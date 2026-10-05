@@ -1,7 +1,7 @@
 # Releasing MCP Console
 
 Tag-driven releases publish exactly four binary-only PyPI wheels: Apple Silicon and Intel macOS, ARM64 and x86-64 Linux.
-Linux builds use Ubuntu 24.04 and require glibc 2.39+.
+Linux builds use native Ubuntu 22.04 runners and target glibc 2.35+.
 The release workflow publishes no source distribution, Windows wheel, or GitHub release archive.
 `Cargo.toml` owns the version; keep the root `mcp-console` entry in `Cargo.lock` synchronized.
 
@@ -64,9 +64,9 @@ Wheel smoke verifies notices, source identity, helper digest, and actual linkage
 
 `scripts/release.py inspect-wheel WHEEL --target TARGET --report abi.json` checks every ELF member, including private helpers and additional native libraries.
 It checks architecture, loader, declared system libraries, loader paths, and symbol requirements against every advertised wheel tag; filename and WHEEL metadata must agree.
-`--release` additionally enforces the proposed glibc 2.35 floor and Ubuntu 22.04's libstdc++ symbol ceilings (GLIBCXX 3.4.30 / CXXABI 1.3.13).
+`--release` additionally enforces the glibc 2.35 floor and Ubuntu 22.04's libstdc++ symbol ceilings (GLIBCXX 3.4.30 / CXXABI 1.3.13).
 The report records the wheel digest and each member's loader, dependencies, paths, and version requirements.
-This inspection does not establish installed-runtime or namespace compatibility; clean native runtime validation is still required before lowering the support declaration.
+The release workflow also installs the built wheel in clean native floor runtimes; an ABI report alone is not a runtime pass.
 
 Use `smoke-wheel WHEEL --installed-only --sandbox-pin PIN_FILE` in a runtime environment without a source checkout or Cargo outputs.
 It reads package identity from the wheel, installs that artifact, and reuses the bundled-helper, startup, language, and bounded shutdown probes.
@@ -102,6 +102,44 @@ Ubuntu AppArmor user- namespace restrictions can permit `/usr/bin/bwrap` but rej
 Do not weaken a user's host policy merely to pass a test.
 Use an approved disposable build environment; [Linux compatibility](docs/LINUX_COMPATIBILITY.md) explains runtime requirements and diagnosis.
 Installation tests need the checkout and `TMPDIR` on the same writable filesystem for renames.
+
+### Linux floor validation
+
+The native bundle needs glibc's architecture loader, libc/libm, libgcc_s, and dynamically linked libcap for the current companion build.
+On Ubuntu these come from `libc6`, `libgcc-s1`, and `libcap2`.
+OpenSSL development files are needed during compilation, but the inspected wheel binaries do not depend on OpenSSL at runtime.
+Default Python packages additionally need `libstdc++6`; R and its packages have their own runtime libraries and preparation requirements.
+R-present validation uses current R from the signed CRAN Jammy repository because stock Ubuntu 22.04 R 4.1 cannot install current Arrow/DuckDB, which require R 4.2+.
+The [runtime fixture](scripts/linux-wheel/Dockerfile) lists these language prerequisites separately from the native bundle.
+
+Run on a matching native Docker host with the evidence directory shared with the daemon:
+
+```sh
+scripts/check-linux-wheel dist/*.whl \
+    --target x86_64-unknown-linux-gnu --evidence linux-compatibility
+```
+
+Use `aarch64-unknown-linux-gnu` on ARM64; emulation is rejected.
+`--docker-context` selects a daemon explicitly, for example `colima` on an ARM64 Mac.
+Only the wheel and minimal release/installation harness enter the runtime containers.
+The no-R image contains standalone Python 3.13 and uv, while the R image additionally retains separately prepared language libraries and resolver metadata.
+Preparation uses serial make and `CXX17FLAGS=-O0 -g0` to bound DuckDB build memory; these settings do not affect the distributed wheel.
+Compilers, development packages, build directories, source archives, and cached CMake are excluded from the final runtime.
+Normal sandboxed startup keeps the documented Console cache policy.
+
+The probes require native namespace support and run in disposable containers with `SYS_ADMIN`, unconfined seccomp, and unconfined AppArmor.
+They do not change host sysctls.
+Startup, Python/R evaluation, bounded shutdown, installed loader resolution, and existing sandbox installation acceptance must pass.
+The empty-PATH probe establishes bundled-helper execution; host-helper precedence and integrity checks remain covered by installed acceptance.
+A namespace denial is separate from a loader/ABI failure, and a skipped native probe does not pass the gate.
+
+The release workflow uploads per-architecture `linux-compatibility-*` artifacts containing the wheel SHA-256, complete ELF/tag report, image digests/platforms, exact probe command, OS/kernel/library/language versions, and results.
+Keep ARM64 and x86_64 reports separate.
+Both independent controlled-Jammy builds at source `d26f9771` used Rust 1.95.0, GCC 11, Maturin 1.15.0, and the unchanged companion pin.
+All three shipped ELF executables required at most GLIBC 2.34, with matching `manylinux_2_34` filename/WHEEL tags, no GLIBCXX/CXXABI requirements, and no RPATH/RUNPATH or extra ELF members.
+Clean runtime tests used Ubuntu 22.04 with glibc 2.35, libgcc/libstdc++ 12.3, libcap 2.44, Python 3.13.16, uv 0.12.22, and R 4.6.1 for R-present coverage.
+ARM64 passed no-R and R-present startup, language and installed acceptance; x86_64 no-R passed and R-present validation is pending.
+The native older-runner rehearsal remains required before release.
 
 ## One-time PyPI setup
 

@@ -38,9 +38,9 @@ jobs:
             target: aarch64-apple-darwin
           - os: macos-15-intel
             target: x86_64-apple-darwin
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
-          - os: ubuntu-24.04
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
 
     steps:
@@ -98,8 +98,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get install -y build-essential pkg-config libcurl4-openssl-dev libcap-dev libssl-dev binutils
 
       - name: Stage private sandbox runner
         run: >-
@@ -115,6 +114,14 @@ jobs:
           # Use native runners while retaining PyPI-compatible Linux wheel tags.
           container: off
           args: --release --locked --compatibility pypi --out dist
+
+      - name: Inspect Linux bundle ABI and wheel tags
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p linux-compatibility
+          python3 scripts/release.py inspect-wheel dist/*.whl \
+            --target "${{ matrix.target }}" --release \
+            --report linux-compatibility/builder-abi.json
 
       - name: Smoke-test wheel
         env:
@@ -137,6 +144,22 @@ jobs:
             --target "${{ matrix.target }}" \
             --without-r
           python3 tests/sandbox_installation.py "$UV_TOOL_BIN_DIR/mcp-console"
+
+      - name: Validate Linux wheel in clean floor runtimes
+        if: runner.os == 'Linux'
+        run: |
+          python3 scripts/check-linux-wheel dist/*.whl \
+            --target "${{ matrix.target }}" \
+            --evidence linux-compatibility \
+            2>&1 | tee linux-compatibility/runtime.log
+
+      - name: Upload Linux compatibility evidence
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-compatibility-${{ matrix.target }}
+          path: linux-compatibility
+          if-no-files-found: warn
 
       - name: Upload wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
