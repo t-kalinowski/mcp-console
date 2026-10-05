@@ -101,12 +101,11 @@ fn console_root(settings: &SandboxSettings) -> Result<PathBuf, String> {
     {
         return Ok(cache.join("mcp-console/cache"));
     }
-    let home = environment_path(settings, "HOME");
+    let home = environment_path(settings, "HOME").filter(|path| path.is_absolute());
     #[cfg(windows)]
-    let home = home.or_else(|| environment_path(settings, "USERPROFILE"));
     let home = home
-        .filter(|path| path.is_absolute())
-        .ok_or("Console cache selection requires an absolute HOME")?;
+        .or_else(|| environment_path(settings, "USERPROFILE").filter(|path| path.is_absolute()));
+    let home = home.ok_or("Console cache selection requires an absolute HOME")?;
     Ok(home.join(if cfg!(windows) {
         "AppData/Local/mcp-console/cache"
     } else if cfg!(target_os = "macos") {

@@ -46,6 +46,12 @@ def workspace():
 @unittest.skipUnless(os.name == "nt", "native Windows sandbox")
 class WindowsSandbox(unittest.TestCase):
     def test_console_cache_paths_reach_resolver_and_worker(self):
+        self.console_cache_paths(profile_fallback=False)
+
+    def test_console_cache_falls_back_to_userprofile_after_relative_home(self):
+        self.console_cache_paths(profile_fallback=True)
+
+    def console_cache_paths(self, *, profile_fallback: bool):
         from windows import Session
 
         with workspace() as root:
@@ -54,17 +60,25 @@ class WindowsSandbox(unittest.TestCase):
                 [sys.executable, "-m", "venv", "--without-pip", selected], check=True
             )
             python = selected / "Scripts/python.exe"
-            cache = root / "local/mcp-console/cache/dependencies"
+            local = (
+                root / "account/AppData/Local" if profile_fallback else root / "local"
+            )
+            cache = local / "mcp-console/cache/dependencies"
             environment = dict(
                 os.environ,
                 PATH=str(root),
-                LOCALAPPDATA=str(root / "local"),
+                LOCALAPPDATA=str(local),
                 UV_CACHE_DIR=str(root / "host-uv"),
                 IR_CACHE_DIR=str(root / "host-ir"),
                 CACHE_TEST_ROOT=str(cache),
             )
             for name in ("XDG_CACHE_HOME", "R_HOME", "RETICULATE_PYTHON"):
                 environment.pop(name, None)
+            if profile_fallback:
+                environment.pop("LOCALAPPDATA")
+                environment.update(
+                    HOME="relative-home", USERPROFILE=str(root / "account")
+                )
             (selected / "Lib/site-packages/sitecustomize.py").write_text(
                 dedent("""
                     import os
