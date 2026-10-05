@@ -1,10 +1,11 @@
 //! Deterministic worker endpoints for Windows relay protocol regressions.
 use std::ffi::c_void;
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
 mod windows_framing;
+mod windows_gate;
+use windows_gate::Gate;
 
 #[repr(C)]
 struct Overlapped {
@@ -107,8 +108,13 @@ fn main() -> io::Result<()> {
     if scenario == "framing_holder" {
         return windows_framing::hold(write);
     }
-    let mut ready = TcpStream::connect(std::env::var("TEST_WORKER_READY").unwrap())?;
+    let mut ready = Gate::connect(std::env::var("TEST_WORKER_READY").unwrap())?;
     writeln!(ready, "{}", std::process::id())?;
+    // Keep the pipe connected until the host has pinned our identity. Closing
+    // a client before ConnectNamedPipe can otherwise discard the rendezvous.
+    let mut release = [0];
+    ready.read_exact(&mut release)?;
+    assert_eq!(release, [b'1']);
     if scenario.starts_with("framing_") {
         return windows_framing::run(&scenario, read, write, ready);
     }
@@ -187,7 +193,7 @@ fn retirement(
     scenario: &str,
     read: *mut c_void,
     write: *mut c_void,
-    ready: TcpStream,
+    ready: Gate,
 ) -> io::Result<()> {
     let marker = std::path::PathBuf::from(std::env::var("TEST_DISPATCHED").unwrap());
     let sideband_eof = scenario == "retirement_sideband";
@@ -225,9 +231,15 @@ fn retirement(
             // Keep the outer writer inside one frame while the sideband reader
             // waits for ordinary event capacity. Neither endpoint closes.
             let data = "x".repeat(1024 * 1024);
-            send(write, &format!("{{\"kind\":\"console_output\",\"data\":\"{data}\"}}\n"))?;
+            send(
+                write,
+                &format!("{{\"kind\":\"console_output\",\"data\":\"{data}\"}}\n"),
+            )?;
             loop {
-                send(write, "{\"kind\":\"console_output\",\"data\":\"blocked\"}\n")?;
+                send(
+                    write,
+                    "{\"kind\":\"console_output\",\"data\":\"blocked\"}\n",
+                )?;
             }
         } else if sideband_eof && command.contains("evaluate") {
             writer.take();

@@ -4,6 +4,7 @@ import ctypes
 import json
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
 import time
@@ -44,6 +45,91 @@ def workspace():
 
 @unittest.skipUnless(os.name == "nt", "native Windows sandbox")
 class WindowsSandbox(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
+    def test_restricted_token_input_and_interrupt(self):
+        from windows import Session, exercise_input_and_interrupt
+
+        with workspace() as root:
+            session = Session(
+                sandbox=True,
+                overrides=[
+                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.network="enabled"',
+                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
+                ],
+            )
+            try:
+                session.initialize()
+                exercise_input_and_interrupt(session)
+            finally:
+                session.close()
+
+    @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "explicitly provisioned elevated Windows sandbox",
+    )
+    def test_provisioned_network_restricted_input_and_interrupt(self):
+        from windows import Session, exercise_input_and_interrupt
+
+        state = os.environ["MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"]
+        session = Session(
+            sandbox=True,
+            overrides=[
+                'sandbox.windows_sandbox_level="elevated"',
+                'sandbox.network="restricted"',
+                f"sandbox.windows_state_dir={json.dumps(state)}",
+            ],
+        )
+        try:
+            session.initialize()
+            exercise_input_and_interrupt(session)
+        finally:
+            session.close()
+
+    def test_network_enabled_allows_loopback_exchange(self):
+        from windows import Session
+
+        with workspace() as root:
+            session = Session(
+                sandbox=True,
+                overrides=[
+                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.network="enabled"',
+                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
+                ],
+            )
+            try:
+                session.initialize()
+                # This socket tests networking itself; ordinary sequencing uses
+                # public stdin or host-only named pipes.
+                with socket.create_server(("127.0.0.1", 0)) as listener:
+                    listener.settimeout(10)
+                    session.send(
+                        # fmt: python
+                        python=dedent(f"""
+                            import socket
+
+                            with socket.create_connection(
+                                ("127.0.0.1", {listener.getsockname()[1]}), timeout=10
+                            ) as peer:
+                                peer.sendall(b"loopback request")
+                                with peer.makefile("rb") as response:
+                                    print(response.read().decode())
+                            """),
+                        timeout_ms=0,
+                    )
+                    with listener.accept()[0] as peer:
+                        peer.settimeout(10)
+                        request = peer.makefile("rb")
+                        with request:
+                            self.assertEqual(request.read(16), b"loopback request")
+                        peer.sendall(b"loopback reply")
+                    result = session.expect("loopback reply")
+                    self.assertFalse(result.get("isError"), result)
+            finally:
+                session.close()
+
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
     def test_r_uses_private_storage_and_preserves_state(self):
         from windows import Session

@@ -162,6 +162,20 @@ Install those formatters separately; missing tools and host policy blocks are re
 
 ### Testing parity and remaining gaps
 
+Native input/interrupt acceptance uses the public `waiting for stdin` receipt before providing input, then observes loop output before interrupting.
+It requires no networking or host-to-sandbox fixture access.
+The same scenario runs directly and with an explicitly network-enabled restricted token in `WindowsSandbox.test_restricted_token_input_and_interrupt`.
+To run it against an already-provisioned elevated, network-restricted backend, set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to its absolute state directory and run `WindowsSandbox.test_provisioned_network_restricted_input_and_interrupt`.
+The test never provisions accounts or chooses another backend.
+Without that opt-in directory, it reports unavailable coverage; a skip does not establish network-restricted compatibility.
+
+Inspection, resolver, raw relay, and inherited-writer fixture checkpoints use unique local named pipes with ordinary host ACLs and non-inheritable handles.
+Their readiness and release operations have bounded deadlines; cancellation joins pending native I/O before releasing its storage.
+The host pins process identities before release or cancellation.
+These are host-plumbing tests, not sandbox-enforcement evidence.
+`WindowsSandbox.test_network_enabled_allows_loopback_exchange` explicitly tests positive loopback communication with networking enabled.
+The provisioned backend's loopback restriction still needs separate acceptance against its established policy contract; restricted-token tests do not imply loopback denial.
+
 Shared discovery reports unavailable capabilities per case and execution mode; a skip is not validation.
 Windows full checks exercise portable R/Python execution, startup, bridge attachment, input, plots, managed activation, process creation, recording, CLI configuration, and protocol behavior in addition to native acceptance.
 The shared Windows pipe reader uses blocking native reads with socket notifications.
