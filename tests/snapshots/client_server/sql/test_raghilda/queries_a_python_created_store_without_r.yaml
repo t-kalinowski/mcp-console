@@ -14,6 +14,17 @@ result:
   isError: false
 ---
 send:
+  sql: CREATE TABLE managed_marker AS SELECT 7 AS value
+result:
+  content:
+    - type: text
+      text: |
+        Count
+        -----
+        1
+  isError: false
+---
+send:
   requirements:
     python:
       - raghilda==0.2.1
@@ -128,14 +139,14 @@ result:
   isError: false
 ---
 send:
-  sql: SELECT 42 AS answer
+  sql: SELECT value FROM managed_marker
 result:
   content:
     - type: text
       text: |
-        answer
-        ------
-        42
+        value
+        -----
+        7
   isError: false
 ---
 send:

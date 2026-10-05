@@ -160,10 +160,12 @@ def test_queries_a_python_created_store_without_r(
                     print("no R executable visible")
                     """),
             )
+            client.send(sql="CREATE TABLE managed_marker AS SELECT 7 AS value")
+            assert last_tool_text(client).splitlines()[-1] == "1"
             exercise_store(client)
             client.expect(python="console_sql_connection(None)")
-            client.send(sql="SELECT 42 AS answer")
-            assert last_tool_text(client).splitlines()[-1] == "42"
+            client.send(sql="SELECT value FROM managed_marker")
+            assert last_tool_text(client).splitlines()[-1] == "7"
             close_store(client)
             return client.finish()[3:]
 
