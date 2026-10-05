@@ -286,12 +286,14 @@ _managed_connection = None
 _settings = _json.loads(_os.environ.get("MCP_CONSOLE_SQL_SETTINGS", "{}"))
 
 
-def enable_native():
+def enable_native(managed: bool) -> None:
     global _native_storage, _native_extension_directory, _native_prepared_source
 
     _native_storage = _Path(_os.environ["TMPDIR"]) / "mcp-console-duckdb"
-    _native_extension_directory = _os.environ.get(
-        "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", ""
+    # R still needs its prepared cache in mixed sessions. A selected Python
+    # keeps DuckDB's native cache instead of inheriting that R directory.
+    _native_extension_directory = (
+        _os.environ.get("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", "") if managed else ""
     )
     _native_prepared_source = {
         "docker": "image",

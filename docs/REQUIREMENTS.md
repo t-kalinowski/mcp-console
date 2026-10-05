@@ -34,7 +34,7 @@ Mixed-runtime R infrastructure is separate: reticulate, jsonlite, DBI, DuckDB, A
 Clearing optional requirements does not remove that infrastructure, ambient libraries, preinstalled packages, or caches.
 DuckDB extension preparation uses the configured managed SQL provider and its candidate engine version, including before launch, live additions, and restart.
 It runs on the trusted execution host and uses the captured extension cache; it does not install through a worker connection or prepare extensions for an arbitrary user-selected DBI/DB-API connection.
-An explicitly selected non-managed Python retains its preinstalled extensions and receives no managed DuckDB defaults.
+An explicitly selected non-managed Python retains its native extension cache and preinstalled extensions, including when R is present, and receives no managed DuckDB defaults.
 Without R, an empty Python declaration omits DuckDB, but a user-selected DB-API connection can still provide SQL.
 
 Default preparation, built-in worker launch, and enabled R/Python initialization run in the background.

@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -16,6 +17,82 @@ from support.normalization import code
 from support.records import Transcript
 from support.requirements import POSIX, R, SQL, requires
 from support.suites import run_this_suite
+
+
+@requires(POSIX, R, SQL)
+@executions(SANDBOXED)
+def test_selected_python_preserves_preinstalled_extensions_with_r_present(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        python = workspace / ".venv/bin/python"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", python.parent.parent],
+            check=True,
+        )
+        subprocess.run(
+            ["uv", "pip", "install", "--python", python, "duckdb==1.4.4"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                python,
+                "-I",
+                "-c",
+                "import duckdb; connection = duckdb.connect(); connection.install_extension('sqlite')",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "python": ".venv/bin/python",
+                    "cache": "console",
+                    "sql": {"provider": "python"},
+                }
+            )
+        )
+        env = dict(os.environ, XDG_CACHE_HOME=str(workspace / "cache"))
+        with McpClient(binary, execution.serve(), env, workspace) as client:
+            client.initialize_and_list_tools()
+            for restart in (False, True):
+                if restart:
+                    client.send(control="restart")
+                client.expect(r="stopifnot(is.environment(globalenv()))")
+                client.expect(
+                    # fmt: python
+                    python=code("""
+                        import duckdb
+
+                        with duckdb.connect() as native:
+                            _ = native.execute("SET autoinstall_known_extensions = false; LOAD sqlite")
+                            native_cache = native.execute(
+                                "SELECT current_setting('extension_directory')"
+                            ).fetchone()
+                        managed = sql_connection()
+                        _ = managed.execute("SET autoinstall_known_extensions = false; LOAD sqlite")
+                        assert (
+                            managed.execute("SELECT current_setting('extension_directory')").fetchone()
+                            == native_cache
+                        )
+                        """),
+                )
+                client.expect(
+                    "Success\n-------\n[0 rows]\n",
+                    sql="LOAD sqlite",
+                )
+                inspected = client.send(requirements={"action": "get"})
+                assert inspected["structuredContent"]["requirements"]["python"] == []
+                assert inspected["structuredContent"]["requirements"]["duckdb"] == []
+            client.finish()
+    return [
+        {"selected_python_native_extensions_with_r_present": ["startup", "restart"]}
+    ]
 
 
 @requires(R, SQL)

@@ -786,8 +786,21 @@ pub(super) fn initialize_managed_sql() -> Result<(), String> {
     })
 }
 
-pub(super) fn configure_native_sql() -> Result<(), String> {
-    api()?.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"enable_native"))
+pub(super) fn configure_native_sql(managed: bool) -> Result<(), String> {
+    api()?.with_gil(|api| unsafe {
+        let source = if managed {
+            c"enable_native(True)"
+        } else {
+            c"enable_native(False)"
+        };
+        let result = api.run_module_result(c"_mcp_console_sql", source)?;
+        if result.is_null() {
+            api.display_pending_exception();
+            return Err(python_function_error(c"_mcp_console_sql", c"enable_native"));
+        }
+        (api.dec_ref)(result);
+        Ok(())
+    })
 }
 
 pub(super) fn take_sql_restore_request() -> Result<bool, String> {

@@ -1,0 +1,4 @@
+---
+selected_python_native_extensions_with_r_present:
+  - startup
+  - restart
