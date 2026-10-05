@@ -277,6 +277,9 @@ elif args[0] == "exec":
         frame(2, {"kind": "ready"})
         initializing = mode == "bootstrap-input"
         if initializing:
+            assert (root / "prompt-release").is_fifo()
+            with (root / "prompt-release").open("rb", buffering=0) as stream:
+                assert stream.read(1) == b"1"
             frame(2, {"kind": "input_requested", "prompt": "target startup> "})
             assert (root / "prompt-ready").is_fifo()
             with (root / "prompt-ready").open("wb", buffering=0) as stream:
