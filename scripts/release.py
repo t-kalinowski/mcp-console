@@ -49,6 +49,33 @@ MANYLINUX_CPP = {
     41: (33, 15),
     42: (34, 15),
 }
+# GCC versions are sparse sets, with these additions at each policy boundary.
+# Use the same pinned auditwheel policy source as the C++ ceilings above.
+MANYLINUX_GCC_COMMON = {
+    "3.0",
+    "3.3",
+    "3.3.1",
+    "3.4",
+    "3.4.2",
+    "3.4.4",
+    "4.0.0",
+    "4.2.0",
+}
+MANYLINUX_GCC = {
+    "x86_64": {
+        12: {"4.3.0"},
+        17: {"4.7.0", "4.8.0"},
+        27: {"7.0.0"},
+        35: {"12.0.0"},
+        39: {"13.0.0", "14.0.0"},
+    },
+    "aarch64": {
+        17: {"4.3.0", "4.5.0", "4.7.0"},
+        26: {"7.0.0"},
+        34: {"11.0"},
+        39: {"13.0.0", "14.0", "14.0.0"},
+    },
+}
 # Runtime prerequisites, not a distro archive or build-package allowlist.
 LINUX_SYSTEM_LIBRARIES = {
     "libc.so.6",
@@ -346,6 +373,7 @@ def inspect_linux_abi(
         "GLIBCXX": [],
         "CXXABI": [],
     }
+    gcc_allowed: set[str] | None = None
     for _, minor in floors:
         require(
             minor in MANYLINUX_CPP and (architecture == "x86_64" or minor >= 17),
@@ -357,6 +385,13 @@ def inspect_linux_abi(
             glibcxx, cxxabi = 24, 11
         ceilings["GLIBCXX"].append((3, 4, glibcxx))
         ceilings["CXXABI"].append((1, 3, cxxabi))
+        gcc_policy = MANYLINUX_GCC_COMMON | {
+            number
+            for since, numbers in MANYLINUX_GCC[architecture].items()
+            if since <= minor
+            for number in numbers
+        }
+        gcc_allowed = gcc_policy if gcc_allowed is None else gcc_allowed & gcc_policy
     if release:
         for family, ceiling in LINUX_RELEASE_CPP.items():
             ceilings[family].append(ceiling)
@@ -433,13 +468,14 @@ def inspect_linux_abi(
                     )
                     search.append(resolved)
             versions = re.findall(
-                r"Name: ((?:GLIBC|GLIBCXX|CXXABI)_[^\s]+)",
+                r"Name: ((?:GLIBC|GLIBCXX|CXXABI|GCC)_[^\s]+)",
                 output.partition("Version needs section")[2],
             )
             requirements: dict[str, list[str]] = {
                 "GLIBC": [],
                 "GLIBCXX": [],
                 "CXXABI": [],
+                "GCC": [],
             }
             for symbol in versions:
                 family, number = symbol.split("_", 1)
@@ -447,12 +483,18 @@ def inspect_linux_abi(
                     re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", number) is not None,
                     f"{member}: unsupported symbol requirement {symbol}",
                 )
-                required = tuple(map(int, number.split(".")))
-                ceiling = limits[family]
-                require(
-                    ceiling is None or required <= ceiling,
-                    f"{member}: {symbol} exceeds the declared wheel/runtime floor",
-                )
+                if family == "GCC":
+                    require(
+                        gcc_allowed is None or number in gcc_allowed,
+                        f"{member}: {symbol} is not permitted by the declared wheel policy",
+                    )
+                else:
+                    required = tuple(map(int, number.split(".")))
+                    ceiling = limits[family]
+                    require(
+                        ceiling is None or required <= ceiling,
+                        f"{member}: {symbol} exceeds the declared wheel/runtime floor",
+                    )
                 requirements[family].append(number)
             evidence[member] = {
                 "class": field("Class"),
@@ -465,6 +507,7 @@ def inspect_linux_abi(
                 "glibc": sorted(set(requirements["GLIBC"])),
                 "glibcxx": sorted(set(requirements["GLIBCXX"])),
                 "cxxabi": sorted(set(requirements["CXXABI"])),
+                "gcc": sorted(set(requirements["GCC"])),
             }
         for name in (
             f"mcp_console-{version}.data/scripts/mcp-console",

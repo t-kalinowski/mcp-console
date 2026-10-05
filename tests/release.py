@@ -889,6 +889,94 @@ class ReleaseScriptTests(ReleaseFixture):
                                         result.returncode, 0, result.stderr
                                     )
 
+    def test_inspect_wheel_checks_gcc_symbols_against_every_advertised_policy(
+        self,
+    ) -> None:
+        for architecture in ("x86_64", "aarch64"):
+            arm = architecture == "aarch64"
+            policies = [
+                ("manylinux2014", "4.7.0" if arm else "4.8.0", "7.0.0"),
+                (
+                    "manylinux_2_26",
+                    "7.0.0" if arm else "4.8.0",
+                    "11.0" if arm else "7.0.0",
+                ),
+                ("manylinux_2_28", "7.0.0", "11.0"),
+                ("manylinux_2_34", "11.0" if arm else "7.0.0", "12.0.0"),
+                (
+                    "manylinux_2_35",
+                    "11.0" if arm else "12.0.0",
+                    "12.0.0" if arm else "11.0",
+                ),
+                ("manylinux_2_35.manylinux_2_28", "7.0.0", "11.0" if arm else "12.0.0"),
+                ("manylinux_2_39", "14.0.0", "15.0.0"),
+            ]
+            if arm:
+                # GCC's sparse policy sets cannot be checked with numeric maxima.
+                policies.append(("manylinux_2_28", "4.5.0", "4.8.0"))
+            else:
+                policies[:0] = [
+                    ("manylinux1", "4.2.0", "4.3.0"),
+                    ("manylinux2010", "4.3.0", "4.7.0"),
+                ]
+            with tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                environment, _, _ = self.smoke_environment(directory)
+                for policy, permitted, rejected in policies:
+                    platform = ".".join(
+                        f"{tag}_{architecture}" for tag in policy.split(".")
+                    )
+                    wheel = directory / f"mcp_console-0.0.2-py3-none-{platform}.whl"
+                    member = "mcp_console-0.0.2.data/data/libexec/mcp-console-sandbox"
+                    for number in (permitted, rejected):
+                        self.write_wheel(wheel, glibc="2.17" if arm else "2.5")
+                        rewrite_wheel(
+                            wheel,
+                            {
+                                member: elf_fixture(
+                                    machine="AArch64"
+                                    if arm
+                                    else "Advanced Micro Devices X86-64",
+                                    interpreter="/lib/ld-linux-aarch64.so.1"
+                                    if arm
+                                    else "/lib64/ld-linux-x86-64.so.2",
+                                    needed=["libc.so.6", "libgcc_s.so.1"],
+                                    versions=[f"GCC_{number}", "GCC_3.0"],
+                                )
+                            },
+                        )
+                        for release in (False, True):
+                            if release and policy == "manylinux_2_39":
+                                continue
+                            with self.subTest(
+                                platform=platform, number=number, release=release
+                            ):
+                                report = directory / "abi.json"
+                                result = self.run_script(
+                                    "inspect-wheel",
+                                    str(wheel),
+                                    *(["--release"] if release else []),
+                                    "--report",
+                                    str(report),
+                                    cwd=directory,
+                                    env=environment,
+                                )
+                                if number == rejected:
+                                    self.assertNotEqual(
+                                        result.returncode, 0, result.stdout
+                                    )
+                                    self.assertIn(f"GCC_{number}", result.stderr)
+                                    self.assertIn(member, result.stderr)
+                                else:
+                                    self.assertEqual(
+                                        result.returncode, 0, result.stderr
+                                    )
+                                    evidence = json.loads(report.read_text())
+                                    self.assertEqual(
+                                        evidence["elf"][member].get("gcc"),
+                                        sorted(["3.0", number]),
+                                    )
+
     def test_smoke_wheel_requires_a_private_companion_bundle(self) -> None:
         for defect in (
             "missing runner",
