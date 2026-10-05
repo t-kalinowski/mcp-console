@@ -18,7 +18,7 @@ The platform-specific staging instructions below cover macOS and Linux.
 Windows direct build commands use `scripts/with-checkout.cmd` and share ownership with packaging; `scripts/check.cmd --full` exercises local wheel and source installation.
 
 On macOS, install Xcode Command Line Tools.
-Ubuntu builds need a C toolchain, `pkg-config`, libcap development files, libcurl development files for R resolver bootstrap, and binutils (`readelf` / `strip`).
+Ubuntu builds need a C toolchain, `pkg-config`, libcap and OpenSSL development files, libcurl development files for R resolver bootstrap, and binutils (`readelf` / `strip`).
 Packages may need additional system libraries.
 Runtime Linux installations need the helper's system dependencies, including dynamically linked libcap when selected.
 
@@ -67,6 +67,10 @@ It checks architecture, loader, declared system libraries, loader paths, and sym
 `--release` additionally enforces the proposed glibc 2.35 floor and Ubuntu 22.04's libstdc++ symbol ceilings (GLIBCXX 3.4.30 / CXXABI 1.3.13).
 The report records the wheel digest and each member's loader, dependencies, paths, and version requirements.
 This inspection does not establish installed-runtime or namespace compatibility; clean native runtime validation is still required before lowering the support declaration.
+
+Use `smoke-wheel WHEEL --installed-only --sandbox-pin PIN_FILE` in a runtime environment without a source checkout or Cargo outputs.
+It reads package identity from the wheel, installs that artifact, and reuses the bundled-helper, startup, language, and bounded shutdown probes.
+The ordinary smoke mode retains its comparison with the Cargo executable.
 
 `scripts/build_backend.py` owns staging through wheel creation.
 `build.rs` verifies and copies prepared files beside native Cargo output; it does not build the runner or mutate wheel staging.

@@ -717,6 +717,42 @@ class ReleaseScriptTests(ReleaseFixture):
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertIn("private sandbox runner failed", result.stderr)
 
+    def test_smoke_installed_wheel_needs_no_checkout_or_build_output(self) -> None:
+        for without_r in (False, True):
+            with (
+                self.subTest(without_r=without_r),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                directory = Path(temporary)
+                environment, _, cargo_bin = self.smoke_environment(directory)
+                wheel = (
+                    directory / "mcp_console-0.0.2-py3-none-manylinux_2_35_x86_64.whl"
+                )
+                self.write_wheel(wheel)
+                cargo_bin.unlink()
+                (directory / "Cargo.toml").unlink()
+                empty = directory / "empty-workspace"
+                empty.mkdir()
+                record = directory / "arguments.jsonl"
+                environment["FAKE_MCP_ARGUMENTS"] = str(record)
+                if without_r:
+                    environment["FAKE_NO_R"] = "1"
+                result = self.run_script(
+                    "smoke-wheel",
+                    str(wheel),
+                    "--installed-only",
+                    "--sandbox-pin",
+                    str(directory / "sandbox-runner.json"),
+                    *(["--without-r"] if without_r else []),
+                    cwd=empty,
+                    env=environment,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [json.loads(line) for line in record.read_text().splitlines()]
+                self.assertEqual(calls.count(["sandbox", "--", "/usr/bin/true"]), 1)
+                self.assertIn(["serve"], calls)
+                self.assertEqual(list(empty.iterdir()), [])
+
     def test_smoke_wheel_evaluates_peers_and_bounds_response_waits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)

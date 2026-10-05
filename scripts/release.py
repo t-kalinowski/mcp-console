@@ -551,18 +551,20 @@ def inspect_wheel(args: argparse.Namespace) -> None:
 
 def smoke_wheel(args: argparse.Namespace) -> None:
     wheel = Path(args.wheel).resolve()
-    cargo_bin = Path(args.cargo_bin).resolve()
-    version = package_version()
-
     require(wheel.is_file(), f"wheel does not exist: {wheel}")
-    require(cargo_bin.is_file(), f"Cargo binary does not exist: {cargo_bin}")
+    cargo_bin = Path(args.cargo_bin).resolve() if args.cargo_bin else None
     require(
-        os.access(cargo_bin, os.X_OK), f"Cargo binary is not executable: {cargo_bin}"
+        args.installed_only == (cargo_bin is None),
+        "provide a Cargo binary or select --installed-only",
     )
-    require(
-        wheel.name.startswith(f"mcp_console-{version}-"),
-        f"wheel version does not match {version}: {wheel.name}",
-    )
+    version, tags = wheel_identity(wheel)
+    if cargo_bin is not None:
+        require(cargo_bin.is_file(), f"Cargo binary does not exist: {cargo_bin}")
+        require(
+            os.access(cargo_bin, os.X_OK),
+            f"Cargo binary is not executable: {cargo_bin}",
+        )
+        require(version == package_version(), "wheel and Cargo versions differ")
     platform = wheel.name.rsplit("-", 1)[-1]
     require(
         platform.startswith(("macosx_", "manylinux", "linux_")),
@@ -570,10 +572,14 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     )
     linux = not platform.startswith("macosx_")
     require(not wheel.name.endswith("-none-any.whl"), "wheel must be platform-specific")
-    wheel_version, tags = wheel_identity(wheel)
-    require(wheel_version == version, "wheel and Cargo versions differ")
     inspect_wheel_commands(
-        wheel, linux=linux, version=version, tags=tags, target=args.target
+        wheel,
+        linux=linux,
+        version=version,
+        tags=tags,
+        target=args.target,
+        release=args.release,
+        sandbox_pin=Path(args.sandbox_pin),
     )
 
     if args.target is not None:
@@ -584,18 +590,30 @@ def smoke_wheel(args: argparse.Namespace) -> None:
             f"wheel does not match {args.target}: {wheel.name}",
         )
 
-    expected_version = command_output([str(cargo_bin), "--version"])
+    expected_version = (
+        command_output([str(cargo_bin), "--version"])
+        if cargo_bin is not None
+        else f"mcp-console {version}"
+    )
     actual_version = command_output(
         ["uv", "tool", "run", "--from", str(wheel), "mcp-console", "--version"]
     )
-    require(actual_version == expected_version, "installed and Cargo versions differ")
+    reference = "Cargo" if cargo_bin is not None else "wheel metadata"
+    require(
+        actual_version == expected_version, f"installed and {reference} versions differ"
+    )
 
-    cargo_help = command_output([str(cargo_bin), "--help"], strip=False)
     wheel_help = command_output(
         ["uv", "tool", "run", "--from", str(wheel), "mcp-console", "--help"],
         strip=False,
     )
-    require(wheel_help == cargo_help, "installed and Cargo help output differ")
+    expected_help = (
+        command_output([str(cargo_bin), "--help"], strip=False)
+        if cargo_bin is not None
+        else wheel_help
+    )
+    if cargo_bin is not None:
+        require(wheel_help == expected_help, "installed and Cargo help output differ")
 
     run_command(["uv", "tool", "install", str(wheel)])
 
@@ -608,11 +626,11 @@ def smoke_wheel(args: argparse.Namespace) -> None:
     )
     require(
         command_output([str(installed), "--version"]) == expected_version,
-        "`uv` tool and Cargo versions differ",
+        f"`uv` tool and {reference} versions differ",
     )
     require(
-        command_output([str(installed), "--help"], strip=False) == cargo_help,
-        "`uv` tool and Cargo help output differ",
+        command_output([str(installed), "--help"], strip=False) == expected_help,
+        "`uv` tool and wheel help output differ",
     )
     public_runner = tool_bin / "mcp-console-sandbox"
     require(
@@ -623,7 +641,9 @@ def smoke_wheel(args: argparse.Namespace) -> None:
         sandbox_env = os.environ.copy()
         sandbox_env["PATH"] = directory
         sandbox_env["MCP_CONSOLE_HOME"] = str(Path(directory) / "console")
-        for executable in (cargo_bin, installed):
+        for executable in (
+            [cargo_bin, installed] if cargo_bin is not None else [installed]
+        ):
             run_command(
                 [str(executable), "sandbox", "--", "/usr/bin/true"],
                 env=sandbox_env,
@@ -777,7 +797,10 @@ def parser() -> argparse.ArgumentParser:
 
     smoke = commands.add_parser("smoke-wheel")
     smoke.add_argument("wheel")
-    smoke.add_argument("cargo_bin")
+    smoke.add_argument("cargo_bin", nargs="?")
+    smoke.add_argument("--installed-only", action="store_true")
+    smoke.add_argument("--sandbox-pin", default="sandbox-runner.json")
+    smoke.add_argument("--release", action="store_true")
     smoke.add_argument("--target", choices=sorted(TARGET_ARCHITECTURES))
     smoke.add_argument("--without-r", action="store_true")
     smoke.add_argument("--startup-timeout-seconds", type=float, default=1200.0)
