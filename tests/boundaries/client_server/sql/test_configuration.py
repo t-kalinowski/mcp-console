@@ -890,12 +890,27 @@ def test_invalid_engine_option_does_not_fall_back(
             )
             client.expect(r="stopifnot(1 + 1 == 2)")
             client.expect(python="assert 1 + 1 == 2")
+            client.expect(
+                # fmt: r
+                r=code("""
+                    native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+                    console_sql_connection(native)
+                    """),
+            )
+            client.expect(
+                "# A tibble: 1 × 1\n   answer\n  <int32>\n1      42\n",
+                sql="SELECT 42 AS answer",
+            )
+            client.expect(
+                r="stopifnot(identical(sql_connection(), native), DBI::dbIsValid(native))"
+            )
             client.finish()
         records.append(
             {
                 "provider": provider,
                 "invalid_engine_value_visible": True,
                 "unrelated_cells_usable": True,
+                "selected_dbi_preview_usable": True,
             }
         )
     return records
@@ -992,11 +1007,26 @@ def test_database_path_does_not_grant_write_access(
                 assert "Cannot open file" in output and (
                     "Operation not permitted" in output or "Permission denied" in output
                 ), client.transcript[-1]
+                client.expect(
+                    # fmt: r
+                    r=code("""
+                        native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+                        console_sql_connection(native)
+                        """),
+                )
+                client.expect(
+                    "# A tibble: 1 × 1\n   answer\n  <int32>\n1      42\n",
+                    sql="SELECT 42 AS answer",
+                )
+                client.expect(
+                    r="stopifnot(identical(sql_connection(), native), DBI::dbIsValid(native))"
+                )
                 client.finish()
             assert not (workspace / "denied.duckdb").exists()
     return [
         {
             "database_path_does_not_grant_write_access": True,
+            "selected_dbi_preview_usable": True,
             "providers": ["r", "python"],
         }
     ]

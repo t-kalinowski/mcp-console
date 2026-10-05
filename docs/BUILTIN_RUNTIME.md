@@ -202,7 +202,8 @@ With a Python managed default and no selected R connection, it reports guidance 
 Python `sql_connection()` is available with the Python managed default and returns its active Python connection.
 Reset from either language restores the configured managed provider and the same managed catalog without closing user connections or changing their transactions.
 If initializing Python during an R reset is interrupted or fails, the reset reports an error and preserves the selected R connection; retry the reset after initialization succeeds.
-R previews of user DBI connections use a private in-memory rendering catalog when the default belongs to Python; they do not open the configured database through a second engine.
+R previews of user DBI connections use a private in-memory rendering catalog independently of the managed provider and its connection settings.
+Managed database or startup-option failures do not block these previews.
 
 R submits cells through `DBI::dbSendQuery()`.
 Python uses the connection's `execute()` when available, otherwise its cursor protocol.

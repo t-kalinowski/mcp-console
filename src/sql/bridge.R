@@ -82,11 +82,11 @@ base::local(
     }
 
     ensure_rendering_connection <- function() {
-      if (.Call("mcp_console_sql_default_is_r")) {
-        return(ensure_managed_connection())
+      if (identical(selected_connection, managed_connection)) {
+        return(managed_connection)
       }
-      # A Python-owned catalog cannot supply native R preview operations. This
-      # scratch catalog opens only for an actual DBI preview, never the SQL default.
+      # User DBI previews must not depend on the managed database or its options.
+      # This scratch catalog opens only for a DBI preview, never the SQL default.
       if (is.null(rendering_connection)) {
         rendering_connection <<- open_connection(":memory:", FALSE, list())
       }

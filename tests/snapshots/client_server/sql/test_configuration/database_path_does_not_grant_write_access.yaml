@@ -1,5 +1,6 @@
 ---
 database_path_does_not_grant_write_access: true
+selected_dbi_preview_usable: true
 providers:
   - r
   - python

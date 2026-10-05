@@ -2,7 +2,9 @@
 provider: r
 invalid_engine_value_visible: true
 unrelated_cells_usable: true
+selected_dbi_preview_usable: true
 ---
 provider: python
 invalid_engine_value_visible: true
 unrelated_cells_usable: true
+selected_dbi_preview_usable: true
