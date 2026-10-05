@@ -1,0 +1,443 @@
+---
+!same-as custom MCP initialization for this execution mode
+---
+send:
+  r: '"plain \u001b[1;31mred\u001b[0m \u20ac\ud83d\ude42\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 576
+        concat:
+          - repeat: |
+              plain red €🙂
+            count: 32
+  isError: false
+---
+send:
+  r: '"old\r\u001b[32mnew\u001b[0m\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 80
+        concat:
+          - repeat: |
+              new
+            count: 20
+  isError: false
+---
+send:
+  r: '"keep\r\u001b[0m\n"'
+result:
+  content:
+    - type: text
+      text: "keep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\n"
+  isError: false
+---
+send:
+  r: '"erase\u001b[2K\n"'
+result:
+  content:
+    - type: text
+      text: |+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  isError: false
+---
+send:
+  r: '"erase\r\u001b[2K\n"'
+result:
+  content:
+    - type: text
+      text: "\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n"
+  isError: false
+---
+send:
+  r: '"erase\r\u001b[K\n"'
+result:
+  content:
+    - type: text
+      text: "\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n"
+  isError: false
+---
+send:
+  r: '"old\r\u001b[Knew\n"'
+result:
+  content:
+    - type: text
+      text: |
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+  isError: false
+---
+send:
+  r: '"old\r\u001b[0Knew\n"'
+result:
+  content:
+    - type: text
+      text: |
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+  isError: false
+---
+send:
+  r: '"keep\u001b[K plus\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 160
+        concat:
+          - repeat: |
+              keep plus
+            count: 16
+  isError: false
+---
+send:
+  r: '"old\u001b[1Knew\n"'
+result:
+  content:
+    - type: text
+      text: |
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+        oldnew
+  isError: false
+---
+send:
+  r: '"before\u001b[2A\u001b[2Jafter\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 276
+        concat:
+          - repeat: |
+              beforeafter
+            count: 23
+  isError: false
+---
+send:
+  r: '"charset\u001b(Btext\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 216
+        concat:
+          - repeat: |
+              charsettext
+            count: 18
+  isError: false
+---
+send:
+  r: '"\u20ac\ud83d\ude42\b\u001b[38:2::10:20:30m!\u001b[m\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 165
+        concat:
+          - repeat: |
+              €!
+            count: 33
+  isError: false
+---
+send:
+  r: '"before\u001b]0;title\u0007after\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 300
+        concat:
+          - repeat: |
+              beforeafter
+            count: 25
+  isError: false
+---
+send:
+  r: '"\u001b]52;c;clipboard\u001b\\safe\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 130
+        concat:
+          - repeat: |
+              safe
+            count: 26
+  isError: false
+---
+send:
+  r: '"\u001b]8;;https://example.invalid\u001b\\label\u001b]8;;\u001b\\\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 276
+        concat:
+          - repeat: |
+              label
+            count: 46
+  isError: false
+---
+send:
+  r: '"before\u001bPprivate\u0007payload\u001b\\after\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 408
+        concat:
+          - repeat: |
+              beforeafter
+            count: 34
+  isError: false
+---
+send:
+  r: '"a\u001bXhidden\u001b\\b\u001b^hidden\u001b\\c\u001b_hidden\u001b\\d\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 190
+        concat:
+          - repeat: |
+              abcd
+            count: 38
+  isError: false
+---
+send:
+  r: '"\u009b31mC1\u009b0m\u009d0;title\u009csafe\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 210
+        concat:
+          - repeat: |
+              C1safe
+            count: 30
+  isError: false
+---
+send:
+  r: '"a\u0090hidden\u009cb\u0098hidden\u009cc\u009ehidden\u009cd\u009fhidden\u009ce\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 294
+        concat:
+          - repeat: |
+              abcde
+            count: 49
+  isError: false
+---
+send:
+  r: '"a\u001b]hidden\n\r\u001b[2Kpayload\u001b\\b\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 87
+        concat:
+          - repeat: |
+              ab
+            count: 29
+  isError: false
+---
+send:
+  r: '"old\u001b[31\u001b[2Knew\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 72
+        concat:
+          - repeat: |
+              new
+            count: 18
+  isError: false
+---
+send:
+  r: '"a\u001b[31\ud83d\ude42b\n"'
+result:
+  content:
+    - type: text
+      text: |
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+  isError: false
+---
+send:
+  r: '"old\u001b[31\rnew\n"'
+result:
+  content:
+    - type: text
+      text: |
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+        new
+  isError: false
+---
+send:
+  r: '"a\u001b[31\nb\n"'
+result:
+  content:
+    - type: text
+      text: |
+        a
+        b
+        a
+        b
+        a
+        b
+        a
+        b
+        a
+        b
+        a
+        b
+        a
+        b
+        a
+        b
+        a
+        b
+        a
+        b
+        a
+        b
+  isError: false
+---
+send:
+  r: '"a\u001b(\ud83d\ude42b\n"'
+result:
+  content:
+    - type: text
+      text: |
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+        a🙂b
+  isError: false
+---
+send:
+  r: '"old\r\b\u001b[0mnew\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 64
+        concat:
+          - repeat: |
+              new
+            count: 16
+  isError: false
+---
+send:
+  r: '"old\u001b[0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;2Ksafe\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 1400
+        concat:
+          - repeat: |
+              oldsafe
+            count: 175
+  isError: false
+---
+send:
+  r: '"old\u001b((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((Bsafe\n"'
+result:
+  content:
+    - type: text
+      text:
+        text_bytes: 1224
+        concat:
+          - repeat: |
+              oldsafe
+            count: 153
+  isError: false

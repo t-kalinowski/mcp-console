@@ -71,9 +71,7 @@ def test_compacts_split_terminal_redraws(
     binary: Path, execution: Execution
 ) -> Transcript:
     client = ServerRelayClient(binary, "split_terminal_redraws", execution=execution)
-    assert (
-        _tool_text(client.send(r="42")) == "ordinary stdout\r\nol\nnew\nold\x1b[2Knew\n"
-    )
+    assert _tool_text(client.send(r="42")) == "ordinary stdout\r\nol\nnew\nnew\n"
     return client.finish_active()
 
 

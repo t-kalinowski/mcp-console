@@ -1318,6 +1318,62 @@ def run_partial_utf8_polls(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_ansi_projection(relay: ScriptedRelay) -> None:
+    relay.ready()
+    while True:
+        command = relay.receive()
+        if command["kind"] == "shutdown":
+            relay.retire(command)
+            return
+        assert command["kind"] == "evaluate", command
+        script = json.loads(command["source"])
+        if isinstance(script, str):
+            raw = script.encode()
+            fragmentations = [
+                [raw],
+                *([raw[:split], raw[split:]] for split in range(len(raw) + 1)),
+                [raw[index : index + 1] for index in range(len(raw))],
+            ]
+            for chunks in fragmentations:
+                for chunk in chunks:
+                    relay.send(
+                        {
+                            "kind": "stdout_bytes",
+                            "data": base64.b64encode(chunk).decode("ascii"),
+                        }
+                    )
+        else:
+            relay.send_batch(script)
+        relay.complete()
+
+
+def run_ansi_polls(relay: ScriptedRelay) -> None:
+    directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
+    relay.ready()
+    relay.expect(EVALUATION)
+    for data in (
+        b"first\x1b[31",
+        b"msecond\x1b]0;hidden",
+        b"third\x1b[32m \xe2",
+        b"\x82\xac\x1b[0m\n",
+    ):
+        with (directory / "partial-release").open("rb", buffering=0) as checkpoint:
+            assert checkpoint.read(1) == b"1"
+        relay.send(
+            {"kind": "stdout_bytes", "data": base64.b64encode(data).decode("ascii")}
+        )
+        # A response to this ordered request proves the preceding bytes reached
+        # the tape; a write or fixture-start checkpoint would not prove it.
+        relay.send(RESOLVE_PYTHON_VERSION)
+        relay.expect(PYTHON_VERSION_RESOLUTION_FAILED)
+        with (directory / "partial-processed").open("wb", buffering=0) as checkpoint:
+            assert checkpoint.write(b"1") == 1
+    with (directory / "partial-release").open("rb", buffering=0) as checkpoint:
+        assert checkpoint.read(1) == b"1"
+    relay.complete()
+    relay.retire()
+
+
 def run_partial_utf8_completion(relay: ScriptedRelay) -> None:
     relay.ready()
     for kind in ("stdout_bytes", "stderr_bytes"):
@@ -1335,6 +1391,8 @@ def main() -> None:
         "preview_raw": run_preview_raw,
         "preview_direct_allocations": run_preview_direct_allocations,
         "partial_utf8_polls": run_partial_utf8_polls,
+        "ansi_projection": run_ansi_projection,
+        "ansi_polls": run_ansi_polls,
         "preview_raw_prelude": run_preview_raw_prelude,
         "partial_utf8_completion": run_partial_utf8_completion,
         "evaluate": run_evaluate,
