@@ -23,8 +23,8 @@ Otherwise it uses `~/.agents/console/sessions/<run-id>/`, without creating a pro
 Returned raw-log paths are launch-directory-relative for project recordings and absolute for fallback recordings.
 Retrieving omitted text requires filesystem access there; Console has no log read/search tool.
 
-The journal uses schema version 2 for startup/session events and nullable metadata before discovery.
-In version 2, `artifact_created.call_id` is `null` for session-owned images and an integer for cell-owned images; consumers must select their decoder using `schema_version`.
+The journal schema is unversioned, with nullable runtime metadata before discovery.
+`artifact_created.call_id` is `null` for session-owned images and an integer for cell-owned images.
 
 The journal is flushed before derived projections.
 A `tool_result` is recorded before transport delivery, so it does not prove that the client received it.

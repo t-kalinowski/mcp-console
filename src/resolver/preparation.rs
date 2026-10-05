@@ -19,7 +19,6 @@ pub(crate) use client::Preparation;
 #[cfg(not(any(unix, windows)))]
 pub(crate) use unsupported::Preparation;
 
-const VERSION: u32 = 7;
 const LIMIT: usize = 1024 * 1024;
 
 #[derive(Default, Clone, Deserialize, Serialize)]
@@ -97,14 +96,12 @@ impl Mode {
 #[serde(deny_unknown_fields)]
 enum Input {
     Open {
-        version: u32,
-        build: String,
         #[serde(default, skip_serializing_if = "Mode::is_r")]
         mode: Mode,
     },
     Run {
         id: u64,
-        operation: Operation,
+        operation: Box<Operation>,
     },
     Control {
         id: u64,
@@ -116,10 +113,7 @@ enum Input {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 enum Output {
-    Hello {
-        version: u32,
-        build: String,
-    },
+    Hello,
     ResultChunk {
         id: u64,
         text: String,

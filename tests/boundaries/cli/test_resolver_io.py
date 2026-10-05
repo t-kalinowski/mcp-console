@@ -4,7 +4,6 @@ import re
 import signal
 import subprocess
 import sys
-import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,8 +32,6 @@ ROOT = Path(__file__).resolve().parents[3]
 def preparation(
     binary: Path, root: Path, environment: dict[str, str]
 ) -> Iterator[tuple]:
-    with (ROOT / "Cargo.toml").open("rb") as source:
-        build = tomllib.load(source)["package"]["version"]
     process = subprocess.Popen(
         [binary, "resolve"],
         stdin=subprocess.PIPE,
@@ -67,16 +64,8 @@ def preparation(
             raise AssertionError(f"timed out waiting for {description}") from None
 
     try:
-        send(
-            {
-                "Open": {
-                    "version": 7,
-                    "build": build,
-                    "mode": "PythonOnly",
-                }
-            }
-        )
-        assert receive("hello") == {"Hello": {"version": 7, "build": build}}
+        send({"Open": {"mode": "PythonOnly"}})
+        assert receive("hello") == "Hello"
         discovery = receive("discovery")["Completed"]
         assert discovery["confirmed"] and "Ok" in discovery["result"], discovery
         yield process, send, receive

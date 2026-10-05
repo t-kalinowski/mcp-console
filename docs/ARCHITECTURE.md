@@ -132,6 +132,7 @@ Explicit and failure-driven replacement both respect retirement barriers.
 Local dependency resolution runs in a separate native resolver sandbox on macOS and Linux.
 Its cache and download policy is independent of the worker policy; see [resolver configuration](RESOLVER.md).
 The hidden `resolve` command owns local preparation over a private JSONL connection.
+Its client and child run from the same Console executable, so their schema is unversioned.
 
 The server owns the accepted manifest and candidate transactions.
 The preparation owner returns a result only after resolver cleanup.

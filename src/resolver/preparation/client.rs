@@ -233,11 +233,7 @@ impl Preparation {
             command.env_remove("RETICULATE_PYTHON");
         }
         command.arg("resolve");
-        let open = Input::Open {
-            version: super::VERSION,
-            build: env!("CARGO_PKG_VERSION").into(),
-            mode,
-        };
+        let open = Input::Open { mode };
         Self::open_with(command, Arc::default(), open, diagnostics, on_started)
     }
 
@@ -481,7 +477,10 @@ impl Preparation {
     ) -> Result<T, String> {
         self.check_ready()?;
         let id = self.0.sequence.fetch_add(1, Ordering::SeqCst);
-        let request = Input::Run { id, operation };
+        let request = Input::Run {
+            id,
+            operation: Box::new(operation),
+        };
         // Reject unsendable requests before registering a resolver or admitting
         // resolver work. No retirement confirmation is needed for a rejected input.
         super::encode(&request)?;
@@ -595,10 +594,7 @@ fn run(
                         let _ = reply.send(Ok(false));
                     }
                 }
-                Event::Received(Ok(Output::Hello { version, build })) if !hello => {
-                    if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
-                        return Err(format!("incompatible {owner} protocol or Console build"));
-                    }
+                Event::Received(Ok(Output::Hello)) if !hello => {
                     hello = true;
                 }
                 Event::Received(Ok(Output::Controlled { id, result })) if hello => {

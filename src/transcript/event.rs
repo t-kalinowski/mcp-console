@@ -9,7 +9,6 @@ use serde_json::Value;
 pub(super) struct Envelope<'a> {
     #[serde(flatten)]
     pub event: Event<'a>,
-    pub schema_version: u64,
     pub run_id: &'a str,
     pub sequence: u64,
     pub at: String,

@@ -10,7 +10,6 @@ import subprocess
 import sys
 import tempfile
 from threading import Thread
-import tomllib
 import unittest
 
 from windows_gate import Gate
@@ -39,16 +38,7 @@ class Resolver:
             self.messages.put(None)
 
         Thread(target=read, daemon=True).start()
-        build = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
-        self.send(
-            {
-                "Open": {
-                    "version": 7,
-                    "build": build,
-                    "mode": mode,
-                }
-            }
-        )
+        self.send({"Open": {"mode": mode}})
 
     def send(self, message):
         self.process.stdin.write(json.dumps(message).encode() + b"\n")
@@ -61,7 +51,7 @@ class Resolver:
         return message
 
     def ready(self):
-        assert "Hello" in self.receive()
+        assert self.receive() == "Hello"
         discovery = self.receive()["Completed"]
         assert discovery["confirmed"], discovery
         assert "Ok" in discovery["result"], discovery

@@ -413,7 +413,7 @@ def test_records_tool_calls_and_images(
         assert events[0]["session"] == "default", events[0]
         assert Path(events[0]["working_directory"]).samefile(workspace), events[0]
         assert all(event["run_id"] == run_id for event in events), events
-        assert all(event["schema_version"] == 2 for event in events), events
+        assert all("schema_version" not in event for event in events), events
         assert [event["sequence"] for event in events] == list(range(1, 10)), events
         assert events[1]["call_id"] == events[2]["call_id"] == 1, events
         assert events[3]["call_id"] == events[2]["call_id"], events
@@ -1004,6 +1004,7 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
             (discovered,) = [
                 event for event in events if event["event"] == "environment_discovered"
             ]
+            assert "schema_version" not in discovered, discovered
             assert [event["event"] for event in early] == [
                 "tool_call",
                 "tool_result",
@@ -1256,7 +1257,7 @@ def test_records_startup_without_a_tool_call(
                 ]
                 assert len(artifacts) == 2, artifacts
                 assert all(event["call_id"] is None for event in artifacts)
-                assert all(event["schema_version"] == 2 for event in events), events
+                assert all("schema_version" not in event for event in events), events
                 assert all(
                     (session / event["path"])
                     .read_bytes()

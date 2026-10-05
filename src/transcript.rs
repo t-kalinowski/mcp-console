@@ -23,9 +23,6 @@ mod output;
 
 pub(crate) use output::{CellOutput, OutputRecord};
 
-// v2 includes startup events and nullable discovery metadata/artifact owners.
-const SCHEMA_VERSION: u64 = 2;
-
 #[derive(Clone)]
 pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 
@@ -584,7 +581,6 @@ impl ActiveTranscript {
         let sequence = self.sequence + 1;
         let event = Envelope {
             event,
-            schema_version: SCHEMA_VERSION,
             run_id: &self.run_id,
             sequence,
             at: timestamp(at),

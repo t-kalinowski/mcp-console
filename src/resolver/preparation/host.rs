@@ -261,17 +261,9 @@ pub(super) fn run() -> Result<(), String> {
     #[cfg(windows)]
     let mut input = io::stdin();
     let first: Input = super::read_jsonl(&mut input)?;
-    let Input::Open {
-        version,
-        build,
-        mode,
-    } = first
-    else {
+    let Input::Open { mode } = first else {
         return Err("expected resolver open".into());
     };
-    if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
-        return Err("incompatible resolver protocol or Console build".into());
-    }
     let (events, received) = mpsc::channel();
     let (outgoing, output) = mpsc::channel::<Output>();
     #[cfg(unix)]
@@ -316,10 +308,7 @@ pub(super) fn run() -> Result<(), String> {
         let _ = output_drained.send(());
     });
     outgoing
-        .send(Output::Hello {
-            version: super::VERSION,
-            build: env!("CARGO_PKG_VERSION").into(),
-        })
+        .send(Output::Hello)
         .map_err(|_| "preparation output stopped")?;
     let (jobs, work) = mpsc::channel();
     let job_events = events.clone();
@@ -360,7 +349,7 @@ pub(super) fn run() -> Result<(), String> {
                 last_id = id;
                 handle = None;
                 pending = None;
-                if jobs.send((id, operation)).is_err() {
+                if jobs.send((id, *operation)).is_err() {
                     failure = Some("preparation executor stopped".into());
                     closing = true;
                     active = None;
