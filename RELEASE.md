@@ -128,6 +128,9 @@ Compilers, development packages, build directories, and cached CMake are exclude
 Normal sandboxed startup keeps the documented Console cache policy.
 The Linux builder prepares the same default R environment before installed-wheel smoke, so cold source compilation completes separately from the startup observation budget.
 This preparation uses the same language-only compiler flags and runtime prerequisites as the floor fixture; it does not change the shipped binaries or smoke assertions.
+Clean floor validation runs in separate native jobs that download the smoke-tested wheel artifacts, giving language preparation its own bounded job budget.
+Both wheel-building and floor-validation jobs must pass before publication.
+Rerunning a failed floor job reuses the built wheel rather than rebuilding it.
 
 The probes require native namespace support and run in disposable containers with `SYS_ADMIN`, unconfined seccomp, and unconfined AppArmor.
 They do not change host sysctls.
@@ -135,7 +138,8 @@ Startup, Python/R evaluation, bounded shutdown, installed loader resolution, and
 The empty-PATH probe establishes bundled-helper execution; host-helper precedence and integrity checks remain covered by installed acceptance.
 A namespace denial is separate from a loader/ABI failure, and a skipped native probe does not pass the gate.
 
-The release workflow uploads per-architecture `linux-compatibility-*` artifacts containing the wheel SHA-256, complete ELF/tag report, image digests/platforms, exact probe command, OS/kernel/library/language versions, and results.
+The release workflow uploads per-architecture `linux-compatibility-*` builder ABI reports and `linux-runtime-*` floor validation evidence.
+Together these contain the wheel SHA-256, complete ELF/tag report, image digests/platforms, exact probe command, OS/kernel/library/language versions, and results.
 Keep ARM64 and x86_64 reports separate.
 Both independent controlled-Jammy builds at source `d26f9771` used Rust 1.95.0, GCC 11, Maturin 1.15.0, and the unchanged companion pin.
 All three shipped ELF executables required at most GLIBC 2.34, with matching `manylinux_2_34` filename/WHEEL tags, no GLIBCXX/CXXABI requirements, and no RPATH/RUNPATH or extra ELF members.
