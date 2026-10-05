@@ -6,12 +6,13 @@ import signal
 import struct
 import sys
 
-mode, operation = sys.argv[1:]
+mode, operation = sys.argv[1], sys.argv[-1]
 if (mode, operation) in (
     ("probe-gate", "docker-probe"),
     ("launch-gate", "docker-launch"),
 ):
-    print("target launch gate", file=sys.stderr, flush=True)
+    with open(sys.argv[2], "wb", buffering=0) as checkpoint:
+        checkpoint.write(b"1")
     signal.pause()
     raise SystemExit(91)
 
