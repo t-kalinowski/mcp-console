@@ -469,12 +469,16 @@ exec "{shutil.which("uv")}" "$@"
 def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Transcript:
     records = []
     installations = subprocess.check_output(["uv", "python", "dir"], text=True).strip()
+    # Windows CI keeps the checkout and Python installations on different
+    # drives. A relative installation path needs a workspace on its drive.
+    temporary_parent = Path(installations).parent if os.name == "nt" else None
+    if temporary_parent is not None:
+        # `uv python dir` reports the path without creating its parents.
+        temporary_parent.mkdir(parents=True, exist_ok=True)
     for cache_setting in ("environment", "configuration"):
-        # Windows CI keeps the checkout and Python installations on different
-        # drives. A relative installation path needs a workspace on its drive.
         with tempfile.TemporaryDirectory(
             prefix="console-preparation-test-",
-            dir=Path(installations).parent if os.name == "nt" else None,
+            dir=temporary_parent,
         ) as directory:
             root = Path(directory).resolve()
             workspace = root / "workspace"

@@ -74,9 +74,19 @@ jobs:
           key: windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**') }}
           restore-keys: |
             windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-
-      - name: Install Windows runtime and formatting tools
+      - name: Install Windows runtime packages
         run: |
-          python -m pip install packaging matplotlib r-lib-ir ruff yamark
+          $ciPython = (Get-Command python).Source
+          uv pip install --python $ciPython packaging matplotlib
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Install Windows development tools
+        run: |
+          $ciPython = (Get-Command python).Source
+          foreach ($tool in @("r-lib-ir", "ruff", "yamark")) {
+            uv tool install --python $ciPython $tool
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          uv tool dir --bin >> $env:GITHUB_PATH
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Install Windows R bridge
         uses: r-lib/actions/setup-r-dependencies@v2
