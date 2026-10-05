@@ -21,7 +21,7 @@ from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
-from support.processes import process_group_exists, stop_process_group
+from support.processes import host_process_id, process_group_exists, stop_process_group
 from support.r import r_test_environment
 from support.events import Events
 from support.records import Transcript
@@ -348,9 +348,9 @@ def test_retires_python_resolver_descendant_after_leader_exit(
                 requirements={"python": ["py-yaml12"]},
             )
             started.wait("Python resolver descendant")
-            descendant, resolver_group = map(
-                int,
-                identity.read_text(encoding="utf-8").split(),
+            descendant, resolver_group = (
+                host_process_id(int(pid), client.process.pid)
+                for pid in identity.read_text(encoding="utf-8").split()
             )
             assert descendant != resolver_group
             assert resolver_group != os.getpgrp()

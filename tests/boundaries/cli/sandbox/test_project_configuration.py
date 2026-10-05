@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.snapshots import platform_snapshots
 from support.client import McpClient
+from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import SANDBOX, requires
@@ -92,8 +93,19 @@ def test_requirements_get_exposes_builtin_prelaunch_failure(binary: Path) -> Tra
         root = Path(directory)
         config = root / CONFIG
         config.parent.mkdir(parents=True)
-        config.write_text("sandbox: {network: full}\n", encoding="utf-8")
-        with McpClient(binary, ("serve",), current_directory=root) as client:
+        config.write_text(
+            json.dumps({"python": sys.executable, "sandbox": {"network": "full"}}),
+            encoding="utf-8",
+        )
+        # Reject worker policy without depending on cold R preparation first.
+        tools = root / "bin"
+        tools.mkdir()
+        retain_system_bwrap(tools)
+        environment = os.environ.copy()
+        environment.pop("R_HOME", None)
+        environment.pop("RHOME", None)
+        environment["PATH"] = str(tools)
+        with McpClient(binary, ("serve",), environment, root) as client:
             client.initialize_and_list_tools()
             result = client.send(requirements={"action": "get"})
             assert result.get("isError"), result

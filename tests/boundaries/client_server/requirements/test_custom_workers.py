@@ -18,7 +18,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
-from support.processes import capture_process_identity, kill_processes
+from support.processes import capture_process_identity, host_process_id, kill_processes
 from support.r import r_test_environment
 from support.records import Transcript
 from support.resolvers import record_resolved_r_library
@@ -471,9 +471,13 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
             client.initialize_and_list_tools()
             pending = client.start_send(requirements={"r": ["praise"]})
             started.wait("materializer published its output and descriptor holder")
-            ir_pid = int((root / "ir-pid").read_text())
+            ir_pid = host_process_id(
+                int((root / "ir-pid").read_text()), client.process.pid
+            )
             holder_identity = capture_process_identity(
-                int((root / "holder-pid").read_text())
+                host_process_id(
+                    int((root / "holder-pid").read_text()), client.process.pid
+                )
             )
             exits.watch_process(ir_pid)
             ir_release.release()

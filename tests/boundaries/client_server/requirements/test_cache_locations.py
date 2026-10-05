@@ -116,6 +116,7 @@ def test_selected_python_preserves_user_site_packages(binary: Path) -> Transcrip
                             "preinstalled user-site package retained\n",
                             # fmt: python
                             python=code(f"""
+                                import errno
                                 import os
                                 import site
                                 from pathlib import Path
@@ -128,8 +129,8 @@ def test_selected_python_preserves_user_site_packages(binary: Path) -> Transcrip
                                 assert Path(os.environ["UV_CACHE_DIR"]) == Path({str(expected_cache)!r})
                                 try:
                                     Path(package.__file__).write_text("answer = -1\\n")
-                                except PermissionError:
-                                    pass
+                                except OSError as error:
+                                    assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
                                 else:
                                     raise AssertionError("worker wrote to the host user site")
                                 print("preinstalled user-site package retained")
@@ -379,6 +380,7 @@ def cache_locations(
             # The hook tests real cache permissions, without requiring downloads.
             # fmt: python
             probe = code(f"""
+                import errno
                 import json
                 import os
                 from pathlib import Path
@@ -393,8 +395,8 @@ def cache_locations(
                     if not {host!r}:
                         try:
                             Path(os.environ["CACHE_TEST_ROOT"]).joinpath("host-write").write_text("escaped")
-                        except PermissionError:
-                            pass
+                        except OSError as error:
+                            assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
                         else:
                             raise AssertionError("resolver wrote outside Console caches")
                     if {source != "direct"!r}:
@@ -403,8 +405,8 @@ def cache_locations(
                             assert file.read_text() == "trusted companion cache"
                             try:
                                 file.write_text("resolver overwrote companion cache")
-                            except PermissionError:
-                                pass
+                            except OSError as error:
+                                assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
                             else:
                                 raise AssertionError("resolver wrote to companion build cache")
                     cache.joinpath("resolver-probe").write_text("prepared")
