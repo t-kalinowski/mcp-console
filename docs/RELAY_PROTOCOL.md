@@ -138,6 +138,8 @@ Each reader can also hold one frame awaiting admission, so this is not a total-m
 Supervisor events have a separate 16-frame/64-KiB allowance but enter the same FIFO and cannot overtake earlier output.
 All worker-originated frames, including completion and resolver requests, use the ordinary allowance.
 Supervisor-budget exhaustion fails the transport.
+Failed sideband event forwarding starts direct-worker retirement independently of the stdout writer's failure callback, which a blocking Windows write may delay.
+Reader completion after cancellation is a separate observation and does not initiate retirement again.
 
 For pipes, FIFOs, and sockets, output is nonblocking and retirement bounds both writes and queue admission.
 Original descriptor flags are restored when the writer finishes; duplicate descriptors share `O_NONBLOCK` state.

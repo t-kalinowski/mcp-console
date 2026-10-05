@@ -219,7 +219,15 @@ fn retirement(
         }
         journal.write_all(&command)?;
         let command = String::from_utf8(command).unwrap();
-        if sideband_eof && command.contains("evaluate") {
+        if scenario == "retirement_backpressure" && command.contains("evaluate") {
+            // Keep the outer writer inside one frame while the sideband reader
+            // waits for ordinary event capacity. Neither endpoint closes.
+            let data = "x".repeat(1024 * 1024);
+            send(write, &format!("{{\"kind\":\"console_output\",\"data\":\"{data}\"}}\n"))?;
+            loop {
+                send(write, "{\"kind\":\"console_output\",\"data\":\"blocked\"}\n")?;
+            }
+        } else if sideband_eof && command.contains("evaluate") {
             writer.take();
         } else if command.trim() == "{\"kind\":\"shutdown\"}" {
             writeln!(ready, "shutdown")?;

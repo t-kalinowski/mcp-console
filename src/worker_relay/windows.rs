@@ -22,6 +22,7 @@ enum Control {
     ControllerEof,
     SidebandEof,
     SidebandReaderFinished,
+    SidebandForwardingFailed,
     Exited,
     Failed(String),
 }
@@ -181,6 +182,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
             match sideband.receive::<WorkerMessage>() {
                 Ok(message) => {
                     if !sideband_events.send(message.into()) {
+                        completion = Control::SidebandForwardingFailed;
                         break;
                     }
                 }
@@ -267,7 +269,10 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 let _ = child.kill();
                 break;
             }
-            Ok(Control::Failed(_)) => {
+            Ok(Control::Failed(_) | Control::SidebandForwardingFailed) => {
+                // Failed event admission can precede the writer's failure
+                // callback when stdout is blocked. Retire the direct child
+                // before cancelling/joining its I/O, just as for other failures.
                 let _ = child.kill();
                 break;
             }
