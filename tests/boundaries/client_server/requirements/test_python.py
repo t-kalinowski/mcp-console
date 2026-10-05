@@ -25,11 +25,15 @@ from support.processes import process_group_exists, stop_process_group
 from support.r import r_test_environment
 from support.events import Events
 from support.records import Transcript
+from support.python import write_test_wheel
+from boundaries.client_server.python.test_peer_runtime import without_r
 from support.resolvers import (
     checkpoint_uv_environment,
     matplotlib_test_environment,
     named_requirement_error,
     recording_uv_environment,
+    send_and_collect_runtime_python_resolution,
+    uv_tool_run_requirements,
 )
 from support.suites import run_this_suite
 
@@ -688,33 +692,90 @@ def test_prepares_python_requirements_after_worker_startup(
 def test_failed_live_python_requirements_do_not_run_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return failed_live_python_requirements_do_not_run_cell(binary, execution)
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_failed_no_r_live_python_requirements_do_not_run_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return failed_live_python_requirements_do_not_run_cell(
+        binary, execution, with_r=False
+    )
+
+
+def failed_live_python_requirements_do_not_run_cell(
+    binary: Path, execution: Execution, *, with_r: bool = True
+) -> Transcript:
+    prior = "mcp_console_test_prior"
+    candidate = "mcp_console_test_candidate"
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        environment, _ = recording_uv_environment(root, fail_requirement="py-yaml12")
+        # fmt: python
+        prior_source = code("""
+            state = {"answer": 42}
+
+
+            def answer():
+                return state["answer"]
+            """)
+        index = write_test_wheel(root, prior, prior_source)
+        write_test_wheel(root, candidate, "answer = 7\n")
+        environment, record = recording_uv_environment(root, fail_requirement=candidate)
+        environment["UV_INDEX"] = index.as_uri()
+        environment["UV_INDEX_STRATEGY"] = "first-index"
+        for name in ("UV_FIND_LINKS", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL"):
+            environment.pop(name, None)
+        if not with_r:
+            uv = environment["RETICULATE_UV"]
+            without_r(environment, root)
+            commands = Path(environment["PATH"])
+            (commands / "uv").symlink_to(uv)
+            (commands / "python3").symlink_to(sys.executable)
         with McpClient(
             binary, execution.serve("-c", "cache=host"), environment, root
         ) as client:
             client.initialize_and_list_tools()
-            client.send(
-                python="import os, sys; live_sentinel = 42; live_worker_pid = os.getpid(); print(sys.executable)"
+            client.expect(
+                "[prepared]", requirements={"action": "set", "python": [prior]}
             )
+            # fmt: python
+            python = code("""
+                import os
+                import sys
+                import mcp_console_test_prior
+
+                live_module = mcp_console_test_prior
+                live_object = live_module.state
+                live_sentinel = live_module.answer()
+                live_worker_pid = os.getpid()
+                print(sys.executable)
+                """)
+            client.send(python=python)
             executable = last_tool_text(client).strip()
             assert Path(executable).is_absolute(), executable
             client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
-            # Ordinary tool preparation must remain independent of the public
-            # reticulate declaration function, even after R is initialized.
-            client.expect(
-                r=code(r"""
-                reticulate_namespace <- asNamespace("reticulate")
-                unlockBinding("py_require", reticulate_namespace)
-                assign("py_require", function(...) stop("tool entered reticulate declaration"),
-                       envir = reticulate_namespace)
-                lockBinding("py_require", reticulate_namespace)
-                """),
-            )
+            accepted = client.send(requirements={"action": "get"})["structuredContent"][
+                "requirements"
+            ]
+            assert accepted["python"] == [prior], accepted
+            baseline = len(uv_tool_run_requirements(record))
+            if with_r:
+                # Ordinary tool preparation remains independent of the public
+                # reticulate declaration function after R is initialized.
+                # fmt: r
+                r = code(r"""
+                    reticulate_namespace <- asNamespace("reticulate")
+                    unlockBinding("py_require", reticulate_namespace)
+                    assign("py_require", function(...) stop("tool entered reticulate declaration"),
+                           envir = reticulate_namespace)
+                    lockBinding("py_require", reticulate_namespace)
+                    """)
+                client.expect(r=r)
             result = client.send(
                 python="failed_live_python_cell = True",
-                requirements={"python": ["py-yaml12"]},
+                requirements={"python": [candidate]},
             )
             assert result["isError"] is True, result
             error = result["content"][0]["text"]
@@ -722,20 +783,89 @@ def test_failed_live_python_requirements_do_not_run_cell(
                 "managed Python resolution failed:\nresolver input:\n"
             ).split("\nuv output:\n")
             requested = json.loads(request)
-            assert requested["packages"] == ["numpy", "pandas", "py-yaml12"], requested
+            assert requested["packages"] == [candidate, prior], requested
             assert requested["python"] == executable, requested
             assert diagnostic == "synthetic uv failure", diagnostic
             result["content"][0]["text"] = normalize_python_resolution_error(
                 error, executable=executable
             )
+            assert len(uv_tool_run_requirements(record)) == baseline + 1
+
+            # Keep failure enforced: the negative import must not acquire the
+            # candidate through automatic resolution while checking rejection.
+            output = send_and_collect_runtime_python_resolution(
+                client, python=f"import {candidate}"
+            )
+            assert client.transcript[-1]["result"]["isError"] is False
+            for expected in ("ModuleNotFoundError", candidate, "synthetic uv failure"):
+                assert expected in output, output
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                normalize_python_resolution_error(output, executable=executable)
+            )
+            runs = uv_tool_run_requirements(record)[baseline:]
+            assert runs == [[candidate, prior], [candidate, prior]], runs
+            assert (
+                client.send(requirements={"action": "get"})["structuredContent"][
+                    "requirements"
+                ]
+                == accepted
+            )
+            # fmt: python
+            python = code("""
+                import importlib.util
+                import mcp_console_test_prior
+
+                (
+                    live_sentinel,
+                    mcp_console_test_prior.answer(),
+                    mcp_console_test_prior is live_module,
+                    mcp_console_test_prior.state is live_object,
+                    os.getpid() == live_worker_pid,
+                    "failed_live_python_cell" not in globals(),
+                    importlib.util.find_spec("mcp_console_test_candidate") is None,
+                )
+                """)
+            client.send(python=python)
+            assert last_tool_text(client) == "(42, 42, True, True, True, True, True)\n"
+            assert len(uv_tool_run_requirements(record)) == baseline + 2
+
             (root / "uv-failure").unlink()
-            client.send(
-                python="import yaml12; (live_sentinel, os.getpid() == live_worker_pid, 'failed_live_python_cell' not in globals(), yaml12.__name__)",
-                requirements={"python": ["py-yaml12"]},
+            # fmt: python
+            python = code("""
+                import mcp_console_test_candidate
+
+                assert mcp_console_test_candidate.answer == 7
+                raise RuntimeError("after accepted Python preparation")
+                """)
+            result = client.send(python=python, requirements={"python": [candidate]})
+            assert result["isError"] is False, result
+            assert "RuntimeError: after accepted Python preparation" in last_tool_text(
+                client
             )
-            assert last_tool_text(client) == "(42, True, True, 'yaml12')\n", (
-                client.transcript[-1]
-            )
+            retained = client.send(requirements={"action": "get"})["structuredContent"][
+                "requirements"
+            ]
+            assert retained == dict(accepted, python=[candidate, prior]), retained
+            resolved = len(uv_tool_run_requirements(record))
+            assert resolved == baseline + 3
+            # fmt: python
+            python = code("""
+                import mcp_console_test_prior
+                import mcp_console_test_candidate
+
+                (
+                    live_sentinel,
+                    mcp_console_test_prior.answer(),
+                    mcp_console_test_candidate.answer,
+                    mcp_console_test_prior is live_module,
+                    mcp_console_test_prior.state is live_object,
+                    os.getpid() == live_worker_pid,
+                    "failed_live_python_cell" not in globals(),
+                )
+                """)
+            client.send(python=python)
+            assert last_tool_text(client) == "(42, 42, 7, True, True, True, True)\n"
+            assert len(uv_tool_run_requirements(record)) == resolved
             return client.finish()
 
 
