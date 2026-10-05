@@ -240,7 +240,7 @@ def returns_matplotlib_plots(
         client = clients.enter_context(
             McpClient(
                 binary,
-                execution.serve(),
+                execution.serve("-c", "cache=host"),
                 environment,
                 current_directory=workspace,
             )
@@ -442,7 +442,7 @@ def test_inherits_explicit_matplotlib_config(
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_rc)
         client = clients.enter_context(
-            McpClient(binary, execution.serve(), environment)
+            McpClient(binary, execution.serve("-c", "cache=host"), environment)
         )
         client.initialize_and_list_tools()
         wait_for_worker_ready(client, "explicit Matplotlib declaration readiness")
@@ -510,8 +510,6 @@ def inherits_matplotlib_config(
         font_cache = (
             cache_root / "matplotlib" if sys.platform == "linux" else matplotlib
         )
-        if execution is SANDBOXED:
-            font_cache = cache_root / "mcp-console/resolver/payload/matplotlib"
         matplotlib.mkdir(parents=True)
         matplotlibrc = matplotlib / "matplotlibrc"
         matplotlibrc.write_text("lines.linewidth: 9.25\n", encoding="utf-8")
@@ -561,7 +559,7 @@ def inherits_matplotlib_config(
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPLCONFIGDIR", None)
         client = clients.enter_context(
-            McpClient(binary, execution.serve(), environment)
+            McpClient(binary, execution.serve("-c", "cache=host"), environment)
         )
         client.initialize_and_list_tools()
         wait_for_worker_ready(client, "inherited Matplotlib declaration readiness")

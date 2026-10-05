@@ -31,6 +31,13 @@ pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 /// Native policy values; application additions materialize on the execution host.
 pub type SandboxSettings = Map<String, Value>;
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Cache {
+    Console,
+    Host,
+}
+
 /// Preserve Console's assignments and removals after project environment controls.
 pub fn preserve_environment<'a>(
     policy: &mut SandboxSettings,
@@ -84,6 +91,7 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Project {
+    cache: Option<Cache>,
     python: Option<std::path::PathBuf>,
     extends: Option<String>,
     sandbox: Map<String, Value>,
@@ -93,6 +101,7 @@ struct Project {
 
 #[derive(Default)]
 pub(crate) struct Captured {
+    pub cache: Option<Cache>,
     pub python: Option<std::path::PathBuf>,
     pub source: Option<String>,
     pub policy: SandboxSettings,
@@ -173,6 +182,7 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
     let target = project.target.filter(|target| !target.is_local_host());
     let remote_python = target.is_some();
     Ok(Captured {
+        cache: project.cache,
         python: project
             .python
             .map(|path| {

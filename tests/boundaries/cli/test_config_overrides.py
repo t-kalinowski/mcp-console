@@ -71,6 +71,7 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
         configure(
             workspace,
             {
+                "cache": "host",
                 "extends": ":read-only",
                 "sandbox": {
                     "environment": {"KEEP": "project", "CHANGE": "project"},

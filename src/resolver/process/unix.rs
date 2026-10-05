@@ -10,6 +10,39 @@ use std::process::{Command, ExitStatus};
 use super::{ResolverInterrupt, settle_observation};
 use crate::process_exit::ChildExitWaiter;
 
+pub(super) type Cancel = io::PipeWriter;
+
+pub(super) fn prepare_io(command: &mut Command, input: bool) -> io::Result<super::Endpoints> {
+    use crate::process_output::RelayOutput;
+    use crate::target_launch::transfer::Io;
+    use std::process::Stdio;
+    let (input_cancelled, input_cancel) = io::pipe()?;
+    let (output_cancelled, output_cancel) = io::pipe()?;
+    let (stdout, stdout_child) = io::pipe()?;
+    let (stderr, stderr_child) = io::pipe()?;
+    let writer = if input {
+        let (stdin_child, stdin) = io::pipe()?;
+        let stdin = Io::new(stdin, Some(input_cancelled), None).map_err(io::Error::other)?;
+        command.stdin(Stdio::from(stdin_child));
+        Some(Box::new(stdin) as Box<dyn io::Write + Send>)
+    } else {
+        command.stdin(Stdio::null());
+        None
+    };
+    let stdout = RelayOutput::new(stdout, output_cancelled.try_clone()?);
+    let stderr = RelayOutput::new(stderr, output_cancelled);
+    command
+        .stdout(Stdio::from(stdout_child))
+        .stderr(Stdio::from(stderr_child));
+    Ok(super::Endpoints {
+        input: writer,
+        stdout: Box::new(stdout),
+        stderr: Box::new(stderr),
+        input_cancel,
+        output_cancel,
+    })
+}
+
 pub(crate) fn resolver_command(program: &Path) -> Command {
     let mut command = Command::new(program);
     command.process_group(0);

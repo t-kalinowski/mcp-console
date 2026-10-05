@@ -396,7 +396,7 @@ def test_failed_mixed_preparation_retains_live_python_activation(
         environment["MCP_CONSOLE_TEST_IR_REQUIREMENT"] = requirement
         environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(candidate)
 
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -520,7 +520,7 @@ def test_evaluates_with_default_managed_r(
 
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=workspace,
         )

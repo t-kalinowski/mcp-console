@@ -6,7 +6,7 @@ Windows SQL remains unavailable, and Windows defaults do not prepare DuckDB exte
 The server retains dependency declarations and resolved environments across worker generations.
 Preparation makes packages or extensions **available**; it does not attach R packages, import Python modules, or load DuckDB extensions.
 [Send ordering](SEND_OPERATIONS.md) defines when preparation, control, input, and code run.
-[Host resolution and trust](#host-resolution-and-trust) describes the separate resolver sandbox and shared cache permissions.
+[Host resolution and trust](#host-resolution-and-trust) describes the separate resolver sandbox and cache permissions.
 
 ## Retained environments
 
@@ -242,15 +242,18 @@ These restrictions reduce input syntax; they do not make remote package code saf
 Capturing paths/environment values does not freeze the files they name.
 A worker that can replace a selected uv wrapper, or write a wheel directory selected by `UV_FIND_LINKS` / uv configuration, can influence later preparation.
 That code runs under the resolver policy in local sandboxed preparation.
-Shared cache writes can also affect other users of those artifacts; Console does not isolate or protect cache contents.
+Local sandboxed sessions redirect preparation and worker cache paths to Console-specific storage.
+With `cache: host`, shared cache writes can also affect other users of those artifacts.
+Cache separation does not protect cache contents from processes explicitly granted writes.
 
 ### Host resolver uv configuration
 
 The preparation owner captures startup `UV_*` values except `UV_OFFLINE`, restores that snapshot for later calls, and uses its captured uv selection.
 R-present sessions respect `RETICULATE_UV`; the special `managed` value uses reticulate's managed tool/cache.
 Environment changes in evaluated cells do not configure later host resolution, though mutable files still can.
-Local resolver write grants cover default cache locations and direct cache environment overrides.
-Custom paths selected by uv configuration files need an explicit [resolver policy](RESOLVER.md#configuration) or a matching `resolver.environment.UV_CACHE_DIR` override.
+Default local resolver writes are confined to the Console cache root and private temporary storage.
+With `cache: host`, grants cover default host cache locations and direct cache environment overrides.
+Custom host paths selected by uv configuration files need an explicit [resolver policy](RESOLVER.md#configuration) or a matching `resolver.environment.UV_CACHE_DIR` override.
 
 Managed environment creation removes `UV_NO_CACHE` because uv would otherwise delete the selected environment on exit.
 Worker code starts with `UV_OFFLINE=1`, including under `--no-sandbox`; that variable configures uv, not process-level network enforcement.
