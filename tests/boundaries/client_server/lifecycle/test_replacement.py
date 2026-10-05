@@ -89,7 +89,7 @@ def test_reports_replacement_startup_failure_and_retry(
         )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), *writable_root),
+            execution.serve("-c", "cache=host", "--worker", str(zod), *writable_root),
             environment,
         )
         client.initialize_and_list_tools()
@@ -169,7 +169,7 @@ def test_polls_replacement_startup_after_send_timeout(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
         )
         forced_release = threading.Event()
@@ -412,6 +412,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["TMPDIR"] = temporary_directory
+        environment["UV_TOOL_DIR"] = str(temporary_path)
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
         environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
@@ -424,7 +425,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), *writable_root),
+            execution.serve("-c", "cache=host", "--worker", str(zod), *writable_root),
             environment,
         )
         finished = False
@@ -502,6 +503,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["TMPDIR"] = temporary_directory
+        environment["UV_TOOL_DIR"] = str(temporary_path)
         environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
         environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
@@ -513,7 +515,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
 
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
         )
         finished = False

@@ -212,7 +212,11 @@ def test_preserves_native_validation_errors(binary: Path) -> Transcript:
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
         }
         for settings in cases:
-            config.write_text(json.dumps({"sandbox": settings}), encoding="utf-8")
+            # Exercise native policy validation without Console cache redirects
+            # adding environment fields to the supplied policy.
+            config.write_text(
+                json.dumps({"cache": "host", "sandbox": settings}), encoding="utf-8"
+            )
             for arguments in (
                 ("serve",),
                 ("sandbox", "--", "/bin/echo", "workload started"),
