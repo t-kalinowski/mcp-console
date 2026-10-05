@@ -20,9 +20,24 @@ static atomic_bool interrupted;
 static _Thread_local bool observer_thread;
 
 __attribute__((constructor)) static void initialize(void) {
+    // An MCP test loads the same fixture in the server so its direct resolver
+    // child inherits it. Other processes drop injection before spawning.
+    const char *server = getenv("MCP_CONSOLE_TEST_OBSERVER_SERVER");
+    if (server != NULL && strtol(server, NULL, 10) == getpid()) return;
     // Interpose only the relay or preparation owner, never its child.
     unsetenv("DYLD_INSERT_LIBRARIES");
     unsetenv("LD_PRELOAD");
+}
+
+static bool target_child(id_t id) {
+    const char *path = getenv("MCP_CONSOLE_TEST_OBSERVER_TARGET");
+    if (path == NULL) return true;
+    FILE *file = fopen(path, "r");
+    if (file == NULL) return false; // The materializer has not published its PID.
+    int pid;
+    int count = fscanf(file, "%d", &pid);
+    if (fclose(file) != 0 || count != 1) _exit(125);
+    return pid == (int)id;
 }
 
 static void checkpoint(const char *name, int flags) {
@@ -36,7 +51,7 @@ static void checkpoint(const char *name, int flags) {
 }
 
 static int observe_exit(idtype_t type, id_t id, siginfo_t *info, int options) {
-    bool observing = type == P_PID && (options & WNOWAIT);
+    bool observing = type == P_PID && (options & WNOWAIT) && target_child(id);
     // The cancellable resolver observer probes waitid before its native event
     // wait. Gate that observer thread, without gating owner-side status probes.
     if (observing && atomic_load(&observed_pid) == 0 &&
