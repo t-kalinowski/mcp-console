@@ -181,7 +181,7 @@ Each target CLI settles its child exit observation, input, and output tasks befo
 Before provider launch, that evidence covers only local command retirement.
 After the probe owner launches, setup also requires the generation's provider receipt, including receipts carried with workload errors.
 Confirmed cleanup does not turn a workload or infrastructure failure into successful setup or suppress it during connection shutdown.
-An independent target CLI signal failure survives cancellation; only the matching SIGKILL sent by command retirement is treated as its termination result.
+Independent target CLI and probe-owner exit failures survive cancellation and valid provider retirement receipts; only the matching SIGKILL sent by command retirement is treated as its termination result.
 Connection closure that refuses the next preparation stage is separate from control of a completed operation.
 It permits a quiet exit only after the refused stage's cleanup is confirmed.
 Errors closing the preparation connection remain visible.

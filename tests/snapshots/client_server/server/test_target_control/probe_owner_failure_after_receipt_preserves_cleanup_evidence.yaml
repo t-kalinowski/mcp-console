@@ -1,0 +1,21 @@
+---
+owner_status: "signal: 9 (SIGKILL)"
+workload_error: false
+shutdown: false
+provider_retirement_confirmed: true
+cell_dispatched: false
+exit_status: 1
+---
+owner_status: "exit status: 47"
+workload_error: false
+shutdown: false
+provider_retirement_confirmed: true
+cell_dispatched: false
+exit_status: 1
+---
+owner_status: "signal: 9 (SIGKILL)"
+workload_error: true
+shutdown: true
+provider_retirement_confirmed: true
+cell_dispatched: false
+exit_status: 1

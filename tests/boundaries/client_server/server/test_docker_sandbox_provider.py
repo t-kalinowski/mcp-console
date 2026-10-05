@@ -40,6 +40,7 @@ def assert_cancelled_creation_error(root: Path, error: str, *, removed: bool) ->
         else "creation returned no identity; an empty listing cannot confirm retirement of an unacknowledged creation"
     )
     assert normalized == (
+        "Docker Sandbox setup cancelled; Docker Sandbox command failed with exit status: 1; "
         "Docker Sandbox setup cancelled; Docker Sandbox create used shared sources []; "
         "shared paths must already exist. Setup requires login, initialized provider "
         "policy, an available template, and virtualization; see docs/DOCKER_SANDBOX.md; "

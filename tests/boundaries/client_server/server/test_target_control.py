@@ -23,7 +23,7 @@ TEMPLATE = "docker.io/example/console@sha256:" + "a" * 64
 
 @contextmanager
 def gated_controller(
-    binary: Path, mode: str
+    binary: Path, mode: str, *, peer_mode: str | None = None
 ) -> Iterator[tuple[McpClient, Path, dict[str, FifoCheckpoint]]]:
     with (
         workspace() as root,
@@ -37,6 +37,8 @@ def gated_controller(
             (root / "peer/version-signal").write_text(str(signal.SIGKILL))
         if mode == "control-gate" or mode.startswith("poll-error"):
             (root / "peer/mode").write_text("diagnostics-gate")
+        if peer_mode is not None:
+            (root / "peer/mode").write_text(peer_mode)
         gates = {
             name: stack.enter_context(
                 closing(FifoCheckpoint.create(root / "peer" / name))
@@ -52,7 +54,12 @@ def gated_controller(
         environment.update(
             {
                 LOADER_VARIABLE: str(
-                    build_interposer(Path(native), "target_setup_control")
+                    build_interposer(
+                        Path(native),
+                        "target_probe_exit"
+                        if mode.startswith("receipt-")
+                        else "target_setup_control",
+                    )
                 ),
                 "MCP_CONSOLE_TEST_TARGET_SETUP": str(root / "peer"),
                 "MCP_CONSOLE_TEST_TARGET_FAULT": mode,
@@ -192,6 +199,65 @@ def test_shutdown_preserves_an_independent_signal_failure(binary: Path) -> list:
         assert [call["args"] for call in calls(root)] == [["version"]]
         assert not (root / "peer/vms").exists()
         return [{"independent_signal": "SIGKILL", "exit_status": 1, "stderr": stderr}]
+
+
+@requires(POSIX, NATIVE_FIXTURES)
+def test_probe_owner_failure_after_receipt_preserves_cleanup_evidence(
+    binary: Path,
+) -> list:
+    records = []
+    for mode, workload_error, shutdown in (
+        ("receipt-sigkill", False, False),
+        ("receipt-exit", False, False),
+        ("receipt-sigkill", True, True),
+    ):
+        with gated_controller(
+            binary, mode, peer_mode="probe-failed" if workload_error else None
+        ) as (client, root, gates):
+            gates["native-reached"].wait("probe owner wrote its complete RETIRED frame")
+            client.send(r="must_not_run <- TRUE", timeout_ms=0)
+            if shutdown:
+                client.stdin.close()
+            gates["native-release"].release()
+            if not shutdown:
+                client.send(timeout_ms=10000)
+                text = last_result_text(client)
+                assert "Docker Sandbox command failed with" in text, text
+            _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+            status = (
+                "signal: 9 (SIGKILL)"
+                if mode == "receipt-sigkill"
+                else "exit status: 47"
+            )
+            assert f"Docker Sandbox command failed with {status}" in stderr, stderr
+            if not workload_error:
+                assert stderr == f"Docker Sandbox command failed with {status}\n", (
+                    stderr
+                )
+            assert ("probe validation failed" in stderr) == workload_error, stderr
+            assert "retirement is unconfirmed" not in stderr, stderr
+            assert not (root / "peer/evaluations").exists()
+            assert not (root / "peer/vms").exists()
+            invoked = [call["args"] for call in calls(root)]
+            (name,) = [
+                args[args.index("--name") + 1]
+                for args in invoked
+                if args[0] == "create"
+            ]
+            assert [args for args in invoked if args[0] == "rm"] == [
+                ["rm", "--force", name]
+            ]
+            records.append(
+                {
+                    "owner_status": status,
+                    "workload_error": workload_error,
+                    "shutdown": shutdown,
+                    "provider_retirement_confirmed": True,
+                    "cell_dispatched": False,
+                    "exit_status": 1,
+                }
+            )
+    return records
 
 
 @requires(POSIX, NATIVE_FIXTURES)

@@ -58,7 +58,6 @@ pub(crate) mod process {
     pub(crate) struct CommandReport {
         pub output: Vec<u8>,
         pub result: Result<(), super::super::SetupFailure>,
-        pub status: Option<std::process::ExitStatus>,
     }
     pub(crate) fn run_report(
         _: std::process::Command,

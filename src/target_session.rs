@@ -129,17 +129,6 @@ impl Session {
                 .read_to_end(&mut unexpected)
                 .map(|_| ())
                 .map_err(|error| error.to_string());
-            let parsed = if !output.retirement_received()
-                && let Some(status) = report.status.filter(|status| !status.success())
-            {
-                Err(format!(
-                    "{} command failed with {status}; {}",
-                    profile.protocol.0,
-                    parsed.err().unwrap_or_default()
-                ))
-            } else {
-                parsed
-            };
             let parsed = if !output.retirement_received() {
                 parsed.map_err(|error| {
                     format!(

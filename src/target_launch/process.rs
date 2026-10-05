@@ -169,7 +169,6 @@ pub(crate) enum OutputMode {
 pub(crate) struct CommandReport {
     pub output: Vec<u8>,
     pub result: Result<(), SetupFailure>,
-    pub status: Option<std::process::ExitStatus>,
 }
 
 /// An I/O failure retires only this command. The operation's control token
@@ -480,10 +479,13 @@ pub(crate) fn run_report(
     let status = process.ok().map(|process| process.status);
     if let Some(status) = status
         && !status.success()
-        && !owner
         && (!killed || status.signal() != Some(libc::SIGKILL))
     {
-        diagnostic_bytes.extend_from_slice(&bytes);
+        // Owner stdout is protocol data, including independent provider
+        // retirement evidence. Keep it for parsing even when the owner fails.
+        if !owner {
+            diagnostic_bytes.extend_from_slice(&bytes);
+        }
         let diagnostic = String::from_utf8_lossy(&diagnostic_bytes);
         errors.push(if diagnostic.is_empty() {
             format!("{label} command failed with {status}")
@@ -501,7 +503,6 @@ pub(crate) fn run_report(
     Ok(CommandReport {
         output: bytes,
         result,
-        status,
     })
 }
 
