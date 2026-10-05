@@ -269,7 +269,7 @@ def test_finishes_ansi_at_polls_but_preserves_split_utf8(
                 for data, expected in (
                     (b"first\x1b[31", "first"),
                     (b"msecond\x1b]0;hidden", "msecond"),
-                    (b"third\x1b[32m \xe2", "third "),
+                    (b"third\x1b[32m:\xe2", "third:"),
                     (b"\x82\xac\x1b[0m\n", "€\n"),
                 ):
                     release.release()

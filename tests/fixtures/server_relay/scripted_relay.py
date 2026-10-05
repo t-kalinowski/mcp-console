@@ -1354,7 +1354,7 @@ def run_ansi_polls(relay: ScriptedRelay) -> None:
     for data in (
         b"first\x1b[31",
         b"msecond\x1b]0;hidden",
-        b"third\x1b[32m \xe2",
+        b"third\x1b[32m:\xe2",
         b"\x82\xac\x1b[0m\n",
     ):
         with (directory / "partial-release").open("rb", buffering=0) as checkpoint:

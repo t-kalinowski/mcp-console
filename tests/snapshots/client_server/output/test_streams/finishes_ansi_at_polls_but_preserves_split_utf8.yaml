@@ -38,7 +38,7 @@ result:
   content:
     - type: text
       text: |-
-        third 
+        third:
         [running; poll with an empty send]
   isError: false
 ---
