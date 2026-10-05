@@ -136,10 +136,11 @@ fn exit_notification(pid: libc::pid_t) -> io::Result<Option<OwnedFd>> {
         udata: std::ptr::null_mut(),
     };
     // XNU rejects NOTE_EXIT registration after exit, even for an unreaped
-    // child. Confirm that race through waitid while identity is still pinned.
+    // child whose terminal status is not yet waitable. As after NOTE_EXIT,
+    // wait for that status while WNOWAIT keeps its identity pinned.
     if unsafe { libc::kevent(fd, &change, 1, std::ptr::null_mut(), 0, std::ptr::null()) } < 0 {
         let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) && observe_direct_child(pid, false)? {
+        if error.raw_os_error() == Some(libc::ESRCH) && observe_direct_child(pid, true)? {
             return Ok(None);
         }
         return Err(error);
