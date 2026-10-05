@@ -7,6 +7,7 @@ use std::path::PathBuf;
 pub(crate) fn configure(
     selection: Option<Cache>,
     no_sandbox: bool,
+    python: Option<&std::path::Path>,
     resolver: &mut SandboxSettings,
     worker: &mut SandboxSettings,
 ) -> Result<(), String> {
@@ -23,6 +24,10 @@ pub(crate) fn configure(
     if no_sandbox {
         return Err("cache: console requires sandboxing; use cache: host with --no-sandbox".into());
     }
+    let explicit_python = python
+        .map(|python| python.as_os_str().to_owned())
+        .or_else(|| std::env::var_os("RETICULATE_PYTHON"))
+        .is_some_and(|python| !python.is_empty() && python != "managed");
     // Host-side companion staging uses the sibling mcp-console/sandbox cache.
     // Grant only dependency storage, never the shared Console cache parent.
     let root = console_root(resolver)?.join("dependencies");
@@ -59,6 +64,9 @@ pub(crate) fn configure(
         ("PYTHONUSERBASE", "python/user"),
     ]
     .into_iter()
+    // Explicit Python keeps its preinstalled user-site packages without adding
+    // resolver write grants for their host locations.
+    .filter(|(name, _)| *name != "PYTHONUSERBASE" || !explicit_python)
     .map(|(name, relative)| Ok((name.to_owned(), path(relative)?)))
     .collect::<Result<SandboxSettings, String>>()?;
     for settings in [&mut *resolver, worker] {

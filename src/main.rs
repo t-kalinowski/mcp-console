@@ -179,7 +179,13 @@ fn run_server(
         provider,
     } = settings::discover(overrides)?;
     if target.is_none() {
-        resolver::cache::configure(cache, no_sandbox, &mut resolver, &mut policy)?;
+        resolver::cache::configure(
+            cache,
+            no_sandbox,
+            python.as_deref(),
+            &mut resolver,
+            &mut policy,
+        )?;
     } else if matches!(cache, Some(settings::Cache::Console)) {
         return Err("cache: console requires a local execution target".into());
     }

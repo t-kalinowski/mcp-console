@@ -65,6 +65,84 @@ def test_host_cache_opt_out(binary: Path) -> Transcript:
 
 
 @requires(SANDBOX)
+def test_selected_python_preserves_user_site_packages(binary: Path) -> Transcript:
+    with TemporaryDirectory(prefix="console-user-site-", dir=Path.home()) as directory:
+        root = Path(directory).resolve()
+        selected = Path(sys._base_executable)
+        env = environment(root)
+        user_base = root / "user-base"
+        env.update(
+            PYTHONUSERBASE=str(user_base),
+            XDG_CACHE_HOME=str(root / "cache"),
+            UV_CACHE_DIR=str(root / "host-uv"),
+        )
+        env.pop("PYTHONNOUSERSITE", None)
+        user_site = Path(
+            subprocess.check_output(
+                [selected, "-c", "import site; print(site.getusersitepackages())"],
+                env=env,
+                text=True,
+            ).strip()
+        )
+        assert user_site.is_relative_to(user_base), user_site
+        user_site.mkdir(parents=True)
+        module = user_site / "console_user_site_package.py"
+        module.write_text("answer = 42\n")
+        workspace = root / "workspace"
+        workspace.mkdir()
+        config = workspace / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        for source in ("config", "environment"):
+            settings = {}
+            if source == "config":
+                settings["python"] = str(selected)
+                env.pop("RETICULATE_PYTHON", None)
+            else:
+                env["RETICULATE_PYTHON"] = str(selected)
+            config.write_text(json.dumps(settings))
+            for host in (True, False):
+                expected_cache = (
+                    root / "host-uv"
+                    if host
+                    else root / "cache/mcp-console/dependencies/uv/cache"
+                )
+                arguments = ["serve", "-c", "cache=host"] if host else ["serve"]
+                with McpClient(binary, arguments, env, workspace) as client:
+                    client.initialize_and_list_tools()
+                    for restart in (False, True):
+                        if restart:
+                            client.send(control="restart")
+                        client.expect(
+                            "preinstalled user-site package retained\n",
+                            # fmt: python
+                            python=code(f"""
+                                import os
+                                import site
+                                from pathlib import Path
+                                import console_user_site_package as package
+
+                                assert package.answer == 42
+                                assert site.ENABLE_USER_SITE
+                                assert Path(site.getusersitepackages()) == Path({str(user_site)!r})
+                                assert os.environ["PYTHONUSERBASE"] == {str(user_base)!r}
+                                assert Path(os.environ["UV_CACHE_DIR"]) == Path({str(expected_cache)!r})
+                                try:
+                                    Path(package.__file__).write_text("answer = -1\\n")
+                                except PermissionError:
+                                    pass
+                                else:
+                                    raise AssertionError("worker wrote to the host user site")
+                                print("preinstalled user-site package retained")
+                                """),
+                        )
+                    client.finish()
+                assert module.read_text() == "answer = 42\n"
+    return [
+        {"selected_python_user_site_retained": True, "host_user_site_read_only": True}
+    ]
+
+
+@requires(SANDBOX)
 def test_resolver_cannot_write_companion_build_cache(binary: Path) -> Transcript:
     cache_locations(binary, host=False, sources=("default", "platform"))
     cache_locations(binary, host=True, sources=("cli",))
@@ -159,6 +237,7 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
                     assert Path(sys.executable).resolve().is_relative_to(root)
                     assert Path(sys.base_prefix).resolve().is_relative_to(root)
                     assert Path(sys.pycache_prefix).is_relative_to(root)
+                    assert Path(os.environ["PYTHONUSERBASE"]).is_relative_to(root)
                     import numpy, pandas, duckdb
 
                     for package in (numpy, pandas, duckdb):
@@ -284,7 +363,9 @@ def cache_locations(
                 assert not console_root.exists()
             config.write_text(json.dumps(settings))
             expected = {
-                name: env[name] if host else str(console_root)
+                name: env[name]
+                if host or name == "PYTHONUSERBASE"
+                else str(console_root)
                 for name in CACHE_VARIABLES
             }
             env["CACHE_TEST_EXPECTED"] = json.dumps(expected)

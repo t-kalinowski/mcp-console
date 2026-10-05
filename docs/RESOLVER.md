@@ -36,7 +36,10 @@ On macOS and Linux, the default resolver policy permits reads of that companion 
 
 Console overrides cache-location variables inherited from the host or supplied in `resolver.environment` and `sandbox.environment`.
 uv's cache, Python installations, tools, and executable links use `uv/`; IR uses `ir/`; renv uses `renv/`; R's package cache base is the Console root, including `R/reticulate` and `R/pkgcache`.
-DuckDB uses `duckdb/extensions`, Matplotlib uses `matplotlib`, and Python's user base and bytecode cache use `python/`.
+DuckDB uses `duckdb/extensions`, Matplotlib uses `matplotlib`, and Python's bytecode cache uses `python/bytecode`.
+Managed Python also redirects its user base to `python/user`.
+An explicit `python` or `RETICULATE_PYTHON` selection preserves the inherited or configured `PYTHONUSERBASE` so preinstalled user-site packages remain importable.
+This preserves reads without adding resolver write grants for host package locations.
 `RENV_PATHS_CACHE`, `RENV_PATHS_SOURCE`, and `RENV_PATHS_BINARY` are redirected explicitly so an inherited override cannot share host artifacts.
 Worker Matplotlib and general XDG caches retain their private temporary storage and read prepared font caches from the captured location.
 Workers link the warmed font cache into their private Matplotlib directory.
