@@ -692,6 +692,93 @@ def test_selected_r_connection_does_not_initialize_python(
 
 @requires(POSIX, SQL, R)
 @executions(DIRECT, SANDBOXED)
+def test_interrupted_selection_replay_preserves_r_connection(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.python.test_setup import deferred_selection_client
+
+    with tempfile.TemporaryDirectory() as temporary:
+        modules = Path(temporary)
+        # Pause the first replay before it can publish the R selection. Disable
+        # the profile hook before input so retry has no second checkpoint.
+        # fmt: python
+        checkpoint = code("""
+            import __main__
+            import sys
+
+            def selection_checkpoint(frame, event, argument):
+                if (event == "call" and frame.f_code.co_name == "use_r"
+                        and frame.f_globals.get("__name__") == "_mcp_console_sql"):
+                    sys.setprofile(None)
+                    __main__.runtime_identity = object()
+                    __main__.runtime_identity_id = id(__main__.runtime_identity)
+                    input("SQL selection replay> ")
+
+            if sys.argv[0] != "-c":
+                sys.setprofile(selection_checkpoint)
+            """)
+        (modules / "sitecustomize.py").write_text(
+            f"exec(compile({json.dumps(checkpoint)}, '<SQL selection checkpoint>', 'exec'))"
+        )
+        with deferred_selection_client(
+            binary, execution.serve("-c", "sql.provider=python")
+        ) as client:
+            client.expect(
+                r=f"Sys.setenv(RETICULATE_PYTHONPATH = {json.dumps(str(modules))})"
+            )
+            client.expect(
+                # fmt: r
+                r=code("""
+                    retained_pid <- Sys.getpid()
+                    retained_state <- new.env()
+                    retained_state$answer <- 42L
+                    native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+                    invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
+                    DBI::dbBegin(native)
+                    invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 43"))
+                    console_sql_connection(native)
+                    stopifnot(!reticulate::py_available(initialize = FALSE))
+                    """),
+            )
+            client.expect(
+                '[input requested: "SQL selection replay> "]\n[waiting for stdin]',
+                python="never_run = True",
+            )
+            client.send(control="interrupt", timeout_ms=0)
+            interrupted = last_tool_text(client)
+            assert "KeyboardInterrupt" in interrupted, interrupted
+            client.expect(
+                # fmt: python
+                python=code("""
+                    assert "never_run" not in globals()
+                    assert id(runtime_identity) == runtime_identity_id
+                    """),
+            )
+            client.expect(
+                "# A tibble: 1 × 1\n   answer\n  <int32>\n1      43\n",
+                sql="SELECT answer FROM selected",
+            )
+            client.expect(
+                # fmt: r
+                r=code("""
+                    stopifnot(
+                      Sys.getpid() == retained_pid,
+                      retained_state$answer == 42L,
+                      identical(sql_connection(), native),
+                      DBI::dbIsValid(native),
+                      DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 43
+                    )
+                    DBI::dbRollback(native)
+                    stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
+                    """),
+            )
+            return json.loads(
+                json.dumps(client.finish()).replace(str(modules), "<startup modules>")
+            )
+
+
+@requires(POSIX, SQL, R)
+@executions(DIRECT, SANDBOXED)
 def test_interrupted_reset_preserves_selected_r_connection(
     binary: Path, execution: Execution
 ) -> Transcript:

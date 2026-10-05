@@ -451,13 +451,23 @@ pub(super) fn install_sql_runtime(source: &str) -> Result<bool, String> {
         let result = api.run_module_result(c"_mcp_console_sql", &source)?;
         api.finish_setup(result)
     })?;
-    if installed {
-        PYTHON_LIBRARY.lock().unwrap().as_mut().unwrap().setup.sql = true;
-        if PENDING_R_SQL.with(|selected| selected.replace(false)) {
-            use_r_sql()?;
-        }
+    if !installed {
+        return Ok(false);
     }
-    Ok(installed)
+    if PENDING_R_SQL.with(|selected| selected.get()) {
+        // Replay is part of setup: retain its exception and the pending
+        // selection on interruption, so retry preserves live worker state.
+        let selected = api.with_gil(|api| unsafe {
+            let function = api.function(c"_mcp_console_sql", c"use_r")?;
+            api.finish_setup((api.call_no_args)(function))
+        })?;
+        if !selected {
+            return Ok(false);
+        }
+        PENDING_R_SQL.with(|selected| selected.set(false));
+    }
+    PYTHON_LIBRARY.lock().unwrap().as_mut().unwrap().setup.sql = true;
+    Ok(true)
 }
 
 fn api() -> Result<PythonApi, String> {

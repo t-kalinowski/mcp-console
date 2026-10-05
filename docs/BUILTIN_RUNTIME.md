@@ -195,6 +195,7 @@ console_sql_connection(None)  # Restore the existing managed catalog.
 
 The latest selection controls SQL cells.
 An R connection selected before Python initializes can execute SQL without starting the configured Python managed provider; later Python initialization preserves that selection.
+Interrupting selection replay leaves Python setup incomplete; a later Python cell retries setup while preserving the R connection, its transaction, and live worker state.
 User connections remain user-owned; restoring managed DuckDB does not close them.
 Never disconnect Console's managed connection.
 R `sql_connection()` returns its selected R-owned connection even while SQL cells use a Python selection.
