@@ -1,4 +1,4 @@
-//! Bounded, cancellable descriptor transfer for the remote launch operation.
+//! Bounded, cancellable descriptor transfer for child processes.
 
 use std::fs::File;
 use std::io::{self, Read, Write};

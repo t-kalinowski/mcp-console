@@ -20,6 +20,8 @@ mod local_runtime;
 mod process_descriptors;
 #[cfg(any(unix, windows))]
 mod process_exit;
+#[cfg(unix)]
+mod process_io;
 #[cfg(any(unix, windows))]
 mod process_output;
 #[cfg(any(unix, windows))]

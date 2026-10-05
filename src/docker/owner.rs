@@ -1,6 +1,6 @@
 //! One ordinary Docker container, owned independently of its attachment.
+use crate::process_io::{Io, duplicate};
 use crate::target_launch::process::{self, Cancel};
-use crate::target_launch::transfer::{Io, duplicate};
 use crate::target_launch::{self, Hello};
 use std::time::{Duration, Instant};
 

@@ -1,7 +1,7 @@
 //! Ownership begins before create; exec exit is never a microVM cleanup receipt.
 use super::*;
+use crate::process_io::{Io, duplicate};
 use crate::target_launch::process::Cancel;
-use crate::target_launch::transfer::{Io, duplicate};
 use crate::target_launch::{Hello, SandboxIdentity};
 
 type Request = target_launch::owner::Request<super::Captured>;

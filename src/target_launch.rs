@@ -18,8 +18,6 @@ pub(crate) mod owner;
 pub(crate) mod process;
 #[cfg(unix)]
 pub(crate) mod runtime;
-#[cfg(unix)]
-pub(crate) mod transfer;
 
 // v11 requires conversion metadata in prepared Python identities.
 // SSH launch stays at v10; its identities use preparation protocol v6.

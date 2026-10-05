@@ -12,9 +12,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::{Discovery, Input, Mode, Operation, Output, Selections};
-use crate::resolver::{ResolverControl, ResolverControlOutcome, ResolverStopHandle};
 #[cfg(unix)]
-use crate::target_launch::transfer::Io;
+use crate::process_io::Io;
+use crate::resolver::{ResolverControl, ResolverControlOutcome, ResolverStopHandle};
 
 #[derive(Clone)]
 pub(crate) struct Preparation(Arc<Connection>);

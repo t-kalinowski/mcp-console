@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use crate::target_launch::transfer::{Io, duplicate, poll};
+use crate::process_io::{Io, duplicate, poll};
 
 #[derive(Clone)]
 pub(crate) struct Cancel {

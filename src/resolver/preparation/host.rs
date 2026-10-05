@@ -7,9 +7,9 @@ use std::thread;
 use std::time::Instant;
 
 use super::{Discovery, Input, Mode, NativeDiscovery, Operation, Output, Selections};
-use crate::resolver::{self, ResolverControlOutcome, ResolverStopHandle};
 #[cfg(unix)]
-use crate::target_launch::transfer::{Io, duplicate};
+use crate::process_io::{Io, duplicate};
+use crate::resolver::{self, ResolverControlOutcome, ResolverStopHandle};
 
 struct Context {
     local: bool,

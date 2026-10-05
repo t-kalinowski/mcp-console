@@ -5,7 +5,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::thread;
 
 pub(super) type Notifier = PipeWriter;
-pub(in crate::worker_client) type RelayInput = crate::target_launch::transfer::Io<ChildStdin>;
+pub(in crate::worker_client) type RelayInput = crate::process_io::Io<ChildStdin>;
 
 pub(in crate::worker_client) fn configure_stdio(command: &mut Command) {
     command

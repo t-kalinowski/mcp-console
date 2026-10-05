@@ -6,8 +6,8 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::transfer::{Io, duplicate, poll};
 use super::{Bootstrap, Hello, Retired};
+use crate::process_io::{Io, duplicate, poll};
 
 const RETIRE_TIMEOUT: Duration = Duration::from_secs(6);
 
