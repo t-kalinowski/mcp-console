@@ -652,6 +652,96 @@ class ReleaseScriptTests(ReleaseFixture):
                 evidence["elf"]["mcp_console-0.0.2.data/data/libexec/bwrap"]["needed"],
             )
 
+    def test_inspect_wheel_resolves_bundled_libraries_after_installation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, _, _ = self.smoke_environment(directory)
+            wheel = directory / "mcp_console-0.0.2-py3-none-manylinux_2_35_x86_64.whl"
+            for member, runpath, library_directory in (
+                (
+                    "mcp_console-0.0.2.data/scripts/mcp-console",
+                    "$ORIGIN/../libexec",
+                    "libexec",
+                ),
+                (
+                    "mcp_console-0.0.2.data/data/libexec/mcp-console-sandbox",
+                    "${ORIGIN}",
+                    "libexec",
+                ),
+                (
+                    "mcp_console-0.0.2.data/data/libexec/mcp-console-sandbox",
+                    "$ORIGIN/..",
+                    ".",
+                ),
+                ("mcp_console/extra.so", "$ORIGIN/../../../../libexec", "libexec"),
+                (
+                    "mcp_console-0.0.2.data/platlib/mcp_console/extra.so",
+                    "$ORIGIN/../../../../libexec",
+                    "libexec",
+                ),
+                (
+                    "mcp_console-0.0.2.data/purelib/mcp_console/extra.so",
+                    "$ORIGIN/../../../../libexec",
+                    "libexec",
+                ),
+            ):
+                with self.subTest(member=member, runpath=runpath):
+                    self.write_wheel(wheel)
+                    contents = elf_fixture(needed=["libfixture.so"], runpath=runpath)
+                    if member.endswith("extra.so"):
+                        with zipfile.ZipFile(wheel, "a") as archive:
+                            archive.writestr(member, contents)
+                    else:
+                        rewrite_wheel(wheel, {member: contents})
+                    with zipfile.ZipFile(wheel, "a") as archive:
+                        archive.writestr(
+                            (
+                                Path("mcp_console-0.0.2.data/data")
+                                / library_directory
+                                / "libfixture.so"
+                            ).as_posix(),
+                            elf_fixture(interpreter=None),
+                        )
+                    report = directory / "abi.json"
+                    result = self.run_script(
+                        "inspect-wheel",
+                        str(wheel),
+                        "--release",
+                        "--report",
+                        str(report),
+                        cwd=directory,
+                        env=environment,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    evidence = json.loads(report.read_text())["elf"]
+                    self.assertEqual(evidence[member]["search"], [library_directory])
+
+    def test_inspect_wheel_rejects_loader_paths_outside_installed_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            environment, _, _ = self.smoke_environment(directory)
+            wheel = directory / "mcp_console-0.0.2-py3-none-manylinux_2_35_x86_64.whl"
+            for member, runpath in (
+                ("mcp_console-0.0.2.data/scripts/mcp-console", "$ORIGIN/../../outside"),
+                (
+                    "mcp_console-0.0.2.data/data/libexec/mcp-console-sandbox",
+                    "$ORIGIN/../../../outside",
+                ),
+            ):
+                with self.subTest(member=member):
+                    self.write_wheel(wheel)
+                    rewrite_wheel(wheel, {member: elf_fixture(runpath=runpath)})
+                    result = self.run_script(
+                        "inspect-wheel",
+                        str(wheel),
+                        "--release",
+                        cwd=directory,
+                        env=environment,
+                    )
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn("RUNPATH escapes the installed wheel", result.stderr)
+                    self.assertIn(member, result.stderr)
+
     def test_inspect_wheel_rejects_incompatible_private_and_extra_elf(self) -> None:
         defects = (
             ({"versions": ["GLIBC_2.36"]}, "GLIBC_2.36"),

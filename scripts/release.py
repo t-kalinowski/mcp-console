@@ -363,11 +363,30 @@ def inspect_linux_abi(
     limits = {family: min(values, default=None) for family, values in ceilings.items()}
     machine, loader = LINUX_MACHINES[architecture]
     evidence = {}
+    # Model a Unix installation prefix; Python's version does not change its depth.
+    site_packages = "lib/pythonX.Y/site-packages"
+    schemes = {
+        "scripts": "bin",
+        "data": ".",
+        "purelib": site_packages,
+        "platlib": site_packages,
+    }
+    data_prefix = f"mcp_console-{version}.data/"
+    installed_elves: set[str] = set()
     with zipfile.ZipFile(wheel) as archive, tempfile.TemporaryDirectory() as directory:
         for member in archive.namelist():
             with archive.open(member) as stream:
                 if stream.read(4) != b"\x7fELF":
                     continue
+            if member.startswith(data_prefix):
+                scheme, relative = member.removeprefix(data_prefix).split("/", 1)
+                require(scheme in schemes, f"{member}: unsupported ELF install scheme")
+                installed = posixpath.normpath(
+                    posixpath.join(schemes[scheme], relative)
+                )
+            else:
+                installed = posixpath.join(site_packages, member)
+            installed_elves.add(installed)
             elf = Path(directory) / "artifact"
             elf.write_bytes(archive.read(member))
             output = command_output(
@@ -404,7 +423,7 @@ def inspect_linux_abi(
                     )
                     resolved = posixpath.normpath(
                         posixpath.join(
-                            posixpath.dirname(member),
+                            posixpath.dirname(installed),
                             path.removeprefix("$ORIGIN").lstrip("/"),
                         )
                     )
@@ -460,7 +479,8 @@ def inspect_linux_abi(
                 require(
                     needed in LINUX_SYSTEM_LIBRARIES
                     or any(
-                        posixpath.join(path, needed) in evidence
+                        posixpath.normpath(posixpath.join(path, needed))
+                        in installed_elves
                         for path in elf["search"]
                     ),
                     f"{member}: undeclared dependency {needed}",

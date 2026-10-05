@@ -64,6 +64,8 @@ Wheel smoke verifies notices, source identity, helper digest, and actual linkage
 
 `scripts/release.py inspect-wheel WHEEL --target TARGET --report abi.json` checks every ELF member, including private helpers and additional native libraries.
 It checks architecture, loader, declared system libraries, loader paths, and symbol requirements against every advertised wheel tag; filename and WHEEL metadata must agree.
+Loader paths and bundled dependencies resolve within the installed Unix prefix: wheel scripts go under `bin`, data under the prefix, and Python libraries under `lib/pythonX.Y/site-packages`.
+`$ORIGIN` paths may traverse between these installed directories but must stay within the prefix; reports retain archive-member keys and use prefix-relative search paths.
 GLIBCXX/CXXABI ceilings follow the advertised [manylinux policies](https://github.com/pypa/auditwheel/blob/7cec8ec5b1436336bc03e560b785cc63d9c4190f/src/auditwheel/policy/manylinux-policy.json), including architecture differences and legacy aliases; multiple tags use the strictest ceiling.
 An unrecognized policy is rejected rather than inferred from the build host.
 `--release` additionally enforces the glibc 2.35 floor and Ubuntu 22.04's libstdc++ symbol ceilings (GLIBCXX 3.4.30 / CXXABI 1.3.13).
