@@ -1,5 +1,4 @@
 ---
 stderr: >
   R_HOME must select an existing R installation:
-  <workspace>\missing-r\bin/x64/Rscript.exe is missing; local resolver
-  setup or retirement deadline exceeded
+  <workspace>\missing-r\bin/x64/Rscript.exe is missing

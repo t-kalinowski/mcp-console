@@ -34,6 +34,7 @@ def rejected_selection(binary: Path, root: Path, environment: dict[str, str]) ->
         assert client.stdout.read(timeout=20) == ""
         error = client.stderr.read(timeout=20)
         assert "R_HOME" in error and str(root / "missing-r") in error, error
+        assert "setup or retirement deadline exceeded" not in error, error
         assert client.process.wait(timeout=5) != 0
         return [{"stderr": error.replace(str(root), "<workspace>")}]
 

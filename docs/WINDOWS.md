@@ -95,6 +95,7 @@ Resolvers and Python inspection enter kill-on-close Jobs while suspended, before
 Cancellation and resolver interruption terminate the Job, and results are accepted only after the Job has no active processes.
 These Jobs own trusted host preparation, not evaluated user code, and are not sandboxes.
 The server invokes `mcp-console resolve` over cancellable pipes; a lost or unconfirmed cleanup receipt blocks replacement.
+After spawning a resolver, the parent releases the command builder's child-side pipe handles so a rejected startup can confirm shutdown and EOF without a spurious retirement timeout.
 R resolver scripts remain compile-time embedded and are passed through temporary files because Windows Rscript does not preserve multiline `-e` arguments.
 Unsandboxed evaluated code runs with the user's permissions.
 Normal retirement reaps the direct worker but does not promise cleanup of its descendants, matching the existing direct-execution boundary.
@@ -168,6 +169,8 @@ Each shared case runs in a kill-on-close Job; cancellation gives the case 15 sec
 Owner-loss cleanup remains independent of the case interpreter, including native calls holding Python's GIL.
 Idle R callbacks remain a runtime parity gap: Windows command waiting does not integrate R's polled-event hooks.
 Those cases declare `R_EVENT_LOOP`; Unix FIFO input-handler fixtures declare `POSIX`.
+Shared interpreter-identity cases launch native `R.exe` and `Rscript.exe` and compare resource paths by filesystem identity, since the stock Windows launcher may shorten `R_HOME` to an 8.3 path.
+The native child-launch fixture uses ASCII arguments because the stock `R.exe` delegates through an ANSI command line; shared cell tests separately exercise Unicode R input.
 
 | Exclusion                                                                                                                  | Assessment and Windows coverage                                                                                                                                                                                                                                                     |
 | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

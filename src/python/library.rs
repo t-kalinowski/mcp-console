@@ -1328,7 +1328,7 @@ impl Configuration {
         Ok(Self {
             selected: selected.clone(),
             reticulate_python: std::env::var_os("RETICULATE_PYTHON"),
-            program_name_wide: wide_string(&program_name, "program name")?,
+            program_name_wide: wide_string(program_name.as_str(), "program name")?,
         })
     }
 }
