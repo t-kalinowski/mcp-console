@@ -9,10 +9,12 @@ from boundaries.relay_worker._harness import RelayWorkerClient
 from support.assertions import tool_text as _tool_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.requirements import POSIX, requires
 from support.records import Transcript
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restarts_session(binary: Path, execution: Execution) -> Transcript:
     client = RelayWorkerClient(

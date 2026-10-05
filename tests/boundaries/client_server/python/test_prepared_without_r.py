@@ -11,6 +11,14 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import (
+    POSIX,
+    PROCESS_EVENTS,
+    Requirement,
+    SQL,
+    WORKER,
+    requires,
+)
 from support.assertions import last_result_text
 from support.assertions import assert_result_content, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint
@@ -35,7 +43,6 @@ from support.docker_sandbox import (
 from support.events import Events
 from support.execution import DIRECT, Execution, executions
 from support.normalization import code
-from support.requirements import PROCESS_EVENTS, WORKER, Requirement, requires
 from support.suites import run_this_suite
 from boundaries.client_server.server.test_no_r import no_r_environment
 
@@ -544,6 +551,7 @@ def unusable_library_client(binary: Path, provider: str):
             yield client
 
 
+@requires(POSIX)
 @executions(
     DIRECT,
     Execution("docker", (DOCKER_PYTHON,)),
@@ -877,36 +885,43 @@ def cancelled_probe(binary: Path, provider: str) -> list:
     ]
 
 
+@requires(SQL)
 @requires(DOCKER_PYTHON)
 def test_docker_sql_first(binary: Path) -> list:
     return sql_first(binary, "docker")
 
 
+@requires(SQL)
 @requires(SBX_PYTHON)
 def test_sbx_sql_first(binary: Path) -> list:
     return sql_first(binary, "sbx")
 
 
+@requires(SQL)
 @requires(DOCKER_PYTHON)
 def test_docker_python_lifecycle(binary: Path) -> list:
     return behavior(binary, "docker")
 
 
+@requires(SQL)
 @requires(DOCKER_PYTHON)
 def test_docker_native_runner_python_lifecycle(binary: Path) -> list:
     return behavior(binary, "docker", sandbox=True)
 
 
+@requires(SQL)
 @requires(SBX_PYTHON)
 def test_sbx_python_lifecycle(binary: Path) -> list:
     return behavior(binary, "sbx")
 
 
+@requires(SQL)
 @requires(DOCKER_PYTHON)
 def test_docker_selected_and_minimal(binary: Path) -> list:
     return selected_and_minimal(binary, "docker")
 
 
+@requires(SQL)
 @requires(SBX_PYTHON)
 def test_sbx_selected_and_minimal(binary: Path) -> list:
     return selected_and_minimal(binary, "sbx")
@@ -932,11 +947,13 @@ def test_sbx_rejected_probes(binary: Path) -> list:
     return rejected_probes(binary, "sbx")
 
 
+@requires(SQL)
 @requires(DOCKER_PYTHON)
 def test_docker_bare_selection_and_languages(binary: Path) -> list:
     return bare_selection_and_languages(binary, "docker")
 
 
+@requires(SQL)
 @requires(SBX_PYTHON)
 def test_sbx_bare_selection_and_languages(binary: Path) -> list:
     return bare_selection_and_languages(binary, "sbx")
@@ -962,11 +979,13 @@ def test_sbx_selection_compatibility(binary: Path) -> list:
     return selection_compatibility(binary, "sbx")
 
 
+@requires(SQL)
 @requires(DOCKER_PYTHON)
 def test_docker_offline_extension(binary: Path) -> list:
     return offline_extension(binary, "docker")
 
 
+@requires(SQL)
 @requires(SBX_PYTHON)
 def test_sbx_offline_extension(binary: Path) -> list:
     return offline_extension(binary, "sbx")
@@ -982,11 +1001,13 @@ def test_sbx_connection_loss(binary: Path) -> list:
     return connection_loss(binary, "sbx")
 
 
+@requires(POSIX)
 @requires(DOCKER_PYTHON)
 def test_docker_cancelled_probe(binary: Path) -> list:
     return cancelled_probe(binary, "docker")
 
 
+@requires(POSIX)
 @requires(SBX_PYTHON)
 def test_sbx_cancelled_probe(binary: Path) -> list:
     return cancelled_probe(binary, "sbx")

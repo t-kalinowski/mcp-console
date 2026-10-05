@@ -23,6 +23,7 @@ from support.relay_lifecycle import (
     LIFECYCLE_COMMANDS,
     assert_exit_tail,
     assert_failure_tail,
+    exercise_shutdown_admission,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -135,7 +136,7 @@ class WindowsRelay(unittest.TestCase):
         ready.settimeout(10)
         stream = ready.makefile("rb")
         pid = int(stream.readline())
-        if scenario.startswith("framing_"):
+        if scenario.startswith(("framing_", "retirement_")):
             self.framing_control = ready
             self.framing_stream = stream
             self.addCleanup(ready.close)
@@ -149,9 +150,21 @@ class WindowsRelay(unittest.TestCase):
         kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         kernel.WaitForSingleObject.restype = wintypes.DWORD
         kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        owned_worker = kernel.OpenProcess(0x100000, False, pid)
+        owned_worker = kernel.OpenProcess(
+            0x100001 if scenario.startswith("retirement_") else 0x100000, False, pid
+        )
         self.assertTrue(owned_worker, ctypes.get_last_error())
         self.addCleanup(kernel.CloseHandle, owned_worker)
+        if scenario.startswith("retirement_"):
+            kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            kernel.TerminateProcess.restype = wintypes.BOOL
+
+            def retire():
+                if kernel.WaitForSingleObject(owned_worker, 0) != 0:
+                    kernel.TerminateProcess(owned_worker, 1)
+                    kernel.WaitForSingleObject(owned_worker, 10000)
+
+            self.addCleanup(retire)
         self.assertEqual(json.loads(process.stdout.readline()), {"kind": "ready"})
         return process, kernel, owned_worker, marker
 
@@ -387,7 +400,8 @@ class WindowsRelay(unittest.TestCase):
             process.kill()
         process.wait(timeout=10)
         for stream in (process.stdin, process.stdout, process.stderr):
-            stream.close()
+            if stream is not None:
+                stream.close()
 
     def finish(self, process):
         output, errors = process.communicate(timeout=10)
@@ -439,6 +453,69 @@ class WindowsRelay(unittest.TestCase):
             events,
             "worker sideband read failed: unknown variant `broken`",
             {"kind": "worker_exited", "code": 1},
+        )
+
+    def test_shutdown_ignores_buffered_commands_and_trailing_bytes(self):
+        self.shutdown_admission("retirement_batch")
+
+    def test_shutdown_ignores_commands_sent_after_worker_receipt(self):
+        self.shutdown_admission("retirement_receipt")
+
+    def test_sideband_eof_closes_admission_without_renewing_deadline(self):
+        self.shutdown_admission("retirement_sideband")
+
+    def test_clean_controller_eof_retires_without_shutdown_acceptance(self):
+        self.shutdown_admission("retirement_eof")
+
+    def test_retires_after_sideband_forwarding_fails_with_blocked_stdout(self):
+        process, kernel, worker, _ = self.start("retirement_backpressure")
+        process.stdin.write(b'{"kind":"evaluate","language":"r","source":"output"}\n')
+        process.stdin.flush()
+        # One byte proves the writer began the 1-MiB frame. Leaving the rest
+        # unread keeps its blocking write unfinished throughout the assertion.
+        prefix = process.stdout.read1(1)
+        self.assertEqual(prefix, b"{")
+        for request_id in range(1, 18):
+            process.stdin.write(
+                json.dumps({"kind": "interrupt", "request_id": request_id}).encode()
+                + b"\n"
+            )
+        process.stdin.flush()
+        # Input and both worker outputs stay open: failed forwarding must start
+        # retirement without relying on EOF or the blocked writer's callback.
+        self.assertEqual(
+            kernel.WaitForSingleObject(worker, 5000), 0, "direct worker did not retire"
+        )
+        self.assertEqual(process.wait(timeout=5), 1)
+        output, errors = process.communicate(timeout=5)
+        frame = b'{"kind":"console_output","data":"' + b"x" * (1024 * 1024) + b'"}\n'
+        captured = prefix + output
+        self.assertTrue(captured)
+        self.assertLess(len(captured), len(frame), "stdout write was not blocked")
+        self.assertEqual(captured, frame[: len(captured)])
+        self.assertEqual(
+            errors,
+            b"relay stdout write failed: relay stdout retirement deadline expired\n",
+        )
+
+    def shutdown_admission(self, scenario: str) -> None:
+        process, kernel, worker, marker = self.start(scenario)
+
+        def wait_worker(timeout: float) -> None:
+            self.assertEqual(
+                kernel.WaitForSingleObject(worker, int(timeout * 1000)),
+                0,
+                "worker budget was renewed",
+            )
+
+        exercise_shutdown_admission(
+            process,
+            self.framing_stream,
+            marker,
+            scenario,
+            wait_worker,
+            {"kind": "worker_exited", "code": 1},
+            shutdown_on_sideband_eof=True,
         )
 
     def test_stdin_write_failure_retires_worker(self):

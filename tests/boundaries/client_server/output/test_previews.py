@@ -30,7 +30,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import startup_r_package
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
 from boundaries.client_server._harness import ZodFixtureControl
 
@@ -98,6 +98,7 @@ after final image
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_summarizes_empty_cell_after_oversized_startup_output(
     binary: Path, execution: Execution
@@ -181,6 +182,7 @@ def test_summarizes_empty_cell_after_oversized_startup_output(
         return [{"startup_preview_and_empty_cell_retained": True}]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_actual_tail_and_image_after_huge_line(
     binary: Path, execution: Execution
@@ -188,6 +190,7 @@ def test_keeps_actual_tail_and_image_after_huge_line(
     return check_preview(binary, execution, "preview huge line")
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_actual_tail_after_tiny_event_flood(
     binary: Path, execution: Execution
@@ -222,6 +225,7 @@ def test_bounds_metadata_for_alternating_tiny_events(binary: Path) -> Transcript
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_edits_unicode_after_same_producer_overflow(
     binary: Path, execution: Execution
@@ -269,6 +273,7 @@ def test_edits_unicode_after_same_producer_overflow(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_compacts_redraws_before_preview_limits(
     binary: Path, execution: Execution
@@ -276,6 +281,7 @@ def test_compacts_redraws_before_preview_limits(
     return check_preview(binary, execution, "preview redraw")
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_raw_and_rendered_counts_for_invalid_utf8(
     binary: Path, execution: Execution
@@ -316,6 +322,7 @@ def test_reports_raw_and_rendered_counts_for_invalid_utf8(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_tail_when_recording_is_disabled(
     binary: Path, execution: Execution
@@ -351,6 +358,7 @@ def test_keeps_tail_when_recording_is_disabled(
             return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_active_prompt_and_state_after_text_flood(
     binary: Path, execution: Execution
@@ -390,6 +398,7 @@ def test_preserves_active_prompt_and_state_after_text_flood(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_image_overflow_preserves_later_text_and_fitting_image(
     binary: Path, execution: Execution
@@ -417,6 +426,7 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_validates_images_before_omitting_them(
     binary: Path, execution: Execution
@@ -440,6 +450,7 @@ def test_validates_images_before_omitting_them(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_combines_old_worker_and_replacement_cell_under_one_budget(
     binary: Path, execution: Execution
@@ -489,6 +500,7 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_partial_idle_utf8_out_of_cell_omission_counts(
     binary: Path, execution: Execution

@@ -295,6 +295,9 @@ impl Preparation {
                 if local { "local" } else { "SSH" }
             )
         })?;
+        // Windows command_pipes installs owned child-side handles in Command.
+        // Release them before discovery failure can wait for shutdown and EOF.
+        drop(command);
         let (events, received) = mpsc::channel();
         let (outgoing, writes) = mpsc::channel();
         #[cfg(unix)]

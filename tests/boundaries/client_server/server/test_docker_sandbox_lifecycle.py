@@ -28,7 +28,7 @@ from support.docker_sandbox import (
 from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 
@@ -205,6 +205,7 @@ def test_failed_exec_retires_despite_output_backpressure(binary: Path) -> list:
                     remove_remaining(identity)
 
 
+@requires(POSIX)
 @requires(DOCKER_SANDBOX)
 def test_cancelled_creation_and_readiness_retire_real_microvms(binary: Path) -> list:
     records = []

@@ -26,7 +26,9 @@ class Requirement:
 
 # Keep implementation availability here until the corresponding runtime lands.
 WORKER = Requirement(
-    "worker", sys.platform in {"darwin", "linux"}, "workers require macOS or Linux"
+    "worker",
+    sys.platform in {"darwin", "linux", "win32"},
+    "requires a supported local worker",
 )
 # Match runtime selection so invalid R_HOME and broken PATH entries report errors.
 R = Requirement(
@@ -35,7 +37,7 @@ R = Requirement(
     or (
         "PATH" in os.environ
         and any(
-            os.path.lexists(Path(directory) / "R")
+            os.path.lexists(Path(directory) / ("R.exe" if os.name == "nt" else "R"))
             for directory in os.environ["PATH"].split(os.pathsep)
         )
     ),
@@ -44,7 +46,7 @@ R = Requirement(
 SANDBOX = Requirement(
     "sandbox",
     sys.platform in {"darwin", "linux"},
-    "the sandbox requires macOS or Linux",
+    "requires Seatbelt/bubblewrap fixtures; Windows policy uses native acceptance",
 )
 MACOS_SANDBOX = Requirement(
     "macOS sandbox",
@@ -88,7 +90,7 @@ NULL_FAULT_ACCERR = Requirement(
 )
 NULL_FAULT_MAPERR = Requirement(
     "null fault with SEGV_MAPERR",
-    WORKER.available and not NULL_FAULT_ACCERR.available,
+    POSIX.available and WORKER.available and not NULL_FAULT_ACCERR.available,
     "ARM macOS reports SEGV_ACCERR for null faults",
 )
 NO_WORKER = Requirement(
@@ -96,8 +98,22 @@ NO_WORKER = Requirement(
 )
 NO_SANDBOX = Requirement(
     "unsupported sandbox",
-    not SANDBOX.available,
+    sys.platform not in {"darwin", "linux", "win32"},
     "the sandbox is available on this platform",
+)
+
+SQL = Requirement(
+    "SQL", sys.platform in {"darwin", "linux"}, "Windows SQL runtime is deferred"
+)
+R_EVENT_LOOP = Requirement(
+    "R event loop",
+    POSIX.available,
+    "Windows idle R callback integration is deferred",
+)
+REMOTE_CONTROLLERS = Requirement(
+    "remote controllers",
+    sys.platform in {"darwin", "linux"},
+    "Windows SSH/Docker/SBX controllers are deferred",
 )
 
 SYSTEM_PYTHON = Path("/usr/bin/python3")
@@ -185,6 +201,6 @@ LANDLOCK = Requirement(
 
 UNPRIVILEGED = Requirement(
     "unprivileged filesystem access",
-    os.geteuid() != 0,
-    "requires an account without root permission bypass",
+    os.name == "posix" and os.geteuid() != 0,
+    "requires POSIX permission fixtures without root bypass",
 )

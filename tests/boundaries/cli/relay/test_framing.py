@@ -12,11 +12,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import NATIVE_FIXTURES, POSIX, WORKER, requires
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
 from support.native import LOADER_VARIABLE, build_interposer
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, WORKER, requires
 from support.suites import run_this_suite
 
 
@@ -139,6 +139,7 @@ def test_fragmented_semantic_frames_and_retiring_tail(binary: Path) -> Transcrip
         return events + tail
 
 
+@requires(POSIX)
 @requires(WORKER)
 def test_unterminated_commands_are_never_dispatched(binary: Path) -> Transcript:
     transcript: Transcript = []
@@ -161,6 +162,7 @@ def test_unterminated_commands_are_never_dispatched(binary: Path) -> Transcript:
     return transcript
 
 
+@requires(POSIX)
 @requires(WORKER)
 def test_malformed_complete_commands_keep_diagnostics(binary: Path) -> Transcript:
     transcript: Transcript = []
@@ -179,6 +181,7 @@ def test_malformed_complete_commands_keep_diagnostics(binary: Path) -> Transcrip
     return transcript
 
 
+@requires(POSIX)
 @requires(WORKER)
 def test_malformed_complete_frames_keep_diagnostics(binary: Path) -> Transcript:
     transcript: Transcript = []

@@ -232,6 +232,12 @@ class TranscriptRunnerFixture(unittest.TestCase):
             directory.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(RUNNER, self.boundaries / "_run.py")
+        if os.name == "nt":
+            scripts = self.root / "scripts"
+            scripts.mkdir()
+            shutil.copy2(
+                ROOT / "scripts/checkout_windows.py", scripts / "checkout_windows.py"
+            )
         (self.boundaries / "_profiles.py").write_text(
             # fmt: python
             code("""
@@ -253,6 +259,8 @@ class TranscriptRunnerFixture(unittest.TestCase):
             shutil.copy2(ROOT / "tests" / "support" / name, support / name)
         self.suite.write_text(PUBLIC_SUITE, encoding="utf-8")
         binary.touch()
+        if os.name == "nt":
+            os.environ["MCP_CONSOLE_TEST_BINARY"] = str(binary)
         for name in ("initializes_and_lists_tools", "selected", "unselected"):
             value = "initialization" if name == "initializes_and_lists_tools" else name
             (self.snapshots / f"{name}.yaml").write_text(
@@ -2360,6 +2368,131 @@ class TranscriptDiscoveryTests(TranscriptRunnerFixture):
                 located_lines[3 * index + 2],
                 f"  snapshot: {snapshots / (case_name + '.yaml')}",
             )
+
+
+@unittest.skipUnless(os.name == "nt", "native Windows case supervision")
+class WindowsTranscriptTests(TranscriptDiscoveryTests):
+    def test_platform_update_preserves_shared_snapshots_and_prunes_stale_windows_companions(
+        self,
+    ) -> None:
+        shared = (self.snapshots / "selected.yaml").read_bytes()
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + "\nfrom support.snapshots import platform_snapshots\ntest_selected = platform_snapshots('win32')(test_selected)\n"
+        )
+        stale = self.snapshots / "selected.win32.stale.yaml"
+        stale.write_text("---\nold: companion\n...\n")
+        result = self.run_runner("--full", "--update")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.snapshots / "selected.yaml").read_bytes(), shared)
+        self.assertTrue((self.snapshots / "selected.win32.yaml").exists())
+        self.assertFalse(stale.exists())
+
+    def test_deadline_and_owner_loss_retire_blocked_cases_and_descendants(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+        import socket
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        for owner_loss in (False, True):
+            with (
+                self.subTest(owner_loss=owner_loss),
+                socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as checkpoint,
+            ):
+                checkpoint.bind(("127.0.0.1", 0))
+                checkpoint.settimeout(10)
+                # fmt: python
+                self.suite.write_text(
+                    code(f"""
+                    import ctypes
+                    import json
+                    import os
+                    import socket
+                    import subprocess
+                    import sys
+
+                    def test_selected(binary):
+                        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as checkpoint:
+                            checkpoint.sendto(json.dumps([os.getpid(), child.pid]).encode(), {checkpoint.getsockname()!r})
+                        ctypes.PyDLL("kernel32").Sleep(60000)
+                        return []
+                    """)
+                )
+                process = self.start_runner(
+                    "client_server/server/test_tools::selected", "--timeout", "3"
+                )
+                try:
+                    pids = json.loads(checkpoint.recv(1000))
+                    handles = [kernel.OpenProcess(0x100000, False, pid) for pid in pids]
+                    self.assertTrue(all(handles))
+                    try:
+                        if owner_loss:
+                            process.kill()
+                        stdout, stderr = process.communicate(timeout=25)
+                        self.assertNotEqual(process.returncode, 0)
+                        if not owner_loss:
+                            self.assertIn("timed out after 3 seconds", stderr)
+                        for handle in handles:
+                            self.assertEqual(
+                                kernel.WaitForSingleObject(handle, 5000),
+                                0,
+                                stdout + stderr,
+                            )
+                    finally:
+                        for handle in handles:
+                            kernel.CloseHandle(handle)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=10)
+
+    def test_shared_cases_record_timings_and_report_capability_skips(self) -> None:
+        timing = self.root / "timings.jsonl"
+        with patch.dict(os.environ, {"MCP_CONSOLE_TEST_TIMINGS": str(timing)}):
+            result = self.run_runner("--full", "--jobs", "2")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            {json.loads(line)["status"] for line in timing.read_text().splitlines()},
+            {"passed"},
+        )
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + "\nfrom support.requirements import POSIX, requires\ntest_unselected = requires(POSIX)(test_unselected)\n"
+        )
+        result = self.run_runner("client_server/server/test_tools::unselected")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("unselected: skipped; POSIX:", result.stdout)
+
+    def test_deadline_runs_finally_blocks_before_reporting_timeout(self) -> None:
+        # fmt: python
+        self.suite.write_text(
+            code("""
+            import time
+            from pathlib import Path
+
+
+            def test_selected(binary):
+                try:
+                    print("case diagnostic", flush=True)
+                    while True:
+                        pass
+                finally:
+                    (binary.parents[2] / "cleaned").touch()
+                return []
+            """)
+        )
+        result = self.run_runner(
+            "client_server/server/test_tools::selected", "--timeout", "2"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("timed out after 2 seconds", result.stderr)
+        self.assertIn("case diagnostic", result.stderr)
+        self.assertTrue((self.root / "cleaned").exists(), result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

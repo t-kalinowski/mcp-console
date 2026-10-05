@@ -11,17 +11,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, SANDBOX, SQL, WORKER, requires
 from support.client import McpClient
 from support.evidence import compact_text
 from support.previews import compact_previews
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
-from support.requirements import SANDBOX, WORKER, requires
 from support.resolvers import bare_runtime_environment
 from support.sandbox_configuration import NATIVE_PROXY
 from support.ssh import configure, peer_environment
 from support.suites import run_this_suite
+from support.snapshots import platform_snapshots
 
 
 @contextmanager
@@ -78,6 +79,7 @@ def _admission_client(binary: Path) -> Iterator[tuple[McpClient, Path]]:
             )
 
 
+@requires(POSIX)
 def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
     with _admission_client(binary) as (client, temporary):
         invalid = (
@@ -103,10 +105,23 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
         return client.finish()
 
 
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
+    if sys.platform == "win32":
+        # SSH/SQL companions need deferred runtimes. Initialization does not
+        # launch the custom worker; its schema is a portable reference.
+        return TranscriptWithCompanions(
+            _initializes_and_lists_tools(binary, execution),
+            {
+                "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True),
+                "custom.yaml": _initializes_and_lists_tools(
+                    binary, execution, custom=True
+                ),
+            },
+        )
     companions = {
         "custom.yaml": _initializes_and_lists_tools(binary, execution, custom=True),
         "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True),
@@ -219,7 +234,7 @@ def _initializes_and_lists_tools(
                 assert "custom-worker" in description
                 assert "does not supply built-in runtime packages" in description
                 assert "defaults include SQLite" not in description
-            else:
+            elif SQL.available:
                 assert description.index(
                     "consider DuckDB SQL first"
                 ) < description.index("Send one complete")
@@ -264,7 +279,7 @@ def _initializes_and_lists_tools(
                 "python",
                 "python_version",
                 "exclude_newer",
-            }
+            }, requirement_properties
             assert requirement_properties["action"]["enum"] == [
                 "get",
                 "add",
@@ -279,6 +294,10 @@ def _initializes_and_lists_tools(
                 assert requirement["items"]["type"] == "string", requirement
                 assert requirement["items"]["minLength"] == 1, requirement
             assert requirement_properties["duckdb"]["items"]["maxLength"] == 64
+            if not SQL.available:
+                assert "sql" not in send["inputSchema"]["properties"]
+                if not custom:
+                    assert "SQL is not yet supported" in description
             # Inspection does not wait for preparation; it must leave the
             # configured schema unchanged. Keep the handshake-only snapshot.
             transcript = list(client.transcript)
@@ -418,6 +437,7 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
     return transcript
 
 
+@platform_snapshots("win32")
 def test_language_switching_guidance_matches_enabled_fields(binary: Path) -> Transcript:
     transcript = []
     for enabled in (
@@ -429,6 +449,8 @@ def test_language_switching_guidance_matches_enabled_fields(binary: Path) -> Tra
         "python,sql",
         "r,python,sql",
     ):
+        if "sql" in enabled and not SQL.available:
+            continue
         environment = dict(os.environ, MCP_CONSOLE_LANGUAGES=enabled)
         with McpClient(
             binary, DIRECT.serve("--worker", "unused-worker"), environment
@@ -449,6 +471,7 @@ def test_language_switching_guidance_matches_enabled_fields(binary: Path) -> Tra
     return transcript
 
 
+@requires(POSIX)
 def test_limits_send_languages_from_environment(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment = os.environ.copy()
@@ -479,6 +502,7 @@ def test_limits_send_languages_from_environment(binary: Path) -> Transcript:
             return client.finish()
 
 
+@requires(POSIX, SQL)
 @requires(WORKER)
 def test_validates_send_arguments(binary: Path) -> Transcript:
     with _admission_client(binary) as (client, temporary):
@@ -611,6 +635,7 @@ def _reject_send_arguments(client: McpClient) -> None:
     ), result
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_bounds_argument_decoding_errors(
     binary: Path, execution: Execution
@@ -672,6 +697,7 @@ def test_bounds_argument_decoding_errors(
             return client.finish()
 
 
+@requires(POSIX)
 def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
     with _admission_client(binary) as (client, temporary):
         client.send(requirements={})
@@ -749,6 +775,7 @@ def test_validates_standalone_requirement_arguments(binary: Path) -> Transcript:
         return client.finish()
 
 
+@requires(POSIX)
 @requires(WORKER)
 def test_rejects_interrupt_without_worker(binary: Path) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"

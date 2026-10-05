@@ -17,11 +17,12 @@ from support.relay_commands import (
     assert_forwarding,
     command_batch,
 )
-from support.requirements import WORKER, requires
+from support.requirements import POSIX, WORKER, requires
 from support.suites import run_this_suite
 
 
-@requires(WORKER)
+# The fixture exchanges inherited Unix descriptors; WindowsRelay covers handles.
+@requires(POSIX, WORKER)
 def test_forwards_worker_commands_and_keeps_controls_local(binary: Path) -> Transcript:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
     with tempfile.TemporaryDirectory() as directory:

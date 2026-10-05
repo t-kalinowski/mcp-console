@@ -151,47 +151,6 @@ def test_waits_with_client(binary: Path) -> list[dict[str, str]]:
 
 @unittest.skipUnless(POSIX.available, POSIX.reason)
 class McpClientTests(unittest.TestCase):
-    def test_isolates_console_home_without_changing_home_or_project_config(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            environment = os.environ | {
-                "HOME": str(root / "caller-home"),
-                "MCP_CONSOLE_HOME": str(root / "caller-console"),
-            }
-            # fmt: python
-            source = code("""
-                import json
-                import os
-                import sys
-                from pathlib import Path
-
-                values = {name: os.environ[name] for name in ("HOME", "MCP_CONSOLE_HOME")}
-                Path("environment.json").write_text(json.dumps(values))
-                assert sys.stdin.read() == ""
-                """)
-            for record_in_project in (False, True):
-                with self.subTest(record_in_project=record_in_project):
-                    workspace = root / str(record_in_project)
-                    workspace.mkdir()
-                    with McpClient(
-                        Path(sys.executable),
-                        ("-c", source),
-                        environment=environment,
-                        current_directory=workspace,
-                        record_in_project=record_in_project,
-                    ) as client:
-                        client.finish()
-                    actual = json.loads((workspace / "environment.json").read_text())
-                    self.assertEqual(actual["HOME"], environment["HOME"])
-                    self.assertNotEqual(
-                        actual["MCP_CONSOLE_HOME"], environment["MCP_CONSOLE_HOME"]
-                    )
-                    self.assertFalse(
-                        (workspace / ".agents/console/config.yaml").exists()
-                    )
-
     @contextmanager
     def client_runner(
         self, suite: str, *arguments: str
@@ -417,6 +376,97 @@ class McpClientTests(unittest.TestCase):
             self.assertIn("timed out waiting for response", stderr)
             self.assertIn("partial response diagnostic", stderr)
             self.assertNotIn("timed out after 16 seconds", stderr)
+
+
+class PortableMcpClientTests(unittest.TestCase):
+    def test_isolates_console_home_without_changing_home_or_project_config(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            environment = os.environ | {
+                "HOME": str(root / "caller-home"),
+                "MCP_CONSOLE_HOME": str(root / "caller-console"),
+            }
+            # fmt: python
+            source = code("""
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                values = {name: os.environ[name] for name in ("HOME", "MCP_CONSOLE_HOME")}
+                Path("environment.json").write_text(json.dumps(values))
+                assert sys.stdin.read() == ""
+                """)
+            for record_in_project in (False, True):
+                with self.subTest(record_in_project=record_in_project):
+                    workspace = root / str(record_in_project)
+                    workspace.mkdir()
+                    with McpClient(
+                        Path(sys.executable),
+                        ("-c", source),
+                        environment=environment,
+                        current_directory=workspace,
+                        record_in_project=record_in_project,
+                    ) as client:
+                        client.finish()
+                    actual = json.loads((workspace / "environment.json").read_text())
+                    self.assertEqual(actual["HOME"], environment["HOME"])
+                    self.assertNotEqual(
+                        actual["MCP_CONSOLE_HOME"], environment["MCP_CONSOLE_HOME"]
+                    )
+                    self.assertFalse(
+                        (workspace / ".agents/console/config.yaml").exists()
+                    )
+
+    def test_pipe_transport_records_responses_and_drains_diagnostics(self) -> None:
+        # fmt: python
+        source = code("""
+            import json
+            import sys
+
+            request = json.loads(sys.stdin.readline())
+            sys.stderr.write("diagnostic\\n" * 10000)
+            sys.stderr.flush()
+            print(
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request["id"],
+                        "result": {"content": [{"type": "text", "text": "42"}], "isError": False},
+                    }
+                ),
+                flush=True,
+            )
+            assert sys.stdin.read() == ""
+            """)
+        with McpClient(Path(sys.executable), ("-u", "-c", source)) as client:
+            result = client.send(python="6 * 7")
+            self.assertEqual(result["content"][0]["text"], "42")
+            transcript, diagnostics = client.finish_with_standard_error()
+            self.assertEqual(diagnostics, ("diagnostic" + os.linesep) * 10000)
+            self.assertEqual(transcript[0]["send"], {"python": "6 * 7"})
+            self.assertEqual(client.process.returncode, 0)
+
+    def test_partial_pipe_response_has_a_bounded_diagnostic_timeout(self) -> None:
+        # fmt: python
+        source = code("""
+            import sys
+
+            sys.stdin.readline()
+            sys.stderr.write("partial response diagnostic\\n")
+            sys.stderr.flush()
+            sys.stdout.write('{"jsonrpc":"2.0","id":')
+            sys.stdout.flush()
+            sys.stdin.read()
+            """)
+        with McpClient(
+            Path(sys.executable), ("-u", "-c", source), response_timeout=0.5
+        ) as client:
+            with self.assertRaisesRegex(TimeoutError, "partial response diagnostic"):
+                client.send(python="6 * 7")
+        self.assertIsNotNone(client.process.returncode)
 
 
 class ScriptedClient:

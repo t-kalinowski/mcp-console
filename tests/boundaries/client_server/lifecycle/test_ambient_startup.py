@@ -11,10 +11,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
+from support.resolvers import bare_runtime_environment
 from support.records import Transcript
+from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_probes_ambient_reticulate_before_first_use_bootstrap(
     binary: Path,
@@ -29,7 +32,13 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
         record = temporary / "reticulate-calls"
         environment["MCP_CONSOLE_TEST_RETICULATE_RECORD"] = str(record)
         subprocess.run(
-            [rscript.with_name("R"), "CMD", "INSTALL", f"--library={library}", fixture],
+            [
+                rscript.with_name("R.exe" if os.name == "nt" else "R"),
+                "CMD",
+                "INSTALL",
+                f"--library={library}",
+                fixture,
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -38,15 +47,13 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
         record.write_text("", encoding="utf-8")
         for name in ("R_LIBS", "R_LIBS_SITE", "R_LIBS_USER"):
             environment[name] = str(library)
-        path = environment.get("PATH")
-        assert path is not None, "PATH is required"
-        environment["PATH"] = os.pathsep.join(
-            entry
-            for entry in path.split(os.pathsep)
-            if not any((Path(entry) / name).exists() for name in ("ir", "uv", "uvx"))
-        )
-        environment.pop("RETICULATE_UV", None)
-        environment.pop("RETICULATE_PYTHON", None)
+        environment = bare_runtime_environment(environment, library)
+        if os.name == "nt":
+            environment["PATH"] = os.pathsep.join(
+                entry
+                for entry in environment["PATH"].split(os.pathsep)
+                if not (Path(entry) / "python.exe").exists()
+            )
 
         with McpClient(
             binary, execution.serve(), environment, current_directory=temporary

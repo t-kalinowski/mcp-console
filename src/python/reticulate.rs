@@ -39,7 +39,8 @@ pub(crate) fn defer_r_startup() -> Result<Option<Option<std::ffi::OsString>>, St
         return Ok(None);
     }
     let packages = std::env::var_os("R_DEFAULT_PACKAGES");
-    unsafe { std::env::set_var("R_DEFAULT_PACKAGES", "NULL") };
+    super::platform::set_environment(c"R_DEFAULT_PACKAGES", c"NULL", true)
+        .map_err(|error| error.to_string())?;
     Ok(Some(packages))
 }
 
@@ -47,11 +48,18 @@ pub(crate) fn finish_r_startup(deferred: Option<Option<std::ffi::OsString>>) -> 
     let Some(packages) = deferred else {
         return Ok(());
     };
-    unsafe {
-        match packages {
-            Some(packages) => std::env::set_var("R_DEFAULT_PACKAGES", packages),
-            None => std::env::remove_var("R_DEFAULT_PACKAGES"),
-        }
+    let value = std::ffi::CString::new(
+        packages
+            .as_deref()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .as_bytes(),
+    )
+    .map_err(|error| error.to_string())?;
+    super::platform::set_environment(c"R_DEFAULT_PACKAGES", &value, true)
+        .map_err(|error| error.to_string())?;
+    if packages.is_none() {
+        unsafe { std::env::remove_var("R_DEFAULT_PACKAGES") };
     }
     harp::parse_eval_base(r#"local({
         dp <- Sys.getenv("R_DEFAULT_PACKAGES")

@@ -15,16 +15,22 @@ send:
     sys <- reticulate::import("sys")
     stopifnot(
       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
-      identical(config$prefix, sys$prefix),
-      identical(config$exec_prefix, sys$exec_prefix),
-      identical(config$base_prefix, sys$base_prefix),
-      identical(config$base_exec_prefix, sys$base_exec_prefix),
+      identical(normalizePath(config$prefix), normalizePath(sys$prefix)),
+      identical(normalizePath(config$exec_prefix), normalizePath(sys$exec_prefix)),
+      identical(normalizePath(config$base_prefix), normalizePath(sys$base_prefix)),
+      identical(
+        normalizePath(config$base_exec_prefix),
+        normalizePath(sys$base_exec_prefix)
+      ),
       !isTRUE(config$ephemeral),
       identical(
         config$conda,
         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
       ),
-      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV")),
+      identical(
+        normalizePath(config$virtualenv, mustWork = FALSE),
+        normalizePath(Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV"), mustWork = FALSE)
+      ),
       identical(config$virtualenv_activate, "")
     )
     cat("environment metadata retained\n")
@@ -60,16 +66,22 @@ send:
     sys <- reticulate::import("sys")
     stopifnot(
       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
-      identical(config$prefix, sys$prefix),
-      identical(config$exec_prefix, sys$exec_prefix),
-      identical(config$base_prefix, sys$base_prefix),
-      identical(config$base_exec_prefix, sys$base_exec_prefix),
+      identical(normalizePath(config$prefix), normalizePath(sys$prefix)),
+      identical(normalizePath(config$exec_prefix), normalizePath(sys$exec_prefix)),
+      identical(normalizePath(config$base_prefix), normalizePath(sys$base_prefix)),
+      identical(
+        normalizePath(config$base_exec_prefix),
+        normalizePath(sys$base_exec_prefix)
+      ),
       !isTRUE(config$ephemeral),
       identical(
         config$conda,
         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
       ),
-      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV")),
+      identical(
+        normalizePath(config$virtualenv, mustWork = FALSE),
+        normalizePath(Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV"), mustWork = FALSE)
+      ),
       identical(config$virtualenv_activate, "")
     )
     cat("environment metadata retained\n")
@@ -105,16 +117,22 @@ send:
     sys <- reticulate::import("sys")
     stopifnot(
       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
-      identical(config$prefix, sys$prefix),
-      identical(config$exec_prefix, sys$exec_prefix),
-      identical(config$base_prefix, sys$base_prefix),
-      identical(config$base_exec_prefix, sys$base_exec_prefix),
+      identical(normalizePath(config$prefix), normalizePath(sys$prefix)),
+      identical(normalizePath(config$exec_prefix), normalizePath(sys$exec_prefix)),
+      identical(normalizePath(config$base_prefix), normalizePath(sys$base_prefix)),
+      identical(
+        normalizePath(config$base_exec_prefix),
+        normalizePath(sys$base_exec_prefix)
+      ),
       !isTRUE(config$ephemeral),
       identical(
         config$conda,
         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
       ),
-      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV")),
+      identical(
+        normalizePath(config$virtualenv, mustWork = FALSE),
+        normalizePath(Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV"), mustWork = FALSE)
+      ),
       identical(config$virtualenv_activate, "")
     )
     cat("environment metadata retained\n")

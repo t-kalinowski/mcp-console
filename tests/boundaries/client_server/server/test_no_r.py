@@ -9,12 +9,14 @@ from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from support.requirements import POSIX, SQL, requires
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
+from support.snapshots import platform_snapshots
 from boundaries.client_server.python.test_without_r import (
     environment as without_r_environment,
 )
@@ -27,7 +29,10 @@ def no_r_environment(directory: Path) -> dict[str, str]:
     commands.mkdir()
     uv = shutil.which("uv")
     assert uv is not None, "uv is required"
-    (commands / "uv").symlink_to(uv)
+    if os.name == "nt":
+        shutil.copy2(uv, commands / "uv.exe")
+    else:
+        (commands / "uv").symlink_to(uv)
     return without_r_environment(commands)
 
 
@@ -42,6 +47,7 @@ def no_r_client(binary: Path, execution: Execution):
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(POSIX)
 def test_prepares_with_only_a_symlinked_system_python(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -84,10 +90,15 @@ def test_records_python_without_r_dependencies(
         assert "```{python}" in quarto, quarto
         return TranscriptWithCompanions(
             transcript=transcript,
-            companions={"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")},
+            companions={
+                "qmd": quarto.replace(str(workspace.resolve()), "<workspace>").replace(
+                    str(workspace), "<workspace>"
+                )
+            },
         )
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_no_r_user_selected_python_is_bare(
     binary: Path, execution: Execution
@@ -136,6 +147,7 @@ def test_no_r_user_selected_python_is_bare(
             return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_python_and_sql_without_r(binary: Path, execution: Execution) -> Transcript:
     with no_r_client(binary, execution) as client:
@@ -252,6 +264,7 @@ def test_no_r_interrupt_requirements_reject_before_control_and_stdin(
         return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_no_r_sql_interrupt_and_worker_crash(
     binary: Path, execution: Execution
@@ -320,6 +333,7 @@ def test_no_r_sql_interrupt_and_worker_crash(
 
 
 @executions(DIRECT, SANDBOXED)
+@platform_snapshots("win32")
 def test_no_r_extension_preparation_uses_candidate_provider(
     binary: Path, execution: Execution
 ) -> Transcript:

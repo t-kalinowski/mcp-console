@@ -850,8 +850,10 @@ mod tests {
     use rmcp::model::ServerResult;
     use tokio::io::AsyncWriteExt;
 
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     const PING_REQUEST: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"id\":1}\n";
     const SEND_REQUEST: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"tools/call\",\"params\":{\"name\":\"send\",\"arguments\":{}},\"id\":1}\n";
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     const CANCEL_REQUEST_9: &[u8] = b"{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":9}}\n";
 
     fn request_id(value: i64) -> RequestId {
@@ -951,6 +953,10 @@ mod tests {
         assert!(current_call(&deliveries, &request_id).is_none());
     }
 
+    // macOS/Linux use the public response_admission transcript (and the existing
+    // output cancellation case). Keep this proof where native write gates are
+    // unavailable; its body and transport configuration remain unchanged.
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     #[tokio::test]
     async fn response_gate_does_not_delay_cancellation_notifications() {
         let deliveries = ResponseDeliveries::default();
@@ -988,6 +994,9 @@ mod tests {
         assert!(current_call(&transport.deliveries, &cancelled_id).is_none());
     }
 
+    // Public owner: client_server/server/test_response_admission on macOS/Linux.
+    // Other targets retain this adversarial successor-first polling proof.
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     #[tokio::test]
     async fn response_gate_skips_cancelled_calls_without_reordering() {
         let deliveries = ResponseDeliveries::default();

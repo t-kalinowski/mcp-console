@@ -16,10 +16,11 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import stop_process
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_accepts_idle_stdin(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
@@ -185,6 +186,7 @@ def test_routes_combined_and_followup_stdin(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_routes_same_call_stdin_to_direct_fd0(
     binary: Path, execution: Execution

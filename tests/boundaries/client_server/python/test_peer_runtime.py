@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.client_server.python.test_setup import deferred_selection_client
 
+from support.requirements import NATIVE_FIXTURES, POSIX, R, SQL, command, requires
 from support.assertions import (
     assert_result_content,
     last_result_text,
@@ -27,13 +28,13 @@ from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.native import build_interposer
 from support.records import ToolResult, Transcript
+from support.snapshots import platform_snapshots
 from support.resolvers import (
     checkpoint_uv_environment,
     send_and_collect_runtime_python_resolution,
 )
-from support.requirements import NATIVE_FIXTURES, R, command, requires
 from support.r import isolated_r_home, r_test_environment, reference_plots
-from support.python import write_test_wheel
+from support.python import virtualenv_python, write_test_wheel
 from support.ssh import (
     SSH,
     configure,
@@ -73,8 +74,11 @@ CLI_CHECK = code("""
       selected <- reticulate::py_config()$python
       prefix <- reticulate::import("sys")$prefix
       stopifnot(identical(
-        unname(Sys.which(command)),
-        file.path(dirname(selected), command)
+        normalizePath(unname(Sys.which(command))),
+        normalizePath(file.path(
+          dirname(selected),
+          paste0(command, if (.Platform$OS.type == "windows") ".exe" else "")
+        ))
       ))
       output <- system2(command, stdout = TRUE)
       stopifnot(is.null(attr(output, "status")))
@@ -217,6 +221,7 @@ def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
     client.expect(r="stopifnot(identical(reticulate::py$nested_peer(), 42L))")
 
 
+@requires(SQL)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_late_r_preserves_python_runtime(
@@ -245,6 +250,7 @@ def test_late_r_preserves_python_runtime(
     return records
 
 
+@requires(SQL)
 @requires(EXTERNAL_SSH)
 def test_external_peer_initialization_order(binary: Path) -> Transcript:
     records = []
@@ -332,7 +338,7 @@ def test_late_attachment_preserves_environment_metadata(
                     [sys.executable, "-m", "venv", "--without-pip", str(prefix)],
                     check=True,
                 )
-                executable = prefix / "bin/python"
+                executable = virtualenv_python(prefix)
                 # Explicit environments still need reticulate's default
                 # NumPy declaration satisfied before bridge attachment.
                 subprocess.run(
@@ -366,16 +372,22 @@ def test_late_attachment_preserves_environment_metadata(
                     sys <- reticulate::import("sys")
                     stopifnot(
                       identical(config$python, Sys.getenv("MCP_CONSOLE_TEST_PYTHON")),
-                      identical(config$prefix, sys$prefix),
-                      identical(config$exec_prefix, sys$exec_prefix),
-                      identical(config$base_prefix, sys$base_prefix),
-                      identical(config$base_exec_prefix, sys$base_exec_prefix),
+                      identical(normalizePath(config$prefix), normalizePath(sys$prefix)),
+                      identical(normalizePath(config$exec_prefix), normalizePath(sys$exec_prefix)),
+                      identical(normalizePath(config$base_prefix), normalizePath(sys$base_prefix)),
+                      identical(
+                        normalizePath(config$base_exec_prefix),
+                        normalizePath(sys$base_exec_prefix)
+                      ),
                       !isTRUE(config$ephemeral),
                       identical(
                         config$conda,
                         Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
                       ),
-                      identical(config$virtualenv, Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV")),
+                      identical(
+                        normalizePath(config$virtualenv, mustWork = FALSE),
+                        normalizePath(Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV"), mustWork = FALSE)
+                      ),
                       identical(config$virtualenv_activate, "")
                     )
                     cat("environment metadata retained\\n")
@@ -389,6 +401,7 @@ def test_late_attachment_preserves_environment_metadata(
     return records
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_interrupt_wakes_input_before_and_after_attachment(
@@ -532,6 +545,7 @@ def exercise_prepared_r_only(binary: Path, provider: str) -> None:
             assert client.process.wait(timeout=5) != 0
 
 
+@requires(POSIX)
 @requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_idle_preparation_keeps_r_uninitialized(
@@ -632,7 +646,11 @@ def test_shared_module_configuration(binary: Path, execution: Execution) -> Tran
                 uv = shutil.which("uv")
                 assert uv is not None
                 without_r(environment, root)
-                (Path(environment["PATH"]) / "uv").symlink_to(uv)
+                shutil.copyfile(
+                    uv, Path(environment["PATH"]) / "uv.exe"
+                ) if os.name == "nt" else (Path(environment["PATH"]) / "uv").symlink_to(
+                    uv
+                )
             with McpClient(binary, execution.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
                 client.expect("[prepared]", requirements={"python": ["matplotlib"]})
@@ -796,12 +814,16 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
         subprocess.run(
             [sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True
         )
-        executable = venv / "bin/python"
+        executable = virtualenv_python(venv)
         other = root / "other environment"
         subprocess.run(
             [sys.executable, "-m", "venv", "--without-pip", str(other)], check=True
         )
-        assert executable.samefile(other / "bin/python")
+        assert (
+            executable.read_bytes() == virtualenv_python(other).read_bytes()
+            if os.name == "nt"
+            else executable.samefile(virtualenv_python(other))
+        )
         # Reticulate declares NumPy by default, including for explicit Python
         # selections. Satisfy that declaration before exercising the bridge.
         index = write_test_wheel(
@@ -840,7 +862,7 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
         (modules / "peer_module.py").write_text("value = 41\n")
         # CPython's pyvenv.cfg is the environment owner. A bridge must not run
         # an activation script again after the interpreter is already live.
-        (venv / "bin/activate_this.py").write_text(
+        executable.with_name("activate_this.py").write_text(
             "raise AssertionError('bridge reactivated the selected interpreter')\n"
         )
         reference = None
@@ -866,7 +888,7 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                 RETICULATE_PYTHON=selection,
                 MCP_CONSOLE_TEST_PYTHON=str(workspace.resolve() / selection),
                 MCP_CONSOLE_TEST_PYTHON_PREFIX=str(venv),
-                MCP_CONSOLE_TEST_OTHER_PYTHON=str(other / "bin/python"),
+                MCP_CONSOLE_TEST_OTHER_PYTHON=str(virtualenv_python(other)),
                 PYTHONPATH=str(root / "unselected-modules"),
                 RETICULATE_PYTHONPATH=str(modules),
             )
@@ -903,9 +925,12 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                     )
                     assert os.environ["PYTHONPATH"] == os.environ["RETICULATE_PYTHONPATH"]
                     assert builtins.peer_bootstrap_count == 1
-                    assert builtins.peer_bootstrap == (sys.prefix, sys.prefix, sys.executable), (
-                        builtins.peer_bootstrap
-                    )
+                    assert all(
+                        os.path.samefile(a, b)
+                        for a, b in zip(
+                            builtins.peer_bootstrap, (sys.prefix, sys.prefix, sys.executable), strict=True
+                        )
+                    ), builtins.peer_bootstrap
                     expected = [
                         sys.executable,
                         sys.prefix,
@@ -922,7 +947,10 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                     program = "import sys, json; print(json.dumps([sys.executable, sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix]))"
                     for command in (sys.executable, "python"):
                         child = json.loads(subprocess.check_output([command, "-c", program], text=True))
-                        assert child == expected, (child, expected)
+                        assert all(os.path.samefile(a, b) for a, b in zip(child, expected, strict=True)), (
+                            child,
+                            expected,
+                        )
                     print("selected environment retained by interpreter and children")
                     """)
                 client.send(python=source)
@@ -964,7 +992,7 @@ def test_shared_virtualenv_bootstrap(binary: Path, execution: Execution) -> Tran
                         stopifnot(identical(failure, "Python is already initialized with another selection; restart required"))
                         # Executable aliases within the selected environment remain valid.
                         suppressWarnings(reticulate::use_python(
-                          file.path(dirname(Sys.getenv("MCP_CONSOLE_TEST_PYTHON")), "python3"),
+                          file.path(dirname(Sys.getenv("MCP_CONSOLE_TEST_PYTHON")), if (.Platform$OS.type == "windows") "python.exe" else "python3"),
                           required = TRUE
                         ))
                         """),
@@ -1130,6 +1158,7 @@ def test_remote_managed_identity_survives_restart(
 
 
 @requires(R, command("uv"))
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_shared_managed_bootstrap_and_replacement(
     binary: Path, execution: Execution
@@ -1147,7 +1176,11 @@ def test_shared_managed_bootstrap_and_replacement(
                 uv = shutil.which("uv")
                 assert uv is not None
                 without_r(environment, root)
-                (Path(environment["PATH"]) / "uv").symlink_to(uv)
+                shutil.copyfile(
+                    uv, Path(environment["PATH"]) / "uv.exe"
+                ) if os.name == "nt" else (Path(environment["PATH"]) / "uv").symlink_to(
+                    uv
+                )
             with McpClient(binary, execution.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
                 defaults = client.send(requirements={"action": "get"})[
@@ -1191,6 +1224,14 @@ def test_shared_managed_bootstrap_and_replacement(
                     assert os.environ["VIRTUAL_ENV"] == sys.prefix
                     print("managed identity and child environment agree")
                     """)
+                if os.name == "nt":
+                    # uv's Windows installation aliases can change spelling
+                    # between embedding and a child while retaining identity.
+                    source = source.replace(
+                        'assert (\n    json.loads(subprocess.check_output([sys.executable, "-c", program], text=True))\n    == expected\n)',
+                        'child = json.loads(subprocess.check_output([sys.executable, "-c", program], text=True))\n'
+                        "assert all(os.path.samefile(a, b) for a, b in zip(child, expected, strict=True)), (child, expected)",
+                    )
                 client.expect(
                     "managed identity and child environment agree\n",
                     python=source,
@@ -1199,9 +1240,14 @@ def test_shared_managed_bootstrap_and_replacement(
                     client.expect(
                         r="stopifnot(isTRUE(reticulate::py_config()$ephemeral))",
                     )
+                prefix_check = (
+                    "os.path.samefile(sys.base_prefix, peer_library)"
+                    if os.name == "nt"
+                    else "sys.base_prefix == peer_library"
+                )
                 client.expect(
                     "live import retained objects\n",
-                    python="import more_itertools; assert id(peer_object) == peer_id; assert sys.base_prefix == peer_library; print('live import retained objects')",
+                    python=f"import more_itertools; assert id(peer_object) == peer_id; assert {prefix_check}; print('live import retained objects')",
                 )
                 client.send(python="raise ValueError('after accepted activation')")
                 assert last_result_text(client).endswith(
@@ -1278,6 +1324,7 @@ def test_r_commands_follow_managed_python_activation(
             return client.finish()[3:]
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_r_startup_uses_initialized_python(
@@ -1286,6 +1333,7 @@ def test_r_startup_uses_initialized_python(
     return r_startup_with_python(binary, execution, managed=False)
 
 
+@requires(POSIX)
 @requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_managed_import_after_r_startup(
@@ -1294,6 +1342,7 @@ def test_managed_import_after_r_startup(
     return r_startup_with_python(binary, execution, managed=True)
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_late_r_startup_uses_running_python(
@@ -1302,6 +1351,7 @@ def test_late_r_startup_uses_running_python(
     return r_startup_with_python(binary, execution, managed=False, python_first=True)
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_late_r_startup_captures_package_plots(
@@ -1322,6 +1372,7 @@ def test_late_r_startup_captures_package_plots(
     return records
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_system_default_packages_survive_late_r_startup(
@@ -1386,7 +1437,7 @@ def unusable_numpy_metadata(
                 capture_output=True,
                 check=True,
             )
-            executable = selected / "bin/python"
+            executable = virtualenv_python(selected)
             if configured_path:
                 modules = root / "configured modules"
                 modules.mkdir()
@@ -1442,6 +1493,7 @@ def unusable_numpy_metadata(
     return [{"unusable_numpy_metadata_is_absent": True}]
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_conversion_metadata_matches_configured_import_paths(
@@ -1459,7 +1511,7 @@ def test_conversion_metadata_matches_configured_import_paths(
             capture_output=True,
             check=True,
         )
-        executable = selected / "bin/python"
+        executable = virtualenv_python(selected)
         subprocess.run(
             [
                 "uv",
@@ -1550,7 +1602,7 @@ def test_conversion_metadata_does_not_import_shadowed_numpy(
                 capture_output=True,
                 check=True,
             )
-            executable = selected / "bin/python"
+            executable = virtualenv_python(selected)
             subprocess.run(
                 ["uv", "pip", "install", "--python", str(executable), "numpy"],
                 capture_output=True,
@@ -1603,6 +1655,7 @@ def test_conversion_metadata_does_not_import_shadowed_numpy(
     return [{"shadowed_numpy_module_and_package_remain_unimported": True}]
 
 
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_attaches_to_reticulate_initialized_by_r_startup(
@@ -1855,6 +1908,7 @@ def r_startup_with_python(
             return records
 
 
+@requires(POSIX)
 @requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_shared_managed_import_failures(
@@ -1878,6 +1932,7 @@ def test_shared_managed_import_failures(
     return records
 
 
+@requires(POSIX)
 @requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_shared_managed_tool_activation_failure(

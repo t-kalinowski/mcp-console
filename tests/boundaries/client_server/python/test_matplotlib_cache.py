@@ -145,6 +145,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             # fmt: python
             python=code("""
                 import os
+                import sys
                 from pathlib import Path
 
                 import matplotlib
@@ -162,7 +163,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             private_cache = next(
                 path
                 for path in Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json")
-                if path.is_symlink()
+                if path.is_symlink() or sys.platform == "win32" and path.name != "fontlist-v999.json"
             )
             private_cache_bytes = private_cache.read_bytes()
             private_cache.unlink()
@@ -201,7 +202,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             private_probe.write_text("ok", encoding="utf-8")
 
             (
-                config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+                config.samefile(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]),
                 matplotlib.rcParams["lines.linewidth"],
                 private_probe.read_text(encoding="utf-8") == "ok",
             )

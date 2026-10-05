@@ -21,6 +21,7 @@ from support.requirements import (
     NATIVE_FIXTURES,
     NULL_FAULT_ACCERR,
     NULL_FAULT_MAPERR,
+    POSIX,
     requires,
 )
 from support.records import Transcript
@@ -179,6 +180,7 @@ def test_reports_r_worker_exit_status(binary: Path, execution: Execution) -> Tra
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_r_worker_restart_with_idle_stdin(
     binary: Path, execution: Execution
@@ -267,6 +269,7 @@ def test_restart_while_r_waits_for_input(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_skips_cell_boundary_callbacks(
     binary: Path, execution: Execution
@@ -322,6 +325,7 @@ def test_restart_skips_cell_boundary_callbacks(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_skips_direct_stdin_boundary_callback(
     binary: Path, execution: Execution
@@ -439,6 +443,7 @@ def test_times_out_and_polls_running_evaluation(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_running_r_evaluation(
     binary: Path, execution: Execution
@@ -674,6 +679,7 @@ def test_interrupts_managed_console_input(
             stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_replays_console_prefix_after_operation_boundary_interrupt(
     binary: Path,

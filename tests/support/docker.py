@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def daemon_available() -> bool:
-    if shutil.which("docker") is None:
+    if os.name != "posix" or shutil.which("docker") is None:
         return False
     try:
         return (

@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, joblib_processes, requires
 from support.assertions import (
     last_result_text,
     last_tool_text,
@@ -19,10 +20,10 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import joblib_processes, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @requires(joblib_processes())
 @executions(DIRECT, SANDBOXED)
 def test_runs_sklearn_parallel_search(binary: Path, execution: Execution) -> Transcript:
@@ -173,6 +174,9 @@ def test_runs_joblib_process_backend(binary: Path, execution: Execution) -> Tran
     )
     output = last_result_text(client)
     assert output == "[2, 1, 0, 1, 2]\n", repr(output)
+    client.expect(
+        python="from joblib.externals.loky import get_reusable_executor\nget_reusable_executor().shutdown(wait=True)"
+    )
     return client.finish()
 
 
@@ -195,6 +199,9 @@ def test_runs_joblib_process_backend_after_live_resolution(
     client.send(python=python)
     output = last_result_text(client)
     assert output == "[2, 1, 0, 1, 2]\n", repr(output)
+    client.expect(
+        python="from joblib.externals.loky import get_reusable_executor\nget_reusable_executor().shutdown(wait=True)"
+    )
     return client.finish()
 
 

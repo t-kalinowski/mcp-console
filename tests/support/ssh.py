@@ -24,7 +24,7 @@ SSHD = shutil.which("sshd") or (
 )
 SSH = Requirement(
     "localhost OpenSSH",
-    SSHD is not None and shutil.which("ssh-keygen") is not None,
+    os.name == "posix" and SSHD is not None and shutil.which("ssh-keygen") is not None,
     "requires sshd and ssh-keygen with permission to run a localhost SSH server",
 )
 CONFIG = ".agents/console/config.yaml"

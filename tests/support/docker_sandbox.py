@@ -44,6 +44,7 @@ def sbx(*args: str, **kwargs) -> subprocess.CompletedProcess:
 def available() -> bool:
     if (
         not WORKER.available
+        or os.name != "posix"
         or not os.environ.get("MCP_CONSOLE_TEST_SBX_TEMPLATE")
         or not shutil.which("sbx")
     ):

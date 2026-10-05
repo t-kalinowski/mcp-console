@@ -72,6 +72,9 @@ result:
 send:
   python: |
     retried_value = 43
+    import sys
+
+    assert sys.orig_argv == [sys.executable], (sys.orig_argv, sys.executable)
     retried_value
 result:
   content:

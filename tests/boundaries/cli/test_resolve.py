@@ -18,10 +18,11 @@ from support.checkpoints import FifoCheckpoint
 from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import stop_process_group
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 def test_resolves_python_version_over_json(binary: Path) -> Transcript:
     root = Path(__file__).resolve().parents[3]
     with (root / "Cargo.toml").open("rb") as source:
