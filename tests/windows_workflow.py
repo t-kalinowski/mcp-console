@@ -301,6 +301,7 @@ class WindowsWorkflow(unittest.TestCase):
         for name in (
             "windows.py",
             "windows_runner.py",
+            "windows_gate.py",
             "windows_relay.py",
             "windows_cargo.py",
             "windows_resolver.py",
