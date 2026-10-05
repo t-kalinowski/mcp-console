@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 #[cfg(unix)]
-use std::io;
+use std::io::{self, Write};
 use std::io::{BufReader, Read};
-use std::process::Stdio;
+use std::process::{Child, Stdio};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -23,8 +23,69 @@ struct Connection {
     events: mpsc::Sender<Event>,
     sequence: AtomicU64,
     owner: Mutex<Option<thread::JoinHandle<Result<(), String>>>>,
+    unconfirmed: Arc<Mutex<Option<UnconfirmedChild>>>,
     blocked: Arc<Mutex<Option<String>>>,
     local: bool,
+}
+
+struct UnconfirmedChild {
+    child: Arc<Mutex<Option<Child>>>,
+    done: mpsc::Receiver<()>,
+    reaper: Option<thread::JoinHandle<()>>,
+}
+
+impl UnconfirmedChild {
+    fn retain(child: Child, mut exit: crate::process_exit::ChildExitWaiter) -> Self {
+        let child = Arc::new(Mutex::new(Some(child)));
+        let retained = child.clone();
+        let (finished, done) = mpsc::channel();
+        let reaper = thread::spawn(move || {
+            // Keep the process handle and its observer owned after the bounded
+            // caller returns. Exit observation precedes the sole reap.
+            if exit.finish().is_ok() {
+                let mut retained = retained.lock().expect("preparation child lock");
+                if retained
+                    .as_mut()
+                    .expect("unconfirmed preparation child")
+                    .try_wait()
+                    .is_ok_and(|status| status.is_some())
+                {
+                    retained.take();
+                }
+            }
+            let _ = finished.send(());
+        });
+        Self {
+            child,
+            done,
+            reaper: Some(reaper),
+        }
+    }
+
+    fn retry(&mut self, local: bool) -> Result<(), String> {
+        if let Some(child) = self.child.lock().expect("preparation child lock").as_mut() {
+            child.kill().map_err(|error| {
+                format!(
+                    "cannot terminate {}: {error}; retirement unconfirmed",
+                    label(local)
+                )
+            })?;
+        }
+        if self.reaper.is_some() {
+            self.done
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|_| format!("{} retirement unconfirmed", label(local)))?;
+            self.reaper
+                .take()
+                .expect("preparation reaper")
+                .join()
+                .map_err(|_| format!("{} reaper panicked", label(local)))?;
+        }
+        if self.child.lock().expect("preparation child lock").is_some() {
+            return Err(format!("{} retirement unconfirmed", label(local)));
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Connection {
@@ -243,7 +304,12 @@ impl Preparation {
         #[cfg(unix)]
         let stdin = child.stdin.take().expect("preparation stdin");
         #[cfg(unix)]
-        let (diagnostic_exit, notify_diagnostic_exit) = io::pipe().map_err(|e| e.to_string())?;
+        let (diagnostic_exit, mut notify_diagnostic_exit) =
+            io::pipe().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        let mut diagnostic_abort = notify_diagnostic_exit
+            .try_clone()
+            .map_err(|e| e.to_string())?;
         #[cfg(unix)]
         let diagnostic_reader = {
             let stderr = child.stderr.take().expect("preparation stderr");
@@ -316,7 +382,7 @@ impl Preparation {
         let mut exit =
             crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
                 #[cfg(unix)]
-                drop(notify_diagnostic_exit);
+                let _ = notify_diagnostic_exit.write_all(&[1]);
                 let _ = exit_events.send(Event::Exited);
             })?;
         let state = Arc::new(State::default());
@@ -328,47 +394,84 @@ impl Preparation {
             chunks: None,
         };
         let owner_blocked = blocked.clone();
+        let unconfirmed = Arc::new(Mutex::new(None));
+        let owner_unconfirmed = unconfirmed.clone();
         let owner = thread::spawn(move || {
             let result = run(received, &outgoing, pending, open, &owner_blocked, local);
             drop(outgoing);
             drop(abort);
             // Retire before joining I/O and reaping. Native cleanup needs a
             // bounded SIGTERM allowance; direct execution can stop immediately.
-            if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
-                #[cfg(unix)]
-                if local && native {
-                    // Let the native supervisor retire the resolver tree before
-                    // escalation. Killing the supervisor bypasses its cleanup.
-                    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
-                    if !exit.wait(Duration::from_secs(2)).unwrap_or(false) {
-                        let _ = child.kill();
+            let mut reaped = false;
+            let retired = (|| {
+                if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
+                    #[cfg(unix)]
+                    let force = if local && native {
+                        // Let the native supervisor retire the resolver tree before
+                        // escalation. Killing the supervisor bypasses its cleanup.
+                        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+                        !exit.wait(Duration::from_secs(2)).unwrap_or(false)
+                    } else {
+                        true
+                    };
+                    #[cfg(windows)]
+                    let force = true;
+                    if force {
+                        child.kill().map_err(|error| {
+                            format!(
+                                "cannot terminate {}: {error}; retirement unconfirmed",
+                                label(local)
+                            )
+                        })?;
+                        if !exit.wait(Duration::from_secs(2))? {
+                            return Err(format!(
+                                "{} did not exit after forced termination; retirement unconfirmed",
+                                label(local)
+                            ));
+                        }
                     }
-                } else {
-                    let _ = child.kill();
                 }
-                #[cfg(windows)]
-                let _ = child.kill();
-            }
+                exit.finish()?;
+                let status = child
+                    .try_wait()
+                    .map_err(|error| format!("cannot reap {}: {error}", label(local)))?
+                    .ok_or_else(|| format!("{} retirement unconfirmed", label(local)))?;
+                reaped = true;
+                if native && !status.success() {
+                    Err(format!("{} sandbox exited with {status}", label(local)))
+                } else {
+                    Ok(())
+                }
+            })();
+            #[cfg(unix)]
+            let _ = diagnostic_abort.write_all(&[1]);
             let _ = writer.join();
             let _ = reader.join();
-            let reaped = child
-                .wait()
-                .map_err(|error| format!("cannot reap {}: {error}", label(local)))
-                .and_then(|status| {
-                    if native && !status.success() {
-                        Err(format!("{} sandbox exited with {status}", label(local)))
-                    } else {
-                        Ok(())
-                    }
-                });
             #[cfg(unix)]
             let _ = diagnostic_reader.join();
-            result.and(reaped)
+            if !reaped {
+                *owner_unconfirmed
+                    .lock()
+                    .expect("preparation retirement lock") =
+                    Some(UnconfirmedChild::retain(child, exit));
+            }
+            let result = match (result, retired) {
+                (Err(error), Err(cleanup)) => Err(format!("{error}; {cleanup}")),
+                (result, cleanup) => result.and(cleanup),
+            };
+            if let Err(error) = &result {
+                *owner_blocked.lock().expect("preparation session lock") = Some(format!(
+                    "{} retirement is unconfirmed; this session cannot prepare or start a replacement: {error}",
+                    label(local)
+                ));
+            }
+            result
         });
         let connection = Self(Arc::new(Connection {
             events: events.clone(),
             sequence: AtomicU64::new(1),
             owner: Mutex::new(Some(owner)),
+            unconfirmed,
             blocked,
             local,
         }));
@@ -460,13 +563,22 @@ impl Preparation {
         // Hold the lock through the join so every close caller waits for the
         // owner to reap its child, even after Closed and EOF arrive.
         let mut owner = self.0.owner.lock().map_err(|_| "preparation owner lock")?;
-        let Some(owner) = owner.take() else {
-            return Ok(());
-        };
         let _ = self.0.events.send(Event::Close);
-        owner
-            .join()
-            .map_err(|_| format!("{} owner panicked", label(self.0.local)))?
+        let result = owner.take().map_or(Ok(()), |owner| {
+            owner
+                .join()
+                .map_err(|_| format!("{} owner panicked", label(self.0.local)))?
+        });
+        let retry = self
+            .0
+            .unconfirmed
+            .lock()
+            .map_err(|_| "preparation retirement lock")?
+            .as_mut()
+            .map_or(Ok(()), |child| child.retry(self.0.local));
+        // A later exit or successful retry does not erase the original
+        // protocol/retirement failure or confirm native descendant cleanup.
+        result.and(retry)
     }
 }
 

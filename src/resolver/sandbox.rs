@@ -73,6 +73,7 @@ fn materialize(mut settings: SandboxSettings) -> Result<SandboxSettings, String>
             "pypi.org",
             "files.pythonhosted.org",
             "astral.sh",
+            "releases.astral.sh",
             "github.com",
             "api.github.com",
             "codeload.github.com",

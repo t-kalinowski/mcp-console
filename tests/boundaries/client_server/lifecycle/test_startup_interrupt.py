@@ -17,7 +17,7 @@ from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.native import build_interposer
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
@@ -62,6 +62,7 @@ def before_resolver_spawn(
         environment.update(
             {
                 "TMPDIR": str(root),
+                "UV_TOOL_DIR": str(root),
                 "PATH": os.pathsep.join([str(fake_bin), environment["PATH"]]),
                 "MCP_CONSOLE_TEST_REAL_IR": real_ir,
                 "MCP_CONSOLE_TEST_REAL_UV": real_uv,
@@ -77,11 +78,28 @@ def before_resolver_spawn(
             }
         )
         (root / "armed").touch()
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "resolver": {
+                        "environment": {
+                            LOADER_VARIABLE: environment[
+                                "MCP_CONSOLE_TEST_SPAWN_LIBRARY"
+                            ],
+                            "MCP_CONSOLE_TEST_SPAWN_OWNER": "1",
+                        }
+                    }
+                }
+            )
+        )
         client = resources.enter_context(
             McpClient(
                 Path(sys.executable),
                 ("-c", server, str(binary), *execution.serve()),
                 environment,
+                root,
                 response_timeout=5,
             )
         )
