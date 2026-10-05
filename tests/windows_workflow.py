@@ -481,9 +481,7 @@ class WindowsWorkflow(unittest.TestCase):
         self.assertEqual(report["required_missing"], [])
         self.assertEqual(report["companion"]["status"], "skip")
         self.assertTrue(report["executable"]["development"].endswith("mcp-console.exe"))
-        self.assertTrue(
-            all(p["status"] == "skip" for p in report["providers"].values())
-        )
+        self.assertNotIn("providers", report)
         self.assertFalse((self.root / "target").exists())
         self.assertFalse((self.root / ".dev-workflow").exists())
         self.stub(

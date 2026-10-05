@@ -6,7 +6,6 @@ import re
 import signal
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -24,9 +23,6 @@ from support.suites import run_this_suite
 
 @requires(POSIX)
 def test_resolves_python_version_over_json(binary: Path) -> Transcript:
-    root = Path(__file__).resolve().parents[3]
-    with (root / "Cargo.toml").open("rb") as source:
-        build = tomllib.load(source)["package"]["version"]
     with TemporaryDirectory() as temporary:
         uv = Path(temporary) / "uv"
         uv.write_text(
@@ -63,20 +59,10 @@ esac
             return json.loads(process.stdout.readline())
 
         try:
-            send(
-                {
-                    "Open": {
-                        "version": 7,
-                        "build": build,
-                        "workspace": "",
-                        "selections": {"r_home": None, "python": None},
-                        "mode": "PythonOnly",
-                    }
-                }
-            )
+            send({"Open": {"mode": "PythonOnly"}})
             hello = receive()
             discovery = receive()
-            assert hello == {"Hello": {"version": 7, "build": build}}, hello
+            assert hello == "Hello", hello
             assert discovery["Completed"]["id"] == 0, discovery
             assert discovery["Completed"]["confirmed"] is True, discovery
             send(
@@ -166,8 +152,6 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
         }
         if fail:
             environment["MCP_CONSOLE_TEST_OBSERVER_FAIL"] = "1"
-        with (Path(__file__).resolve().parents[3] / "Cargo.toml").open("rb") as source:
-            build = tomllib.load(source)["package"]["version"]
         process = subprocess.Popen(
             [binary, "resolve"],
             stdin=subprocess.PIPE,
@@ -179,26 +163,13 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
         )
         try:
             assert process.stdin is not None and process.stdout is not None
-            process.stdin.write(
-                json.dumps(
-                    {
-                        "Open": {
-                            "version": 7,
-                            "build": build,
-                            "workspace": "",
-                            "selections": {"r_home": None, "python": None},
-                            "mode": "PythonOnly",
-                        }
-                    }
-                )
-                + "\n"
-            )
+            process.stdin.write(json.dumps({"Open": {"mode": "PythonOnly"}}) + "\n")
             process.stdin.flush()
             opened = [
                 json.loads(line)
                 for line in read_lines(process.stdout, 2, "preparation open")
             ]
-            assert opened[0] == {"Hello": {"version": 7, "build": build}}, opened
+            assert opened[0] == "Hello", opened
             assert opened[1]["Completed"]["confirmed"] is True, opened
             process.stdin.write(
                 json.dumps(

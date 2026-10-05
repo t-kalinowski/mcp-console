@@ -7,7 +7,6 @@ Reticulate provides interoperability when both runtimes and the bridge are avail
 
 Managed R and Python dependencies use the shared hidden `resolve` subcommand, with `ir` and `uv` materializing the environments on the host.
 SQL remains deferred; Windows defaults do not prepare DuckDB extensions.
-Windows SSH/Docker/Docker Sandbox controllers remain unsupported.
 The release workflow does not publish Windows wheels; Windows source checkouts can build and install a local wheel.
 
 ## Build and run
@@ -150,7 +149,7 @@ scripts/with-checkout.cmd cargo build
 scripts/review-diff.cmd origin/main
 ```
 
-`preflight` is read-only; its Windows inventory currently skips companion inspection and unsupported controller capabilities.
+`preflight` is read-only; its Windows inventory currently skips companion inspection.
 Stage the Windows companion with `scripts/stage-sandbox-runner.cmd` before native build, test, or check commands; packaging stages it automatically.
 R is optional in its inventory so Python-only setups can be inspected; the complete acceptance suite needs both runtimes.
 Failed optional R probes remain visible in the inventory without failing preflight; required tool and probe failures still fail it.
@@ -191,7 +190,7 @@ The native child-launch fixture uses ASCII arguments because the stock `R.exe` d
 
 | Exclusion                                                                                                                  | Assessment and Windows coverage                                                                                                                                                                                                                                                     |
 | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SQL and SSH/Docker/SBX controllers                                                                                         | Runtime features are deferred; cases declare those capabilities rather than failing while launching an unavailable runtime.                                                                                                                                                         |
+| SQL                                                                                                                        | Runtime features are deferred; cases declare those capabilities rather than failing while launching an unavailable runtime.                                                                                                                                                         |
 | Seatbelt/bubblewrap policy, ELF interposition, procfs, Unix signals, PTYs, descriptor inheritance, and non-UTF-8 filenames | OS-specific contracts and fixtures remain on their owning platforms. Native Windows policy, relay, input, cancellation, and Job retirement have separate acceptance cases. The shared `sandbox` capability refers to Unix fixtures, not absence of a Windows sandbox.               |
 | Shell/shebang fake workers and resolvers, FIFO checkpoints, Unix virtualenv or R-library layouts                           | Remaining fixture debt for otherwise supported behavior. These cases declare `POSIX`; Windows native tests cover some corresponding contracts, but do not replace every skipped admission, SDK, resolver, and lifecycle scenario. Port the fixture before removing its requirement. |
 | Unix staging/release executable fixtures and Rust Unix descriptor fixtures                                                 | Keep the native ABI/build requirements. Windows checkout ownership, packaging, and installation are exercised through the native workflow; portable release-manifest, client, and runner checks run on both platforms.                                                              |

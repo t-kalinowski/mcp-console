@@ -281,13 +281,12 @@ from pathlib import Path as _Path
 
 _native_storage = None
 _native_extension_directory = None
-_native_prepared_source = None
 _managed_connection = None
 _settings = None  # Supplied from the worker's captured settings during installation.
 
 
 def enable_native(managed: bool) -> None:
-    global _native_storage, _native_extension_directory, _native_prepared_source
+    global _native_storage, _native_extension_directory
 
     _native_storage = _Path(_os.environ["TMPDIR"]) / "mcp-console-duckdb"
     # R still needs its prepared cache in mixed sessions. A selected Python
@@ -295,10 +294,6 @@ def enable_native(managed: bool) -> None:
     _native_extension_directory = (
         _os.environ.get("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", "") if managed else ""
     )
-    _native_prepared_source = {
-        "docker": "image",
-        "docker_sandbox": "template",
-    }.get(_os.environ.get("MCP_CONSOLE_EXECUTION_COMPUTE"))
     _builtins.sql_connection = sql_connection
 
 
@@ -314,12 +309,6 @@ def _ensure_managed_connection():
                 "in a managed session, install it before starting a selected Python environment, "
                 "or select a DB-API connection with console_sql_connection(connection)"
             )
-            if _native_prepared_source is not None:
-                message = (
-                    f"DuckDB is unavailable in this prepared {_native_prepared_source}; "
-                    "preinstall duckdb there and start a new server session, or select a "
-                    "DB-API connection with console_sql_connection(connection)"
-                )
             raise RuntimeError(message) from error
         config = {
             **_settings.get("options", {}),
@@ -328,8 +317,6 @@ def _ensure_managed_connection():
             "temp_directory": str(_native_storage / "spill"),
             "python_enable_replacements": "false",
         }
-        if _native_prepared_source is not None:
-            config["autoinstall_known_extensions"] = "false"
         connection = duckdb.connect(
             _settings.get("database", ":memory:"),
             read_only=_settings.get("read_only", False),

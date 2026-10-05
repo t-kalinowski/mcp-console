@@ -53,26 +53,6 @@ impl PythonEnvironment {
         !configured.is_some_and(|configured| !configured.is_empty() && configured != "managed")
     }
 
-    #[cfg(not(any(unix, windows)))]
-    pub(in crate::worker_client) fn builtin(
-        configured: Option<OsString>,
-        resolver: crate::resolver::ManagedPythonResolverConfiguration,
-        managed_r: Option<&crate::resolver::ManagedR>,
-        on_started: impl FnOnce(crate::resolver::ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<Self, String> {
-        if let Some(configured) = configured
-            && !configured.is_empty()
-            && configured != "managed"
-        {
-            return Ok(Self::UserSelected(configured));
-        }
-        let selected = crate::resolver::resolve_python(&[], &resolver, managed_r, on_started)?;
-        Ok(Self::Managed {
-            selected,
-            resolver: crate::resolver::execution::PythonConfiguration::Direct(resolver),
-        })
-    }
-
     pub(in crate::worker_client) fn bare(configured: Option<OsString>) -> Self {
         if let Some(configured) = configured
             && !configured.is_empty()

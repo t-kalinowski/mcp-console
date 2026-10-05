@@ -1,6 +1,0 @@
----
-cancelled: probe-gate
-owned_containers_absent: true
----
-cancelled: launch-gate
-owned_containers_absent: true

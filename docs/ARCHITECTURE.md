@@ -3,11 +3,11 @@
 The shared runtime coordinator supports independent R and Python startup on [Windows](WINDOWS.md) for local sandboxed or unsandboxed sessions, including managed dependency resolution through the shared `resolve` subcommand with `ir` and `uv` materializing environments on the host.
 Windows uses native pipe/event/process primitives, and resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code; cancellation and normal completion require confirmed empty Jobs.
 These Jobs own trusted host preparation and inspection processes, not evaluated user code, and are not sandboxes.
-Windows SQL and remote controllers are deferred.
+Windows SQL is deferred.
 
 Console separates session management from code execution.
 The server owns what survives a worker; the worker owns live language state.
-A relay connects them, and a native runner or compute provider enforces the execution boundary.
+A relay connects them, and the native runner enforces the execution boundary.
 See the [glossary](GLOSSARY.md) for terms used below.
 
 ## Process layout
@@ -32,24 +32,23 @@ The frontend verifies the installed companion and passes immutable launch config
 Unix replaces the frontend with the runner; Windows waits for its exit and uses native owner handles.
 Native enforcement, private storage, and descendant supervision belong to that runner, not to Console's relay.
 
-[SSH](SSH.md) places the launcher, relay, worker, and preparation owner on the remote host.
-[Docker](DOCKER.md) uses a captured image and a fresh container for each generation.
-[Docker Sandbox](DOCKER_SANDBOX.md) uses an owned microVM from a prepared template, with provider-managed enforcement and no inner native runner.
-Admission, requirements, output, and recordings remain on the controller.
+All Console processes run on the local host.
+The MCP client and its shell and filesystem tools should run on that same host.
+For remote work, run the client and Console together in the chosen environment; deployment and its outer lifecycle belong to the client or deployment tooling.
 
-`serve --no-sandbox` skips native enforcement at the selected target; it does not remove a Docker container or microVM boundary.
+`serve --no-sandbox` skips native enforcement.
 Direct host execution has no runner-provided descendant cleanup.
 See [sandbox limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 ## Ownership
 
-| Component                     | Owns                                                                                  | Does not own                                                  |
-| ----------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Server                        | Session, admission, generations, retained requirements, response delivery, recordings | Interpreter execution or native supervision                   |
-| Preparation owner             | Execution-host discovery, resolver processes, confirmed resolver cleanup              | Accepted session manifest or worker activation                |
-| Native runner / compute owner | Its enforcement and resource-retirement contract                                      | MCP operations or language state                              |
-| Relay                         | Worker descriptors, stream translation, signals, direct-worker shutdown and reaping   | Session policy, response budgets, or process-tree enforcement |
-| Worker                        | Interpreter state, cell evaluation, input, semantic output, environment activation    | Durable session state or MCP response ownership               |
+| Component         | Owns                                                                                  | Does not own                                                  |
+| ----------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Server            | Session, admission, generations, retained requirements, response delivery, recordings | Interpreter execution or native supervision                   |
+| Preparation owner | Execution-host discovery, resolver processes, confirmed resolver cleanup              | Accepted session manifest or worker activation                |
+| Native runner     | Its enforcement and resource-retirement contract                                      | MCP operations or language state                              |
+| Relay             | Worker descriptors, stream translation, signals, direct-worker shutdown and reaping   | Session policy, response budgets, or process-tree enforcement |
+| Worker            | Interpreter state, cell evaluation, input, semantic output, environment activation    | Durable session state or MCP response ownership               |
 
 The server-relay transport is [JSONL](RELAY_PROTOCOL.md).
 The relay-worker [sideband](WORKER_PROTOCOL.md) carries commands and semantic events separately from interactive stdin and direct stdout/stderr.
@@ -67,7 +66,7 @@ Configured language fields stay visible even when a runtime is unavailable; exec
 Early cells reserve the ordinary evaluation slot while startup finishes.
 There is no cell queue.
 A call's observation deadline includes that wait; timeout or request cancellation does not cancel admitted evaluation or shared startup.
-Connection closure cancels startup through the existing preparation/provider owners and waits for their cleanup contract.
+Connection closure cancels startup through the existing preparation and worker owners and waits for their cleanup contract.
 The preparation close barrier joins its owner thread after protocol closure and child reaping, so the server cannot exit with resolver cleanup still in flight.
 If the owner failed, closing retains its protocol error instead of replacing it with a generic stopped-owner error.
 A failed close handshake kills the preparation child before joining I/O and reaping, without starting a second exit allowance.
@@ -134,9 +133,8 @@ Explicit and failure-driven replacement both respect retirement barriers.
 
 Local dependency resolution runs in a separate native resolver sandbox on macOS and Linux.
 Its cache and download policy is independent of the worker policy; see [resolver configuration](RESOLVER.md).
-SSH preparation retains execution-host permissions.
-Local sessions use the hidden `resolve` command; SSH has a remote preparation connection.
-Prepared Docker/SBX targets use preinstalled environments and never invoke controller or target dependency resolvers.
+The hidden `resolve` command owns local preparation over a private JSONL connection.
+Its client and child run from the same Console executable, so their schema is unversioned.
 
 The server owns the accepted manifest and candidate transactions.
 The preparation owner returns a result only after resolver cleanup.
@@ -163,7 +161,7 @@ Normal retirement queues ordered Shutdown and allows the relay its grace period.
 Forced transport retirement closes command admission and independently aborts pending writes or an idle queue wait, then joins the writer.
 It does not use stdout closure to decide whether stdin can be retired, and it never inserts a control into a partial frame.
 Retirement settles outstanding control receipts; cancelling a call's observation does not redirect its queued interrupt.
-Owned output readers preserve their bounded available-output drain even when launcher cleanup fails; joining I/O does not confirm provider cleanup.
+Owned output readers preserve their bounded available-output drain even when launcher cleanup fails; joining I/O does not confirm native cleanup.
 Worker-client native adapters own endpoint setup and separate output wakeup from command cancellation.
 The shared process and generation owners retain exit observation, I/O joins, and retirement decisions.
 The preparation owner bounds exit observation after forced termination and reaps only an observed exited child.
@@ -171,19 +169,9 @@ If termination fails, it reports unconfirmed retirement and stops diagnostic col
 It retains the child and exit observer in a background reaping owner and retries termination during connection closure, without erasing the original retirement failure.
 
 The server integrates a local native launcher as an ordinary child; successful managed exit is the cleanup barrier.
-SSH and compute generations carry explicit retirement receipts: transport exit alone does not prove remote processes, containers, or microVMs are gone.
 Unconfirmed retirement blocks replacement.
-Provider setup, command, and retirement allowances have different owners; none is a universal end-to-end cleanup deadline.
+Worker, relay, and native retirement allowances have different owners; none is a universal end-to-end cleanup deadline.
 
-Target setup retains the first accepted interrupt or shutdown for its complete capture/probe operation.
-The I/O token only wakes work; a poll, read, or write failure does not create a requested control.
-Command I/O failures abort that command without closing the operation's control token, so required provider cleanup commands remain admissible.
-Completion closes control admission, so a later interrupt cannot target the completed setup or its successor.
-Each target CLI settles its child exit observation, input, and output tasks before setup publishes terminal evidence.
-Before provider launch, that evidence covers only local command retirement.
-After the probe owner launches, setup also requires the generation's provider receipt, including receipts carried with workload errors.
-Confirmed cleanup does not turn a workload or infrastructure failure into successful setup or suppress it during connection shutdown.
-Independent target CLI and probe-owner exit failures survive cancellation and valid provider retirement receipts; only the matching SIGKILL sent by command retirement is treated as its termination result.
 Connection closure that refuses the next preparation stage is separate from control of a completed operation.
 It permits a quiet exit only after the refused stage's cleanup is confirmed.
 Errors closing the preparation connection remain visible.
@@ -196,7 +184,7 @@ Retirement cancels stdin independently and joins every I/O task, including when 
 Output collection preserves bytes already read plus a finite snapshot of queued bytes per stream after process retirement; it does not wait for inherited descriptors to close or accept an endless final producer.
 Failed process cleanup cancels and joins exit observation without signalling or reaping the remaining child.
 The original operation failure and cleanup failures remain separate until diagnostic formatting.
-Resolver cleanup confirmation combines the native process owner's result with settled observer/I/O tasks; it does not confirm preparation transport or outer compute retirement.
+Resolver cleanup confirmation combines the native process owner's result with settled observer/I/O tasks; it does not confirm preparation transport or worker retirement.
 Unix signals the owned process group and reaps its leader after observation settles; it does not provide a separate empty-group receipt, and escaped descendants remain outside that scope.
 Windows retains suspended creation and kill-on-close Job ownership, requires a confirmed empty Job, and shares its existing retirement allowance with exit observation.
 On connection closure, the server closes admission, cancels preparation, retires owned execution resources, settles accepted responses, and bounds blocked MCP delivery.
@@ -238,7 +226,7 @@ Discovery failure retains pending calls and their results alongside the startup 
 | Relay transport and direct-worker supervision | [`src/worker_relay.rs`](../src/worker_relay.rs)                                                                                 |
 | Language coordination                         | [`src/worker/coordinator.rs`](../src/worker/coordinator.rs), [`src/python.rs`](../src/python.rs), [`src/sql.rs`](../src/sql.rs) |
 | Host preparation                              | [`src/resolver/preparation.rs`](../src/resolver/preparation.rs)                                                                 |
-| Target ownership                              | [`src/target_session.rs`](../src/target_session.rs), [`src/sandbox.rs`](../src/sandbox.rs)                                      |
+| Local launch ownership                        | [`src/worker_client/process.rs`](../src/worker_client/process.rs), [`src/sandbox.rs`](../src/sandbox.rs)                        |
 | Recording                                     | [`src/transcript.rs`](../src/transcript.rs)                                                                                     |
 
 Follow these owners into their modules rather than maintaining a parallel file inventory in prose.

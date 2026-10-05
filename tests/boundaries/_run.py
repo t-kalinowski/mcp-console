@@ -686,7 +686,7 @@ def main() -> None:
     assert suite_paths, "no transcript suites found"
 
     suites = {suite_identifier(path): path for path in suite_paths}
-    # The global audit imports every suite, including external provider probes.
+    # The global audit imports every suite and its capability probes.
     # Keep smoke and focused runs confined to their selected suites.
     full_selection = options.full and not options.selectors and options.locate is None
     orphans = orphan_snapshots(suites) if full_selection else []

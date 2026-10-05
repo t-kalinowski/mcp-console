@@ -96,7 +96,7 @@ base::local(
     initialize_managed_connection <- function() {
       tryCatch(
         {
-          # Bare and prepared environments may omit the optional managed provider.
+          # Bare environments may omit the optional managed provider.
           if (
             !nzchar(system.file(package = "DBI")) ||
               !nzchar(system.file(package = "duckdb"))

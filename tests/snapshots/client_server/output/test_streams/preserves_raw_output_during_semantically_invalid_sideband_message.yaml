@@ -7,14 +7,14 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8114
+        text_bytes: 8083
         concat:
           - "zod unexpected input receipt: "
           - repeat: x
             count: 3810
           - |
 
-            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); <raw byte count> raw bytes retained, 0 raw bytes not retained]
+            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); <raw byte count> raw bytes retained, 0 raw bytes not retained]
           - repeat: z
             count: 3802
           - |-

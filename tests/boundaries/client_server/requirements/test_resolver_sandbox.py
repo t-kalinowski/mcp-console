@@ -20,7 +20,6 @@ from support.normalization import code
 from support.records import Transcript
 from support.r import r_test_environment
 from support.resolvers import ir_cache_directory
-from support.ssh import SSH, configure, localhost, remote_command
 from boundaries.client_server.python.test_without_r import environment
 
 
@@ -459,11 +458,6 @@ def test_ignores_relative_uv_xdg_directories(binary: Path) -> Transcript:
         return [{"relative_uv_xdg_ignored": True, "managed_python_prepared": True}]
 
 
-@requires(SANDBOX, SSH)
-def test_ssh_resolver_permissions(binary: Path) -> Transcript:
-    return permissions(binary, tailored=False, remote=True)
-
-
 @requires(SANDBOX, R, command("ir"))
 def test_bootstraps_reticulate_uv_with_host_cache_policy(binary: Path) -> Transcript:
     with TemporaryDirectory() as directory:
@@ -533,7 +527,7 @@ def test_cold_r_cache_resolution(binary: Path) -> Transcript:
         return [{"cold_ir_cache": True, "resolved_r_package": "utf8"}]
 
 
-def permissions(binary: Path, *, tailored: bool, remote: bool = False) -> Transcript:
+def permissions(binary: Path, *, tailored: bool) -> Transcript:
     from contextlib import ExitStack
 
     with ExitStack() as stack:
@@ -596,31 +590,6 @@ def permissions(binary: Path, *, tailored: bool, remote: bool = False) -> Transc
             }))
             os.execv(os.environ["RESOLVER_TEST_UV"], ["uv", *sys.argv[1:]])
             """)
-        if remote:
-            # fmt: python
-            probe = code(r"""
-                import json
-                import os
-                from pathlib import Path
-                import sys
-
-                cache = Path(os.environ["UV_CACHE_DIR"])
-                cache.mkdir(exist_ok=True)
-                protected = Path(os.environ["RESOLVER_TEST_PROTECTED"])
-                assert protected.joinpath("readable").read_text() == "host read"
-                assert os.environ.get("CODEX_NETWORK_PROXY_ACTIVE") != "1"
-                protected.joinpath("allowed").write_text("host permissions")
-                cache.joinpath("probe.json").write_text(
-                    json.dumps(
-                        {
-                            "host_read": True,
-                            "cache_write": True,
-                            "host_write_allowed": True,
-                        }
-                    )
-                )
-                os.execv(os.environ["RESOLVER_TEST_UV"], ["uv", *sys.argv[1:]])
-                """)
         (tools / "uv").write_text(f"#!{sys.executable}\n" + probe, encoding="utf-8")
         (tools / "uv").chmod(0o755)
         (protected / "readable").write_text("host read")
@@ -675,34 +644,6 @@ def permissions(binary: Path, *, tailored: bool, remote: bool = False) -> Transc
                     }
                 )
             )
-        if remote:
-            ssh_env = stack.enter_context(localhost(root / "ssh", remote_path=tools))
-            ssh_env.update({key: value for key, value in env.items() if key != "PATH"})
-            env = ssh_env
-            configure(
-                root,
-                root,
-                remote_command(
-                    root,
-                    binary,
-                    {
-                        "PATH": str(tools),
-                        "HOME": env["HOME"],
-                        **{
-                            name: env[name]
-                            for name in (
-                                "UV_CACHE_DIR",
-                                "RESOLVER_TEST_UV",
-                                "RESOLVER_TEST_PROTECTED",
-                            )
-                        },
-                    },
-                ),
-                resolver={
-                    "inherit_environment": False,
-                    "environment": {"HOME": "/local-only"},
-                },
-            )
         with McpClient(binary, ("serve", "-c", "cache=host"), env, root) as client:
             client.initialize_and_list_tools()
             if tailored:
@@ -731,6 +672,4 @@ def permissions(binary: Path, *, tailored: bool, remote: bool = False) -> Transc
                 custom_download_host=True,
                 captured_policy=True,
             )
-        if remote:
-            result["execution_host"] = "ssh"
         return [result]

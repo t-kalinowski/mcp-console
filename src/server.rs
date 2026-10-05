@@ -43,7 +43,6 @@ impl ConsoleServer {
         relay: Option<PathBuf>,
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
-        target: Option<(crate::settings::Target, Vec<PathBuf>)>,
         python: Option<PathBuf>,
         resolver: crate::settings::SandboxSettings,
         sql: crate::settings::sql::Sql,
@@ -59,7 +58,6 @@ impl ConsoleServer {
             worker.is_none(),
             &sandbox_settings,
             no_sandbox,
-            target.as_ref().map(|(target, _)| target),
         );
         let runtime = Arc::new(startup::Runtime {
             worker: crate::worker_client::Client::pending(),
@@ -76,17 +74,7 @@ impl ConsoleServer {
             runtime,
             prelaunch,
             move |started, diagnostics| {
-                let configuration = if let Some((target, roots)) = target {
-                    crate::worker_client::ClientConfiguration::target(
-                        target,
-                        roots,
-                        no_sandbox,
-                        sandbox_settings,
-                        python,
-                        diagnostics,
-                        started,
-                    )?
-                } else if let Some(program) = worker {
+                let configuration = if let Some(program) = worker {
                     crate::worker_client::ClientConfiguration::new(
                         program,
                         relay,
@@ -105,13 +93,11 @@ impl ConsoleServer {
                     )?
                 };
                 let configuration = configuration.with_sql_settings(sql);
-                let target = configuration.target_metadata();
-                let transcript = crate::transcript::Transcript::with_target(
+                let transcript = crate::transcript::Transcript::configured(
                     recording_directory,
                     configuration.dynamic_resolution(),
                     configuration.python_preparation(),
                     !configuration.python_only(),
-                    target,
                 );
                 Ok(startup::PreparedRuntime {
                     configuration,
@@ -455,7 +441,6 @@ pub async fn run(
     relay: Option<PathBuf>,
     no_sandbox: bool,
     sandbox_settings: crate::settings::SandboxSettings,
-    target: Option<(crate::settings::Target, Vec<PathBuf>)>,
     python: Option<PathBuf>,
     resolver: crate::settings::SandboxSettings,
     sql: crate::settings::sql::Sql,
@@ -470,7 +455,6 @@ pub async fn run(
         relay,
         no_sandbox,
         sandbox_settings,
-        target,
         python,
         resolver,
         sql,

@@ -7,14 +7,14 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8112
+        text_bytes: 8081
         concat:
           - "zod invalid stdout: � trailing: �"
           - repeat: x
             count: 3803
           - |
 
-            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); <raw byte count> raw bytes retained, 0 raw bytes not retained]
+            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); <raw byte count> raw bytes retained, 0 raw bytes not retained]
           - repeat: z
             count: 3798
           - |-
@@ -32,14 +32,14 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8112
+        text_bytes: 8081
         concat:
           - "zod invalid stderr: � trailing: �"
           - repeat: x
             count: 3803
           - |
 
-            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); <raw byte count> raw bytes retained, 0 raw bytes not retained]
+            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); <raw byte count> raw bytes retained, 0 raw bytes not retained]
           - repeat: z
             count: 3798
           - |-

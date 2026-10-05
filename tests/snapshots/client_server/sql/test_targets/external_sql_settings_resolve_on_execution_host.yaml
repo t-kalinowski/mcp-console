@@ -1,6 +1,0 @@
----
-execution_host_relative_database: true
-captured_restart_settings: true
-providers:
-  - r
-  - python

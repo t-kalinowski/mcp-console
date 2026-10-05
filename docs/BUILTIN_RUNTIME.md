@@ -22,14 +22,14 @@ Interrupting warmup withholds an early waiting cell and retains the worker.
 Early calls use [shared startup](SEND_OPERATIONS.md#server-readiness), not an independent worker per call.
 Custom workers retain lazy launch.
 
-[SSH](SSH.md), [Docker](DOCKER.md), and [SBX](DOCKER_SANDBOX.md) execute on their selected target while the controller owns recordings and responses.
-Provider filesystems, preparation, and cleanup differ; they are not interchangeable sandbox modes.
+The server, resolver, relay, and worker run on the same host.
+For remote work, run the MCP client and Console together on the remote host.
 
 ## Python sessions without R
 
 R discovery uses `R_HOME` or `R` on the execution host's PATH.
 Genuine absence allows Python/SQL; a broken selected R installation is an error, not fallback.
-Local and SSH sessions without an explicit Python selection require uv on that host.
+Sessions without an explicit Python selection require uv on that host.
 There is no automatic PATH-Python fallback.
 Managed defaults are NumPy, pandas, DuckDB, and the SQLite extension; Matplotlib is not a default dependency.
 
@@ -38,9 +38,9 @@ Paths and legacy selection precedence are described in [configuration](CONFIGURA
 CPython 3.10+ with a usable shared embedding library is required.
 Selected virtualenv paths and prefixes are preserved for imports, subprocesses, and multiprocessing.
 
-Prepared Docker/SBX targets use preinstalled interpreters and packages.
-They can run ordinary Python without NumPy, pandas, or DuckDB; missing DuckDB disables managed SQL, not Python or a user-selected DB-API connection.
-Managed local Python uses the captured [resolver extension cache](RESOLVER.md); SSH Python needs an absolute startup `HOME` for its shared extension cache.
+Explicit Python selections use preinstalled packages and can run without NumPy, pandas, or DuckDB.
+Missing DuckDB disables managed SQL, not Python or a user-selected DB-API connection.
+Managed Python uses the captured [resolver extension cache](RESOLVER.md).
 Worker spill, secrets, and caches use private lifetime storage, not ownership by R's session tempdir.
 
 ## Cells and polling
@@ -149,7 +149,7 @@ Console adds no notebook event loop: asynchronous work must be started and manag
 
 Use imports directly in managed sessions.
 [Automatic Python resolution](REQUIREMENTS.md#automatic-python-import-resolution) explains inference, optional dependencies, and thread restrictions.
-Explicit Python environments and bare/prepared targets require installed packages.
+Explicit Python environments and bare workers require installed packages.
 
 ## R and Python interoperability
 
@@ -284,5 +284,5 @@ Partial R initialization or unsafe bridge/startup failure can require restart ev
 macOS and Linux are supported.
 Windows x64 supports experimental [local R and Python](WINDOWS.md), including managed dependency resolution; SQL is deferred.
 Native enforcement and descendant retirement have explicit [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
-`--no-sandbox` removes native enforcement/descendant cleanup but not an outer Docker/SBX resource.
+`--no-sandbox` removes native enforcement and descendant cleanup.
 Preparation remains a separate [trusted host operation](REQUIREMENTS.md#host-resolution-and-trust).

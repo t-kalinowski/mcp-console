@@ -17,7 +17,6 @@ from support.processes import capture_process_identity, host_process_id, signal_
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires, POSIX
 from support.suites import run_this_suite
-from support.ssh import configure, peer_environment
 
 
 def retirement_case(
@@ -219,67 +218,6 @@ def test_restart_accepts_aborted_frame_after_confirmed_retirement(
                 "subsequent_send": "completed",
             }
         ]
-
-
-@requires(POSIX)
-@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
-def test_eof_joins_blocked_target_bootstrap(binary: Path) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
-        root = Path(temporary)
-        partial, exit_relay, holder, held = [
-            stack.enter_context(
-                closing(FifoCheckpoint.create(root / f"bootstrap-{name}"))
-            )
-            for name in ("partial", "exit", "holder", "held")
-        ]
-        configure(
-            root,
-            root,
-            [str(binary)],
-            sandbox={"environment": {"BOOTSTRAP_PAYLOAD": "x" * (900 * 1024)}},
-        )
-        environment = {
-            **peer_environment(root, "blocked-command-bootstrap"),
-            LOADER_VARIABLE: str(build_interposer(root, "relay_writer_retirement")),
-            "MCP_CONSOLE_TEST_WRITER_ROOT": str(root),
-        }
-        client = McpClient(binary, ("serve", "--no-sandbox"), environment, root)
-        identity = None
-        events = stack.enter_context(Events())
-        try:
-            client.initialize_and_list_tools()
-            client.send(r="never-run", timeout_ms=0)
-            partial.wait(
-                f"bootstrap header received without consuming the body: {client.transcript[-1]!r}, stderr={client.stderr.buffer!r}"
-            )
-            wait_for_path(
-                root / "large-write-1",
-                "bootstrap writer entered oversized transfer",
-                client=client,
-            )
-            held.wait("bootstrap holder ready and PID published")
-            identity = capture_process_identity(
-                int((root / "bootstrap-holder-pid").read_text())
-            )
-            events.watch_process(identity[0])
-            # EOF owns startup cancellation. Release launcher exit, while its
-            # fixture descendant retains stdin until after the join assertion.
-            client.stdin.close()
-            exit_relay.release()
-            client.finish()
-            assert (root / "closed-1").exists()
-            assert (root / "joined-1").exists()
-            assert not (root / "calls").exists(), "EOF started a successor"
-        finally:
-            exit_relay.release()
-            holder.release()
-            if identity is not None:
-                signal_process(identity, signal.SIGKILL)
-                assert identity[0] in events.wait(10), (
-                    "fixture bootstrap holder did not exit"
-                )
-            client.close()
-        return [{"blocked_bootstrap_writer_closed_and_joined": True}]
 
 
 def interrupt_shutdown_case(

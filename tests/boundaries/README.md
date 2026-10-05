@@ -18,7 +18,7 @@ Keep a combined case when the interaction itself is a plausible failure mode.
 
 Start with a behavior below and search its test areas.
 Use `scripts/test --full --list` to discover exact suites and cases, then `scripts/test --locate SELECTOR` to reach source and snapshots; see [Running cases](#running-cases).
-See [Fixtures and providers](#fixtures-and-providers) for fixture and harness guidance, and the [architecture source map](../../docs/ARCHITECTURE.md#where-to-look-in-source) for production ownership.
+See [Fixtures](#fixtures) for fixture and harness guidance, and the [architecture source map](../../docs/ARCHITECTURE.md#where-to-look-in-source) for production ownership.
 These areas provide representative transcript coverage; [case capabilities](#requirements-and-execution-modes) determine applicability.
 For native Windows acceptance, use the [Windows validation guide](../../docs/WINDOWS.md#validation).
 
@@ -85,10 +85,10 @@ During updates, the first mode writes and later modes must match, not overwrite 
 Unavailable modes report a skip, not validation.
 Test-host requirements such as Linux process-observation facilities do not imply the same runtime requirements.
 Windows full checks run shared direct cases in addition to native acceptance.
-Declare `SQL`, remote-controller capabilities, and `POSIX` for Unix-only shell/FIFO fixtures explicitly; fixture exclusions are remaining parity debt, not evidence that the supported runtime behavior is unavailable.
+Declare `SQL` and `POSIX` for Unix-only shell/FIFO fixtures explicitly; fixture exclusions are remaining parity debt, not evidence that the supported runtime behavior is unavailable.
 The shared sandbox mode uses Seatbelt/bubblewrap fixtures; Windows native sandbox acceptance owns Windows policy coverage.
 
-Each case uses a temporary workspace and private `MCP_CONSOLE_HOME`, preserving `HOME` and the caller's R/Python/uv/provider environment.
+Each case uses a temporary workspace and private `MCP_CONSOLE_HOME`, preserving `HOME` and the caller's R/Python/uv environment.
 Home-discovery cases supply their environment explicitly with `use_home_configuration=True`; remove inherited `MCP_CONSOLE_HOME` when testing the default home location.
 Remove fixture-owned directories only after processes exit.
 
@@ -130,7 +130,7 @@ The runner compares the complete exchange before replacing an exact match with `
 Different or incomplete handshakes remain in full.
 The canonical case's mode-specific companions are the exception to shared-mode snapshots.
 
-## Fixtures and providers
+## Fixtures
 
 Use `McpClient` as a context manager, then `initialize_and_list_tools()`, `send()`, and `finish()`.
 For overlapping calls, use `start_send()` and `receive()` / `receive_many()`; responses are matched by request ID.
@@ -139,19 +139,6 @@ Use `finish_with_standard_error()` when diagnostics are part of the contract.
 Shared capability, execution, client, snapshot, checkpoint, and process helpers live in `tests/support/`.
 Each boundary's `_harness.py` owns its concrete launch and capture mechanics.
 Keep large fixture programs in searchable files under `tests/fixtures/`; see [authoring](AUTHORING.md) for examples and causal gates.
-
-Real provider coverage requires explicit fixtures:
-
-| Provider       | Fixture selection                                                                                                                    |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Docker         | `MCP_CONSOLE_TEST_DOCKER_IMAGE` or `MCP_CONSOLE_TEST_DOCKER_PYTHON_IMAGE`; see [Docker](../../docs/DOCKER.md).                       |
-| Docker Sandbox | `MCP_CONSOLE_TEST_SBX_TEMPLATE` or `MCP_CONSOLE_TEST_SBX_PYTHON_TEMPLATE`; see [SBX](../../docs/DOCKER_SANDBOX.md).                  |
-| Localhost SSH  | Private `sshd`, temporary pinned keys, and the shared SSH capability.                                                                |
-| External SSH   | `MCP_CONSOLE_TEST_SSH_HOST`; an empty value disables the optional probe. See `support/ssh_external.py` and [SSH](../../docs/SSH.md). |
-
-Unavailable services skip their cases; connected setup failures fail.
-Fake provider peers establish orchestration contracts, not real container/VM cleanup.
-SBX fixtures serialize real VMs and must not change global provider policy.
 
 For namespace PIDs, use `support.processes.host_process_id` before host observation or signaling.
 **Never send a namespace process-group ID of 1 to host group signaling: `kill(-1, ...)` is a broadcast.** Fixture cleanup must identify only its own resources.

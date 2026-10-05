@@ -124,16 +124,8 @@ fn import_policy(managed: bool) -> ImportResolution<'static> {
         return ImportResolution::Managed;
     }
     ImportResolution::Disabled(
-        match std::env::var("MCP_CONSOLE_EXECUTION_COMPUTE").as_deref() {
-            Ok("docker") => {
-                "automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session"
-            }
-            Ok("docker_sandbox") => {
-                "automatic package installation is unavailable in prepared Docker Sandbox targets; preinstall the distribution in the template and start a new server session"
-            }
-            _ if std::env::var("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION").as_deref()
-                == Ok("0") =>
-            {
+        match std::env::var("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION").as_deref() {
+            Ok("0") => {
                 "MCP Console dynamic environment resolution is unavailable. Install the distribution into the ambient Python environment, or install `ir` or `uv` and restart MCP Console."
             }
             _ => {

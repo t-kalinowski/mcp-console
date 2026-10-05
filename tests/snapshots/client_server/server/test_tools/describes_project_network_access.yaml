@@ -27,9 +27,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code has unrestricted filesystem access and cannot directly access
@@ -66,9 +66,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code has unrestricted filesystem access and cannot directly access
@@ -105,9 +105,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code has unrestricted filesystem access and can directly access the
@@ -144,9 +144,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code has unrestricted filesystem access and can directly access the
@@ -183,9 +183,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code can read host files, cannot directly access the network, and
@@ -223,9 +223,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code can read host files, cannot directly access the network, and
@@ -263,9 +263,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code can read host files, can directly access the network, and can
@@ -303,9 +303,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code can read host files, can directly access the network, and can
@@ -343,9 +343,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code has filesystem access governed by the launcher's sandbox
@@ -383,9 +383,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code has filesystem access governed by the launcher's sandbox
@@ -423,9 +423,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code has filesystem access governed by the launcher's sandbox
@@ -463,9 +463,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code has filesystem access governed by the launcher's sandbox
@@ -503,9 +503,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code can read host files, cannot directly access the network, and
@@ -543,9 +543,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code can read host files, can directly access the network, and can
@@ -583,9 +583,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code can read host files, can access the network subject to the
@@ -623,9 +623,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code can read host files, can access the network subject to the
@@ -663,9 +663,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code can read host files, can access the network subject to the
@@ -703,9 +703,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code can read host files, can directly access the network, and can
@@ -743,9 +743,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code has filesystem access governed by the launcher's sandbox
@@ -783,9 +783,9 @@ description: >-
   Each result has at most 8 KiB of UTF-8 text, including notices; oversized
   output keeps its beginning and latest tail. Images have separate limits.
   Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings (both on the controller
-  for remote targets). Full retained text requires filesystem access there
-  through existing tools; Console provides no read/search interface.
+  project recordings and absolute for home recordings. Full retained text
+  requires filesystem access there through existing tools; Console provides no
+  read/search interface.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,

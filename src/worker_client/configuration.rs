@@ -22,8 +22,7 @@ pub(crate) struct ClientConfiguration {
     pub(super) dynamic_resolution: bool,
     pub(super) python_only: bool,
     pub(super) python_preparation: bool,
-    pub(super) local_preparation: Mutex<Option<crate::resolver::preparation::Preparation>>,
-    pub(super) target: Option<crate::target_session::Session>,
+    pub(super) resolver_preparation: Mutex<Option<crate::resolver::preparation::Preparation>>,
     /// Local built-in workers retain the controller selection across generations.
     pub(super) languages: Option<crate::cell::Languages>,
     /// A default worker may be replaced without discarding user runtime state.
@@ -34,13 +33,13 @@ pub(crate) struct ClientConfiguration {
 pub(super) enum RResolver {
     Discover,
     Pending(BuiltinSetup),
-    Configured(crate::resolver::execution::RConfiguration),
+    Configured(crate::resolver::preparation::Preparation),
     Disabled,
 }
 
 #[derive(Clone)]
 pub(super) struct BuiltinSetup {
-    pub(super) bootstrap: crate::resolver::execution::Bootstrap,
+    pub(super) bootstrap: crate::resolver::preparation::Preparation,
     pub(super) python_resolver: crate::resolver::execution::PythonConfiguration,
     pub(super) configured_python: Option<OsString>,
 }
@@ -128,7 +127,7 @@ impl ClientConfiguration {
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
         let local_runtime;
         #[cfg(any(unix, windows))]
-        let local_preparation;
+        let resolver_preparation;
         #[cfg(any(unix, windows))]
         let (preparation, discovery) = crate::resolver::preparation::Preparation::open_local(
             crate::resolver::preparation::Mode::Auto,
@@ -139,7 +138,7 @@ impl ClientConfiguration {
         )?;
         #[cfg(any(unix, windows))]
         let (r, duckdb_extensions, python, r_resolver) = if discovery.selections.r_home.is_none() {
-            let resolver = crate::resolver::execution::PythonConfiguration::Local {
+            let resolver = crate::resolver::execution::PythonConfiguration {
                 preparation: preparation.clone(),
                 has_uv: discovery
                     .local_has_uv
@@ -169,7 +168,7 @@ impl ClientConfiguration {
                 }
             };
             local_runtime = Some(selection);
-            local_preparation = Some(preparation);
+            resolver_preparation = Some(preparation);
             let python = Some(match managed {
                 Some(selected) => PythonEnvironment::Managed { selected, resolver },
                 None => PythonEnvironment::bare(configured_python.clone()),
@@ -196,17 +195,15 @@ impl ClientConfiguration {
                 r_home: Some(home),
                 python: None,
             });
-            local_preparation = Some(preparation.clone());
+            resolver_preparation = Some(preparation.clone());
             if discovery.managed {
                 (
                     None,
                     Default::default(),
                     None,
                     RResolver::Pending(BuiltinSetup {
-                        bootstrap: crate::resolver::execution::Bootstrap::Local(
-                            preparation.clone(),
-                        ),
-                        python_resolver: crate::resolver::execution::PythonConfiguration::Local {
+                        bootstrap: preparation.clone(),
+                        python_resolver: crate::resolver::execution::PythonConfiguration {
                             preparation,
                             has_uv: discovery
                                 .local_has_uv
@@ -242,7 +239,7 @@ impl ClientConfiguration {
                         .flatten()
                 });
             if let Some(explicit) = explicit {
-                let preparation = local_preparation.as_ref().expect("local preparation");
+                let preparation = resolver_preparation.as_ref().expect("local preparation");
                 let selected = crate::python::explicit_executable(&explicit)
                     .and_then(|executable| {
                         preparation.call(
@@ -284,7 +281,7 @@ impl ClientConfiguration {
         );
         configuration.duckdb_extension_directory = duckdb_extension_directory;
         configuration.resolver_settings = resolver_settings;
-        configuration.local_preparation = Mutex::new(local_preparation);
+        configuration.resolver_preparation = Mutex::new(resolver_preparation);
         configuration.languages = Some(languages);
         Ok(configuration)
     }
@@ -330,194 +327,10 @@ impl ClientConfiguration {
             dynamic_resolution,
             python_only,
             python_preparation,
-            local_preparation: Mutex::new(None),
-            target: None,
+            resolver_preparation: Mutex::new(None),
             languages: None,
             unused_default: AtomicBool::new(false),
         }
-    }
-
-    pub(crate) fn target(
-        target: crate::settings::Target,
-        roots: Vec<PathBuf>,
-        no_sandbox: bool,
-        policy: crate::settings::SandboxSettings,
-        python: Option<PathBuf>,
-        diagnostics: crate::process_output::Diagnostics,
-        started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<Self, String> {
-        let languages = crate::cell::Languages::from_environment()?;
-        if matches!(target.compute, crate::settings::Compute::Host {}) {
-            return Self::ssh(
-                crate::ssh::Session::new(target, roots, languages),
-                no_sandbox,
-                policy,
-                python,
-                diagnostics,
-                started,
-            );
-        }
-        let session = crate::target_session::Session::setup_compute(
-            target,
-            roots,
-            languages,
-            &policy,
-            no_sandbox,
-            python.as_deref(),
-            diagnostics,
-            started,
-        )?;
-        let mut configuration = Self::with_arguments(
-            std::env::current_exe().map_err(|error| error.to_string())?,
-            Vec::new(),
-            None,
-            no_sandbox,
-            policy,
-            Environment {
-                local_runtime: None,
-                custom_worker: false,
-                python_sql: false,
-                duckdb_extensions: Default::default(),
-                duckdb_r_targets: Vec::new(),
-                python: Some(PythonEnvironment::bare(None)),
-                r: None,
-                r_resolver: RResolver::Disabled,
-            },
-        );
-        configuration.python_only = session.python_only();
-        configuration.target = Some(session);
-        Ok(configuration)
-    }
-
-    pub(crate) fn target_metadata(&self) -> Option<serde_json::Value> {
-        let target = self.target.as_ref()?;
-        let mut metadata = target.metadata();
-        let provider = target.provider();
-        metadata["provider"] = serde_json::json!(provider);
-        metadata["inner_native_runner"] = provider.needs_native_runner(self.no_sandbox).into();
-        Some(metadata)
-    }
-
-    fn ssh(
-        mut session: crate::ssh::Session,
-        no_sandbox: bool,
-        policy: crate::settings::SandboxSettings,
-        configured_python: Option<PathBuf>,
-        diagnostics: crate::process_output::Diagnostics,
-        started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<Self, String> {
-        #[cfg(unix)]
-        let (discovery, duckdb_extensions) = (|| {
-            let discovery = session.discover(
-                &policy,
-                configured_python.as_deref(),
-                diagnostics.clone(),
-                started,
-            )?;
-            let extensions = if let Some(native) = &discovery.native {
-                native.selection.prepare_default_duckdb_extensions(
-                    native.python.as_ref(),
-                    &crate::resolver::execution::PythonConfiguration::Ssh(
-                        session
-                            .preparation
-                            .as_ref()
-                            .expect("remote preparation")
-                            .clone(),
-                    ),
-                    started,
-                )?
-            } else {
-                Default::default()
-            };
-            Ok((discovery, extensions))
-        })()
-        .map_err(|error| {
-            // No installed configuration owns shutdown if discovery fails.
-            if let Some(preparation) = &session.preparation
-                && let Err(cleanup) = preparation.close()
-            {
-                return format!("{error}; {cleanup}");
-            }
-            error
-        })?;
-        #[cfg(not(unix))]
-        let discovery = session.discover(
-            &policy,
-            configured_python.as_deref(),
-            diagnostics.clone(),
-            started,
-        )?;
-        #[cfg(not(unix))]
-        let duckdb_extensions = Default::default();
-        let duckdb_extension_directory = discovery.duckdb_extension_directory.clone();
-        let preparation = session
-            .preparation
-            .as_ref()
-            .expect("remote discovery opened preparation")
-            .clone();
-        let r_selection =
-            discovery
-                .selections
-                .r_home
-                .as_ref()
-                .map(|home| crate::local_runtime::Selection {
-                    r_home: Some(PathBuf::from(home)),
-                    python: None,
-                });
-        let selected_python = discovery.selections.python.map(OsString::from);
-        let (r_resolver, python, local_runtime) = if let Some(native) = discovery.native {
-            let resolver =
-                crate::resolver::execution::PythonConfiguration::Ssh(preparation.clone());
-            let python = match native.python {
-                Some(selected) => PythonEnvironment::Managed { selected, resolver },
-                None => PythonEnvironment::bare(selected_python),
-            };
-            (RResolver::Disabled, Some(python), Some(native.selection))
-        } else if discovery.managed {
-            (
-                RResolver::Pending(BuiltinSetup {
-                    bootstrap: crate::resolver::execution::Bootstrap::Ssh(preparation.clone()),
-                    python_resolver: crate::resolver::execution::PythonConfiguration::Ssh(
-                        preparation,
-                    ),
-                    configured_python: selected_python,
-                }),
-                None,
-                r_selection,
-            )
-        } else {
-            (
-                RResolver::Disabled,
-                Some(PythonEnvironment::bare(selected_python)),
-                r_selection,
-            )
-        };
-        let mut configuration = Self::with_arguments(
-            std::env::current_exe().map_err(|error| error.to_string())?,
-            Vec::new(),
-            None,
-            no_sandbox,
-            policy,
-            Environment {
-                local_runtime,
-                custom_worker: false,
-                python_sql: false,
-                duckdb_extensions,
-                duckdb_r_targets: Vec::new(),
-                python,
-                r: None,
-                r_resolver,
-            },
-        );
-        configuration.duckdb_extension_directory = duckdb_extension_directory;
-        configuration.target = Some(crate::target_session::Session::Ssh(session));
-        Ok(configuration)
-    }
-
-    pub(super) fn python_available(&self) -> bool {
-        self.target
-            .as_ref()
-            .is_none_or(|target| target.python_available())
     }
 
     pub(crate) fn python_only(&self) -> bool {

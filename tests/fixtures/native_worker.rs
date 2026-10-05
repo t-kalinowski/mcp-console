@@ -153,7 +153,6 @@ fn spawn_probe_with_configuration(
         ])
         .env("MCP_CONSOLE_NATIVE_PROBE", scenario)
         .env("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION", "1")
-        .env_remove("MCP_CONSOLE_EXECUTION_COMPUTE")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -233,18 +232,16 @@ fn native_python_activation_preserves_runtime_without_r() {
         python_version: vec![],
         exclude_newer: None,
     };
-    let initial = crate::resolver::resolve_python_manifest_for_remote(
+    let initial = crate::resolver::resolve_python_manifest_for_host(
         manifest(vec!["duckdb".into()]),
         &resolver,
-        None,
         None,
         |_| Ok(()),
     )
     .expect("prepare initial managed Python environment");
-    let candidate = crate::resolver::resolve_python_manifest_for_remote(
+    let candidate = crate::resolver::resolve_python_manifest_for_host(
         manifest(vec!["duckdb".into(), "py-yaml12".into()]),
         &resolver,
-        None,
         None,
         |_| Ok(()),
     )
