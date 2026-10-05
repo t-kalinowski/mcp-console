@@ -557,6 +557,7 @@ def test_prints_requirements_with_host_uv_cache(
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         environment["MCP_CONSOLE_TEST_WORKER_UV_CACHE"] = str(worker_cache)
         environment["UV_CACHE_DIR"] = str(trusted_cache)
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["UV_DEFAULT_INDEX"] = "https://pypi.org/simple"
         environment["UV_OFFLINE"] = "1"
         client = McpClient(

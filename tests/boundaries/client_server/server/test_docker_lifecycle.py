@@ -18,11 +18,13 @@ from support.docker import (
     absent,
     calls as peer_calls,
     cli_peer,
+    container_event,
     configure,
     docker,
     image,
     normalize_recording,
     removal_event,
+    tagged_image,
     workspace,
 )
 from support.normalization import code
@@ -128,12 +130,12 @@ def test_cancelled_creation_uses_ownership_token(binary: Path) -> Transcript:
 @requires(DOCKER)
 def test_cancelled_real_build_stops_setup_container(binary: Path) -> Transcript:
     reference = image()
-    with workspace() as root:
+    with workspace() as root, tagged_image(reference) as base:
         marker = "build-cancel-" + root.name.replace(" ", "-")
         dockerfile = root / "Dockerfile"
         dockerfile.write_text(
             code(f"""
-                FROM {reference}
+                FROM {base}
                 LABEL org.mcp-console.build-cancel={marker}
                 RUN echo {marker} && exec sleep 3600
                 """)
@@ -148,23 +150,17 @@ def test_cancelled_real_build_stops_setup_container(binary: Path) -> Transcript:
         )
         identity = None
         try:
-            with McpClient(
-                binary, ("serve",), {**os.environ, "DOCKER_BUILDKIT": "0"}, root
-            ) as client:
-                while True:
-                    line = client.stderr.readline(timeout=30)
-                    assert line, "build stopped before its execution checkpoint"
-                    if line.strip() == marker:
-                        break
-                result = docker(
-                    "container",
-                    "ls",
-                    "--quiet",
-                    "--filter",
-                    f"label=org.mcp-console.build-cancel={marker}",
-                )
-                assert result.returncode == 0 and result.stdout.strip(), result
-                identity = result.stdout.strip()
+            with (
+                container_event(
+                    "start", f"label=org.mcp-console.build-cancel={marker}"
+                ) as started,
+                McpClient(
+                    binary, ("serve",), {**os.environ, "DOCKER_BUILDKIT": "0"}, root
+                ) as client,
+            ):
+                # Provider progress belongs to MCP startup diagnostics. The
+                # daemon's start event witnesses the labelled RUN container.
+                identity = started()["Actor"]["ID"]
                 with removal_event(identity) as removed:
                     client.stdin.close()
                     assert client.stdout.read(timeout=15) == ""
@@ -193,18 +189,27 @@ def test_cancelled_probe_and_pre_ready_launch(binary: Path) -> Transcript:
     for mode in ("probe-gate", "launch-gate"):
         with workspace() as root:
             environment = cli_peer(root / "peer")
+            reached = FifoCheckpoint.create(root / "reached")
             configure(
                 root,
                 reference,
-                command=["/opt/analysis/bin/python", "/target.py", mode],
+                command=["/opt/analysis/bin/python", "/target.py", mode, "/checkpoint"],
                 mounts=[
                     {
                         "source": str(ROOT / "tests/fixtures/docker_target.py"),
                         "target": "/target.py",
-                    }
+                    },
+                    {
+                        "source": str(reached.path),
+                        "target": "/checkpoint",
+                        "access": "read_write",
+                    },
                 ],
             )
-            with McpClient(binary, ("serve",), environment, root) as client:
+            with (
+                closing(reached),
+                McpClient(binary, ("serve",), environment, root) as client,
+            ):
                 if mode == "launch-gate":
                     client.initialize_and_list_tools()
                     client.start_request(
@@ -212,7 +217,7 @@ def test_cancelled_probe_and_pre_ready_launch(binary: Path) -> Transcript:
                         name="send",
                         arguments={"r": "must_not_run <- TRUE"},
                     )
-                assert client.stderr.readline(timeout=30) == "target launch gate\n"
+                reached.wait("target launch admitted", timeout=30)
                 client.stdin.close()
                 client.stdout.read(timeout=15)
                 client.stderr.read(timeout=15)
@@ -234,12 +239,16 @@ def test_unacknowledged_creation_is_not_an_absence_receipt(binary: Path) -> Tran
         configure(root, reference)
         with closing(FifoCheckpoint.create(root / "peer/reached")) as reached:
             with McpClient(binary, ("serve",), environment, root) as client:
+                client.initialize_and_list_tools()
                 reached.wait("creation request without a daemon result", timeout=30)
+                client.send(control="interrupt", timeout_ms=60_000)
+                error = last_result_text(client)
+                assert "retirement is unconfirmed" in error, error
+                assert "creation ID unavailable" in error, error
                 client.stdin.close()
                 assert client.stdout.read(timeout=15) == ""
                 error = client.stderr.read(timeout=15)
-                assert "retirement is unconfirmed" in error, error
-                assert "creation ID unavailable" in error, error
+                assert "cancel" in error, error
                 assert client.process.wait(timeout=5) != 0
         return [
             {

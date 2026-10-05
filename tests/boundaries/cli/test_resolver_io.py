@@ -60,7 +60,9 @@ def preparation(
 
     def receive(description: str) -> object:
         try:
-            return json.loads(reader.readline(timeout=10))
+            line = reader.readline(timeout=10)
+            assert line, (description, process.wait(timeout=10), process.stderr.read())
+            return json.loads(line)
         except TimeoutError:
             raise AssertionError(f"timed out waiting for {description}") from None
 

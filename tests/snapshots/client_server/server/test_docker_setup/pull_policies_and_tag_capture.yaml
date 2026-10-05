@@ -2,6 +2,9 @@
 pull: never
 initially_present: false
 pull_count: 0
+startup: |
+  Docker command failed with exit status: 1: Error response from daemon: No such image: <requested image>
+  []
 stderr: |+
   Docker command failed with exit status: 1: Error response from daemon: No such image: <requested image>
   []
@@ -10,7 +13,18 @@ stderr: |+
 pull: never
 initially_present: true
 pull_count: 0
+startup: ""
 stderr: ""
+---
+send:
+  timeout_ms: 60000
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
 ---
 send:
   r: "42"
@@ -29,6 +43,16 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  timeout_ms: 60000
+result:
+  content:
+    - type: text
+      text: |-
+
         [idle]
   isError: false
 ---
@@ -44,8 +68,20 @@ result:
 pull: if_missing
 initially_present: false
 pull_count: 1
-stderr: |
+startup: |
   registry peer: pulled image
+stderr: ""
+---
+send:
+  timeout_ms: 60000
+result:
+  content:
+    - type: text
+      text: |-
+        registry peer: pulled image
+
+        [idle]
+  isError: false
 ---
 send:
   r: "42"
@@ -64,6 +100,16 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  timeout_ms: 60000
+result:
+  content:
+    - type: text
+      text: |-
+
         [idle]
   isError: false
 ---
@@ -79,7 +125,18 @@ result:
 pull: if_missing
 initially_present: true
 pull_count: 0
+startup: ""
 stderr: ""
+---
+send:
+  timeout_ms: 60000
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
 ---
 send:
   r: "42"
@@ -102,6 +159,16 @@ result:
   isError: false
 ---
 send:
+  timeout_ms: 60000
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
+send:
   r: "42"
 result:
   content:
@@ -113,8 +180,20 @@ result:
 pull: always
 initially_present: true
 pull_count: 1
-stderr: |
+startup: |
   registry peer: pulled image
+stderr: ""
+---
+send:
+  timeout_ms: 60000
+result:
+  content:
+    - type: text
+      text: |-
+        registry peer: pulled image
+
+        [idle]
+  isError: false
 ---
 send:
   r: "42"
@@ -133,6 +212,16 @@ result:
       text: |-
         [worker stopped: in-memory state lost]
         [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  timeout_ms: 60000
+result:
+  content:
+    - type: text
+      text: |-
+
         [idle]
   isError: false
 ---

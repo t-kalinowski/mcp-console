@@ -20,12 +20,14 @@ from support.checkpoints import FifoCheckpoint
 from support.installation import installed_console
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.linux_sandbox import retain_system_bwrap
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript, TranscriptWithCompanions
 
 
 def environment(path: Path) -> dict[str, str]:
+    retain_system_bwrap(path)
     env = dict(os.environ, PATH=str(path))
     for name in (
         "R_HOME",

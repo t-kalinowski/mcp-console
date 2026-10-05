@@ -357,6 +357,7 @@ def python_inventory_client(
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     environment.pop("UV_PYTHON_PREFERENCE", None)
+    environment["UV_TOOL_DIR"] = str(directory)
     environment["RETICULATE_UV"] = str(FIXTURES / "record_uv_environment")
     environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
     environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(directory / "uv.jsonl")
@@ -458,9 +459,7 @@ def resolve_public_python_version(
     # fmt: r
     r = code(rf"""
         reticulate::py_require(
-          python_version = {
-            constraints_r
-          },
+          python_version = {constraints_r},
           action = "set"
         )
         result <- tryCatch(

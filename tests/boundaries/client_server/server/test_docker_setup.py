@@ -6,7 +6,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_result_text, wait_for_evaluation_output
+from support.assertions import (
+    last_result_text,
+    wait_for_evaluation_output,
+    wait_for_prepared_ready,
+)
 from support.client import McpClient
 from support.docker import (
     DOCKER,
@@ -83,6 +87,8 @@ def test_build_and_image_defaults_captured_once(binary: Path) -> Transcript:
         )
         with McpClient(binary, ("serve",), environment, root) as client:
             client.initialize_and_list_tools()
+            startup = wait_for_prepared_ready(client)
+            assert "COPY . /build-input/" in startup, startup
             client.send(
                 # fmt: python
                 python=code("""
@@ -110,6 +116,7 @@ def test_build_and_image_defaults_captured_once(binary: Path) -> Transcript:
             )
             client.send(control="restart")
             absent(first)
+            wait_for_prepared_ready(client)
             client.send(
                 # fmt: python
                 python=code("""
@@ -126,17 +133,18 @@ def test_build_and_image_defaults_captured_once(binary: Path) -> Transcript:
             second = text.splitlines()[-1]
             assert json.loads(docker("inspect", second).stdout)[0]["Image"] == captured
             transcript, diagnostics = client.finish_with_standard_error()
-            assert diagnostics, (
-                "build diagnostics must be delivered separately from MCP stdout"
-            )
+            assert diagnostics == "", diagnostics
         absent(second)
         assert sum("build" in args for args in calls(root)) == 1
         assert all(captured in args for args in calls(root) if "create" in args)
         result = docker("image", "rm", captured)
         assert result.returncode == 0, result.stderr
-        return normalize_recording(transcript[3:], root) + [
+        # Build progress varies with daemon caching; its delivery and COPY
+        # diagnostic are asserted above rather than snapshotting that progress.
+        return normalize_recording(transcript[4:], root) + [
             {
                 "builds": 1,
+                "build_diagnostics_delivered": True,
                 "separate_dockerfile": True,
                 "dockerignore": True,
                 "image_user": 1234,
@@ -170,27 +178,31 @@ def test_pull_policies_and_tag_capture(binary: Path) -> Transcript:
             try:
                 with McpClient(binary, ("serve",), environment, root) as client:
                     if policy == "never" and not present:
-                        client.startup_error()
+                        startup = client.startup_error()
+                        assert "No such image" in startup, startup
                         client.stdin.close()
                         assert client.stdout.read(timeout=20) == ""
                         diagnostics = client.stderr.read(timeout=20)
-                        assert "No such image" in diagnostics
+                        assert "No such image" in diagnostics, diagnostics
                         transcript = []
                         assert client.process.wait(timeout=5) != 0
                     else:
                         client.initialize_and_list_tools()
+                        startup = wait_for_prepared_ready(client)
+                        assert startup == "registry peer: pulled image\n" * pulls, (
+                            startup
+                        )
                         client.send(r="42")
                         assert last_result_text(client) == "[1] 42\n"
                         # Removing the mutable name cannot invalidate captured generations.
                         assert docker("image", "rm", tag).returncode == 0
                         client.send(control="restart")
+                        wait_for_prepared_ready(client)
                         client.send(r="42")
                         assert last_result_text(client) == "[1] 42\n"
                         transcript, diagnostics = client.finish_with_standard_error()
                         transcript = transcript[3:]
-                        assert diagnostics == "registry peer: pulled image\n" * pulls, (
-                            diagnostics
-                        )
+                        assert diagnostics == "", diagnostics
                 operations = calls(root)
                 assert sum("pull" in args for args in operations) == pulls, operations
                 assert all(reference in args for args in operations if "create" in args)
@@ -199,6 +211,7 @@ def test_pull_policies_and_tag_capture(binary: Path) -> Transcript:
                         "pull": policy,
                         "initially_present": present,
                         "pull_count": pulls,
+                        "startup": startup.replace(tag, "<requested image>"),
                         "stderr": diagnostics.replace(tag, "<requested image>"),
                     }
                 )
@@ -285,11 +298,12 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                 value["sandbox"]["filesystem"] = {"kind": "native-runner-must-validate"}
             config.write_text(json.dumps(value))
             with McpClient(binary, ("serve",), environment, root) as client:
-                client.startup_error()
+                startup = client.startup_error()
+                assert expected in startup, startup
                 client.stdin.close()
                 assert client.stdout.read(timeout=30) == "", case
                 error = client.stderr.read(timeout=30)
-                assert expected in error, error
+                assert error, error
                 assert client.process.wait(timeout=5) != 0
             assert not any(
                 line.startswith("Docker command failed") and line.endswith(": ")
@@ -300,11 +314,13 @@ def test_setup_failures_retire_containers(binary: Path) -> Transcript:
                     name = args[args.index("--name") + 1]
                     absent(name)
                     error = error.replace(name, "<owned container>")
+                    startup = startup.replace(name, "<owned container>")
             assert not (root / "missing-bind").exists()
             records.append(
                 {
                     "rejected_before_worker_startup": case,
                     "container_absent": True,
+                    "startup": startup.replace(str(root), "<controller>"),
                     "stderr": error.replace(str(root), "<controller>"),
                 }
             )

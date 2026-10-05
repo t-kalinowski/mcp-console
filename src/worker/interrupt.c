@@ -17,7 +17,8 @@ static void handle_interrupt(int signum) {
     interrupt_fn notify_python = atomic_load_explicit(&python_interrupt, memory_order_relaxed);
     if (notify_python != NULL) notify_python();
     /* Nonblocking self-pipe wakes managed input even if another thread got SIGINT. */
-    (void) write(interrupt_wakeup, "1", 1);
+    ssize_t count = write(interrupt_wakeup, "1", 1);
+    (void) count;
     errno = saved_errno;
 }
 
