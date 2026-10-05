@@ -94,7 +94,9 @@ def test_runs_without_a_resolver_bootstrap(
         assert "tidyverse" not in quarto, quarto
         assert "numpy" not in quarto, quarto
         assert "praise" not in quarto, quarto
-        quarto = quarto.replace(str(workspace.resolve()), "<workspace>")
+        quarto = quarto.replace(str(workspace.resolve()), "<workspace>").replace(
+            str(workspace), "<workspace>"
+        )
         return TranscriptWithCompanions(
             transcript=transcript,
             companions={
