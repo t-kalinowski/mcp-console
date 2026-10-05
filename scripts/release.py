@@ -50,10 +50,17 @@ MANYLINUX_CPP = {
     41: (33, 15),
     42: (34, 15),
 }
-# Named CXXABI versions start at these policy/architecture boundaries.
-MANYLINUX_CXXABI_NAMED = {
-    "TM_1": (17, {"x86_64", "aarch64"}),
-    "FLOAT128": (24, {"x86_64"}),
+# Named versions start at these pinned policy/architecture boundaries.
+MANYLINUX_NAMED = {
+    "GLIBC": {
+        "ABI_DT_RELR": (36, {"x86_64", "aarch64"}),
+        "ABI_DT_X86_64_PLT": (42, {"x86_64"}),
+        "ABI_GNU2_TLS": (42, {"x86_64"}),
+    },
+    "CXXABI": {
+        "TM_1": (17, {"x86_64", "aarch64"}),
+        "FLOAT128": (24, {"x86_64"}),
+    },
 }
 # GCC versions are sparse sets, with these additions at each policy boundary.
 # Use the same pinned auditwheel policy source as the C++ ceilings above.
@@ -402,10 +409,13 @@ def inspect_linux_abi(
         for family, ceiling in LINUX_RELEASE_CPP.items():
             ceilings[family].append(ceiling)
     limits = {family: min(values, default=None) for family, values in ceilings.items()}
-    cxxabi_named_allowed = {
-        number
-        for number, (since, supported) in MANYLINUX_CXXABI_NAMED.items()
-        if architecture in supported and all(minor >= since for _, minor in floors)
+    named_allowed = {
+        family: {
+            number
+            for number, (since, supported) in versions.items()
+            if architecture in supported and all(minor >= since for _, minor in floors)
+        }
+        for family, versions in MANYLINUX_NAMED.items()
     }
     machine, loader = LINUX_MACHINES[architecture]
     evidence = {}
@@ -501,7 +511,7 @@ def inspect_linux_abi(
                 family, number = symbol.split("_", 1)
                 numeric = re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", number) is not None
                 require(
-                    numeric or (family == "CXXABI" and number in cxxabi_named_allowed),
+                    numeric or number in named_allowed.get(family, ()),
                     f"{member}: unsupported symbol requirement {symbol}",
                 )
                 if family == "GCC":

@@ -1264,6 +1264,90 @@ class ReleaseScriptTests(ReleaseFixture):
                                         result.returncode, 0, result.stderr
                                     )
 
+    def test_wheel_commands_check_named_glibc_against_every_advertised_policy(
+        self,
+    ) -> None:
+        for architecture in ("x86_64", "aarch64"):
+            arm = architecture == "aarch64"
+            cases = [
+                ("manylinux_2_35", "ABI_DT_RELR", False),
+                ("manylinux_2_36", "ABI_DT_RELR", True),
+                ("manylinux_2_39", "ABI_DT_RELR", True),
+                ("manylinux_2_39.manylinux_2_36", "ABI_DT_RELR", True),
+                ("manylinux_2_39.manylinux_2_35", "ABI_DT_RELR", False),
+                ("manylinux_2_39.manylinux2014", "ABI_DT_RELR", False),
+                ("manylinux_2_39", "ABI_DT_X86_64_PLT", False),
+                ("manylinux_2_42", "ABI_DT_X86_64_PLT", not arm),
+                ("manylinux_2_39", "ABI_GNU2_TLS", False),
+                ("manylinux_2_42", "ABI_GNU2_TLS", not arm),
+                ("manylinux_2_42.manylinux_2_39", "ABI_GNU2_TLS", False),
+                ("manylinux_2_42", "PRIVATE", False),
+                ("manylinux_2_42", "UNKNOWN", False),
+                ("linux", "ABI_DT_RELR", True),
+            ]
+            with tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                environment, _, _ = self.smoke_environment(directory)
+                environment["FAKE_NO_R"] = "1"
+                for policy, number, permitted in cases:
+                    platform = ".".join(
+                        f"{tag}_{architecture}" for tag in policy.split(".")
+                    )
+                    wheel = directory / f"mcp_console-0.0.2-py3-none-{platform}.whl"
+                    self.write_wheel(wheel, glibc="2.17")
+                    member = "mcp_console/extra.so"
+                    with zipfile.ZipFile(wheel, "a") as archive:
+                        archive.writestr(
+                            member,
+                            elf_fixture(
+                                machine="AArch64"
+                                if arm
+                                else "Advanced Micro Devices X86-64",
+                                interpreter=None,
+                                versions=["GLIBC_2.17", f"GLIBC_{number}"],
+                            ),
+                        )
+                    for release in (False, True):
+                        with self.subTest(
+                            platform=platform, number=number, release=release
+                        ):
+                            report = directory / "abi.json"
+                            result = self.run_script(
+                                "inspect-wheel",
+                                str(wheel),
+                                *(["--release"] if release else []),
+                                "--report",
+                                str(report),
+                                cwd=directory,
+                                env=environment,
+                            )
+                            if release and policy != "manylinux_2_35":
+                                self.assertNotEqual(result.returncode, 0, result.stdout)
+                                self.assertIn("release floor", result.stderr)
+                            elif not permitted:
+                                self.assertNotEqual(result.returncode, 0, result.stdout)
+                                self.assertIn(f"GLIBC_{number}", result.stderr)
+                                self.assertIn(member, result.stderr)
+                            else:
+                                self.assertEqual(result.returncode, 0, result.stderr)
+                                evidence = json.loads(report.read_text())
+                                self.assertEqual(
+                                    evidence["elf"][member]["glibc"], ["2.17", number]
+                                )
+                    if policy == "manylinux_2_39" and number == "ABI_DT_RELR":
+                        with self.subTest(platform=platform, command="smoke-wheel"):
+                            result = self.run_script(
+                                "smoke-wheel",
+                                str(wheel),
+                                "--installed-only",
+                                "--sandbox-pin",
+                                str(directory / "sandbox-runner.json"),
+                                "--without-r",
+                                cwd=directory,
+                                env=environment,
+                            )
+                            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_inspect_wheel_checks_named_cxxabi_against_every_advertised_policy(
         self,
     ) -> None:

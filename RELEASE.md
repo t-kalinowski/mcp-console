@@ -74,6 +74,8 @@ The audit loads dependencies breadth-first in `DT_NEEDED` order, reusing already
 Independent executables do not share loaded libraries or loader paths.
 Numeric GLIBCXX/CXXABI ceilings follow the advertised [manylinux policies](https://github.com/pypa/auditwheel/blob/7cec8ec5b1436336bc03e560b785cc63d9c4190f/src/auditwheel/policy/manylinux-policy.json), including architecture differences and legacy aliases; multiple tags use the strictest ceiling.
 Named CXXABI versions must be permitted by every advertised policy: `TM_1` from manylinux 2.17 on both architectures, and `FLOAT128` from 2.24 on x86_64 only.
+Named GLIBC requirements follow the same rule: `ABI_DT_RELR` from 2.36 on both architectures, and `ABI_DT_X86_64_PLT` / `ABI_GNU2_TLS` from 2.42 on x86_64 only.
+These GLIBC requirements remain incompatible with the 2.35 release floor; unknown names, including `GLIBC_PRIVATE`, are rejected.
 GCC requirements from libgcc use each tag's exact architecture-specific permitted versions; sparse version sets cannot be validated with a numeric ceiling.
 An unrecognized policy is rejected rather than inferred from the build host.
 `--release` additionally enforces the glibc 2.35 floor and Ubuntu 22.04's libstdc++ symbol ceilings (GLIBCXX 3.4.30 / CXXABI 1.3.13).
