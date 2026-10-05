@@ -41,15 +41,10 @@ impl Observer {
             if ready.cancelled {
                 return Ok(false);
             }
-            // The native exit event is non-reaping; waitid validates its result
-            // while the owner still holds the child's identity unreaped.
-            observe_direct_child(self.0, false).and_then(|exited| {
-                if exited {
-                    Ok(true)
-                } else {
-                    Err(io::Error::other("child exit event without exit"))
-                }
-            })
+            // macOS NOTE_EXIT can precede a waitable terminal status. After
+            // exit readiness, wait for that status with WNOWAIT so the owner
+            // retains the child's identity and remains the sole reaper.
+            observe_direct_child(self.0, true)
         })();
         result.map_err(|error| format!("failed to observe child process {} exit: {error}", self.0))
     }

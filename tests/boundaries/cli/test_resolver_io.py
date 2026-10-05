@@ -17,7 +17,12 @@ from support.client import TextReader
 from support.events import Events
 from support.records import Transcript
 from support.native import LOADER_VARIABLE, build_interposer
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import (
+    MACOS_SANDBOX,
+    NATIVE_FIXTURES,
+    PROCESS_EVENTS,
+    requires,
+)
 from support.suites import run_this_suite
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -79,6 +84,99 @@ def preparation(
             os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=10)
         reader.close()
+
+
+@requires(MACOS_SANDBOX, NATIVE_FIXTURES)
+def test_exit_readiness_waits_for_terminal_status_before_reaping(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        gates = {
+            name: FifoCheckpoint.create(root / name)
+            for name in (
+                "entered",
+                "release",
+                "registered",
+                "exit",
+                "pending",
+                "status",
+                "killed",
+            )
+        }
+        uv = root / "uv"
+        uv.write_text(
+            f"#!{sys.executable}\n"
+            "import json\n"
+            f"with open({str(root / 'exit')!r}, 'rb') as gate:\n"
+            "    assert gate.read(1) == b'1'\n"
+            "print(json.dumps([{\n"
+            '    "version": "3.12.7",\n'
+            '    "version_parts": {"major": 3, "minor": 12, "patch": 7},\n'
+            '    "symlink": None, "variant": "default", "implementation": "cpython",\n'
+            "}]))\n"
+        )
+        uv.chmod(0o755)
+        environment = {
+            "PATH": str(root),
+            LOADER_VARIABLE: str(build_interposer(root, "child_exit_observation")),
+            "MCP_CONSOLE_TEST_OBSERVER_CANCELLABLE": "1",
+            "MCP_CONSOLE_TEST_OBSERVER_DELAY_STATUS": "1",
+            "MCP_CONSOLE_TEST_OBSERVER_ENTERED": str(root / "entered"),
+            "MCP_CONSOLE_TEST_OBSERVER_RELEASE": str(root / "release"),
+            "MCP_CONSOLE_TEST_EXIT_REGISTERED": str(root / "registered"),
+            "MCP_CONSOLE_TEST_STATUS_PENDING": str(root / "pending"),
+            "MCP_CONSOLE_TEST_STATUS_RELEASE": str(root / "status"),
+            "MCP_CONSOLE_TEST_OBSERVER_PID": str(root / "resolver-pid"),
+            "MCP_CONSOLE_TEST_CHILD_KILLED": str(root / "killed"),
+            "MCP_CONSOLE_TEST_EARLY_REAP": str(root / "early-reap"),
+        }
+        try:
+            with preparation(binary, root, environment) as (process, send, receive):
+                send(
+                    {
+                        "Run": {
+                            "id": 1,
+                            "operation": {"PythonVersion": {"constraints": [">=3.12"]}},
+                        }
+                    }
+                )
+                gates["entered"].wait("initial live-child observation")
+                gates["release"].release()
+                gates["registered"].wait("native exit notification registered")
+                gates["exit"].release()
+                gates["pending"].wait("exit readiness precedes terminal status")
+                assert not (root / "early-reap").exists()
+                gates["status"].release()
+                completed = receive("successful terminal confirmation")["Completed"]
+                assert completed == {
+                    "id": 1,
+                    "result": {"Ok": "3.12.7"},
+                    "control": None,
+                    "confirmed": True,
+                }, completed
+                send("Close")
+                assert receive("close") == "Closed"
+                process.stdin.close()
+                assert process.wait(timeout=10) == 0, process.stderr.read()
+                assert process.stderr.read() == ""
+                assert not (root / "early-reap").exists(), (
+                    "resolver reaped before terminal status was confirmed"
+                )
+                return [{"completed": completed, "terminal_status_before_reap": True}]
+        finally:
+            if (root / "resolver-pid").exists():
+                pid = int((root / "resolver-pid").read_text())
+                with Events() as exits:
+                    try:
+                        exits.watch_process(pid)
+                    except ProcessLookupError:
+                        pass
+                    else:
+                        os.killpg(pid, signal.SIGKILL)
+                        assert exits.wait(10) == {pid}
+            for gate in gates.values():
+                gate.close()
 
 
 @requires(PROCESS_EVENTS)
