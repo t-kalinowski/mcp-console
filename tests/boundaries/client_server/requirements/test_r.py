@@ -606,138 +606,142 @@ def test_prepares_initial_r_requirements(
         )
         environment["MCP_CONSOLE_AMBIENT_R_LIBRARY"] = str(ambient_library)
 
-        client = McpClient(
+        with McpClient(
             binary,
             execution.serve(),
             environment,
             current_directory=workspace,
-        )
-        client.initialize_and_list_tools()
-        client.send(
-            requirements={"r": [initial_r]},
-        )
-        assert last_result_text(client) == "[prepared]"
-
-        invalid_r = "not a valid requirement !!!"
-        reference = subprocess.run(
-            [
-                "ir",
-                "run",
-                "--rscript",
-                str(rscript),
-                "--with",
-                invalid_r,
-                "--isolated",
-                "--vanilla",
-                "-e",
-                "42",
-            ],
-            env=environment
-            | {"IR_NO_LOCAL_SOURCES": "1", "PKG_SUBPROCESS_TIMEOUT": "60000"},
-            cwd=workspace,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-        )
-        assert reference.returncode == 1, reference
-        client.send(
-            requirements={"r": [invalid_r]},
-        )
-        result = client.transcript[-1]["result"]
-        assert result["isError"] is True, result
-        error = result["content"][0]["text"]
-        status = "exit code" if os.name == "nt" else "exit status"
-        failure_prefix = f"R package resolution failed with {status}: 1: "
-        assert error.startswith(failure_prefix + "Error:"), error
-        assert f"Cannot parse package: {invalid_r}." in error, error
-        assert error.replace("\r\n", "\n").endswith(
-            "Execution halted\nir: dependency resolution failed"
-        ), error
-        assert error.replace("\r\n", "\n") == (
-            f"{failure_prefix}{reference.stderr.strip()}"
-        ), error
-        # Keep the complete diagnostic; `ir` releases change pkg_deps arguments.
-        pak_call = next(
-            line for line in error.splitlines() if line.startswith("3. pak::pkg_deps(")
-        )
-        assert error.count(pak_call) == 1, error
-        result["content"][0]["text"] = error.replace(
-            pak_call, "3. pak::pkg_deps(<ir-version-dependent arguments>)"
-        )
-        client.transcript[-1]["transcript_normalization"] = {
-            "target": "result.content[0].text",
-            "replacements": {
-                "ir_pkg_deps_arguments": "<ir-version-dependent arguments>",
-            },
-        }
-
-        invalid_python = "example @ https://example.invalid/example.whl"
-        client.send(
-            requirements={
-                "r": [candidate_r],
-                "python": [invalid_python],
-            },
-        )
-        result = client.transcript[-1]["result"]
-        assert result["isError"] is True, result
-        assert result["content"][0]["text"] == named_requirement_error(invalid_python)
-
-        # fmt: r
-        r = code(r"""
-            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
-            stopifnot(
-              identical(
-                dirname(find.package("praise")),
-                .libPaths()[[managed_index]]
-              ),
-              normalizePath(.libPaths()[[managed_index + 1L]]) ==
-                normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(
+                requirements={"r": [initial_r]},
             )
-            42L
-            """)
-        client.send(r=r)
-        assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+            assert last_result_text(client) == "[prepared]"
 
-        client.send(
-            requirements={"r": [initial_r]},
-        )
-        assert last_result_text(client) == "[prepared]"
-        client.send(
-            requirements={
-                "r": [candidate_r],
-                "python": ["py-yaml12"],
-            },
-        )
-        assert last_result_text(client) == "[prepared]"
-
-        # fmt: r
-        prepared_r = code(r"""
-            managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
-            stopifnot(
-              "py-yaml12" %in% reticulate::py_require()$packages,
-              identical(
-                dirname(find.package("praise")),
-                .libPaths()[[managed_index]]
-              ),
-              identical(
-                dirname(find.package("zeallot")),
-                .libPaths()[[managed_index]]
-              ),
-              normalizePath(.libPaths()[[managed_index + 1L]]) ==
-                normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+            invalid_r = "not a valid requirement !!!"
+            reference = subprocess.run(
+                [
+                    "ir",
+                    "run",
+                    "--rscript",
+                    str(rscript),
+                    "--with",
+                    invalid_r,
+                    "--isolated",
+                    "--vanilla",
+                    "-e",
+                    "42",
+                ],
+                env=environment
+                | {"IR_NO_LOCAL_SOURCES": "1", "PKG_SUBPROCESS_TIMEOUT": "60000"},
+                cwd=workspace,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
             )
-            42L
-            """)
-        client.send(r=prepared_r)
-        assert last_result_text(client) == "[1] 42\n"
+            assert reference.returncode == 1, reference
+            client.send(
+                requirements={"r": [invalid_r]},
+            )
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is True, result
+            error = result["content"][0]["text"]
+            status = "exit code" if os.name == "nt" else "exit status"
+            failure_prefix = f"R package resolution failed with {status}: 1: "
+            assert error.startswith(failure_prefix + "Error:"), error
+            assert f"Cannot parse package: {invalid_r}." in error, error
+            assert error.replace("\r\n", "\n").endswith(
+                "Execution halted\nir: dependency resolution failed"
+            ), error
+            assert error.replace("\r\n", "\n") == (
+                f"{failure_prefix}{reference.stderr.strip()}"
+            ), error
+            # Keep the complete diagnostic; `ir` releases change pkg_deps arguments.
+            pak_call = next(
+                line
+                for line in error.splitlines()
+                if line.startswith("3. pak::pkg_deps(")
+            )
+            assert error.count(pak_call) == 1, error
+            result["content"][0]["text"] = error.replace(
+                pak_call, "3. pak::pkg_deps(<ir-version-dependent arguments>)"
+            )
+            client.transcript[-1]["transcript_normalization"] = {
+                "target": "result.content[0].text",
+                "replacements": {
+                    "ir_pkg_deps_arguments": "<ir-version-dependent arguments>",
+                },
+            }
 
-        client.send(control="restart")
-        assert last_result_text(client) == (
-            "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
-        )
-        client.send(r=prepared_r)
-        assert last_result_text(client) == "[1] 42\n"
-        return client.finish()
+            invalid_python = "example @ https://example.invalid/example.whl"
+            client.send(
+                requirements={
+                    "r": [candidate_r],
+                    "python": [invalid_python],
+                },
+            )
+            result = client.transcript[-1]["result"]
+            assert result["isError"] is True, result
+            assert result["content"][0]["text"] == named_requirement_error(
+                invalid_python
+            )
+
+            # fmt: r
+            r = code(r"""
+                managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+                stopifnot(
+                  identical(
+                    dirname(find.package("praise")),
+                    .libPaths()[[managed_index]]
+                  ),
+                  normalizePath(.libPaths()[[managed_index + 1L]]) ==
+                    normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+                )
+                42L
+                """)
+            client.send(r=r)
+            assert last_result_text(client) == "[1] 42\n", client.transcript[-1]
+
+            client.send(
+                requirements={"r": [initial_r]},
+            )
+            assert last_result_text(client) == "[prepared]"
+            client.send(
+                requirements={
+                    "r": [candidate_r],
+                    "python": ["py-yaml12"],
+                },
+            )
+            assert last_result_text(client) == "[prepared]"
+
+            # fmt: r
+            prepared_r = code(r"""
+                managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
+                stopifnot(
+                  "py-yaml12" %in% reticulate::py_require()$packages,
+                  identical(
+                    dirname(find.package("praise")),
+                    .libPaths()[[managed_index]]
+                  ),
+                  identical(
+                    dirname(find.package("zeallot")),
+                    .libPaths()[[managed_index]]
+                  ),
+                  normalizePath(.libPaths()[[managed_index + 1L]]) ==
+                    normalizePath(Sys.getenv("MCP_CONSOLE_AMBIENT_R_LIBRARY"))
+                )
+                42L
+                """)
+            client.send(r=prepared_r)
+            assert last_result_text(client) == "[1] 42\n"
+
+            client.send(control="restart")
+            assert last_result_text(client) == (
+                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
+            )
+            client.send(r=prepared_r)
+            assert last_result_text(client) == "[1] 42\n"
+            return client.finish()
 
 
 if __name__ == "__main__":

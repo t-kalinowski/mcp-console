@@ -470,7 +470,12 @@ def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Trans
     records = []
     installations = subprocess.check_output(["uv", "python", "dir"], text=True).strip()
     for cache_setting in ("environment", "configuration"):
-        with preparation_directory() as directory:
+        # Windows CI keeps the checkout and Python installations on different
+        # drives. A relative installation path needs a workspace on its drive.
+        with tempfile.TemporaryDirectory(
+            prefix="console-preparation-test-",
+            dir=Path(installations).parent if os.name == "nt" else None,
+        ) as directory:
             root = Path(directory).resolve()
             workspace = root / "workspace"
             workspace.mkdir()
@@ -734,7 +739,12 @@ def test_prepares_managed_python_at_startup_and_restart(
         for package in packages:
             assert f"    - {package}\n" in quarto
     return TranscriptWithCompanions(
-        records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
+        records,
+        {
+            "qmd": quarto.replace(str(workspace.resolve()), "<workspace>").replace(
+                str(workspace), "<workspace>"
+            )
+        },
     )
 
 
@@ -2969,7 +2979,12 @@ def test_records_managed_python_defaults(
         assert events[0]["dynamic_resolution"] is False
         assert events[0]["python_preparation"] is True
         return TranscriptWithCompanions(
-            records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
+            records,
+            {
+                "qmd": quarto.replace(str(workspace.resolve()), "<workspace>").replace(
+                    str(workspace), "<workspace>"
+                )
+            },
         )
 
 

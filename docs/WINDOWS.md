@@ -190,7 +190,8 @@ Windows workflow phases use Jobs to retire descendants on completion or cancella
 These are development-command ownership guarantees; they do not add sandboxing to evaluated user code.
 
 The acceptance interpreter needs `packaging` and `matplotlib`; R needs `reticulate` and `jsonlite`.
-Resolver acceptance also needs uv and package repository access; use `ir` 0.4.0 or later if it is on PATH.
+Resolver acceptance also needs uv and package repository access.
+Full checks include shared plotting and R resolver cases that require `ir` 0.4.0 or later on PATH; install it with `uv tool install r-lib-ir`, as CI does through pip.
 For installed-wheel acceptance, set `MCP_CONSOLE_TEST_BINARY` to the installed `mcp-console.exe` and run the same tests.
 Tests use `rustc` to build small process fixtures.
 R source validation finds `Rscript.exe` under `R_HOME` (including `bin/x64`) or on `PATH`, and uses `LC_ALL=C` for the syntax checker.
