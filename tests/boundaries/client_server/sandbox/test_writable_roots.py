@@ -97,7 +97,9 @@ def _writable_roots_reach_every_runner_launch(
             assert result.stdout == result.stderr == ""
             assert not future.exists()
 
-        with McpClient(binary, SANDBOXED.serve(*options), environment, host) as client:
+        with McpClient(
+            binary, SANDBOXED.serve("-c", "cache=host", *options), environment, host
+        ) as client:
             client.initialize_and_list_tools()
             client.send(python=exercise)
             assert last_tool_text(client).endswith(

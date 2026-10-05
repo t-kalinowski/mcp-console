@@ -222,9 +222,14 @@ exec "{shutil.which("uv")}" "$@"
 """)
         uv.chmod(0o755)
         env = dict(
-            environment(workspace), UV_OFFLINE="1", RETICULATE_UV="unused-selection"
+            environment(workspace),
+            UV_TOOL_DIR=str(root),
+            UV_OFFLINE="1",
+            RETICULATE_UV="unused-selection",
         )
-        with McpClient(binary, execution.serve(), env, workspace) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, workspace
+        ) as client:
             client.initialize_and_list_tools()
             prepared = client.send(requirements={"action": "get"})
             assert not prepared.get("isError", False), prepared

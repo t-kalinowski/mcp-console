@@ -83,6 +83,7 @@ def before_resolver_spawn(
         config.write_text(
             json.dumps(
                 {
+                    "cache": "host",
                     "resolver": {
                         "environment": {
                             LOADER_VARIABLE: environment[
@@ -90,7 +91,7 @@ def before_resolver_spawn(
                             ],
                             "MCP_CONSOLE_TEST_SPAWN_OWNER": "1",
                         }
-                    }
+                    },
                 }
             )
         )

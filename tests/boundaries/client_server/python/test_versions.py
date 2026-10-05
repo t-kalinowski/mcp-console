@@ -52,6 +52,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         r_libs_record = temporary / "uv-r-libs.jsonl"
         environment, _ = r_test_environment()
         environment.pop("R_LIBS", None)
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["RETICULATE_UV"] = str(
             Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
         )
@@ -60,7 +61,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         environment["MCP_CONSOLE_TEST_R_LIBS_RECORD"] = str(r_libs_record)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=temporary,
         )
@@ -147,6 +148,7 @@ def test_validates_registry_only_python_requirements(
         real_uv = shutil.which("uv")
         assert real_uv is not None, "real uv is required"
         environment = os.environ.copy()
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["RETICULATE_UV"] = str(
             Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
         )
@@ -154,7 +156,7 @@ def test_validates_registry_only_python_requirements(
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=temporary,
         )
@@ -432,7 +434,7 @@ def test_recovers_from_python_version_resolution_failure(
         environment["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"] = str(failure_marker)
         environment["MCP_CONSOLE_TEST_UV_FAILURE_ARGUMENT"] = "list"
 
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         client.send(r="worker_pid <- Sys.getpid()")
         assert last_result_text(client) == "[done]"
