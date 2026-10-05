@@ -13,7 +13,7 @@ See [SBX](DOCKER_SANDBOX.md).
 For project editing:
 
 ```yaml
-extends: :workspace
+extends: ':workspace'
 ```
 
 `:workspace` grants workspace writes while `.git`, `.agents`, `.codex`, and `.claude` are readable but protected from writes by default.
@@ -35,7 +35,7 @@ Metadata protections are **defaults, not mandatory ceilings**.
 For example:
 
 ```yaml
-extends: :workspace
+extends: ':workspace'
 sandbox:
   filesystem:
     entries:
@@ -113,6 +113,8 @@ Cwd is selected by the caller's process API, not a configuration `command`/`cwd`
 `environment` supplies workload overrides; `inherit_environment: false` makes that the complete ordinary workload map.
 In native execution these values apply after helper setup, so they cannot select host helpers, move setup storage, or inject host-loader code.
 The trusted launch environment still controls frontend loading and helper selection.
+When inheritance is disabled in application policy, Console omits non-UTF-8 host environment names and values from the native launch environment.
+They cannot contribute to the selected workload environment.
 
 For `serve`, Console reapplies the selected R/Python generation environment and resolution policy after workload controls, even without inheritance.
 Workload settings do not configure trusted resolvers; supported remote runtime selections are conveyed separately.
