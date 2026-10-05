@@ -445,7 +445,9 @@ class WindowsConsole(unittest.TestCase):
                     # PATH; do not depend on reticulate's ambient uv cache.
                     environment.update(
                         RETICULATE_UV=uv,
-                        UV_PYTHON_PREFERENCE="only-system",
+                        # uv-installed acceptance interpreters are also valid;
+                        # downloads stay disabled so discovery uses local installs.
+                        UV_PYTHON_PREFERENCE="system",
                         UV_PYTHON_DOWNLOADS="never",
                     )
                 session = Session(environment, bare_r=not with_python)
@@ -769,7 +771,9 @@ class WindowsConsole(unittest.TestCase):
                 ]
             ),
             RETICULATE_PYTHON="managed",
-            UV_PYTHON_PREFERENCE="only-system",
+            # Accept an existing uv-managed interpreter when no system install
+            # is exposed by this fixture's PATH (for example, a uv-created venv).
+            UV_PYTHON_PREFERENCE="system",
             UV_PYTHON_DOWNLOADS="never",
         )
         environment.pop("R_HOME", None)

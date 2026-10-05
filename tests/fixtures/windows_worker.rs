@@ -135,6 +135,22 @@ fn main() -> io::Result<()> {
             }
         }
         let command = String::from_utf8(command).unwrap();
+        if scenario == "forwarding" {
+            let marker = std::path::PathBuf::from(std::env::var("TEST_DISPATCHED").unwrap());
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&marker)?
+                .write_all(command.as_bytes())?;
+            if command.trim() == "{\"kind\":\"shutdown\"}" {
+                let mut input = Vec::new();
+                io::stdin().read_to_end(&mut input)?;
+                std::fs::write(marker.with_extension("stdin"), input)?;
+                return Ok(());
+            }
+            send(write, "{\"kind\":\"completed\"}\n")?;
+            continue;
+        }
         if command.contains("shutdown") {
             return Ok(());
         }

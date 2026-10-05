@@ -132,6 +132,7 @@ Start a behavior change with a failing public regression; establish the existing
 After implementation, rerun the focused case.
 Regenerate only intentional snapshot changes, then rerun without `--update`.
 Review the diff, embedded-program indentation, and `git diff --check` after formatting.
+Ruff emits LF line endings, including Python fences formatted through yamark, so CRLF Windows documents retain a separate closing fence.
 A shared fixture change may need snapshots from other platforms; a local skip does not validate them.
 
 On macOS/Linux, the default `scripts/check` stages the companion, validates extracted runtime sources and architecture, checks Rust formatting and Clippy, runs debug Rust tests, builds the release executable, and runs the explicit smoke transcript profile.

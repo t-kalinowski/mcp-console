@@ -1,12 +1,16 @@
 use std::collections::VecDeque;
 use std::io;
-#[cfg(unix)]
-use std::os::fd::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::cell::Language;
 use crate::worker_protocol::{ConsoleChannel, ServerMessage, WorkerMessage};
+
+pub(crate) use super::activity::observe_stdin_shutdown;
+// Preserve the existing native probe entry point without exposing readiness
+// variants to the production coordinator.
+#[cfg(all(test, unix))]
+pub(super) use super::activity::next_command;
 
 static WORKER_READER: OnceLock<Mutex<crate::sideband::Reader>> = OnceLock::new();
 static WORKER_WRITER: OnceLock<crate::sideband::Writer> = OnceLock::new();
@@ -59,51 +63,17 @@ pub(crate) fn initialize(
         .map_err(|_| io::Error::other("R worker sideband was already initialized"))
 }
 
-pub(super) enum CommandReadiness {
-    Ready(ServerMessage),
-    #[cfg(unix)]
-    Waiting(RawFd),
-    #[cfg(windows)]
-    Waiting,
-}
-
-// Decide whether a command can be received without waiting for activity.
-// The coordinator chooses the runtime's wait and idle processing separately.
-pub(super) fn next_command() -> Result<CommandReadiness, String> {
+// Commands deferred during resolution retain their order across native waits.
+pub(super) fn queued_command() -> Result<Option<ServerMessage>, String> {
     if is_shutting_down() {
-        return Ok(CommandReadiness::Ready(ServerMessage::Shutdown));
+        return Ok(Some(ServerMessage::Shutdown));
     }
-    if let Some(message) = take_pending_server_message()? {
-        return Ok(CommandReadiness::Ready(message));
-    }
-    #[cfg(unix)]
-    {
-        let (buffered, descriptor) = {
-            let reader = worker_reader()?;
-            (reader.has_buffered_data(), reader.as_raw_fd())
-        };
-        if buffered {
-            receive_server_message().map(CommandReadiness::Ready)
-        } else {
-            Ok(CommandReadiness::Waiting(descriptor))
-        }
-    }
-    // Even buffered bytes can be an incomplete frame. The Windows idle read
-    // must retain its interrupt wakeup until the whole command is available.
-    #[cfg(windows)]
-    Ok(CommandReadiness::Waiting)
+    take_pending_server_message()
 }
 
 pub(crate) fn receive_server_message() -> Result<ServerMessage, String> {
     worker_reader()?
         .receive()
-        .map_err(|error| format!("worker sideband read failed: {error}"))
-}
-
-#[cfg(windows)]
-pub(super) fn receive_idle_command() -> Result<Option<ServerMessage>, String> {
-    worker_reader()?
-        .receive_or_wake(super::interrupt::windows_wakeup())
         .map_err(|error| format!("worker sideband read failed: {error}"))
 }
 
@@ -120,28 +90,6 @@ pub(crate) fn is_shutting_down() -> bool {
 
 pub(crate) fn mark_shutting_down() {
     WORKER_SHUTDOWN.store(true, Ordering::SeqCst);
-}
-
-#[cfg(unix)]
-pub(crate) fn observe_stdin_shutdown() -> Result<(), String> {
-    let mut event = libc::pollfd {
-        fd: libc::STDIN_FILENO,
-        events: libc::POLLIN,
-        revents: 0,
-    };
-    loop {
-        let result = unsafe { libc::poll(&mut event, 1, 0) };
-        if result >= 0 {
-            if event.revents & libc::POLLHUP != 0 {
-                mark_shutting_down();
-            }
-            return Ok(());
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() != io::ErrorKind::Interrupted {
-            return Err(format!("worker stdin readiness check failed: {error}"));
-        }
-    }
 }
 
 pub(crate) fn record_worker_failure(message: String) {
@@ -370,7 +318,7 @@ fn queue_server_message(message: ServerMessage) -> Result<(), String> {
     Ok(())
 }
 
-fn worker_reader() -> Result<std::sync::MutexGuard<'static, crate::sideband::Reader>, String> {
+pub(super) fn worker_reader() -> Result<MutexGuard<'static, crate::sideband::Reader>, String> {
     WORKER_READER
         .get()
         .ok_or_else(|| "R worker sideband reader is not initialized".to_string())?
@@ -424,16 +372,4 @@ fn send_image(data: String) -> Result<(), String> {
             mime_type: "image/png".to_string(),
         })
         .map_err(|error| format!("R worker failed to send a plot image: {error}"))
-}
-
-#[cfg(windows)]
-pub(crate) fn observe_stdin_shutdown() -> Result<(), String> {
-    if let Err(error) = crate::windows::available(unsafe { libc::get_osfhandle(0) } as _) {
-        if error.raw_os_error() == Some(windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE as i32) {
-            mark_shutting_down();
-        } else {
-            return Err(error.to_string());
-        }
-    }
-    Ok(())
 }
