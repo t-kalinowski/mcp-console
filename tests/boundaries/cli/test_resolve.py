@@ -21,6 +21,58 @@ from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
 
 
+def test_rejects_invalid_preparation_frames(binary: Path) -> Transcript:
+    transcript: Transcript = []
+    with TemporaryDirectory() as temporary:
+        for name, frame, diagnostic in (
+            (
+                "versioned_open",
+                '{"Open":{"mode":"PythonOnly","version":1}}\n',
+                "invalid resolver JSON: unknown field `version`, expected `mode` at line 1 column 38",
+            ),
+            (
+                "malformed_json",
+                '{"Open":}\n',
+                "invalid resolver JSON: expected value at line 1 column 9",
+            ),
+            (
+                "unterminated_open",
+                '{"Open":{"mode":"PythonOnly"}}',
+                "resolver input closed",
+            ),
+            (
+                "oversized_line",
+                " " * (1024 * 1024 + 1) + "\n",
+                "resolver JSON line exceeds 1 MiB",
+            ),
+        ):
+            result = subprocess.run(
+                [binary, "resolve"],
+                input=frame,
+                text=True,
+                capture_output=True,
+                timeout=10,
+                cwd=temporary,
+                env={
+                    **os.environ,
+                    "MCP_CONSOLE_HOME": str(Path(temporary) / "console"),
+                },
+            )
+            assert result.returncode == 1, result
+            assert result.stdout == "", result.stdout
+            assert result.stderr == diagnostic + "\n", result.stderr
+            transcript.append(
+                {
+                    "case": name,
+                    "input_bytes": len(frame.encode("utf-8")),
+                    "exit": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                }
+            )
+    return transcript
+
+
 @requires(POSIX)
 def test_resolves_python_version_over_json(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:

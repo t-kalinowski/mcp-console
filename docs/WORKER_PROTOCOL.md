@@ -131,7 +131,7 @@ The controller also orders interrupt admission against this receipt and withhold
 This covers signals delivered after the worker has sampled its interrupt state: the relay's interrupt result acknowledges signal dispatch, not worker-side handling.
 Fatal startup failure follows ordinary generation failure and replacement handling.
 Custom workers retain their existing readiness and evaluation contract and do not send this event.
-Default local and target launchers opt into interpreter bootstrap with the private `worker --bootstrap-runtimes` argument.
+The default local launcher opts into interpreter bootstrap with the private `worker --bootstrap-runtimes` argument.
 
 The server admits one evaluation or explicit preparation at a time.
 Each ordinary operation has exactly one matching terminal result:
