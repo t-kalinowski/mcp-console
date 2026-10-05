@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SQL, command, requires
 from support.assertions import (
     collect_running_output,
     last_tool_text,
@@ -34,7 +35,6 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
 from support.events import Events
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -116,6 +116,7 @@ def startup_fixture(
         environment.update(
             {
                 "TMPDIR": str(temporary),
+                "UV_TOOL_DIR": str(temporary),
                 "MCP_CONSOLE_TEST_REAL_IR": real_ir,
                 "MCP_CONSOLE_TEST_REAL_UV": real_uv,
                 "MCP_CONSOLE_TEST_STARTUP_PHASE": phase,
@@ -129,7 +130,7 @@ def startup_fixture(
         environment.update(server_environment or {})
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             response_timeout=5,
         )
@@ -170,7 +171,9 @@ def test_preserves_initialize_buffered_during_startup(
         assert fixture.invocations() == invocations, (
             "poll or invalid input duplicated startup"
         )
-        assert not list(fixture.root.glob("sandbox-*"))
+        # The resolver owns one native temp directory; a worker would add another.
+        storage = list(fixture.root.glob("sandbox-*"))
+        assert len(storage) == (1 if execution is SANDBOXED else 0), storage
         return client.finish()
 
 
@@ -219,6 +222,7 @@ def test_prepares_python_before_r_bootstrap_validation(
         return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS, command("ir"), command("uv"))
 def test_first_cell_prepares_defaults_after_running_response(
@@ -247,7 +251,8 @@ def test_first_cell_prepares_defaults_after_running_response(
         client.send(r=r, timeout_ms=0)
         assert last_tool_text(client) == RUNNING
         fixture.wait_for_resolver()
-        assert not list(fixture.root.glob("sandbox-*"))
+        storage = list(fixture.root.glob("sandbox-*"))
+        assert len(storage) == (1 if execution is SANDBOXED else 0), storage
         assert any(
             invocation["program"] == "uv"
             and invocation["arguments"][:2] == ["tool", "run"]
@@ -328,7 +333,8 @@ def test_explicit_preparation_keeps_its_wait_precondition(
         assert "result" not in preparation, (
             "explicit preparation returned before resolution"
         )
-        assert not list(fixture.root.glob("sandbox-*"))
+        storage = list(fixture.root.glob("sandbox-*"))
+        assert len(storage) == (1 if execution is SANDBOXED else 0), storage
         fixture.release.release()
         client.response_timeout = 600
         client.receive(preparation)

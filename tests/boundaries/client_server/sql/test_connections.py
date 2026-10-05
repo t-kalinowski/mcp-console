@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import NATIVE_FIXTURES, SQL, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
@@ -20,10 +21,10 @@ from support.normalization import code
 from support.r import r_test_environment
 from support.native import SHARED_LIBRARY_FLAG, build_interposer
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_routes_sql_cells_to_a_selected_dbi_connection(
     binary: Path,
@@ -169,6 +170,7 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_python_restores_managed_connection_before_r_reads_it(
     binary: Path,
@@ -260,6 +262,7 @@ def test_python_restores_managed_connection_before_r_reads_it(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     binary: Path,
@@ -422,6 +425,7 @@ def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_selected_python_duckdb_connection_state(
     binary: Path,
@@ -464,6 +468,7 @@ def test_preserves_selected_python_duckdb_connection_state(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_reports_python_dbapi_cursor_cleanup_failures(
     binary: Path,
@@ -513,6 +518,7 @@ def test_reports_python_dbapi_cursor_cleanup_failures(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_recovers_when_python_dbapi_connection_raises_base_exception(
     binary: Path,
@@ -568,6 +574,7 @@ def test_recovers_when_python_dbapi_connection_raises_base_exception(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
     binary: Path,
@@ -664,6 +671,7 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
                 stop_client(client)
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_interrupts_selected_python_dbapi_connection(
@@ -781,6 +789,7 @@ def test_interrupts_selected_python_dbapi_connection(
                 stop_client(client)
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_interrupts_python_dbapi_provider_probe(
@@ -932,6 +941,7 @@ def test_interrupts_python_dbapi_provider_probe(
                 stop_client(client)
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
     binary: Path,
@@ -990,6 +1000,7 @@ def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_recovers_when_r_provider_switch_trace_raises_system_exit(
     binary: Path,
@@ -1056,6 +1067,7 @@ def display_width(text: str) -> int:
     )
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_sql_warmup_without_losing_worker(
     binary: Path, execution: Execution
@@ -1121,6 +1133,7 @@ def test_interrupts_sql_warmup_without_losing_worker(
     return [{"sql_warmup_interrupt_withholds_cell_and_retains_worker": True}]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_optional_sql_warmup_failure_preserves_runtime(
     binary: Path, execution: Execution
@@ -1174,6 +1187,7 @@ def test_optional_sql_warmup_failure_preserves_runtime(
     return [{"optional_sql_warmup_failure_preserves_runtime_and_later_sql": True}]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_closes_provisional_connections_after_sql_setup_failure(
     binary: Path, execution: Execution
@@ -1287,6 +1301,7 @@ def startup_sql_client(
             release.close()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_creates_managed_connection_without_a_send(
     binary: Path, execution: Execution

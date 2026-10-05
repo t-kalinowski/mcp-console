@@ -14,9 +14,11 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
+from support.requirements import POSIX, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_workers_keep_plot_files_separate(
     binary: Path, execution: Execution

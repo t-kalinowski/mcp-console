@@ -309,6 +309,8 @@ class Run:
             timings = self.directory / "case-timings.jsonl"
             timings.touch()
             environment["MCP_CONSOLE_TEST_TIMINGS"] = str(timings)
+            if WINDOWS:
+                environment["PYTHONUTF8"] = "1"
         started = time.monotonic()
         status = 1
         process = None
@@ -399,6 +401,9 @@ def main() -> None:
             ("workflow-tests", [sys.executable, "tests/windows_workflow.py"]),
             ("format-tests", [sys.executable, "tests/format.py"]),
             ("development-tests", [sys.executable, "tests/development.py"]),
+            ("runner-tests", ["uv", "run", "--script", "tests/transcript_runner.py"]),
+            ("client-tests", ["uv", "run", "--script", "tests/mcp_client.py"]),
+            ("release-tests", [sys.executable, "tests/release.py"]),
         ]
     core = [
         ("runtime-sources", [sys.executable, "scripts/validate_runtime_sources.py"]),
@@ -498,6 +503,42 @@ def main() -> None:
             ),
         ],
     }
+
+    if WINDOWS and options.mode == "test":
+        native_arguments = []
+        arguments = iter(options.arguments)
+        for argument in arguments:
+            if argument in {"--jobs", "--timeout"}:
+                next(arguments)
+            elif argument not in {"--full", "--quick", "--update"}:
+                native_arguments.append(argument)
+        boundary_selection = any("/" in argument for argument in options.arguments)
+        if boundary_selection:
+            plans["test"] = [
+                phase for phase in plans["test"] if phase[0] != "native-tests"
+            ]
+        else:
+            plans["test"][-1] = (
+                "native-tests",
+                [sys.executable, "tests/windows.py", "-v", *native_arguments],
+            )
+        if boundary_selection or (
+            "--full" in options.arguments and not native_arguments
+        ):
+            plans["test"].append(
+                (
+                    "transcripts",
+                    [
+                        "uv",
+                        "run",
+                        "--python",
+                        sys.executable,
+                        "--script",
+                        "tests/boundaries/_run.py",
+                        *options.arguments,
+                    ],
+                )
+            )
 
     cancelling = False
 

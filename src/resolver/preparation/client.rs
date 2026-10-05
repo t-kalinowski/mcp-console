@@ -242,7 +242,27 @@ impl Preparation {
                 &mut settings,
                 [("RETICULATE_PYTHON".as_ref(), python)],
             )?;
-            crate::resolver::sandbox::command(settings, std::process::id())?
+            #[cfg(unix)]
+            let command = crate::resolver::sandbox::command(settings, std::process::id())?;
+            #[cfg(windows)]
+            let command = {
+                // Windows has no resolver proxy support yet. Keep its existing
+                // host execution, but use the captured Console cache environment.
+                let mut command = std::process::Command::new(
+                    std::env::current_exe().map_err(|error| error.to_string())?,
+                );
+                if settings.get("inherit_environment") == Some(&serde_json::Value::Bool(false)) {
+                    command.env_clear();
+                }
+                if let Some(environment) = settings.get("environment") {
+                    let values: std::collections::BTreeMap<String, String> =
+                        serde_json::from_value(environment.clone())
+                            .map_err(|error| error.to_string())?;
+                    command.envs(values);
+                }
+                command
+            };
+            command
         } else {
             std::process::Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
         };
@@ -293,6 +313,9 @@ impl Preparation {
                 if local { "local" } else { "SSH" }
             )
         })?;
+        // Windows command_pipes installs owned child-side handles in Command.
+        // Release them before discovery failure can wait for shutdown and EOF.
+        drop(command);
         let (events, received) = mpsc::channel();
         let (outgoing, writes) = mpsc::channel();
         #[cfg(unix)]

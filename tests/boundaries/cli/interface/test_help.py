@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.records import Transcript, TranscriptEntry
+from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 
@@ -28,6 +29,7 @@ def record(binary: Path, *arguments: str) -> TranscriptEntry:
     return entry
 
 
+@platform_snapshots("win32")
 def test_help(binary: Path) -> Transcript:
     return [
         record(binary),

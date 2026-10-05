@@ -27,10 +27,12 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.suites import run_this_suite
+from support.requirements import POSIX, requires
 
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_separates_startup_omissions_from_retained_cell_text(
     binary: Path, execution: Execution
@@ -78,6 +80,7 @@ def test_separates_startup_omissions_from_retained_cell_text(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_partial_retention_and_later_unretained_output(
     binary: Path, execution: Execution
@@ -200,6 +203,7 @@ def test_reports_partial_retention_and_later_unretained_output(
             return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_omitted_bytes_retained_at_the_file_limit(
     binary: Path, execution: Execution

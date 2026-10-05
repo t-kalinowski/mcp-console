@@ -20,6 +20,39 @@ use windows_sys::Win32::System::Threading::*;
 use super::{ResolverInterrupt, settle_observation};
 use crate::process_exit::ChildExitWaiter;
 
+pub(super) type Cancel = crate::windows::Notify;
+
+pub(super) fn prepare_io(command: &mut Command, input: bool) -> io::Result<super::Endpoints> {
+    use crate::process_output::RelayOutput;
+    use crate::windows::{Pipe, notification, pipe};
+    use std::process::Stdio;
+    let (input_cancelled, input_cancel) = notification()?;
+    let (output_cancelled, output_cancel) = notification()?;
+    let (stdout, stdout_child) = pipe(true, false)?;
+    let (stderr, stderr_child) = pipe(true, false)?;
+    let writer = if input {
+        let (stdin_child, stdin) = pipe(false, true)?;
+        command.stdin(Stdio::from(stdin_child));
+        Some(Box::new(Pipe::from(stdin).with_cancel(input_cancelled)) as Box<dyn io::Write + Send>)
+    } else {
+        command.stdin(Stdio::null());
+        None
+    };
+    command
+        .stdout(Stdio::from(stdout_child))
+        .stderr(Stdio::from(stderr_child));
+    Ok(super::Endpoints {
+        input: writer,
+        stdout: Box::new(RelayOutput::new(
+            Pipe::from(stdout),
+            output_cancelled.clone(),
+        )),
+        stderr: Box::new(RelayOutput::new(Pipe::from(stderr), output_cancelled)),
+        input_cancel,
+        output_cancel,
+    })
+}
+
 pub(crate) struct Child {
     process: Process,
     job: OwnedHandle,

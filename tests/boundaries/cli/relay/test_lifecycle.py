@@ -3,6 +3,7 @@
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -24,9 +25,96 @@ from support.relay_lifecycle import (
     LIFECYCLE_COMMANDS,
     assert_exit_tail,
     assert_failure_tail,
+    exercise_shutdown_admission,
 )
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, WORKER, requires
 from support.suites import run_this_suite
+
+
+@requires(WORKER, PROCESS_EVENTS)
+def test_shutdown_ignores_buffered_commands_and_trailing_bytes(
+    binary: Path,
+) -> Transcript:
+    return shutdown_admission(binary, "retirement_batch")
+
+
+@requires(WORKER, PROCESS_EVENTS)
+def test_shutdown_ignores_commands_sent_after_worker_receipt(
+    binary: Path,
+) -> Transcript:
+    return shutdown_admission(binary, "retirement_receipt")
+
+
+@requires(WORKER, PROCESS_EVENTS)
+def test_sideband_eof_closes_admission_without_renewing_deadline(
+    binary: Path,
+) -> Transcript:
+    return shutdown_admission(binary, "retirement_sideband")
+
+
+@requires(WORKER, PROCESS_EVENTS)
+def test_clean_controller_eof_retires_without_shutdown_acceptance(
+    binary: Path,
+) -> Transcript:
+    return shutdown_admission(binary, "retirement_eof")
+
+
+def shutdown_admission(binary: Path, scenario: str) -> Transcript:
+    fixture = Path(__file__).resolve().parents[3] / "fixtures/relay_worker/lifecycle.py"
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        Events() as exits,
+        socket.socket() as listener,
+    ):
+        root = Path(directory)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(10)
+        marker = root / "dispatched"
+        process = subprocess.Popen(
+            [binary, "worker-relay", sys.executable, fixture, scenario],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=dict(
+                os.environ,
+                TMPDIR=directory,
+                MCP_CONSOLE_HOME=directory,
+                TEST_WORKER_PID=str(root / "worker-pid"),
+                TEST_WORKER_READY=f"127.0.0.1:{listener.getsockname()[1]}",
+                TEST_DISPATCHED=str(marker),
+            ),
+            start_new_session=True,
+        )
+        try:
+            with listener.accept()[0] as connection:
+                connection.settimeout(5)
+                with connection.makefile("rb") as checkpoint:
+                    worker = capture_process_identity(int(checkpoint.readline()))
+                    exits.watch_process(worker[0])
+                    assert json.loads(process.stdout.readline()) == {"kind": "ready"}
+
+                    def wait_worker(timeout: float) -> None:
+                        assert exits.wait(timeout) == {worker[0]}, (
+                            "worker budget was renewed"
+                        )
+
+                    result = exercise_shutdown_admission(
+                        process,
+                        checkpoint,
+                        marker,
+                        scenario,
+                        wait_worker,
+                        {"kind": "worker_signaled", "signal": signal.SIGKILL},
+                    )
+                    assert live_processes([worker]) == [], (
+                        "direct worker was not reaped"
+                    )
+                    return result
+        finally:
+            if process.poll() is None:
+                stop_process_group(process.pid)
+            process.communicate(timeout=10)
 
 
 @requires(WORKER, PROCESS_EVENTS)

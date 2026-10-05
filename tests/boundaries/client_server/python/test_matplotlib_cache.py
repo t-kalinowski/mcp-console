@@ -39,13 +39,14 @@ def uses_resolver_font_cache(binary: Path, *, with_r: bool) -> Transcript:
         )
         env["XDG_CACHE_HOME"] = str(root / "cache")
         env.pop("MPLCONFIGDIR", None)
-        cache = root / "cache/mcp-console/resolver/payload/matplotlib"
+        cache = root / "cache/mcp-console/dependencies/matplotlib"
         env["MCP_CONSOLE_TEST_FONT_CACHE"] = str(cache)
         config = root / "matplotlibrc"
         config.write_text("lines.linewidth: 7.25\n", encoding="utf-8")
         env["MATPLOTLIBRC"] = str(config)
         with McpClient(binary, SANDBOXED.serve(), env, root) as client:
             client.initialize_and_list_tools()
+            wait_for_worker_ready(client, "resolver font cache readiness")
             client.expect("[prepared]", requirements={"python": ["matplotlib"]})
             for restart in (False, True):
                 if restart:
@@ -122,7 +123,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
         client = clients.enter_context(
             McpClient(
                 binary,
-                execution.serve(),
+                execution.serve("-c", "cache=host"),
                 environment,
                 current_directory=workspace,
             )
@@ -145,6 +146,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             # fmt: python
             python=code("""
                 import os
+                import sys
                 from pathlib import Path
 
                 import matplotlib
@@ -162,7 +164,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             private_cache = next(
                 path
                 for path in Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json")
-                if path.is_symlink()
+                if path.is_symlink() or sys.platform == "win32" and path.name != "fontlist-v999.json"
             )
             private_cache_bytes = private_cache.read_bytes()
             private_cache.unlink()
@@ -201,7 +203,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             private_probe.write_text("ok", encoding="utf-8")
 
             (
-                config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+                config.samefile(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]),
                 matplotlib.rcParams["lines.linewidth"],
                 private_probe.read_text(encoding="utf-8") == "ok",
             )

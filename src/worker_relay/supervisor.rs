@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use super::commands::{CommandReader, SidebandWrite, SidebandWriter, StdinWrite, StdinWriter};
 use super::event_writer::{self, EventSender};
 use super::lifecycle::{
-    self, ExitDeadline, FirstFailure, WORKER_SHUTDOWN_GRACE, collect_error, report_startup_failure,
+    self, FirstFailure, Retirement, WORKER_SHUTDOWN_GRACE, collect_error, report_startup_failure,
 };
 use super::streams::{OutputReader, OutputStream, SidebandReader, drain_unstarted_output};
 use crate::process_exit::ChildExitWaiter;
@@ -135,9 +135,12 @@ fn supervise_worker(
     sideband: &mpsc::Sender<SidebandWrite>,
     stdin: &mpsc::Sender<StdinWrite>,
 ) -> (Option<ExitStatus>, Option<String>) {
-    let mut exit_deadline = ExitDeadline::default();
+    let mut retirement = Retirement::default();
     loop {
-        let control = match exit_deadline.remaining() {
+        let control = match retirement.remaining() {
+            Some(remaining) if remaining.is_zero() => {
+                return force_stop_worker(child, Some(exit), String::new());
+            }
             Some(remaining) => match controls.recv_timeout(remaining) {
                 Ok(control) => control,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -163,21 +166,42 @@ fn supervise_worker(
             },
         };
         match control {
-            Control::Interrupt { request_id } => {
+            Control::Worker(message) if retirement.accepts_commands() => {
+                if sideband.send(SidebandWrite::Message(message)).is_err() {
+                    return force_stop_worker(
+                        child,
+                        Some(exit),
+                        "worker sideband writer stopped".to_string(),
+                    );
+                }
+            }
+            Control::Stdin { data } if retirement.accepts_commands() => {
+                if stdin.send(StdinWrite::Write(data.into_bytes())).is_err() {
+                    return force_stop_worker(
+                        child,
+                        Some(exit),
+                        "worker stdin writer stopped".to_string(),
+                    );
+                }
+            }
+            Control::Interrupt { request_id } if retirement.accepts_commands() => {
                 let error = interrupt_worker(child).err();
                 if !events.send_supervisor(RelayEvent::InterruptResult { request_id, error }) {
                     return force_stop_worker(child, Some(exit), String::new());
                 }
             }
             Control::Shutdown { deadline } | Control::ControllerEof { deadline } => {
+                if !retirement.accepts_commands() {
+                    continue;
+                }
                 if matches!(control, Control::Shutdown { .. }) {
-                    if !exit_deadline.accept_shutdown(events, || deadline) {
+                    if !retirement.accept_shutdown(events, || deadline) {
                         return force_stop_worker(child, Some(exit), String::new());
                     }
                 } else {
                     // EOF keeps the deadline computed by the command reader
                     // and sends no acceptance event.
-                    exit_deadline.replace(deadline);
+                    retirement.start_if_idle(|| deadline);
                 }
                 stopping.store(true, Ordering::SeqCst);
                 let _ = stdin.send(StdinWrite::Close);
@@ -189,7 +213,9 @@ fn supervise_worker(
             }
             Control::SidebandEof => {
                 stopping.store(true, Ordering::SeqCst);
-                exit_deadline.start_if_idle(|| Instant::now() + WORKER_SHUTDOWN_GRACE);
+                if retirement.start_if_idle(|| Instant::now() + WORKER_SHUTDOWN_GRACE) {
+                    let _ = stdin.send(StdinWrite::Close);
+                }
             }
             Control::WorkerExited(result) => {
                 stopping.store(true, Ordering::SeqCst);
@@ -198,6 +224,7 @@ fn supervise_worker(
                     Err(error) => force_stop_worker(child, Some(exit), error),
                 };
             }
+            Control::Worker(_) | Control::Stdin { .. } | Control::Interrupt { .. } => {}
         }
     }
 }
@@ -390,18 +417,7 @@ impl WorkerLifecycle {
             )
         })?;
 
-        self.command_reader = Some(CommandReader::start(
-            self.sideband_writer
-                .as_ref()
-                .expect("worker sideband writer should be running")
-                .sender(),
-            self.stdin
-                .as_ref()
-                .expect("worker stdin writer should be running")
-                .sender(),
-            controls.clone(),
-            failures.clone(),
-        )?);
+        self.command_reader = Some(CommandReader::start(controls.clone(), failures.clone())?);
 
         self.sideband_reader.start(|sideband_reader| {
             SidebandReader::start(
@@ -512,6 +528,8 @@ impl FailureReporter {
 }
 
 pub(super) enum Control {
+    Worker(ServerMessage),
+    Stdin { data: String },
     Interrupt { request_id: u64 },
     Shutdown { deadline: Instant },
     ControllerEof { deadline: Instant },

@@ -4,7 +4,9 @@ import ctypes
 import json
 import os
 import shutil
+import socket
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -44,6 +46,170 @@ def workspace():
 
 @unittest.skipUnless(os.name == "nt", "native Windows sandbox")
 class WindowsSandbox(unittest.TestCase):
+    def test_console_cache_paths_reach_resolver_and_worker(self):
+        self.console_cache_paths(profile_fallback=False)
+
+    def test_console_cache_falls_back_to_userprofile_after_relative_home(self):
+        self.console_cache_paths(profile_fallback=True)
+
+    def console_cache_paths(self, *, profile_fallback: bool):
+        from windows import Session
+
+        with workspace() as root:
+            selected = root / "python"
+            subprocess.run(
+                [sys.executable, "-m", "venv", "--without-pip", selected], check=True
+            )
+            python = selected / "Scripts/python.exe"
+            local = (
+                root / "account/AppData/Local" if profile_fallback else root / "local"
+            )
+            cache = local / "mcp-console/cache/dependencies"
+            environment = dict(
+                os.environ,
+                PATH=str(root),
+                LOCALAPPDATA=str(local),
+                UV_CACHE_DIR=str(root / "host-uv"),
+                IR_CACHE_DIR=str(root / "host-ir"),
+                CACHE_TEST_ROOT=str(cache),
+            )
+            for name in ("XDG_CACHE_HOME", "R_HOME", "RETICULATE_PYTHON"):
+                environment.pop(name, None)
+            if profile_fallback:
+                environment.pop("LOCALAPPDATA")
+                environment.update(
+                    HOME="relative-home", USERPROFILE=str(root / "account")
+                )
+            (selected / "Lib/site-packages/sitecustomize.py").write_text(
+                dedent("""
+                    import os
+                    from pathlib import Path
+
+                    if "MCP_CONSOLE_LOCAL_RUNTIME" not in os.environ:
+                        root = Path(os.environ["CACHE_TEST_ROOT"])
+                        cache = Path(os.environ["UV_CACHE_DIR"])
+                        assert cache.is_relative_to(root)
+                        cache.mkdir(parents=True, exist_ok=True)
+                        cache.joinpath("resolver-probe").write_text("prepared")
+                    """)
+            )
+            session = Session(
+                environment,
+                python=python,
+                sandbox=True,
+                overrides=[
+                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.network="enabled"',
+                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
+                ],
+            )
+            try:
+                session.initialize()
+                result = session.send(
+                    python=dedent("""
+                        import os
+                        from pathlib import Path
+
+                        root = Path(os.environ["CACHE_TEST_ROOT"])
+                        for name in ("UV_CACHE_DIR", "IR_CACHE_DIR", "R_USER_CACHE_DIR", "RENV_PATHS_CACHE"):
+                            assert Path(os.environ[name]).is_relative_to(root)
+                        assert Path(os.environ["UV_CACHE_DIR"]).joinpath("resolver-probe").read_text() == "prepared"
+                        print("Console caches retained")
+                        """)
+                )
+                self.assertIn("Console caches retained", json.dumps(result), result)
+            finally:
+                session.close()
+            self.assertFalse((root / "host-uv").exists())
+            self.assertFalse((root / "host-ir").exists())
+
+    @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
+    def test_restricted_token_input_and_interrupt(self):
+        from windows import Session, exercise_input_and_interrupt
+
+        with workspace() as root:
+            session = Session(
+                sandbox=True,
+                overrides=[
+                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.network="enabled"',
+                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
+                ],
+            )
+            try:
+                session.initialize()
+                exercise_input_and_interrupt(session)
+            finally:
+                session.close()
+
+    @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "explicitly provisioned elevated Windows sandbox",
+    )
+    def test_provisioned_network_restricted_input_and_interrupt(self):
+        from windows import Session, exercise_input_and_interrupt
+
+        state = os.environ["MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"]
+        session = Session(
+            sandbox=True,
+            overrides=[
+                'sandbox.windows_sandbox_level="elevated"',
+                'sandbox.network="restricted"',
+                f"sandbox.windows_state_dir={json.dumps(state)}",
+            ],
+        )
+        try:
+            session.initialize()
+            exercise_input_and_interrupt(session)
+        finally:
+            session.close()
+
+    def test_network_enabled_allows_loopback_exchange(self):
+        from windows import Session
+
+        with workspace() as root:
+            session = Session(
+                sandbox=True,
+                overrides=[
+                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.network="enabled"',
+                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
+                ],
+            )
+            try:
+                session.initialize()
+                # Complete runtime startup before starting the networking deadline.
+                session.expect("[done]", python="pass")
+                # This socket tests networking itself; ordinary sequencing uses
+                # public stdin or host-only named pipes.
+                with socket.create_server(("127.0.0.1", 0)) as listener:
+                    listener.settimeout(10)
+                    session.send(
+                        # fmt: python
+                        python=dedent(f"""
+                            import socket
+
+                            with socket.create_connection(
+                                ("127.0.0.1", {listener.getsockname()[1]}), timeout=10
+                            ) as peer:
+                                peer.sendall(b"loopback request")
+                                with peer.makefile("rb") as response:
+                                    print(response.read().decode())
+                            """),
+                        timeout_ms=0,
+                    )
+                    with listener.accept()[0] as peer:
+                        peer.settimeout(10)
+                        request = peer.makefile("rb")
+                        with request:
+                            self.assertEqual(request.read(16), b"loopback request")
+                        peer.sendall(b"loopback reply")
+                    result = session.expect("loopback reply")
+                    self.assertFalse(result.get("isError"), result)
+            finally:
+                session.close()
+
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
     def test_r_uses_private_storage_and_preserves_state(self):
         from windows import Session

@@ -8,10 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from boundaries.server_relay._harness import ServerRelayClient
 from support.execution import SANDBOXED
 from support.records import Transcript
-from support.requirements import SANDBOX, requires
+from support.requirements import SANDBOX, requires, POSIX
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @requires(SANDBOX)
 def test_rejects_unsolicited_status_137_after_fatal(binary: Path) -> Transcript:
     client = ServerRelayClient(binary, "fatal_status_137", execution=SANDBOXED)

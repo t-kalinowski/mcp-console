@@ -10,6 +10,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.records import Transcript
 from support.suites import run_this_suite
+from support.requirements import POSIX, SQL, requires
 
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
@@ -17,6 +18,7 @@ PNG_1X1 = (
 )
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_routes_send_over_sideband(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
@@ -34,6 +36,7 @@ def test_routes_send_over_sideband(binary: Path, execution: Execution) -> Transc
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_projects_console_kinds(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
@@ -55,6 +58,7 @@ def test_projects_console_kinds(binary: Path, execution: Execution) -> Transcrip
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_returns_worker_images(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"

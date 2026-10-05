@@ -6,10 +6,7 @@ use serde::Serialize;
 
 use super::ManagedPython;
 
-use super::process::{
-    ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
-    resolver_command,
-};
+use super::process::{ResolverOutput, ResolverProcess, ResolverStopHandle, resolver_command};
 
 const PYTHON_PATH_SOURCE: &str = r#"
 import sys
@@ -425,22 +422,16 @@ fn run_resolver_command<F>(
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!(
             "failed to run {kind} resolver with `{}`: {error}",
             program.display()
         )
     })?;
-    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-    resolver.watch_exit(child.id());
-    if let Some(on_started) = on_started.take()
-        && let Err(error) = on_started(resolver.stop_handle())
-    {
-        resolver
-            .abort(&mut child, program, kind)
-            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
-        return Err(error);
-    }
-    resolver.wait(&mut child, completed_write(), stdout, stderr, program, kind)
+    resolver.collect(invocation, program, kind, |handle| {
+        match on_started.take() {
+            Some(started) => started(handle),
+            None => Ok(()),
+        }
+    })
 }

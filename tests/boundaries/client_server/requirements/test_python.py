@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, PROCESS_EVENTS, R_EVENT_LOOP, requires
 from support.assertions import (
     last_tool_text,
     release_worker_callback_gate,
@@ -24,7 +25,6 @@ from support.processes import process_group_exists, stop_process_group
 from support.r import r_test_environment
 from support.events import Events
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     matplotlib_test_environment,
@@ -338,7 +338,7 @@ def test_retires_python_resolver_descendant_after_leader_exit(
         environment["MCP_CONSOLE_TEST_LEADER_RELEASE"] = str(leader_release.path)
         environment["MCP_CONSOLE_TEST_DESCENDANT_LIFETIME"] = str(lifetime.path)
 
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         resolver_group = None
         exit_events = Events()
         try:
@@ -412,7 +412,7 @@ def test_does_not_fail_resolution_when_matplotlib_cache_cannot_be_written(
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=temporary,
         )
@@ -461,6 +461,7 @@ def test_restart_loses_state_and_retains_python_requirements(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_discards_pre_marker_python_activation(
     binary: Path, execution: Execution
@@ -468,6 +469,7 @@ def test_restart_discards_pre_marker_python_activation(
     return restart_discards_pre_marker_activation(binary, execution, {})
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_set_discards_pre_marker_python_activation(
     binary: Path, execution: Execution
@@ -489,7 +491,7 @@ def restart_discards_pre_marker_activation(
         environment["TMPDIR"] = temporary_directory
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
 
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:
@@ -681,6 +683,7 @@ def test_prepares_python_requirements_after_worker_startup(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_failed_live_python_requirements_do_not_run_cell(
     binary: Path, execution: Execution
@@ -688,7 +691,9 @@ def test_failed_live_python_requirements_do_not_run_cell(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         environment, _ = recording_uv_environment(root, fail_requirement="py-yaml12")
-        with McpClient(binary, execution.serve(), environment, root) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment, root
+        ) as client:
             client.initialize_and_list_tools()
             client.send(
                 python="import os, sys; live_sentinel = 42; live_worker_pid = os.getpid(); print(sys.executable)"
@@ -734,6 +739,7 @@ def test_failed_live_python_requirements_do_not_run_cell(
             return client.finish()
 
 
+@requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
 def test_prepares_after_idle_python_resolution(
     binary: Path, execution: Execution
@@ -769,6 +775,7 @@ def test_prepares_after_idle_python_resolution(
     return client.finish()
 
 
+@requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
 def test_retains_idle_python_activation_during_continuous_collection(
     binary: Path,
@@ -984,6 +991,7 @@ def test_layers_python_requirements_declared_by_r_packages(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_does_not_retain_package_requirements_before_python_initializes(
     binary: Path,
@@ -1050,6 +1058,7 @@ def test_does_not_retain_package_requirements_before_python_initializes(
         return client.finish()[3:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retains_python_activation_before_later_cell_failure(
     binary: Path,

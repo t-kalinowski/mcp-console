@@ -9,7 +9,6 @@ import json
 import os
 from pathlib import Path
 from queue import Queue
-import socket
 import shutil
 import subprocess
 import sys
@@ -18,6 +17,8 @@ import time
 from threading import Thread
 from textwrap import dedent
 import unittest
+
+from windows_gate import Gate
 
 from windows_cargo import WindowsCargo  # noqa: F401 -- include build acceptance
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
@@ -218,6 +219,29 @@ class Session:
             self.process.stdout.close()
             self.errors.close()
             self.directory.cleanup()
+
+
+def exercise_input_and_interrupt(session: Session) -> None:
+    """The same public, network-independent scenario for every Windows backend."""
+    result = session.expect(
+        "waiting for stdin",
+        # fmt: r
+        r=dedent("""
+            answer <- readline("Name: ")
+            answer
+            """),
+    )
+    assert "waiting for stdin" in json.dumps(result), result
+    result = session.expect("Windows", stdin="Windows\n")
+    assert "Windows" in json.dumps(result), result
+    result = session.expect(
+        "Loop ready", r='saved <- 42; cat("Loop ready\\n"); repeat {}'
+    )
+    assert "running" in json.dumps(result), result
+    result = session.send(control="interrupt")
+    assert "running;" not in json.dumps(result), result
+    result = session.send(r="saved")
+    assert "42" in json.dumps(result), result
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows packaging")
@@ -917,27 +941,23 @@ class WindowsConsole(unittest.TestCase):
     def test_startup_eof_cancels_python_inspection(self):
         with tempfile.TemporaryDirectory(prefix="console startup ") as directory:
             root = Path(directory)
-            ready = socket.socket()
-            self.addCleanup(ready.close)
-            ready.bind(("127.0.0.1", 0))
-            ready.listen(1)
-            ready.settimeout(8)
-            source = root / "resolver.rs"
-            source.write_text(r"""fn main() {
-    std::fs::write(std::env::var("TEST_RESOLVER_PID").unwrap(), std::process::id().to_string()).unwrap();
-    let _ready = std::net::TcpStream::connect(std::env::var("TEST_READY_ADDR").unwrap()).unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(60));
-}
-""")
             subprocess.run(
-                ["rustc", str(source), "-o", str(root / "python.exe")], check=True
+                [
+                    "rustc",
+                    "--edition=2024",
+                    str(ROOT / "tests/fixtures/windows_inspection.rs"),
+                    "-o",
+                    str(root / "python.exe"),
+                ],
+                check=True,
             )
+            ready = Gate(timeout=8)
+            self.addCleanup(ready.close)
             environment = dict(
                 os.environ,
                 PATH=str(root) + os.pathsep + os.environ["PATH"],
                 RETICULATE_PYTHON=str(root / "python.exe"),
-                TEST_RESOLVER_PID=str(root / "child.pid"),
-                TEST_READY_ADDR=f"127.0.0.1:{ready.getsockname()[1]}",
+                TEST_INSPECTION_GATE=ready.name,
             )
             process = subprocess.Popen(
                 [str(BINARY), "serve", "--no-sandbox"],
@@ -947,21 +967,47 @@ class WindowsConsole(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.argtypes = [
+                ctypes.c_uint32,
+                ctypes.c_int,
+                ctypes.c_uint32,
+            ]
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            kernel.WaitForSingleObject.restype = ctypes.c_uint32
+            kernel.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            inspection = None
             try:
-                connection, _ = ready.accept()
-                connection.close()
-                process.communicate(timeout=8)
-                self.assertNotEqual(process.returncode, 0)
+                ready.accept(process)
+                pid = int(ready.readline())
+                inspection = kernel.OpenProcess(0x100001, False, pid)
+                self.assertTrue(inspection, ctypes.get_last_error())
+                self.assertEqual(kernel.WaitForSingleObject(inspection, 0), 258)
+                # communicate closes MCP input while inspection awaits release.
+                _, errors = process.communicate(timeout=8)
+                self.assertNotEqual(
+                    process.returncode, 0, errors.decode(errors="replace")
+                )
+                self.assertEqual(
+                    kernel.WaitForSingleObject(inspection, 0),
+                    0,
+                    "server EOF returned before inspection retirement",
+                )
             finally:
-                if process.poll() is None:
-                    process.kill()
-                if (root / "child.pid").exists():
-                    subprocess.run(
-                        ["taskkill", "/PID", (root / "child.pid").read_text(), "/F"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                process.communicate(timeout=5)
+                with ExitStack() as cleanup:
+                    cleanup.callback(ready.close)
+                    if inspection:
+                        cleanup.callback(kernel.CloseHandle, inspection)
+                    cleanup.callback(process.communicate, timeout=5)
+                    if process.poll() is None:
+                        process.kill()
+                    if inspection and kernel.WaitForSingleObject(inspection, 0) != 0:
+                        kernel.TerminateProcess(inspection, 1)
+                        self.assertEqual(
+                            kernel.WaitForSingleObject(inspection, 5000), 0
+                        )
 
     def test_python_inspection_descendants_are_retired(self):
         with tempfile.TemporaryDirectory(prefix="console resolver ") as directory:
@@ -1267,41 +1313,7 @@ class WindowsConsole(unittest.TestCase):
         self.assertIn("26", json.dumps(result))
 
     def test_input_and_interrupt(self):
-        session = self.session()
-        with socket.create_server(("127.0.0.1", 0)) as listener:
-            listener.settimeout(session.timeout)
-            session.send(r=f"input_port <- {listener.getsockname()[1]}L")
-            result = session.send(
-                # fmt: r
-                r=dedent("""
-                    gate <- socketConnection(
-                      "127.0.0.1",
-                      port = input_port,
-                      blocking = TRUE,
-                      open = "r"
-                    )
-                    invisible(readLines(gate, n = 1L))
-                    close(gate)
-                    answer <- readline("Name: ")
-                    answer
-                    """),
-                timeout_ms=0,
-            )
-            with listener.accept()[0] as gate:
-                self.assertIn("running;", json.dumps(result))
-                gate.sendall(b"continue\n")
-            result = session.expect("waiting for stdin")
-        self.assertIn("waiting for stdin", json.dumps(result))
-        result = session.expect("Windows", stdin="Windows\n")
-        self.assertIn("Windows", json.dumps(result))
-        result = session.expect(
-            "Loop ready", r='saved <- 42; cat("Loop ready\\n"); repeat {}'
-        )
-        self.assertIn("running", json.dumps(result))
-        result = session.send(control="interrupt")
-        self.assertNotIn("running;", json.dumps(result))
-        result = session.send(r="saved")
-        self.assertIn("42", json.dumps(result))
+        exercise_input_and_interrupt(self.session())
 
 
 if __name__ == "__main__":

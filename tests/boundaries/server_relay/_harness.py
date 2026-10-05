@@ -142,7 +142,11 @@ class ServerRelayClient:
         )
         self.client = McpClient(
             binary,
+            # Resolver fixtures own temporary records and checkpoint FIFOs.
+            # Preserve their explicit cache grants in these relay scenarios.
             execution.serve(
+                "-c",
+                "cache=host",
                 "--worker",
                 str(binary),
                 "--relay",

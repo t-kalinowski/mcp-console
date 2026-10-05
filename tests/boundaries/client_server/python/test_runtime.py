@@ -23,7 +23,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
-from support.requirements import R, requires
+from support.requirements import POSIX, R, requires
 from support.resolvers import matplotlib_test_environment
 from support.suites import run_this_suite
 from boundaries.client_server.server.test_no_r import no_r_environment
@@ -240,7 +240,7 @@ def returns_matplotlib_plots(
         client = clients.enter_context(
             McpClient(
                 binary,
-                execution.serve(),
+                execution.serve("-c", "cache=host"),
                 environment,
                 current_directory=workspace,
             )
@@ -264,9 +264,8 @@ def returns_matplotlib_plots(
             import matplotlib
             import matplotlib.pyplot as plt
 
-            assert (
-                Path(matplotlib.matplotlib_fname()).resolve()
-                == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve()
+            assert Path(matplotlib.matplotlib_fname()).samefile(
+                os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]
             )
             assert matplotlib.rcParams["lines.linewidth"] == 7.25
 
@@ -443,7 +442,7 @@ def test_inherits_explicit_matplotlib_config(
         environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         environment["MCP_CONSOLE_TEST_MATPLOTLIBRC"] = str(explicit_rc)
         client = clients.enter_context(
-            McpClient(binary, execution.serve(), environment)
+            McpClient(binary, execution.serve("-c", "cache=host"), environment)
         )
         client.initialize_and_list_tools()
         wait_for_worker_ready(client, "explicit Matplotlib declaration readiness")
@@ -460,7 +459,7 @@ def test_inherits_explicit_matplotlib_config(
             private_probe.write_text("ok", encoding="utf-8")
 
             (
-                config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+                config.samefile(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]),
                 matplotlib.rcParams["lines.linewidth"],
                 private_probe.read_text(encoding="utf-8") == "ok",
             )
@@ -511,8 +510,6 @@ def inherits_matplotlib_config(
         font_cache = (
             cache_root / "matplotlib" if sys.platform == "linux" else matplotlib
         )
-        if execution is SANDBOXED:
-            font_cache = cache_root / "mcp-console/resolver/payload/matplotlib"
         matplotlib.mkdir(parents=True)
         matplotlibrc = matplotlib / "matplotlibrc"
         matplotlibrc.write_text("lines.linewidth: 9.25\n", encoding="utf-8")
@@ -545,6 +542,8 @@ def inherits_matplotlib_config(
         environment = matplotlib_test_environment(temporary / "host-cache")
         home.mkdir(exist_ok=True)
         environment["HOME"] = str(home)
+        if os.name == "nt":
+            environment["USERPROFILE"] = str(home)
         environment.pop("XDG_CONFIG_HOME", None)
         environment.pop("XDG_CACHE_HOME", None)
         if xdg:
@@ -560,7 +559,7 @@ def inherits_matplotlib_config(
         environment.pop("MATPLOTLIBRC", None)
         environment.pop("MPLCONFIGDIR", None)
         client = clients.enter_context(
-            McpClient(binary, execution.serve(), environment)
+            McpClient(binary, execution.serve("-c", "cache=host"), environment)
         )
         client.initialize_and_list_tools()
         wait_for_worker_ready(client, "inherited Matplotlib declaration readiness")
@@ -573,8 +572,9 @@ def inherits_matplotlib_config(
             import matplotlib
 
             (
-                Path(matplotlib.matplotlib_fname()).resolve()
-                == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+                Path(matplotlib.matplotlib_fname()).samefile(
+                    os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]
+                ),
                 matplotlib.rcParams["lines.linewidth"],
             )
             """)
@@ -891,6 +891,7 @@ def test_reads_unicode_nul_and_long_python_input(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_python_input_eof_retires_worker(
     binary: Path, execution: Execution

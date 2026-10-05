@@ -9,23 +9,25 @@ use crate::relay_protocol::RelayEvent;
 pub(super) const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
-pub(super) struct ExitDeadline(Option<Instant>);
+pub(super) struct Retirement(Option<Instant>);
 
-impl ExitDeadline {
+impl Retirement {
+    pub(super) fn accepts_commands(&self) -> bool {
+        self.0.is_none()
+    }
+
     pub(super) fn remaining(&self) -> Option<Duration> {
         self.0
             .map(|deadline| deadline.saturating_duration_since(Instant::now()))
-    }
-
-    pub(super) fn replace(&mut self, deadline: Instant) {
-        self.0 = Some(deadline);
     }
 
     pub(super) fn start_if_idle(&mut self, deadline: impl FnOnce() -> Instant) -> bool {
         if self.0.is_some() {
             return false;
         }
-        self.replace(deadline());
+        // Closing admission and retaining the first budget are one transition.
+        // Later EOF or control observations cannot renew worker lifetime.
+        self.0 = Some(deadline());
         true
     }
 
@@ -34,11 +36,10 @@ impl ExitDeadline {
         events: &EventSender,
         deadline: impl FnOnce() -> Instant,
     ) -> bool {
-        let accepted = events.send_supervisor(RelayEvent::ShutdownStarted);
-        // Native adapters choose the clock origin and reaction to failed
-        // publication. Windows still replaces the deadline on every Shutdown.
-        self.replace(deadline());
-        accepted
+        if !self.start_if_idle(deadline) {
+            return true;
+        }
+        events.send_supervisor(RelayEvent::ShutdownStarted)
     }
 }
 

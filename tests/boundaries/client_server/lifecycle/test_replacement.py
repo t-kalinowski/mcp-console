@@ -30,7 +30,7 @@ from support.previews import (
     session_directory,
 )
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
 
@@ -60,7 +60,7 @@ def test_reports_missing_worker_launch_failure(
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     failure = result["content"][0]["text"]
-    assert failure.startswith("failed to launch worker: "), failure
+    assert failure.removeprefix("[").startswith("failed to launch worker: "), failure
     result["content"][0]["text"] = "failed to launch worker: <missing executable>"
 
     transcript, standard_error = client.finish_with_standard_error()
@@ -89,7 +89,7 @@ def test_reports_replacement_startup_failure_and_retry(
         )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), *writable_root),
+            execution.serve("-c", "cache=host", "--worker", str(zod), *writable_root),
             environment,
         )
         client.initialize_and_list_tools()
@@ -169,7 +169,7 @@ def test_polls_replacement_startup_after_send_timeout(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
         )
         forced_release = threading.Event()
@@ -382,6 +382,7 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_preserves_idle_worker_startup_failure(
     binary: Path,
@@ -411,6 +412,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["TMPDIR"] = temporary_directory
+        environment["UV_TOOL_DIR"] = str(temporary_path)
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
         environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
@@ -423,7 +425,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), *writable_root),
+            execution.serve("-c", "cache=host", "--worker", str(zod), *writable_root),
             environment,
         )
         finished = False
@@ -472,6 +474,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_control_only_interrupt_returns_while_explicit_preparation_settles(
     binary: Path,
@@ -500,6 +503,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["TMPDIR"] = temporary_directory
+        environment["UV_TOOL_DIR"] = str(temporary_path)
         environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
         environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
@@ -511,7 +515,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
 
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
         )
         finished = False
@@ -767,6 +771,7 @@ def test_restart_interrupts_waiting_send(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restarts_after_worker_exit(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
@@ -798,6 +803,7 @@ def test_restarts_after_worker_exit(binary: Path, execution: Execution) -> Trans
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_unexpected_worker_exit_zero(
     binary: Path, execution: Execution

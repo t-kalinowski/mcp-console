@@ -14,6 +14,7 @@ from collections.abc import Iterator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import NATIVE_FIXTURES, POSIX, SQL, requires
 from support.assertions import last_result_text, last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.installation import installed_console
@@ -22,7 +23,6 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript, TranscriptWithCompanions
-from support.requirements import NATIVE_FIXTURES, requires
 
 
 def environment(path: Path) -> dict[str, str]:
@@ -46,10 +46,11 @@ def sql_client(
     current_directory: Path | None = None,
     *,
     record_in_project: bool = True,
+    arguments: tuple[str, ...] = (),
 ) -> Iterator[McpClient]:
     with McpClient(
         installed_console(binary),
-        execution.serve(),
+        execution.serve(*arguments),
         env,
         current_directory,
         record_in_project=record_in_project,
@@ -61,9 +62,22 @@ def sql_client(
 def managed_environment(root: Path) -> dict[str, str]:
     (root / "home").mkdir()
     (root / "uv").symlink_to(shutil.which("uv"))
-    return dict(environment(root), HOME=str(root / "home"))
+    return dict(
+        environment(root),
+        HOME=str(root / "home"),
+        XDG_CACHE_HOME=str(root / "cache-base"),
+    )
 
 
+def extension_cache(root: Path, execution: Execution) -> Path:
+    return (
+        root / "home/.duckdb/extensions"
+        if execution is DIRECT
+        else root / "cache-base/mcp-console/dependencies/duckdb/extensions"
+    )
+
+
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_sqlite_is_available_by_default(
     binary: Path, execution: Execution
@@ -71,7 +85,7 @@ def test_sqlite_is_available_by_default(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         env = managed_environment(root)
-        home = root / "home"
+        cache = extension_cache(root, execution)
         with sqlite3.connect(root / "audit.sqlite") as database:
             database.execute("CREATE TABLE events (payload TEXT)")
             database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
@@ -80,11 +94,7 @@ def test_sqlite_is_available_by_default(
             assert inspected["structuredContent"]["requirements"]["duckdb"] == [
                 "sqlite"
             ]
-            assert list(
-                (home / ".duckdb/extensions").glob(
-                    "v*/**/sqlite_scanner.duckdb_extension"
-                )
-            )
+            assert list(cache.glob("v*/**/sqlite_scanner.duckdb_extension"))
             client.send(sql="SET autoinstall_known_extensions = false")
             client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
             client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
@@ -92,6 +102,7 @@ def test_sqlite_is_available_by_default(
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT)
 def test_managed_python_requires_home_for_default_extensions(
     binary: Path, execution: Execution
@@ -101,8 +112,14 @@ def test_managed_python_requires_home_for_default_extensions(
         (root / "uv").symlink_to(shutil.which("uv"))
         env = dict(environment(root), UV_CACHE_DIR=str(root / "uv-cache"))
         env.pop("HOME", None)
+        env.pop("XDG_CACHE_HOME", None)
         with sql_client(
-            binary, execution, env, current_directory=root, record_in_project=False
+            binary,
+            execution,
+            env,
+            current_directory=root,
+            record_in_project=False,
+            arguments=("-c", "cache=host"),
         ) as client:
             failure = client.send(sql="SELECT 42 AS answer")
             assert failure.get("isError"), failure
@@ -121,6 +138,7 @@ def test_managed_python_requires_home_for_default_extensions(
             return transcript[3:] + [{"stderr": errors}]
 
 
+@requires(SQL)
 @executions(SANDBOXED)
 def test_resolver_requires_home_for_default_extensions(
     binary: Path, execution: Execution
@@ -128,6 +146,7 @@ def test_resolver_requires_home_for_default_extensions(
     return test_managed_python_requires_home_for_default_extensions(binary, execution)
 
 
+@requires(SQL)
 @executions(DIRECT)
 @requires(NATIVE_FIXTURES)
 def test_default_extension_failure_preserves_close_failure(
@@ -179,7 +198,12 @@ def test_default_extension_failure_preserves_close_failure(
                 )
             )
         with sql_client(
-            binary, execution, env, current_directory=root, record_in_project=False
+            binary,
+            execution,
+            env,
+            current_directory=root,
+            record_in_project=False,
+            arguments=("-c", "cache=host"),
         ) as client:
             failure = client.send(sql="SELECT 42 AS answer")
             assert failure.get("isError"), failure
@@ -189,7 +213,9 @@ def test_default_extension_failure_preserves_close_failure(
                     diagnostic
                 )
                 assert "path exists but is not a directory!" in diagnostic, diagnostic
-                assert diagnostic.endswith("; resolver input closed"), diagnostic
+                assert diagnostic.endswith(
+                    "; resolver input closed; local resolver sandbox exited with exit status: 47"
+                ), diagnostic
             else:
                 diagnostic = (
                     "DuckDB extension preparation requires an absolute HOME at server startup; "
@@ -207,6 +233,7 @@ def test_default_extension_failure_preserves_close_failure(
             return json.loads(json.dumps(records).replace(str(root), "<temporary>"))
 
 
+@requires(SQL)
 @executions(SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_invalid_extension_cache_preserves_close_failure(
@@ -215,6 +242,7 @@ def test_invalid_extension_cache_preserves_close_failure(
     return test_default_extension_failure_preserves_close_failure(binary, execution)
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_prepares_extension_before_first_worker_and_loads_from_cache(
@@ -223,8 +251,7 @@ def test_prepares_extension_before_first_worker_and_loads_from_cache(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         env = managed_environment(root)
-        home = root / "home"
-        cache = home / ".duckdb/extensions"
+        cache = extension_cache(root, execution)
         assert not cache.exists()
         shadow = root / "duckdb.py"
         shadow.write_text(
@@ -296,6 +323,7 @@ def test_prepares_extension_before_first_worker_and_loads_from_cache(
             )
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_adds_extensions_to_idle_worker_without_losing_state(
@@ -304,7 +332,7 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         env = managed_environment(root)
-        home = root / "home"
+        cache = extension_cache(root, execution)
         if execution == DIRECT:
             env[LOADER_VARIABLE] = str(build_interposer(root, "deny_worker_connect"))
             env["MCP_CONSOLE_TEST_DENY_WORKER_NETWORK"] = "1"
@@ -334,14 +362,7 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
                 requirements={"duckdb": ["fts"], "python": ["duckdb"]}
             )
             assert not prepared.get("isError"), prepared
-            assert (
-                len(
-                    list(
-                        (home / ".duckdb/extensions").glob("v*/**/fts.duckdb_extension")
-                    )
-                )
-                == 1
-            )
+            assert len(list(cache.glob("v*/**/fts.duckdb_extension"))) == 1
             client.send(
                 # fmt: python
                 python=code("""
@@ -388,6 +409,7 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_combines_python_and_extension_candidates_across_duckdb_versions(
     binary: Path, execution: Execution
@@ -395,8 +417,7 @@ def test_combines_python_and_extension_candidates_across_duckdb_versions(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         env = managed_environment(root)
-        home = root / "home"
-        cache = home / ".duckdb/extensions"
+        cache = extension_cache(root, execution)
         with sql_client(binary, execution, env) as client:
             first = client.send(
                 requirements={
@@ -451,6 +472,7 @@ def test_combines_python_and_extension_candidates_across_duckdb_versions(
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_combined_preparation_precedes_first_sql_cell(
     binary: Path, execution: Execution
@@ -458,7 +480,7 @@ def test_combined_preparation_precedes_first_sql_cell(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         env = managed_environment(root)
-        home = root / "home"
+        cache = extension_cache(root, execution)
         with sql_client(binary, execution, env) as client:
             result = client.send(
                 requirements={"python": ["six"], "duckdb": ["fts"]},
@@ -468,17 +490,11 @@ def test_combined_preparation_precedes_first_sql_cell(
             assert "Error:" not in last_tool_text(client)
             client.send(python="import six; print('combined SQL preparation')")
             assert last_tool_text(client) == "combined SQL preparation\n"
-            assert (
-                len(
-                    list(
-                        (home / ".duckdb/extensions").glob("v*/**/fts.duckdb_extension")
-                    )
-                )
-                == 1
-            )
+            assert len(list(cache.glob("v*/**/fts.duckdb_extension"))) == 1
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_extension_actions_replace_and_reset_declarations(
     binary: Path, execution: Execution
@@ -486,8 +502,7 @@ def test_extension_actions_replace_and_reset_declarations(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         env = managed_environment(root)
-        home = root / "home"
-        cache = home / ".duckdb/extensions"
+        cache = extension_cache(root, execution)
         with sql_client(binary, execution, env) as client:
 
             def declaration():
@@ -527,6 +542,7 @@ def test_extension_actions_replace_and_reset_declarations(
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_failed_and_live_extension_changes_preserve_worker_and_selected_connection(
     binary: Path, execution: Execution
@@ -536,7 +552,10 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
         env = managed_environment(root)
         uv_cache = root / "uv-cache"
         with sql_client(
-            binary, execution, dict(env, UV_CACHE_DIR=str(uv_cache))
+            binary,
+            execution,
+            dict(env, UV_CACHE_DIR=str(uv_cache)),
+            arguments=("-c", "cache=host"),
         ) as client:
             client.send(
                 requirements={
@@ -658,6 +677,7 @@ def test_failed_and_live_extension_changes_preserve_worker_and_selected_connecti
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_live_extension_additions_require_an_idle_worker(
     binary: Path, execution: Execution
@@ -713,6 +733,7 @@ def test_live_extension_additions_require_an_idle_worker(
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_extension_preparation_before_worker_retirement(
     binary: Path, execution: Execution
@@ -730,7 +751,9 @@ def test_interrupts_extension_preparation_before_worker_retirement(
             MCP_CONSOLE_TEST_DUCKDB_INTERRUPT_ROOT=str(checkpoints),
         )
         try:
-            with sql_client(binary, execution, env) as client:
+            with sql_client(
+                binary, execution, env, arguments=("-c", "cache=host")
+            ) as client:
                 client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
                 client.send(
                     python="import os, sysconfig; site = sysconfig.get_paths()['purelib']; identity = object(); identity_id = id(identity); pid = os.getpid(); print(site)"
@@ -797,6 +820,7 @@ def test_interrupts_extension_preparation_before_worker_retirement(
             release.close()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_sql_is_the_first_cell(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
@@ -878,6 +902,7 @@ def _replace_paths(records: Transcript, paths: list[Path]) -> Transcript:
     return records
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_catalog_and_private_storage_follow_worker_lifetime(
     binary: Path, execution: Execution
@@ -953,6 +978,7 @@ def test_catalog_and_private_storage_follow_worker_lifetime(
             )
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_requirements_and_missing_duckdb(
     binary: Path, execution: Execution
@@ -1032,6 +1058,7 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
             return client.finish()[3:]
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_selected_environment_uses_custom_connection_without_duckdb(
     binary: Path, execution: Execution
@@ -1082,6 +1109,7 @@ def test_selected_environment_uses_custom_connection_without_duckdb(
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_bootstrap_ignores_workspace_duckdb_shadows(
     binary: Path, execution: Execution
@@ -1136,6 +1164,7 @@ def test_bootstrap_ignores_workspace_duckdb_shadows(
     return [{"workspace_duckdb_module_and_package_remain_unimported": True}]
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_selected_environment_uses_preinstalled_duckdb(
     binary: Path, execution: Execution
@@ -1209,6 +1238,7 @@ def test_selected_environment_uses_preinstalled_duckdb(
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_records_managed_sql_cells(
     binary: Path, execution: Execution
@@ -1266,6 +1296,7 @@ def test_records_managed_sql_cells(
         )
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_language_restriction_still_disables_sql(
     binary: Path, execution: Execution
@@ -1287,6 +1318,7 @@ def test_language_restriction_still_disables_sql(
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_interrupt_preserves_sql_and_python_state(

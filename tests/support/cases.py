@@ -21,9 +21,10 @@ class CaseCancelled(Exception):
 @dataclass
 class CaseProcess:
     process: subprocess.Popen
-    ownership: int
+    ownership: int | None
     _interrupt_lock: Lock = field(default_factory=Lock)
     _interrupted: bool = False
+    _state_changed: Event = field(default_factory=Event)
 
     def interrupt(self) -> None:
         # A case deadline and a sibling failure can request cleanup together.
@@ -31,7 +32,15 @@ class CaseProcess:
         with self._interrupt_lock:
             if not self._interrupted:
                 self._interrupted = True
-                os.close(self.ownership)
+                if self.ownership is not None:
+                    os.close(self.ownership)
+                elif self.process.poll() is None:
+                    try:
+                        self.process.send_signal(signal.CTRL_BREAK_EVENT)
+                    except OSError:
+                        if self.process.poll() is None:
+                            raise
+                self._state_changed.set()
 
 
 def _captured_output(stream: BinaryIO) -> str:
@@ -103,6 +112,10 @@ def run_case_subprocess(
     *,
     update: bool,
 ) -> set[Path]:
+    if os.name == "nt":
+        return run_windows_case(
+            suite_path, case_name, timeout, events, index, update=update
+        )
     runner = Path(__file__).resolve().parents[1] / "boundaries" / "_run.py"
     selector = f"{suite_path.relative_to(runner.parent).with_suffix('')}::{case_name}"
     with (
@@ -199,3 +212,83 @@ def run_case_subprocess(
                 return pickle.load(stream)
         finally:
             case.interrupt()
+
+
+def run_windows_case(suite_path, case_name, timeout, events, index, *, update):
+    # Reuse the checkout's native Job supervisor: every case owns a Job, and
+    # forced cleanup or runner loss retires descendants before removing files.
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    sys.path.insert(0, str(scripts))
+    from checkout_windows import command_process
+
+    runner = Path(__file__).resolve().parents[1] / "boundaries/_run.py"
+    selector = f"{suite_path.relative_to(runner.parent).with_suffix('').as_posix()}::{case_name}"
+    with tempfile.TemporaryDirectory(prefix="mcp-console-case-") as directory:
+        workspace = Path(directory) / "workspace"
+        workspace.mkdir()
+        result = Path(directory) / "result.pickle"
+        command = [
+            sys.executable,
+            str(runner),
+            "--record-case",
+            str(suite_path),
+            case_name,
+            str(result),
+        ]
+        if update:
+            command.append("--update")
+        started = time.monotonic()
+        with (
+            (Path(directory) / "output").open("w+b") as output,
+            command_process(
+                command,
+                log=output,
+                directory=workspace,
+                interruptible=True,
+                environment=os.environ
+                | {
+                    "MCP_CONSOLE_HOME": str(Path(directory) / "console"),
+                    "MCP_CONSOLE_TEST_CASE_DEADLINE": str(started + timeout),
+                },
+            ) as process,
+        ):
+            case = CaseProcess(process, None)
+            events.put((index, started, case))
+            completed = Event()
+
+            def reap():
+                process.wait()
+                completed.set()
+                case._state_changed.set()
+
+            reaper = Thread(target=reap, daemon=True)
+            reaper.start()
+            timed_out = not case._state_changed.wait(
+                max(0, started + timeout - time.monotonic())
+            )
+            if not completed.is_set():
+                case.interrupt()
+                if not completed.wait(CASE_CLEANUP_SECONDS):
+                    process.kill()
+                    assert completed.wait(5), (
+                        f"{selector} did not exit after termination"
+                    )
+            reaper.join()
+            with (Path(directory) / "output").open("rb") as captured:
+                diagnostics = captured.read(os.fstat(output.fileno()).st_size).decode(
+                    "utf-8", errors="replace"
+                )
+            if timed_out:
+                raise TimeoutError(
+                    f"{selector} timed out after {timeout:g} seconds\n{diagnostics}"
+                )
+            if case._interrupted and process.returncode in {130, 0xC000013A}:
+                raise CaseCancelled(diagnostics)
+            if process.returncode:
+                raise RuntimeError(
+                    f"{selector} exited with status {process.returncode}\n{diagnostics}"
+                )
+            if diagnostics:
+                print(diagnostics, end="", flush=True)
+            with result.open("rb") as stream:
+                return pickle.load(stream)

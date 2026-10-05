@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, R, requires
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -32,10 +33,10 @@ from support.resolvers import (
     write_python_executable,
     write_uv_python_inventories,
 )
-from support.requirements import R, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_uses_current_r_library_for_managed_python_resolution(
@@ -51,6 +52,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         r_libs_record = temporary / "uv-r-libs.jsonl"
         environment, _ = r_test_environment()
         environment.pop("R_LIBS", None)
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["RETICULATE_UV"] = str(
             Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
         )
@@ -59,7 +61,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         environment["MCP_CONSOLE_TEST_R_LIBS_RECORD"] = str(r_libs_record)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=temporary,
         )
@@ -134,6 +136,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_validates_registry_only_python_requirements(
@@ -145,6 +148,7 @@ def test_validates_registry_only_python_requirements(
         real_uv = shutil.which("uv")
         assert real_uv is not None, "real uv is required"
         environment = os.environ.copy()
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["RETICULATE_UV"] = str(
             Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
         )
@@ -152,7 +156,7 @@ def test_validates_registry_only_python_requirements(
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=temporary,
         )
@@ -409,6 +413,7 @@ exit 97
         return json.loads(transcript_json)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_recovers_from_python_version_resolution_failure(
@@ -421,13 +426,15 @@ def test_recovers_from_python_version_resolution_failure(
         assert real_uv is not None, "real uv is required"
         failure_marker = temporary / "fail-version-resolution"
         environment = os.environ.copy()
+        # Keep the fixture record in a granted resolver cache.
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["RETICULATE_UV"] = str(uv)
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(temporary / "uv.jsonl")
         environment["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"] = str(failure_marker)
         environment["MCP_CONSOLE_TEST_UV_FAILURE_ARGUMENT"] = "list"
 
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         client.send(r="worker_pid <- Sys.getpid()")
         assert last_result_text(client) == "[done]"
@@ -452,6 +459,7 @@ def test_recovers_from_python_version_resolution_failure(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_resolves_python_version_inventory_semantics(
@@ -486,6 +494,7 @@ def test_resolves_python_version_inventory_semantics(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_resolves_python_version_constraint_semantics(
@@ -534,6 +543,7 @@ def test_resolves_python_version_constraint_semantics(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_falls_back_after_filtering_unsupported_python_versions(
@@ -581,6 +591,7 @@ def test_falls_back_after_filtering_unsupported_python_versions(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_respects_system_python_preference_with_custom_install_directory(
@@ -635,6 +646,7 @@ def test_respects_system_python_preference_with_custom_install_directory(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_uses_reticulate_managed_uv_for_python_resolution(
@@ -732,6 +744,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         environment["RETICULATE_UV"] = "managed"
         environment["R_USER_CACHE_DIR"] = str(r_user_cache)
         environment["IR_CACHE_DIR"] = host_ir_cache
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["UV_CACHE_DIR"] = str(temporary / "wrong-cache")
         environment["UV_PYTHON_INSTALL_DIR"] = str(temporary / "wrong-python")
         environment["PATH"] = os.pathsep.join((str(fake_bin), original_path))
@@ -746,7 +759,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         client = stack.enter_context(
             McpClient(
                 binary,
-                execution.serve(),
+                execution.serve("-c", "cache=host"),
                 environment,
                 current_directory=temporary,
             )
@@ -790,6 +803,7 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_retains_managed_python_when_uv_caching_is_disabled(
@@ -828,6 +842,7 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_removes_disabled_uv_python_source_aliases(
@@ -859,6 +874,7 @@ def test_removes_disabled_uv_python_source_aliases(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_interrupts_python_cache_warmup_without_committing(
@@ -976,6 +992,7 @@ def test_interrupts_python_cache_warmup_without_committing(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_stops_before_cache_warmup_after_python_resolver_interrupt(

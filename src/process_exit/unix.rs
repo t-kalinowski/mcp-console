@@ -1,4 +1,12 @@
 use std::io;
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "macos")]
+use std::os::fd::{FromRawFd, OwnedFd};
+
+pub(super) type Cancel = io::PipeWriter;
+pub(super) fn cancellation() -> Result<(io::PipeReader, Cancel), String> {
+    io::pipe().map_err(|error| error.to_string())
+}
 
 const CHILD_EXITED: libc::c_int = 1;
 const CHILD_KILLED: libc::c_int = 2;
@@ -18,6 +26,126 @@ impl Observer {
     pub(super) fn wait(self) -> Result<(), String> {
         super::wait_for_direct_child_exit(self.0)
     }
+
+    pub(super) fn wait_cancellable(self, cancelled: io::PipeReader) -> Result<bool, String> {
+        #[cfg(target_os = "linux")]
+        let result = wait_for_signal_exit(self.0, cancelled);
+        #[cfg(target_os = "macos")]
+        let result = (|| {
+            if observe_direct_child(self.0, false)? {
+                return Ok(true);
+            }
+            let Some(descriptor) = exit_notification(self.0)? else {
+                return Ok(true);
+            };
+            let ready = crate::readiness::wait_for_io(
+                descriptor.as_raw_fd(),
+                libc::POLLIN,
+                Some(&cancelled),
+            )?;
+            if ready.cancelled {
+                return Ok(false);
+            }
+            // macOS NOTE_EXIT can precede a waitable terminal status. After
+            // exit readiness, wait for that status with WNOWAIT so the owner
+            // retains the child's identity and remains the sole reaper.
+            observe_direct_child(self.0, true)
+        })();
+        result.map_err(|error| format!("failed to observe child process {} exit: {error}", self.0))
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct ChildSignal(signal_hook::SigId);
+
+#[cfg(target_os = "linux")]
+impl Drop for ChildSignal {
+    fn drop(&mut self) {
+        // Unregister settles in-flight callbacks before their endpoints close.
+        signal_hook::low_level::unregister(self.0);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn wait_for_signal_exit(pid: libc::pid_t, cancelled: io::PipeReader) -> io::Result<bool> {
+    use std::io::Read;
+    use std::os::unix::net::UnixStream;
+
+    let (mut notifications, notify) = UnixStream::pair()?;
+    notifications.set_nonblocking(true)?;
+    // Install before probing status: an earlier exit is waitable, and a later
+    // exit queues a wake. SIGCHLD is only a hint; waitid is the exit evidence.
+    // Each registration receives the wake, preserving concurrent observers.
+    let _signal = ChildSignal(signal_hook::low_level::pipe::register(
+        libc::SIGCHLD,
+        notify,
+    )?);
+    // The observer alone must accept SIGCHLD even if the host inherited a
+    // blocked mask. Other masks stay unchanged; signal-hook chains handlers.
+    let mut signals = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigemptyset(&mut signals);
+        libc::sigaddset(&mut signals, libc::SIGCHLD);
+    }
+    let error = unsafe { libc::pthread_sigmask(libc::SIG_UNBLOCK, &signals, std::ptr::null_mut()) };
+    if error != 0 {
+        return Err(io::Error::from_raw_os_error(error));
+    }
+    loop {
+        if observe_direct_child(pid, false)? {
+            return Ok(true);
+        }
+        let ready = crate::readiness::wait_for_io(
+            notifications.as_raw_fd(),
+            libc::POLLIN,
+            Some(&cancelled),
+        )?;
+        if ready.cancelled {
+            return Ok(false);
+        }
+        // Clear a finite queued wake before checking status again. Clearing
+        // after the check could lose an exit coalesced with another SIGCHLD.
+        match notifications.read(&mut [0; 64]) {
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn exit_notification(pid: libc::pid_t) -> io::Result<Option<OwnedFd>> {
+    let fd = unsafe { libc::kqueue() };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let queue = unsafe { OwnedFd::from_raw_fd(fd) };
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let change = libc::kevent {
+        ident: pid as _,
+        filter: libc::EVFILT_PROC,
+        flags: libc::EV_ADD | libc::EV_ONESHOT,
+        fflags: libc::NOTE_EXIT,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    };
+    // XNU rejects NOTE_EXIT registration after exit, even for an unreaped
+    // child whose terminal status is not yet waitable. As after NOTE_EXIT,
+    // wait for that status while WNOWAIT keeps its identity pinned.
+    if unsafe { libc::kevent(fd, &change, 1, std::ptr::null_mut(), 0, std::ptr::null()) } < 0 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) && observe_direct_child(pid, true)? {
+            return Ok(None);
+        }
+        return Err(error);
+    }
+    Ok(Some(queue))
 }
 
 pub(crate) fn direct_child_has_exited(process_id: u32) -> io::Result<bool> {

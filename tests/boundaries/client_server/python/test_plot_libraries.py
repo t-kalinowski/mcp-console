@@ -48,7 +48,10 @@ def plot_client(
         )
         environment.pop("MATPLOTLIBRC", None)
         with McpClient(
-            binary, execution.serve(), environment, current_directory=workspace
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
             wait_for_worker_ready(client, "plot library preparation readiness")
@@ -149,7 +152,7 @@ def test_captures_only_pyplot_owned_plotnine_figures(
         result = client.transcript[-1]["result"]
         representation = result["content"][0]["text"]
         assert re.fullmatch(
-            r"<plotnine\.ggplot\.ggplot object at 0x[0-9a-f]+>\n", representation
+            r"<plotnine\.ggplot\.ggplot object at 0x[0-9a-fA-F]+>\n", representation
         ), representation
         assert_result_content(client, [representation])
         result["content"][0]["text"] = "<unshown plotnine ggplot>\n"

@@ -1,6 +1,7 @@
 """A complete immutable Console installation owned by one case process."""
 
 import shutil
+import os
 import tempfile
 from functools import cache
 from pathlib import Path
@@ -12,9 +13,17 @@ def _installed_console(binary: Path) -> tuple[tempfile.TemporaryDirectory, Path]
     prefix = Path(temporary.name)
     try:
         (prefix / "bin").mkdir()
-        installed = prefix / "bin/mcp-console"
+        installed = (
+            prefix / "bin" / ("mcp-console.exe" if os.name == "nt" else "mcp-console")
+        )
         shutil.copy2(binary, installed)
-        for relative in ("libexec", "share/licenses/mcp-console"):
+        # Native Windows builds keep licenses inside the immutable libexec bundle.
+        directories = (
+            ("libexec",)
+            if os.name == "nt"
+            else ("libexec", "share/licenses/mcp-console")
+        )
+        for relative in directories:
             shutil.copytree(binary.parent.parent / relative, prefix / relative)
     except BaseException:
         temporary.cleanup()

@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, PROCESS_EVENTS, SQL, command, requires
 from support.assertions import (
     entry_result_text,
     last_result_text,
@@ -27,7 +28,6 @@ from support.processes import (
 )
 from support.records import Transcript
 from support.r import r_test_environment, reference_r_error
-from support.requirements import PROCESS_EVENTS, command, requires
 from support.resolvers import (
     ir_requirements,
     ir_run_records,
@@ -158,6 +158,7 @@ def send_and_compare_r_error(
     }
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_resolves_missing_r_packages_during_evaluation(
@@ -167,7 +168,7 @@ def test_resolves_missing_r_packages_during_evaluation(
         directory = Path(temporary)
         packages = ("mcpfirst", "mcpsecond")
         environment, _ = recording_fixture_r_environment(directory, packages)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
 
         client.send(python="python_sentinel = 40")
@@ -207,6 +208,7 @@ def test_resolves_missing_r_packages_during_evaluation(
         return client.finish()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
@@ -217,7 +219,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
         directory = Path(temporary)
         package = "mcpsqlcallback"
         environment, record = recording_fixture_r_environment(directory, (package,))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
 
         # fmt: r
@@ -264,6 +266,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_resolves_reached_r_packages_at_runtime(
@@ -283,7 +286,7 @@ def test_resolves_reached_r_packages_at_runtime(
         )
         environment, record = recording_fixture_r_environment(directory, packages)
         environment["PKG_SUBPROCESS_TIMEOUT"] = "0"
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
@@ -358,6 +361,7 @@ def test_resolves_reached_r_packages_at_runtime(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_retains_automatic_r_package_after_error_and_restart(
@@ -366,7 +370,7 @@ def test_retains_automatic_r_package_after_error_and_restart(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
@@ -404,6 +408,7 @@ def test_retains_automatic_r_package_after_error_and_restart(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_preserves_missing_package_conditions_after_resolution_failure(
@@ -467,7 +472,9 @@ def test_preserves_missing_package_conditions_after_resolution_failure(
             text=True,
             check=True,
         )
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             for restart in (False, True):
                 if restart:
@@ -499,6 +506,7 @@ def test_preserves_missing_package_conditions_after_resolution_failure(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_matches_base_r_missing_package_error_display(
@@ -508,7 +516,9 @@ def test_matches_base_r_missing_package_error_display(
         environment, _ = recording_ir_environment(
             Path(temporary), fail_requirement="notloaded.pkg"
         )
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             client.send(r="options(showErrorCalls = TRUE)")
             for source in (
@@ -527,6 +537,7 @@ def test_matches_base_r_missing_package_error_display(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_does_not_resolve_unreached_package_loads(
@@ -538,7 +549,7 @@ def test_does_not_resolve_unreached_package_loads(
             Path(temporary),
             fail_requirement=missing,
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
@@ -558,6 +569,7 @@ def test_does_not_resolve_unreached_package_loads(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_rejects_non_package_runtime_names_before_ir(
@@ -565,7 +577,7 @@ def test_rejects_non_package_runtime_names_before_ir(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
@@ -601,6 +613,7 @@ def test_rejects_non_package_runtime_names_before_ir(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_preserves_base_r_loading_semantics_without_resolution(
@@ -609,7 +622,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         client.expect("[prepared]", requirements={"r": ["DBI"]})
         baseline = len(ir_run_records(record))
@@ -745,6 +758,7 @@ def test_preserves_base_r_loading_semantics_without_resolution(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Transcript:
@@ -756,7 +770,7 @@ def test_loads_package_with_devtools(binary: Path, execution: Execution) -> Tran
         environment, record = recording_ir_environment(directory)
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=package,
         )
@@ -803,6 +817,7 @@ $internal
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_r_activation_failure_requires_restart_without_stopping_worker(
@@ -811,7 +826,7 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         environment, record = recording_ir_environment(Path(temporary))
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         client.expect(r="activation_state <- 41L; activation_pid <- Sys.getpid()")
         baseline = len(ir_run_records(record))
@@ -868,6 +883,7 @@ def test_r_activation_failure_requires_restart_without_stopping_worker(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_restart_discards_unactivated_r_candidate(
@@ -879,7 +895,7 @@ def test_restart_discards_unactivated_r_candidate(
         package = "mcprestart"
         environment, record = recording_fixture_r_environment(directory, (package,))
         environment["TMPDIR"] = temporary
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         try:
             client.initialize_and_list_tools()
@@ -963,6 +979,7 @@ def test_restart_discards_unactivated_r_candidate(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_rejects_preparation_while_automatic_r_resolver_is_running(
@@ -978,7 +995,7 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
         environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(release.path)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         resolver_released = False
         finished = False
         try:
@@ -1049,7 +1066,7 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
         environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(started.path)
         environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(release.path)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         try:
             client.initialize_and_list_tools()

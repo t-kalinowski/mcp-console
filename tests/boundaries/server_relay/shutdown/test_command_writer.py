@@ -15,7 +15,7 @@ from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import capture_process_identity, host_process_id, signal_process
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires, POSIX
 from support.suites import run_this_suite
 from support.ssh import configure, peer_environment
 
@@ -105,6 +105,7 @@ def retirement_case(
         return [{"retained_stream": mode, "retired_writers": restarts + 1}]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_restarts_join_writer_with_retained_stdin(
@@ -113,6 +114,7 @@ def test_restarts_join_writer_with_retained_stdin(
     return retirement_case(binary, execution, "stdin", 3)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_idle_writer_joins_with_retained_stdout(
@@ -121,6 +123,7 @@ def test_idle_writer_joins_with_retained_stdout(
     return retirement_case(binary, execution, "stdout", 1)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_forced_retirement_aborts_full_command_pipe(
@@ -129,6 +132,7 @@ def test_forced_retirement_aborts_full_command_pipe(
     return retirement_case(binary, execution, "forced", 1)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_restart_accepts_aborted_frame_after_confirmed_retirement(
@@ -217,6 +221,7 @@ def test_restart_accepts_aborted_frame_after_confirmed_retirement(
         ]
 
 
+@requires(POSIX)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_eof_joins_blocked_target_bootstrap(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
@@ -357,6 +362,7 @@ def interrupt_shutdown_case(
         ]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_shutdown_settles_cancelled_interrupt_without_ack(
@@ -365,6 +371,7 @@ def test_shutdown_settles_cancelled_interrupt_without_ack(
     return interrupt_shutdown_case(binary, execution, late_ack=False)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_shutdown_ignores_interrupt_ack_after_command_eof(

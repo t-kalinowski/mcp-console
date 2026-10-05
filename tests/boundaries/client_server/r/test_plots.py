@@ -17,9 +17,11 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
+from support.requirements import R_EVENT_LOOP, requires
 from support.suites import run_this_suite
 
 
+@requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
 def test_routes_input_to_idle_later_callback(
     binary: Path,

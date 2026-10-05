@@ -10,16 +10,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, SQL, requires
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.events import Events
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.processes import capture_process_identity, kill_processes
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
 
@@ -35,6 +36,7 @@ from boundaries.client_server._harness import (
 )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_skips_managed_python_preflight(
     binary: Path, execution: Execution
@@ -82,6 +84,7 @@ def test_custom_worker_skips_managed_python_preflight(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
     binary: Path,
@@ -90,6 +93,7 @@ def test_standalone_preparation_before_worker_startup_is_causal_and_idempotent(
     return standalone_preparation(binary, execution, {})
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_standalone_replacement_is_inspectable_before_worker_startup(
     binary: Path, execution: Execution
@@ -232,6 +236,7 @@ def standalone_preparation(
                 stop_client(client)
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_starts_without_home(
     binary: Path, execution: Execution
@@ -239,9 +244,10 @@ def test_custom_worker_starts_without_home(
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
     environment = os.environ.copy()
     environment.pop("HOME", None)
+    environment.pop("XDG_CACHE_HOME", None)
     client = McpClient(
         binary,
-        execution.serve("--worker", str(zod)),
+        execution.serve("--worker", str(zod), "-c", "cache=host"),
         environment,
     )
     client.initialize_and_list_tools()
@@ -273,6 +279,7 @@ def _write_selected_ir(path: Path) -> None:
     path.chmod(0o755)
 
 
+@requires(POSIX)
 @executions(DIRECT)
 def test_custom_worker_preserves_non_utf8_r_libs(
     binary: Path, execution: Execution
@@ -301,6 +308,7 @@ def test_custom_worker_preserves_non_utf8_r_libs(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_keeps_first_r_resolver_selection(
     binary: Path, execution: Execution
@@ -341,6 +349,7 @@ def test_custom_worker_keeps_first_r_resolver_selection(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_keeps_selection_after_failed_first_manifest(
     binary: Path, execution: Execution
@@ -386,7 +395,7 @@ def test_custom_worker_keeps_selection_after_failed_first_manifest(
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(PROCESS_EVENTS)
+@requires(PROCESS_EVENTS, NATIVE_FIXTURES)
 def test_interrupt_after_local_resolver_exit_rejects_success(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -406,6 +415,10 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
         started = FifoCheckpoint.create(root / "ir-started")
         ir_release = FifoCheckpoint.create(root / "ir-release")
         holder_release = FifoCheckpoint.create(root / "holder-release")
+        observer_entered = FifoCheckpoint.create(root / "observer-entered")
+        observer_release = FifoCheckpoint.create(root / "observer-release")
+        child_killed = FifoCheckpoint.create(root / "child-killed")
+        interposer = build_interposer(root, "child_exit_observation")
         environment, _ = r_test_environment()
         environment["PATH"] = os.pathsep.join((str(fake_bin), environment["PATH"]))
         environment.update(
@@ -416,18 +429,48 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
                 "MCP_CONSOLE_TEST_IR_STARTED": str(started.path),
                 "MCP_CONSOLE_TEST_IR_RELEASE": str(ir_release.path),
                 "MCP_CONSOLE_TEST_IR_HOLDER_RELEASE": str(holder_release.path),
+                "MCP_CONSOLE_TEST_OBSERVER_LIBRARY": str(interposer),
+                "MCP_CONSOLE_TEST_OBSERVER_TARGET": str(root / "ir-pid"),
+                "MCP_CONSOLE_TEST_OBSERVER_CANCELLABLE": "1",
+                "MCP_CONSOLE_TEST_OBSERVER_ENTERED": str(observer_entered.path),
+                "MCP_CONSOLE_TEST_OBSERVER_RELEASE": str(observer_release.path),
+                "MCP_CONSOLE_TEST_CHILD_KILLED": str(child_killed.path),
+                "MCP_CONSOLE_TEST_EARLY_REAP": str(root / "early-reap"),
             }
         )
+        # Direct preparation inherits the loader from the server. Sandboxed
+        # preparation receives it in its own environment after runner setup.
+        # fmt: python
+        launcher = code("""
+            import os
+            import sys
+
+            os.environ["MCP_CONSOLE_TEST_OBSERVER_SERVER"] = str(os.getpid())
+            loader = "DYLD_INSERT_LIBRARIES" if sys.platform == "darwin" else "LD_PRELOAD"
+            os.environ[loader] = os.environ.pop("MCP_CONSOLE_TEST_OBSERVER_LIBRARY")
+            os.execv(sys.argv[1], sys.argv[1:])
+            """)
         client = McpClient(
-            binary,
-            resolver_fixture_arguments(execution, "--worker", str(zod)),
+            Path(sys.executable),
+            (
+                "-c",
+                launcher,
+                str(binary),
+                *resolver_fixture_arguments(
+                    execution,
+                    "--worker",
+                    str(zod),
+                    "-c",
+                    f"resolver.environment.{LOADER_VARIABLE}={json.dumps(str(interposer))}",
+                ),
+            ),
             environment,
         )
         holder_identity = None
         try:
             client.initialize_and_list_tools()
             pending = client.start_send(requirements={"r": ["praise"]})
-            started.wait("resolver output retained after its child exits")
+            started.wait("materializer published its output and descriptor holder")
             ir_pid = int((root / "ir-pid").read_text())
             holder_identity = capture_process_identity(
                 int((root / "holder-pid").read_text())
@@ -435,9 +478,14 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
             exits.watch_process(ir_pid)
             ir_release.release()
             assert ir_pid in exits.wait(10), "resolver child did not exit"
+            # I/O retirement no longer waits for the holder's stdout EOF. Hold
+            # exit observation instead, keeping this preparation interruptible
+            # after actual child exit and before its result can be published.
+            observer_entered.wait("materializer exit observation held")
 
             client.send(control="interrupt", timeout_ms=0)
             assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            observer_release.release()
             holder_release.release()
             client.receive(pending)
             assert pending["result"]["isError"] is True, pending
@@ -446,9 +494,13 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
             )
             state = client.send(requirements={"action": "get"})["structuredContent"]
             assert state["requirements"]["r"] == [], state
+            assert not (root / "early-reap").exists(), (
+                "materializer reaped before its observation settled"
+            )
             return client.finish()
         finally:
             ir_release.release()
+            observer_release.release()
             holder_release.release()
             stop_client(client)
             if holder_identity is not None:
@@ -456,6 +508,9 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
             started.close()
             ir_release.close()
             holder_release.close()
+            observer_entered.close()
+            observer_release.close()
+            child_killed.close()
 
 
 @executions(DIRECT, SANDBOXED)
@@ -648,6 +703,7 @@ def test_custom_worker_reports_idle_input_before_preparation_failure(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_resolves_idle_activity_before_preparation(
     binary: Path,
@@ -792,6 +848,7 @@ def test_custom_worker_resolves_idle_activity_before_evaluation(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_restart_prepares_r_and_duckdb_requirements(
     binary: Path,

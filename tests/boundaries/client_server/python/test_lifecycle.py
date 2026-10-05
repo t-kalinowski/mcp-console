@@ -21,11 +21,12 @@ from support.normalization import code
 from support.native import SHARED_LIBRARY_FLAG
 from support.python import runtime_source_line
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.resolvers import checkpoint_uv_environment, named_requirement_error
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_python_preparation_while_evaluation_is_running(
     binary: Path,
@@ -38,12 +39,13 @@ def test_rejects_python_preparation_while_evaluation_is_running(
         uv_record = temporary / "uv-record.jsonl"
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["RETICULATE_UV"] = str(
             Path(__file__).parents[3] / "fixtures" / "record_uv_environment"
         )
         environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         # fmt: python
         python = code("""
@@ -236,6 +238,7 @@ def test_interrupts_running_python_evaluation(
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(POSIX)
 def test_interrupts_raw_python_stdin(binary: Path, execution: Execution) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
@@ -288,6 +291,7 @@ def test_interrupts_raw_python_stdin(binary: Path, execution: Execution) -> Tran
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_nested_language_calls_once(
     binary: Path, execution: Execution
@@ -408,6 +412,7 @@ def test_interrupts_nested_language_calls_once(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_releases_python_threads_during_managed_input(
     binary: Path, execution: Execution
@@ -669,6 +674,7 @@ def test_dispatch_does_not_mutate_python_globals(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_live_python_resolver(
     binary: Path, execution: Execution
@@ -688,7 +694,7 @@ def test_interrupts_live_python_resolver(
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(binary, execution.serve(), environment)
+            client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
@@ -757,6 +763,7 @@ def test_interrupts_live_python_resolver(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_cancels_live_python_preparation(
     binary: Path, execution: Execution
@@ -766,7 +773,7 @@ def test_restart_cancels_live_python_preparation(
         environment, uv_started, uv_release = checkpoint_uv_environment(
             temporary, "mcp-console-blocked-live-preparation"
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         try:
             client.initialize_and_list_tools()

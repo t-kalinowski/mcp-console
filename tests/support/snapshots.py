@@ -1,5 +1,6 @@
 import difflib
 import json
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -22,6 +23,16 @@ initialization_reference = (
     .relative_to(root)
     .as_posix()
 )
+
+
+def platform_snapshots(*platforms: str):
+    """Declare observable platform differences without duplicating shared records."""
+
+    def decorate(case):
+        case.snapshot_platforms = platforms
+        return case
+
+    return decorate
 
 
 def identical(left: object, right: object) -> bool:
@@ -204,6 +215,7 @@ def compact_initializations(
                     .removesuffix(".direct")
                     .removeprefix(".")
                 )
+                variant = variant.replace(".win32", "").removeprefix("win32")
                 target = (
                     f"{variant + ' ' if variant else ''}MCP initialization for this execution mode"
                     if execution is not None
@@ -225,10 +237,13 @@ def check_recording(
     *,
     update: bool,
     execution: str | None = None,
+    platform_specific: bool = False,
 ) -> set[Path]:
     snapshot = snapshot_path(suite_name, case_name)
     initialization = snapshot == root / initialization_reference
-    mode_suffix = ".direct" if initialization and execution == "direct" else ""
+    mode_suffix = (f".{sys.platform}" if platform_specific else "") + (
+        ".direct" if initialization and execution == "direct" else ""
+    )
     primary = snapshot.with_suffix(f"{mode_suffix}.yaml")
     case = f"{suite_name}::{case_name}"
     if execution is not None:
@@ -242,7 +257,7 @@ def check_recording(
             suffix = (
                 f".{name.removesuffix('.yaml')}{mode_suffix}.yaml"
                 if initialization
-                else f".{name}"
+                else f"{mode_suffix}.{name}"
             )
             companions.append((snapshot.with_suffix(suffix), contents))
     else:
@@ -255,7 +270,15 @@ def check_recording(
             # Prefer the canonical direct handshake when variant schemas are equal.
             *sorted(
                 reference.parent.glob(f"{reference.stem}.*.yaml"),
-                key=lambda path: (path != reference.with_suffix(".direct.yaml"), path),
+                key=lambda path: (
+                    path
+                    != reference.with_suffix(
+                        ".win32.direct.yaml"
+                        if sys.platform == "win32"
+                        else ".direct.yaml"
+                    ),
+                    path,
+                ),
             ),
         ]
         if execution is not None:
@@ -263,6 +286,14 @@ def check_recording(
                 path
                 for path in references
                 if path.stem.endswith(".direct") == (execution == "direct")
+            ]
+        if sys.platform != "win32" or any(
+            "win32" in path.stem.split(".") for path in references
+        ):
+            references = [
+                path
+                for path in references
+                if ("win32" in path.stem.split(".")) == (sys.platform == "win32")
             ]
         assert references, f"no initialization reference for {execution}"
         actual = compact_initializations(actual, references, execution=execution)

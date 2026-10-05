@@ -21,7 +21,7 @@ from support.normalization import code
 from support.records import Transcript
 from support.previews import assert_preview
 from support.evidence import compact_text
-from support.requirements import WORKER, command, requires
+from support.requirements import POSIX, SQL, WORKER, command, requires
 from support.resolvers import (
     bare_runtime_environment,
     fake_ir_environment,
@@ -40,6 +40,7 @@ def options(binary: Path, execution: Execution) -> dict:
     }
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_clients_inspect_and_replace_requirements(
@@ -89,7 +90,7 @@ def test_clients_inspect_and_replace_requirements(
         environment["MCP_CONSOLE_TEST_UV_PYTHON"] = sys.executable
         settings = {
             "command": binary,
-            "args": execution.serve(),
+            "args": execution.serve("-c", "cache=host"),
             "server_parameters": {"cwd": directory, "env": environment},
         }
         with MCPConsole(**settings) as console:
@@ -125,6 +126,7 @@ def test_clients_inspect_and_replace_requirements(
     return results
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_sync_and_async_clients_receive_bounded_previews(
     binary: Path, execution: Execution
@@ -160,6 +162,7 @@ def test_sync_and_async_clients_receive_bounded_previews(
     return results
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_initialization_keeps_one_lifecycle_while_startup_is_pending(
     binary: Path, execution: Execution
@@ -200,6 +203,7 @@ def test_initialization_keeps_one_lifecycle_while_startup_is_pending(
         return [{"startup_kept_one_lifecycle": True, "output": result}]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_callable_tools_follow_connected_server_fields(
     binary: Path, execution: Execution
@@ -339,6 +343,7 @@ def test_callable_tools_follow_connected_server_fields(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_callable_preserves_line_breaks_around_images(
     binary: Path, execution: Execution
@@ -363,6 +368,7 @@ after image
 
 @requires(WORKER)
 @executions(DIRECT, SANDBOXED)
+@requires(SQL)
 def test_callable_preserves_mixed_language_state(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -412,6 +418,7 @@ def test_callable_preserves_mixed_language_state(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_errors_close_and_reconnect(binary: Path, execution: Execution) -> Transcript:
     async def exercise():
@@ -439,6 +446,7 @@ def test_errors_close_and_reconnect(binary: Path, execution: Execution) -> Trans
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_responses_preserves_schema_text_and_images(
     binary: Path, execution: Execution
@@ -479,6 +487,7 @@ def test_responses_preserves_schema_text_and_images(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_openai_agents_callable_preserves_optional_arguments(
     binary: Path, execution: Execution
@@ -507,6 +516,7 @@ def test_openai_agents_callable_preserves_optional_arguments(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_native_openai_agents_server(binary: Path, execution: Execution) -> Transcript:
     from agents import Agent
@@ -529,6 +539,7 @@ def test_native_openai_agents_server(binary: Path, execution: Execution) -> Tran
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_anthropic_callable_and_native_tools(
     binary: Path, execution: Execution
@@ -551,6 +562,7 @@ def test_anthropic_callable_and_native_tools(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_native_openai_agents_waits_for_console_output(
     binary: Path, execution: Execution
@@ -568,6 +580,7 @@ def test_native_openai_agents_waits_for_console_output(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_chatlas_registers_on_existing_chat(
     binary: Path, execution: Execution
@@ -592,6 +605,7 @@ def test_chatlas_registers_on_existing_chat(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_chatlas_callable_registers_concrete_schema(
     binary: Path, execution: Execution
@@ -609,6 +623,7 @@ def test_chatlas_callable_registers_concrete_schema(
     return asyncio.run(exercise())
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_sync_callable_and_framework_tools(
     binary: Path, execution: Execution
@@ -665,6 +680,7 @@ def test_sync_callable_and_framework_tools(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_sync_responses_preserves_text_and_images(
     binary: Path, execution: Execution

@@ -278,7 +278,10 @@ pub(super) fn initialize(selected: &super::NativePython) -> Result<bool, String>
     if unsafe { (api.is_initialized)() } == 0 {
         return Err("CPython initialization did not complete".to_string());
     }
-    let mut argv = [program_name_wide.cast_mut()];
+    // CPython's Windows path bootstrap requires native separators; retain the
+    // caller's executable spelling in the public argument identity.
+    let mut argument_name = wide_string(&selected.embedding.python, "program name")?;
+    let mut argv = [argument_name.as_mut_ptr()];
     unsafe {
         // Workspace lookup is installed by common setup, never the bin directory.
         (api.set_argv_ex)(1, argv.as_mut_ptr(), 0);
@@ -1317,10 +1320,15 @@ unsafe fn load_symbol<T: Copy>(
 
 impl Configuration {
     fn new(selected: &super::NativePython) -> Result<Self, String> {
+        #[cfg(windows)]
+        // getpath's virtualenv search requires native Windows separators.
+        let program_name = selected.embedding.python.replace('/', "\\");
+        #[cfg(not(windows))]
+        let program_name = &selected.embedding.python;
         Ok(Self {
             selected: selected.clone(),
             reticulate_python: std::env::var_os("RETICULATE_PYTHON"),
-            program_name_wide: wide_string(&selected.embedding.python, "program name")?,
+            program_name_wide: wide_string(program_name.as_str(), "program name")?,
         })
     }
 }

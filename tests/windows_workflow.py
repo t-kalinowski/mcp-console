@@ -301,6 +301,7 @@ class WindowsWorkflow(unittest.TestCase):
         for name in (
             "windows.py",
             "windows_runner.py",
+            "windows_gate.py",
             "windows_relay.py",
             "windows_cargo.py",
             "windows_resolver.py",
@@ -312,7 +313,7 @@ class WindowsWorkflow(unittest.TestCase):
             path = self.root / "tests" / name
             path.parent.mkdir(exist_ok=True)
             shutil.copy2(ROOT / "tests" / name, path)
-        result = self.run_command("test", "--full", "--list")
+        result = self.run_command("test", "--list")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("WindowsConsole.test_python_without_r", result.stdout)
         result = self.run_command(
@@ -363,6 +364,45 @@ class WindowsWorkflow(unittest.TestCase):
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertEqual(json.loads(result.stdout), arguments)
         self.assertEqual(result.stderr.strip(), "diagnostic")
+
+    def test_full_validation_and_boundary_selectors_run_shared_cases(self):
+        self.write(
+            "tests/windows.py",
+            "import unittest\nclass Fixture(unittest.TestCase):\n    def test_native(self): pass\nif __name__ == '__main__': unittest.main()\n",
+        )
+        self.stub(
+            "uv",
+            "import json,sys\nfrom pathlib import Path\nPath('shared-arguments.json').write_text(json.dumps(sys.argv[1:]))\n",
+        )
+        environment = self.environment | {"MCP_CONSOLE_TEST_BINARY": "installed.exe"}
+        for arguments, expected in (
+            (
+                ("client_server/server/test_tools::initializes_and_lists_tools",),
+                ["transcripts"],
+            ),
+            (("--full",), ["native-tests", "transcripts"]),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_command(
+                    "checkout_workflow.py", "test", *arguments, environment=environment
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                records = list((self.root / ".dev-workflow/runs").glob("*/result.json"))
+                record = max(records, key=lambda path: path.stat().st_mtime_ns)
+                self.assertEqual(
+                    [
+                        phase["name"]
+                        for phase in json.loads(record.read_text())["phases"]
+                    ],
+                    expected,
+                )
+                self.assertEqual(
+                    json.loads((self.root / "shared-arguments.json").read_text())[
+                        -len(arguments) :
+                    ],
+                    list(arguments),
+                )
+        self.assertFalse((self.root / "target").exists())
 
     def test_cmd_launchers_work_from_a_different_directory(self):
         for name in (

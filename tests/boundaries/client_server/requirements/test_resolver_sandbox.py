@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import R, SANDBOX, SQL, command, requires
 from support.assertions import (
     last_result_text,
     last_tool_text,
@@ -17,13 +18,13 @@ from support.assertions import (
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import R, SANDBOX, command, requires
 from support.r import r_test_environment
 from support.resolvers import ir_cache_directory
 from support.ssh import SSH, configure, localhost, remote_command
 from boundaries.client_server.python.test_without_r import environment
 
 
+@requires(SQL)
 @requires(SANDBOX)
 def test_default_caches_use_console_namespace(binary: Path) -> Transcript:
     return console_cache_defaults(binary, configured_empty=False)
@@ -52,7 +53,11 @@ def console_cache_defaults(binary: Path, *, configured_empty: bool) -> Transcrip
             "MPLCONFIGDIR",
         ):
             env.pop(name, None)
-        payload = home / ".cache/mcp-console/resolver/payload"
+        payload = home / (
+            "Library/Caches/mcp-console/dependencies"
+            if sys.platform == "darwin"
+            else ".cache/mcp-console/dependencies"
+        )
         if configured_empty:
             config = root / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
@@ -86,7 +91,7 @@ def console_cache_defaults(binary: Path, *, configured_empty: bool) -> Transcrip
                 python="import six, sys; print(sys.executable)",
             )
             client.expect(
-                lambda text: str(payload / "extensions") in text,
+                lambda text: str(payload / "duckdb/extensions") in text,
                 sql="SELECT current_setting('extension_directory') AS directory",
             )
             client.send(control="restart")
@@ -107,6 +112,7 @@ def test_python_duckdb_uses_resolver_cache(binary: Path) -> Transcript:
     return duckdb_cache(binary, r=False)
 
 
+@requires(SQL)
 @requires(SANDBOX, R, command("ir"))
 def test_r_duckdb_uses_resolver_cache(binary: Path) -> Transcript:
     return duckdb_cache(binary, r=True)
@@ -122,11 +128,7 @@ def test_custom_worker_captures_duckdb_cache_before_live_r(binary: Path) -> Tran
             env.pop("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", None)
             env["MCP_CONSOLE_TEST_ZOD_PYTHON_CELLS"] = str(root / "cells.jsonl")
             home = root / "resolver-home"
-            cache = (
-                root / "extensions"
-                if explicit
-                else home / ".cache/mcp-console/resolver/payload/extensions"
-            )
+            cache = root / "extensions" if explicit else home / ".duckdb/extensions"
             resolver_env = {
                 "HOME": str(home),
                 "IR_CACHE_DIR": env.get(
@@ -145,7 +147,9 @@ def test_custom_worker_captures_duckdb_cache_before_live_r(binary: Path) -> Tran
                 resolver_env["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"] = str(cache)
             config = root / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
-            config.write_text(json.dumps({"resolver": {"environment": resolver_env}}))
+            config.write_text(
+                json.dumps({"cache": "host", "resolver": {"environment": resolver_env}})
+            )
             with McpClient(
                 binary,
                 ("serve", "--writable-root", str(root), "--worker", str(zod)),
@@ -186,11 +190,7 @@ def duckdb_cache(binary: Path, *, r: bool) -> Transcript:
             (tools / "uv").symlink_to(shutil.which("uv"))
             env = r_test_environment()[0] if r else environment(tools)
             home = root / "resolver-home"
-            cache = (
-                root / "extensions"
-                if explicit
-                else home / ".cache/mcp-console/resolver/payload/extensions"
-            )
+            cache = root / "extensions" if explicit else home / ".duckdb/extensions"
             resolver_env = {"HOME": str(home)}
             if r:
                 resolver_env["IR_CACHE_DIR"] = env.get(
@@ -208,7 +208,9 @@ def duckdb_cache(binary: Path, *, r: bool) -> Transcript:
                 resolver_env["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"] = str(cache)
             config = root / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
-            config.write_text(json.dumps({"resolver": {"environment": resolver_env}}))
+            config.write_text(
+                json.dumps({"cache": "host", "resolver": {"environment": resolver_env}})
+            )
             with McpClient(binary, ("serve",), env, root) as client:
                 client.initialize_and_list_tools()
                 result = client.send(
@@ -396,7 +398,7 @@ def test_rejects_non_utf8_cache_paths(binary: Path) -> Transcript:
             (tools / "uv").symlink_to(shutil.which("uv"))
             invalid = root / os.fsdecode(b"cache-\xff")
             env = dict(environment(tools), **{name: str(invalid)})
-            with McpClient(binary, ("serve",), env, root) as client:
+            with McpClient(binary, ("serve", "-c", "cache=host"), env, root) as client:
                 client.initialize_and_list_tools()
                 failure = client.send(requirements={"action": "get"})
                 assert failure.get("isError"), failure
@@ -434,13 +436,14 @@ def test_ignores_relative_uv_xdg_directories(binary: Path) -> Transcript:
         config.write_text(
             json.dumps(
                 {
+                    "cache": "host",
                     "resolver": {
                         "environment": {
                             "HOME": str(home),
                             "XDG_CACHE_HOME": "relative-cache",
                             "XDG_DATA_HOME": "relative-data",
                         }
-                    }
+                    },
                 }
             )
         )
@@ -450,9 +453,8 @@ def test_ignores_relative_uv_xdg_directories(binary: Path) -> Transcript:
             client.finish()
         assert not (root / "relative-cache/uv").exists()
         assert not (root / "relative-data/uv").exists()
-        payload = home / ".cache/mcp-console/resolver/payload"
-        assert (payload / "uv/cache").is_dir()
-        assert (payload / "uv/python").is_dir()
+        assert (home / ".cache/uv").is_dir()
+        assert (home / ".local/share/uv/python").is_dir()
         assert list(home.rglob("pyvenv.cfg"))
         return [{"relative_uv_xdg_ignored": True, "managed_python_prepared": True}]
 
@@ -463,7 +465,7 @@ def test_ssh_resolver_permissions(binary: Path) -> Transcript:
 
 
 @requires(SANDBOX, R, command("ir"))
-def test_bootstraps_reticulate_uv_in_console_cache(binary: Path) -> Transcript:
+def test_bootstraps_reticulate_uv_with_host_cache_policy(binary: Path) -> Transcript:
     with TemporaryDirectory() as directory:
         root = Path(directory).resolve()
         env, _ = r_test_environment()
@@ -477,7 +479,9 @@ def test_bootstraps_reticulate_uv_in_console_cache(binary: Path) -> Transcript:
             "UV_PYTHON_INSTALL_DIR",
         ):
             env.pop(name, None)
-        with McpClient(binary, ("serve",), env, root) as client:
+        # Cold shell installation on macOS needs the host policy's Darwin temp
+        # grant. The redirected XDG cache keeps this fixture's artifacts private.
+        with McpClient(binary, ("serve", "-c", "cache=host"), env, root) as client:
             client.initialize_and_list_tools()
             client.expect(
                 "managed uv prepared\n",
@@ -485,7 +489,7 @@ def test_bootstraps_reticulate_uv_in_console_cache(binary: Path) -> Transcript:
                 python="import six; print('managed uv prepared')",
             )
             client.finish()
-        cache = root / "cache/mcp-console/resolver/payload/r"
+        cache = root / "cache"
         assert (cache / "R/reticulate/uv/bin/uv").is_file()
         assert not (cache / "reticulate").exists()
     return [{"reticulate_managed_uv": "R/reticulate", "cache_write_granted": True}]
@@ -497,8 +501,10 @@ def test_cold_r_cache_resolution(binary: Path) -> Transcript:
         root = Path(directory).resolve()
         env, _ = r_test_environment()
         env.update(
-            IR_CACHE_DIR=str(root / "ir"),
-            R_USER_CACHE_DIR=str(root / "r-cache"),
+            XDG_CACHE_HOME=str(root / "cache-base"),
+            IR_CACHE_DIR=str(root / "host-ir"),
+            R_USER_CACHE_DIR=str(root / "host-r-cache"),
+            RENV_PATHS_CACHE=str(root / "host-renv"),
             MCP_CONSOLE_LANGUAGES="r",
         )
         with McpClient(binary, ("serve",), env, root) as client:
@@ -509,10 +515,21 @@ def test_cold_r_cache_resolution(binary: Path) -> Transcript:
                 "cold R preparation and evaluation",
                 completion_timeout_seconds=client.response_timeout,
                 requirements={"action": "set", "r": ["utf8"]},
-                r='cat(utf8::utf8_valid("resolved"), "\\n", sep = "")',
+                # fmt: r
+                r=code(r"""
+                    root <- paste0(normalizePath(Sys.getenv("R_USER_CACHE_DIR")), "/")
+                    stopifnot(startsWith(normalizePath(find.package("utf8")), root))
+                    cat(utf8::utf8_valid("resolved"), "\n", sep = "")
+                    """),
             )
             client.finish()
-        assert list((root / "ir").rglob("utf8/DESCRIPTION"))
+        cache = root / "cache-base/mcp-console/dependencies"
+        descriptions = list((cache / "ir").rglob("utf8/DESCRIPTION"))
+        assert descriptions
+        assert all(path.resolve().is_relative_to(cache) for path in descriptions)
+        assert not (root / "host-ir").exists()
+        assert not (root / "host-r-cache").exists()
+        assert not (root / "host-renv").exists()
         return [{"cold_ir_cache": True, "resolved_r_package": "utf8"}]
 
 
@@ -686,7 +703,7 @@ def permissions(binary: Path, *, tailored: bool, remote: bool = False) -> Transc
                     "environment": {"HOME": "/local-only"},
                 },
             )
-        with McpClient(binary, ("serve",), env, root) as client:
+        with McpClient(binary, ("serve", "-c", "cache=host"), env, root) as client:
             client.initialize_and_list_tools()
             if tailored:
                 config.write_text(

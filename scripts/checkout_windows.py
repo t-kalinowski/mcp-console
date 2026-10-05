@@ -143,7 +143,9 @@ def wait_process(process):
 
 
 @contextmanager
-def command_process(command, *, log=None, environment=None):
+def command_process(
+    command, *, log=None, environment=None, directory=None, interruptible=False
+):
     job = checked(
         api("CreateJobObjectW", w.HANDLE, ctypes.c_void_p, w.LPCWSTR)(None, None)
     )
@@ -170,15 +172,24 @@ def command_process(command, *, log=None, environment=None):
         )
         os.set_handle_inheritable(job, True)
         startup = subprocess.STARTUPINFO(lpAttributeList={"handle_list": [job]})
+        # A virtualenv redirector would retain the inherited Job handle outside
+        # the Job. This stdlib helper must use the base interpreter directly.
         # The helper enters the Job and closes its inherited Job handle before
         # running the command. Even owner death during startup cannot let a
         # mutator escape: closing the last handle then kills the helper itself.
         process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), str(job), *command],
+            [
+                sys._base_executable,
+                str(Path(__file__).resolve()),
+                str(job),
+                *(["--interruptible"] if interruptible else []),
+                *command,
+            ],
             stdin=sys.stdin,
             stdout=sys.stdout if log is None else log,
             stderr=sys.stderr if log is None else subprocess.STDOUT,
             env=environment,
+            cwd=directory,
             startupinfo=startup,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
@@ -240,4 +251,10 @@ if __name__ == "__main__":
         )
     )
     checked(close(handle))
-    raise SystemExit(subprocess.call(sys.argv[2:]))
+    command = sys.argv[2:]
+    if command[0] == "--interruptible":
+        # The case interpreter handles CTRL_BREAK and owns its finally blocks.
+        # Keep its Job supervisor alive throughout that graceful cleanup.
+        signal.signal(signal.SIGBREAK, signal.SIG_IGN)
+        command = command[1:]
+    raise SystemExit(subprocess.call(command))

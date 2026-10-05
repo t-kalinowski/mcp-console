@@ -28,11 +28,12 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
 from support.previews import compact_previews, assert_preview, normalize_preview_paths
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.resolvers import fake_ir_environment as _fake_ir_environment
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_gracefully_shuts_down(binary: Path, execution: Execution) -> Transcript:
     client = ServerRelayClient(binary, "shutdown", execution=execution)
@@ -42,6 +43,7 @@ def test_gracefully_shuts_down(binary: Path, execution: Execution) -> Transcript
     return client.finish_shutdown()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_shutdown_precedes_blocked_resolver_cancellation(
@@ -123,6 +125,7 @@ def test_shutdown_precedes_blocked_resolver_cancellation(
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_cancelled_send_returns_owned_output_to_restart(
     binary: Path, execution: Execution

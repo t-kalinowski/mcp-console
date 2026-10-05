@@ -19,6 +19,14 @@ from boundaries.client_server.python.test_startup import (
     isolated_python,
     selected_python,
 )
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    R,
+    command,
+    requires,
+)
 from support.assertions import last_result_text
 from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint, wait_for_checkpoint, wait_for_path
@@ -40,7 +48,6 @@ from support.resolvers import (
     local_resolver_owner,
     recording_ir_environment,
 )
-from support.requirements import R, NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -230,6 +237,7 @@ def retains_failed_preparation(binary: Path, *, retry_on_close: bool) -> Transcr
                     kill_processes([identity])
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_invalid_early_cell_does_not_poison_default_startup(
     binary: Path, execution: Execution
@@ -262,7 +270,10 @@ def test_invalid_early_cell_does_not_poison_default_startup(
         environment = selected_python(root, python)
         environment.pop("R_HOME", None)
         environment["PATH"] = str(root)
-        with McpClient(binary, execution.serve(), environment, root) as client:
+        environment["UV_TOOL_DIR"] = str(root)
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment, root
+        ) as client:
             try:
                 reached.wait("selected Python inspection is blocked")
                 client.initialize_and_list_tools()
@@ -286,6 +297,7 @@ def test_invalid_early_cell_does_not_poison_default_startup(
                 release.release()
 
 
+@requires(POSIX)
 @requires(R)
 def test_accepts_zero_timeout_cell_during_discovery(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
@@ -557,7 +569,9 @@ def early_requirements_with_pending_poll(
         with McpClient(
             binary,
             execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                "-c",
+                "cache=host",
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
             ),
             environment,
             root,

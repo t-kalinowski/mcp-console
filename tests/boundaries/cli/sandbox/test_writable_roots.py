@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.snapshots import platform_snapshots
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import LINUX_SANDBOX, MACOS_SANDBOX, SANDBOX, requires
@@ -287,6 +288,7 @@ def test_rejects_non_utf8_writable_roots_before_starting(binary: Path) -> Transc
     return transcript
 
 
+@platform_snapshots("win32")
 def test_rejects_conflicting_writable_root_options(binary: Path) -> Transcript:
     transcript = []
     for arguments in (

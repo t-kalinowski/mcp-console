@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, PROCESS_EVENTS, R, requires
 from support.assertions import entry_result_text, last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
@@ -20,7 +21,6 @@ from support.processes import (
 )
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, R, requires
 from boundaries.client_server.python.test_peer_runtime import without_r
 from support.resolvers import (
     checkpoint_uv_environment,
@@ -32,6 +32,7 @@ from support.resolvers import (
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_automatic_resolution_from_background_thread(
     binary: Path,
@@ -40,7 +41,7 @@ def test_rejects_automatic_resolution_from_background_thread(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -84,6 +85,7 @@ def test_rejects_automatic_resolution_from_background_thread(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_automatic_resolution_from_fork_child(
     binary: Path, execution: Execution
@@ -91,7 +93,7 @@ def test_rejects_automatic_resolution_from_fork_child(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -166,6 +168,7 @@ def test_rejects_automatic_resolution_from_fork_child(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_times_out_and_polls_automatic_python_resolution(
     binary: Path,
@@ -178,7 +181,7 @@ def test_times_out_and_polls_automatic_python_resolution(
             "py-yaml12",
         )
         environment.pop("RETICULATE_PYTHON", None)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         resolver_released = False
         finished = False
         try:
@@ -272,7 +275,7 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(binary, execution.serve(), environment)
+            client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
@@ -342,6 +345,7 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_restart_discards_unactivated_automatic_python_candidate(
@@ -360,7 +364,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
         environment.pop("RETICULATE_PYTHON", None)
         environment["TMPDIR"] = temporary
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:

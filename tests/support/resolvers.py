@@ -18,19 +18,38 @@ from support.requirements import R
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
 
+# Callers of recording/checkpoint fixtures select cache=host explicitly: their
+# writable state is granted through fixture-owned UV_TOOL_DIR overrides. Real
+# default Console cache coverage lives in requirements/test_cache_locations.py.
+
+
+def expose_uv(directory: Path) -> Path:
+    executable = shutil.which("uv")
+    assert executable is not None, "real uv is required"
+    target = directory / ("uv.exe" if os.name == "nt" else "uv")
+    if os.name == "nt":
+        shutil.copyfile(executable, target)
+    else:
+        target.symlink_to(executable)
+    return target
+
 
 def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:
-    owners = [
-        child
-        for child in child_process_identities(server)
-        if subprocess.run(
+    # Native sandbox launchers own the resolver beneath the server's children.
+    pending = list(child_process_identities(server))
+    owners = []
+    while pending:
+        child = pending.pop()
+        arguments = subprocess.run(
             ["/bin/ps", "-ww", "-o", "args=", "-p", str(child[0])],
             capture_output=True,
             text=True,
             check=True,
         ).stdout.strip()
-        == f"{binary} resolve"
-    ]
+        if arguments == f"{binary} resolve":
+            owners.append(child)
+        else:
+            pending.extend(child_process_identities(child))
     assert len(owners) == 1, owners
     return owners[0]
 
@@ -134,6 +153,8 @@ def checkpoint_uv_environment(
 def record_resolved_r_library(environment: dict[str, str], directory: Path) -> None:
     real_ir = shutil.which("ir", path=environment.get("PATH"))
     assert real_ir is not None, "ir is required"
+    # Record the result inside an explicitly granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(directory)
     identity = directory / "resolved-r-library"
     fake_bin = directory / "fixture-r-bin"
     fake_bin.mkdir()
@@ -235,6 +256,8 @@ def resolver_interrupt_permission_environment(
 
 def fake_ir_environment(root: Path, libraries: list[Path]) -> dict[str, str]:
     environment, _ = r_test_environment()
+    # Keep fixture records and checkpoints in a granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(root)
     fake_bin = root / "bin"
     fake_bin.mkdir()
     fixture = FIXTURES / "ordered_retirement_ir"
@@ -306,7 +329,10 @@ def bare_runtime_environment(
     environment["PATH"] = os.pathsep.join(
         entry
         for entry in environment["PATH"].split(os.pathsep)
-        if not any((Path(entry) / name).exists() for name in ("ir", "uv", "uvx"))
+        if not any(
+            (Path(entry) / (name + (".exe" if os.name == "nt" else ""))).exists()
+            for name in ("ir", "uv", "uvx")
+        )
     )
     environment.pop("RETICULATE_UV", None)
     environment.pop("RETICULATE_PYTHON", None)
@@ -353,7 +379,7 @@ def python_inventory_client(
         environment.update(extra_environment)
     client = McpClient(
         binary,
-        execution.serve(),
+        execution.serve("-c", "cache=host"),
         environment,
         current_directory=directory,
     )

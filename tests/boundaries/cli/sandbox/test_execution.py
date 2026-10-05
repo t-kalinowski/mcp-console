@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import os
-import pty
 import select
 import selectors
 import shutil
@@ -11,6 +10,10 @@ import sys
 import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+if os.name == "posix":
+    import pty
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 

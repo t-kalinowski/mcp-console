@@ -13,13 +13,13 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import SANDBOX, SQL, WORKER, command, requires
 from support.assertions import last_result_text, last_tool_text, wait_for_worker_ready
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import WORKER, SANDBOX, command, requires
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.resolvers import (
     recording_ir_environment,
@@ -251,7 +251,11 @@ def managed_session(
         with localhost(root / "sshd") as controller:
             trap = poison_controller(root / "sshd", controller)
             with McpClient(
-                binary, execution.serve(), controller, local, response_timeout=180
+                binary,
+                execution.serve("-c", "cache=host"),
+                controller,
+                local,
+                response_timeout=180,
             ) as client:
                 client.initialize_and_list_tools()
                 yield client, remote, ir_record, uv_record
@@ -345,6 +349,7 @@ def test_bootstraps_managed_requirements_through_uv(
         )
 
 
+@requires(SQL)
 @requires(SSH, WORKER, command("ir"), command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_managed_requirements_and_callbacks(binary, execution) -> Transcript:

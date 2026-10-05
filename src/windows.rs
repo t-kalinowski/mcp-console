@@ -25,6 +25,24 @@ pub(crate) fn configure_worker_stdio() -> io::Result<()> {
     Ok(())
 }
 
+pub(crate) fn restore_worker_stdio() -> io::Result<()> {
+    use windows_sys::Win32::System::Console::{
+        STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+    };
+    // R's system2 can clear the Win32 standard handles while the CRT retains
+    // its live descriptors. Python subprocesses use the Win32 handles.
+    for (descriptor, kind) in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
+        .into_iter()
+        .enumerate()
+    {
+        let handle = unsafe { libc::get_osfhandle(descriptor as _) } as HANDLE;
+        if handle == INVALID_HANDLE_VALUE || unsafe { SetStdHandle(kind, handle) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub(crate) struct Event(Arc<OwnedHandle>);
 

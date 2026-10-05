@@ -94,7 +94,8 @@ There is no automatic unsandboxed fallback; constrained Linux hosts may lack the
 
 **Dependency preparation uses a separate native sandbox on local macOS and Linux hosts.** Its default policy permits host reads, package cache writes, and downloads through a managed proxy.
 See [resolver configuration and expanded defaults](docs/RESOLVER.md).
-Shared caches and configurable permissions still require trusted requirements and resolver configuration.
+Local sandboxed sessions use Console-specific caches by default; `-c cache=host` opts into shared host caches, and `--no-sandbox` uses host caches by default.
+Configurable permissions and package execution still require trusted requirements and resolver configuration.
 Read the [trust boundary](docs/REQUIREMENTS.md#host-resolution-and-trust) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 There is one implicit session and cells run sequentially.
