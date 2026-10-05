@@ -180,6 +180,7 @@ jobs:
 
       - name: Validate Linux wheel in clean floor runtimes
         if: runner.os == 'Linux'
+        shell: bash
         run: |
           python3 scripts/check-linux-wheel dist/*.whl \
             --target "${{ matrix.target }}" \
