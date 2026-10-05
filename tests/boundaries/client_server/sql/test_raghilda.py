@@ -8,12 +8,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.installation import installed_console
 from support.linux_sandbox import retain_system_bwrap
-from support.normalization import code
+from support.normalization import code, normalize_onnx_device_probe
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import R, SQL, command, requires
@@ -22,8 +22,11 @@ from support.resolvers import expose_uv
 
 def exercise_store(client: McpClient) -> None:
     client.expect("[prepared]", requirements={"python": ["raghilda==0.2.1"]})
-    client.expect(
-        "beta.md: Bananas are yellow fruit.\n",
+    output = wait_for_evaluation_output(
+        client,
+        None,
+        "raghilda store creation",
+        completion_timeout_seconds=client.response_timeout,
         # fmt: python
         python=code("""
             from collections.abc import Sequence
@@ -76,6 +79,9 @@ def exercise_store(client: McpClient) -> None:
             console_sql_connection(store.con)
             """),
     )
+    output = normalize_onnx_device_probe(output)
+    assert output == "beta.md: Bananas are yellow fruit.\n", repr(output)
+    client.transcript[-1]["result"]["content"][0]["text"] = output
     client.send(sql="SELECT origin, text FROM chunks ORDER BY origin LIMIT 2")
     rows = last_tool_text(client).splitlines()[2:]
     assert [tuple(cell.strip() for cell in row.split("|")) for row in rows] == [
