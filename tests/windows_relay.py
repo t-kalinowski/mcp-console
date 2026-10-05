@@ -23,6 +23,7 @@ from support.relay_lifecycle import (
     LIFECYCLE_COMMANDS,
     assert_exit_tail,
     assert_failure_tail,
+    exercise_shutdown_admission,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -135,7 +136,7 @@ class WindowsRelay(unittest.TestCase):
         ready.settimeout(10)
         stream = ready.makefile("rb")
         pid = int(stream.readline())
-        if scenario.startswith("framing_"):
+        if scenario.startswith(("framing_", "retirement_")):
             self.framing_control = ready
             self.framing_stream = stream
             self.addCleanup(ready.close)
@@ -149,9 +150,21 @@ class WindowsRelay(unittest.TestCase):
         kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         kernel.WaitForSingleObject.restype = wintypes.DWORD
         kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        owned_worker = kernel.OpenProcess(0x100000, False, pid)
+        owned_worker = kernel.OpenProcess(
+            0x100001 if scenario.startswith("retirement_") else 0x100000, False, pid
+        )
         self.assertTrue(owned_worker, ctypes.get_last_error())
         self.addCleanup(kernel.CloseHandle, owned_worker)
+        if scenario.startswith("retirement_"):
+            kernel.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            kernel.TerminateProcess.restype = wintypes.BOOL
+
+            def retire():
+                if kernel.WaitForSingleObject(owned_worker, 0) != 0:
+                    kernel.TerminateProcess(owned_worker, 1)
+                    kernel.WaitForSingleObject(owned_worker, 10000)
+
+            self.addCleanup(retire)
         self.assertEqual(json.loads(process.stdout.readline()), {"kind": "ready"})
         return process, kernel, owned_worker, marker
 
@@ -439,6 +452,38 @@ class WindowsRelay(unittest.TestCase):
             events,
             "worker sideband read failed: unknown variant `broken`",
             {"kind": "worker_exited", "code": 1},
+        )
+
+    def test_shutdown_ignores_buffered_commands_and_trailing_bytes(self):
+        self.shutdown_admission("retirement_batch")
+
+    def test_shutdown_ignores_commands_sent_after_worker_receipt(self):
+        self.shutdown_admission("retirement_receipt")
+
+    def test_sideband_eof_closes_admission_without_renewing_deadline(self):
+        self.shutdown_admission("retirement_sideband")
+
+    def test_clean_controller_eof_retires_without_shutdown_acceptance(self):
+        self.shutdown_admission("retirement_eof")
+
+    def shutdown_admission(self, scenario: str) -> None:
+        process, kernel, worker, marker = self.start(scenario)
+
+        def wait_worker(timeout: float) -> None:
+            self.assertEqual(
+                kernel.WaitForSingleObject(worker, int(timeout * 1000)),
+                0,
+                "worker budget was renewed",
+            )
+
+        exercise_shutdown_admission(
+            process,
+            self.framing_stream,
+            marker,
+            scenario,
+            wait_worker,
+            {"kind": "worker_exited", "code": 1},
+            shutdown_on_sideband_eof=True,
         )
 
     def test_stdin_write_failure_retires_worker(self):

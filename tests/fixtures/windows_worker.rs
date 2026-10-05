@@ -112,6 +112,9 @@ fn main() -> io::Result<()> {
     if scenario.starts_with("framing_") {
         return windows_framing::run(&scenario, read, write, ready);
     }
+    if scenario.starts_with("retirement_") {
+        return retirement(&scenario, read, write, ready);
+    }
     drop(ready);
     if scenario == "closed_stdin" {
         assert_eq!(unsafe { _close(0) }, 0);
@@ -176,6 +179,50 @@ fn main() -> io::Result<()> {
                 return Ok(());
             }
             _ => {}
+        }
+    }
+}
+
+fn retirement(
+    scenario: &str,
+    read: *mut c_void,
+    write: *mut c_void,
+    ready: TcpStream,
+) -> io::Result<()> {
+    let marker = std::path::PathBuf::from(std::env::var("TEST_DISPATCHED").unwrap());
+    let sideband_eof = scenario == "retirement_sideband";
+    let mut stdin_ready = ready.try_clone()?;
+    let stdin_marker = marker.with_extension("stdin");
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        io::stdin().read_to_end(&mut bytes).unwrap();
+        std::fs::write(stdin_marker, bytes).unwrap();
+        if sideband_eof {
+            writeln!(stdin_ready, "stdin closed").unwrap();
+        }
+    });
+    let mut ready = ready;
+    let mut writer = Some(unsafe { OwnedHandle::from_raw_handle(write) });
+    send(write, "{\"kind\":\"ready\"}\n")?;
+    let mut journal = std::fs::File::create(marker)?;
+    loop {
+        let mut command = Vec::new();
+        loop {
+            let mut byte = [0];
+            if transfer(read, &mut byte, false)? == 0 {
+                std::thread::park();
+            }
+            command.push(byte[0]);
+            if byte[0] == b'\n' {
+                break;
+            }
+        }
+        journal.write_all(&command)?;
+        let command = String::from_utf8(command).unwrap();
+        if sideband_eof && command.contains("evaluate") {
+            writer.take();
+        } else if command.trim() == "{\"kind\":\"shutdown\"}" {
+            writeln!(ready, "shutdown")?;
         }
     }
 }

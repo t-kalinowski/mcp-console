@@ -79,7 +79,9 @@ See [SSH](SSH.md), [Docker](DOCKER.md), and [SBX](DOCKER_SANDBOX.md) for placeme
 ## Framing and raw bytes
 
 Each relay direction is ordered UTF-8 JSONL, flushed per frame.
-Unknown kinds/fields, wrong types, malformed JSON, and partial-frame EOF fail the transport.
+While command input is open, unknown kinds/fields, wrong types, malformed JSON, and partial-frame EOF fail the transport.
+The first explicit Shutdown ends command parsing; all trailing frames and bytes are ignored, including malformed or incomplete tails.
+Worker output framing remains strict through retirement.
 
 Raw stdout/stderr reads are chunks of at most 8 KiB.
 An entirely valid UTF-8 chunk uses a text event; otherwise it uses padded standard base64.
@@ -150,9 +152,18 @@ An unsolicited or duplicate acceptance is invalid.
 Timely server observation permits up to two additional seconds for relay retirement, not more worker grace.
 Failure retirement instead uses zero worker grace and the same bounded relay allowance.
 
-The relay concurrently closes stdin and sends worker `shutdown`.
-At the worker deadline it sends SIGKILL if needed, reaps the direct child, and retires transports.
-Clean relay-input EOF performs shutdown with a fresh one-second grace but no `shutdown_started`; partial-command EOF is failure.
+The relay's supervisor closes command admission when shutdown or retirement begins.
+It forwards no later evaluation, preparation, resolution, stdin or interrupt command, and sends at most one `shutdown_started` and one worker `shutdown`.
+The first worker retirement deadline is retained; later Shutdown or EOF observations cannot renew it, and queued commands cannot keep an expired deadline alive.
+Fatal failures still retire immediately.
+
+Explicit Shutdown and clean relay-input EOF concurrently close stdin and send worker `shutdown`.
+Clean input EOF starts a one-second grace only if retirement has not begun, without `shutdown_started`; partial-command EOF is failure while parsing remains open.
+Worker-sideband EOF also closes admission and stdin and starts that grace only if needed.
+Unix waits for the worker without sending another sideband command on this observation; Windows retains its cooperative worker `shutdown`.
+Controller EOF, worker-sideband EOF, child exit and fatal transport failure remain distinct observations; cancellation completion does not count as EOF.
+At the worker deadline the relay terminates the direct child if needed, reaps it, and retires transports.
+Unix uses SIGKILL and reports the signal; Windows uses native termination and reports the numeric exit code.
 After the server aborts its command writer during retirement, the resulting partial-command EOF describes the abandoned transport and does not itself block replacement.
 Other fatal failures, owned task joins, and confirmed launcher/provider cleanup still determine whether replacement is permitted.
 
