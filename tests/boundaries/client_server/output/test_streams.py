@@ -1,10 +1,13 @@
 #!/usr/bin/env -S uv run --script
 
+import base64
+import json
 import os
 import sys
 import tempfile
 import time
-from contextlib import closing
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -29,9 +32,14 @@ from support.client import McpClient, stop_client
 from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
-from support.checkpoints import FifoCheckpoint, release_fixture_checkpoint
+from support.normalization import code
+from support.checkpoints import (
+    FifoCheckpoint,
+    release_fixture_checkpoint,
+    wait_for_checkpoint,
+)
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
 from support.suites import run_this_suite
 
 TEST_GATED_RESPONSE_SIZE = 128 * 1024
@@ -39,6 +47,7 @@ PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
+AnsiFixture = dict[str, str | list[dict[str, str]]]
 
 from boundaries.client_server._harness import (
     ResponseGateObserver,
@@ -46,6 +55,418 @@ from boundaries.client_server._harness import (
     ZodFixtureControl,
     wait_for_marker,
 )
+
+
+@contextmanager
+def ansi_client(
+    binary: Path, execution: Execution, inputs: dict[str, AnsiFixture]
+) -> Iterator[McpClient]:
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with tempfile.TemporaryDirectory() as temporary:
+        # Fixture transport stays separate from the named command in send.r.
+        input_path = Path(temporary) / "ansi-inputs.json"
+        input_path.write_text(json.dumps(inputs), encoding="utf-8")
+        with McpClient(
+            binary,
+            execution.serve(
+                "--worker",
+                str(fixtures / "zod"),
+                "--relay",
+                str(fixtures / "server_relay/scripted_relay.py"),
+            ),
+            {
+                **os.environ,
+                "TMPDIR": temporary,
+                "MCP_CONSOLE_TEST_ANSI_INPUTS": str(input_path),
+                "MCP_CONSOLE_TEST_RELAY_SCENARIO": "ansi_projection",
+            },
+        ) as client:
+            yield client
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_projects_ansi_across_every_byte_split(
+    binary: Path, execution: Execution
+) -> Transcript:
+    samples = (
+        ("plain \x1b[1;31mred\x1b[0m €🙂\n", "plain red €🙂\n"),
+        ("old\r\x1b[32mnew\x1b[0m\n", "new\n"),
+        ("keep\r\x1b[0m\n", "keep\r\n"),
+        ("erase\x1b[2K\n", "\n"),
+        ("erase\r\x1b[2K\n", "\r\n"),
+        ("erase\r\x1b[K\n", "\r\n"),
+        ("old\r\x1b[Knew\n", "new\n"),
+        ("old\r\x1b[0Knew\n", "new\n"),
+        ("keep\x1b[K plus\n", "keep plus\n"),
+        ("old\x1b[1Knew\n", "oldnew\n"),
+        ("before\x1b[2A\x1b[2Jafter\n", "beforeafter\n"),
+        ("charset\x1b(Btext\n", "charsettext\n"),
+        ("€🙂\b\x1b[38:2::10:20:30m!\x1b[m\n", "€!\n"),
+        ("before\x1b]0;title\x07after\n", "beforeafter\n"),
+        ("\x1b]52;c;clipboard\x1b\\safe\n", "safe\n"),
+        (
+            "\x1b]8;;https://example.invalid\x1b\\label\x1b]8;;\x1b\\\n",
+            "label\n",
+        ),
+        ("before\x1bPprivate\x07payload\x1b\\after\n", "beforeafter\n"),
+        ("a\x1bXhidden\x1b\\b\x1b^hidden\x1b\\c\x1b_hidden\x1b\\d\n", "abcd\n"),
+        ("\u009b31mC1\u009b0m\u009d0;title\u009csafe\n", "C1safe\n"),
+        (
+            "a\u0090hidden\u009cb\u0098hidden\u009cc\u009ehidden\u009cd\u009fhidden\u009ce\n",
+            "abcde\n",
+        ),
+        ("a\x1b]hidden\n\r\x1b[2Kpayload\x1b\\b\n", "ab\n"),
+        ("old\x1b[31\x1b[2Knew\n", "new\n"),
+        ("a\x1b[31🙂b\n", "a🙂b\n"),
+        ("old\x1b[31\rnew\n", "new\n"),
+        ("a\x1b[31\nb\n", "a\nb\n"),
+        ("a\x1b(🙂b\n", "a🙂b\n"),
+        ("old\r\b\x1b[0mnew\n", "new\n"),
+        ("old\x1b[" + "0;" * 80 + "2Ksafe\n", "oldsafe\n"),
+        ("old\x1b" + "(" * 140 + "Bsafe\n", "oldsafe\n"),
+    )
+    inputs = {
+        f"project_ansi_sample_{call_id:02}": {"sample": sample}
+        for call_id, (sample, _) in enumerate(samples, 1)
+    }
+    with ansi_client(binary, execution, inputs) as client:
+        client.initialize_and_list_tools()
+        for call_id, (sample, projected) in enumerate(samples, 1):
+            # One unsplit run, every two-chunk split, and byte-wise fragmentation.
+            repetitions = len(sample.encode()) + 3
+            operation = f"project_ansi_sample_{call_id:02}"
+            client.transcript.append(
+                {"fixture": {"operation": operation, **inputs[operation]}}
+            )
+            result = client.send(r=operation)
+            assert result == {
+                "content": [{"type": "text", "text": projected * repetitions}],
+                "isError": False,
+            }, (sample, result)
+            assert len(last_tool_text(client).encode()) <= TEXT_BUDGET
+            assert (
+                session_directory(client) / f"outputs/call-{call_id:06}.log"
+            ).read_bytes() == sample.encode() * repetitions
+        compact_previews(client, *(projected for _, projected in samples))
+        assert [
+            entry["fixture"]["sample"]
+            for entry in client.transcript
+            if "fixture" in entry
+        ] == [sample for sample, _ in samples]
+        assert [
+            entry["send"]["r"] for entry in client.transcript if "send" in entry
+        ] == list(inputs)
+        return client.finish()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_finishes_ansi_at_producer_image_and_cell_boundaries(
+    binary: Path, execution: Execution
+) -> Transcript:
+    events = [
+        {"kind": "console_output", "data": "out\x1b["},
+        {"kind": "console_diagnostic", "data": "31mdiag\n"},
+        {"kind": "stdout_bytes", "data": base64.b64encode(b"\x9b31mraw\n").decode()},
+        {"kind": "stdout", "data": "raw\x1b]0;discard"},
+        {"kind": "stderr", "data": "error\n"},
+        {"kind": "stderr", "data": "stderr \x1b[3"},
+        {"kind": "stdout_closed"},
+        {"kind": "stderr", "data": "1mred\x1b[0m\n"},
+        {"kind": "stderr_closed"},
+        {"kind": "console_output", "data": "before image\x1b]unterminated"},
+        {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"},
+        {"kind": "console_output", "data": "after \x1b[32mimage\x1b[m\n"},
+    ]
+    cell_samples = (
+        ("visible\x1b[31", "visible"),
+        ("mnext\n", "mnext\n"),
+        ("visible\x1b]hidden", "visible"),
+        ("next\n", "next\n"),
+        ("visible\x1b[2K", "[done]"),
+    )
+    inputs = {
+        "emit_ansi_boundary_events": {"events": events},
+        **{
+            f"emit_ansi_cell_{call_id:02}": {
+                "events": [{"kind": "console_output", "data": sample}]
+            }
+            for call_id, (sample, _) in enumerate(cell_samples, 2)
+        },
+    }
+    with ansi_client(binary, execution, inputs) as client:
+        client.initialize_and_list_tools()
+        operation = "emit_ansi_boundary_events"
+        client.transcript.append(
+            {"fixture": {"operation": operation, **inputs[operation]}}
+        )
+        result = client.send(r=operation)
+        assert [block["type"] for block in result["content"]] == [
+            "text",
+            "image",
+            "text",
+        ]
+        assert result["content"][0]["text"] == (
+            "out31mdiag\n�31mraw\nrawerror\nstderr red\nbefore image"
+        ), result
+        assert result["content"][-1]["text"] == "after image\n", result
+        assert (session_directory(client) / "outputs/call-000001.log").read_bytes() == (
+            b"".join(
+                base64.b64decode(event["data"])
+                if event["kind"].endswith("_bytes")
+                else event["data"].encode()
+                for event in events
+                if event["kind"] != "image" and "data" in event
+            )
+        )
+        for call_id, (sample, expected) in enumerate(cell_samples, 2):
+            operation = f"emit_ansi_cell_{call_id:02}"
+            client.transcript.append(
+                {"fixture": {"operation": operation, **inputs[operation]}}
+            )
+            result = client.send(r=operation)
+            assert last_tool_text(client) == expected, result
+            assert (
+                session_directory(client) / f"outputs/call-{call_id:06}.log"
+            ).read_bytes() == sample.encode()
+        assert [
+            entry["fixture"]["events"]
+            for entry in client.transcript
+            if "fixture" in entry
+        ] == [
+            events,
+            *(
+                [{"kind": "console_output", "data": sample}]
+                for sample, _ in cell_samples
+            ),
+        ]
+        assert [
+            entry["send"]["r"] for entry in client.transcript if "send" in entry
+        ] == list(inputs)
+        return client.finish()
+
+
+@requires(POSIX, PROCESS_EVENTS)
+@executions(DIRECT, SANDBOXED)
+def test_separates_native_diagnostics_from_worker_stderr(
+    binary: Path, execution: Execution
+) -> Transcript:
+    chunks = (
+        ("native_stderr", b"native \x1b[3"),
+        ("native_stderr", b"1m\xe2"),
+        ("native_stderr", b"\x82\xacred\x1b[0m\n"),
+        ("native_stderr", b"\x1b]0;hidden"),
+        ("native_stderr", b"\x07native string ended\n"),
+        ("native_stderr", b"native before \x1b]0;hidden"),
+        ("stderr_bytes", b"worker diagnostic\n"),
+        ("native_stderr", b"\x1b\\native after\n"),
+        ("stderr_bytes", b"worker before \x1b]0;hidden"),
+        ("native_stderr", b"native diagnostic\n"),
+        ("stderr_bytes", b"\x1b\\worker after\n"),
+    )
+    inputs = {
+        "emit_ansi_diagnostics": {
+            "events": [
+                {"kind": kind, "data": base64.b64encode(data).decode()}
+                for kind, data in chunks
+            ]
+        }
+    }
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        input_path = directory / "ansi-inputs.json"
+        input_path.write_text(json.dumps(inputs), encoding="utf-8")
+        roots = ("--writable-root", temporary) if execution == SANDBOXED else ()
+        with (
+            closing(FifoCheckpoint.create(directory / "diagnostic-release")) as release,
+            McpClient(
+                binary,
+                execution.serve(
+                    "--worker",
+                    str(fixtures / "zod"),
+                    "--relay",
+                    str(fixtures / "server_relay/scripted_relay.py"),
+                    *roots,
+                ),
+                {
+                    **os.environ,
+                    "TMPDIR": temporary,
+                    "MCP_CONSOLE_TEST_ANSI_INPUTS": str(input_path),
+                    "MCP_CONSOLE_TEST_PREVIEW_DIRECTORY": temporary,
+                    "MCP_CONSOLE_TEST_RELAY_SCENARIO": "ansi_diagnostics",
+                },
+            ) as client,
+            Events() as events,
+        ):
+            try:
+                client.initialize_and_list_tools()
+                operation = "emit_ansi_diagnostics"
+                client.transcript.append(
+                    {"fixture": {"operation": operation, **inputs[operation]}}
+                )
+                request = client.start_send(
+                    r=operation,
+                    timeout_ms=600_000,
+                )
+                raw = b""
+                sessions = (
+                    Path(client.temporary_directory.name) / ".agents/console/sessions"
+                )
+
+                def recorded() -> Path | None:
+                    for path in sessions.glob("*/outputs/call-000001.log"):
+                        events.watch_file(path)
+                        if path.read_bytes() == raw:
+                            return path
+                    return None
+
+                for _, data in chunks:
+                    release.release()
+                    raw += data
+                    # Recording occurs under the tape lock. Observing these bytes
+                    # before releasing the next writer proves ingestion order,
+                    # without cutting/resetting the unfinished ANSI sequence.
+                    log = wait_for_checkpoint(
+                        recorded,
+                        "diagnostic chunk retained before producer switch",
+                        root=sessions,
+                        recursive=True,
+                        client=client,
+                        events=events,
+                    )
+                release.release()
+                client.receive(request)
+                assert log.read_bytes() == raw
+                assert last_tool_text(client) == (
+                    "native €red\nnative string ended\n"
+                    "native before worker diagnostic\nnative after\n"
+                    "worker before native diagnostic\nworker after\n"
+                ), request
+                assert [
+                    entry["fixture"]["events"]
+                    for entry in client.transcript
+                    if "fixture" in entry
+                ] == [
+                    [
+                        {"kind": kind, "data": base64.b64encode(data).decode()}
+                        for kind, data in chunks
+                    ]
+                ]
+                assert request["send"]["r"] == "emit_ansi_diagnostics"
+                return client.finish()
+            finally:
+                for _ in range(len(chunks) + 1):
+                    release.release()
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(R)
+def test_projects_builtin_ansi_and_preserves_raw_bytes(
+    binary: Path, execution: Execution
+) -> Transcript:
+    raw = b"\x1b[31mstyled\x1b[0m\nold\r\x1b[2Kshort\n"
+    # fmt: python
+    python = code(r"""
+        import sys
+
+        _ = sys.stdout.write("\x1b[31mstyled\x1b[0m\nold\r\x1b[2Kshort\n")
+        """)
+    # fmt: r
+    r = code(r"""
+        cat("\033[31mstyled\033[0m\nold\r\033[2Kshort\n")
+        """)
+    with McpClient(binary, execution.serve()) as client:
+        client.initialize_and_list_tools()
+        for call_id, arguments in enumerate(
+            ({"python": python}, {"r": r}),
+            1,
+        ):
+            result = client.send(**arguments)
+            assert last_tool_text(client) == "styled\nshort\n", result
+            assert (
+                session_directory(client) / f"outputs/call-{call_id:06}.log"
+            ).read_bytes() == raw
+        client.expect(
+            'before\n[input requested: "prompt> "]\n[waiting for stdin]',
+            # fmt: python
+            python=code(r"""
+                _ = sys.stdout.write("before\x1b]unterminated")
+                answer = input("prompt> ")
+                print("after")
+                """),
+        )
+        client.expect("after\n", stdin="answer\n")
+        assert (
+            session_directory(client) / "outputs/call-000003.log"
+        ).read_bytes() == b"before\x1b]unterminatedafter\n"
+        return client.finish()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_finishes_ansi_at_polls_but_preserves_split_utf8(
+    binary: Path, execution: Execution
+) -> Transcript:
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with tempfile.TemporaryDirectory() as temporary:
+        directory = Path(temporary)
+        roots = ("--writable-root", temporary) if execution == SANDBOXED else ()
+        with (
+            closing(FifoCheckpoint.create(directory / "partial-release")) as release,
+            closing(
+                FifoCheckpoint.create(directory / "partial-processed")
+            ) as processed,
+            McpClient(
+                binary,
+                execution.serve(
+                    "--worker",
+                    str(fixtures / "zod"),
+                    "--relay",
+                    str(fixtures / "server_relay/scripted_relay.py"),
+                    *roots,
+                ),
+                {
+                    **os.environ,
+                    "TMPDIR": temporary,
+                    "MCP_CONSOLE_TEST_PREVIEW_DIRECTORY": temporary,
+                    "MCP_CONSOLE_TEST_RELAY_SCENARIO": "ansi_polls",
+                },
+            ) as client,
+        ):
+            try:
+                client.initialize_and_list_tools()
+                running = "\n[running; poll with an empty send]"
+                assert client.send(r="42", timeout_ms=0)["content"] == [
+                    {"type": "text", "text": running}
+                ]
+                raw = b""
+                for data, expected in (
+                    (b"first\x1b[31", "first"),
+                    (b"msecond\x1b]0;hidden", "msecond"),
+                    (b"third\x1b[32m:\xe2", "third:"),
+                    (b"\x82\xac\x1b[0m\n", "€\n"),
+                ):
+                    release.release()
+                    processed.wait("ANSI bytes reached the output tape")
+                    raw += data
+                    result = client.send(timeout_ms=0)
+                    assert result == {
+                        "content": [{"type": "text", "text": expected + running}],
+                        "isError": False,
+                    }, result
+                    assert (
+                        session_directory(client) / "outputs/call-000001.log"
+                    ).read_bytes() == raw
+                release.release()
+                assert last_tool_text(client) == "€\n" + running
+                client.send()
+                assert last_tool_text(client) == "[done]", client.transcript[-1]
+                return client.finish()
+            finally:
+                for _ in range(5):
+                    release.release()
 
 
 @requires(POSIX)

@@ -9,6 +9,7 @@ pub(super) struct OutputTapeState {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
     stream: Option<Stream>,
+    next_diagnostic: u64,
     terminal: terminal::Stream,
     current: ResponseBuilder,
     sealed: VecDeque<(u64, Response)>,
@@ -27,6 +28,7 @@ enum Stream {
     Diagnostic,
     Stdout,
     Stderr,
+    NativeDiagnostic(u64),
 }
 
 impl OutputTape {
@@ -75,11 +77,18 @@ impl OutputTape {
         let output = self.clone();
         Arc::new(move || {
             let output = output.clone();
+            // Native readers and worker stderr are different producers. Each
+            // reader keeps its identity across writes, including split controls.
+            let stream = {
+                let mut state = output.lock();
+                state.next_diagnostic += 1;
+                Stream::NativeDiagnostic(state.next_diagnostic)
+            };
             let mut pending = Vec::new();
             Box::new(move |bytes| {
                 let mut state = output.lock();
                 if bytes.is_empty() {
-                    state.text(Stream::Stderr, &String::from_utf8_lossy(&pending));
+                    state.text(stream, &String::from_utf8_lossy(&pending));
                     pending.clear();
                     // Response cuts and shutdown finish the shared terminal.
                     // This EOF cannot finish another producer's progress line.
@@ -94,7 +103,7 @@ impl OutputTape {
                 };
                 let complete = complete_utf8_prefix(bytes);
                 let remainder = bytes[complete..].to_vec();
-                state.text(Stream::Stderr, &String::from_utf8_lossy(&bytes[..complete]));
+                state.text(stream, &String::from_utf8_lossy(&bytes[..complete]));
                 pending = remainder;
                 state.recording_notice(notice);
             })
