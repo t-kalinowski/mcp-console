@@ -382,10 +382,11 @@ def initialize_connection(source: str) -> int:
             raise RuntimeError(
                 "startup must select a native connection with console_sql_connection(connection)"
             )
-        # DB-API has no common is-open predicate. Opening and closing a cursor
-        # validates usability without executing a query or changing transactions.
+        # DB-API has no common is-open predicate. Probe without executing a query,
+        # and close only cursors distinct from the user-owned connection.
         cursor = _connection.cursor()
-        cursor.close()
+        if cursor is not _connection:
+            cursor.close()
         return 1
     except BaseException as error:
         rendered = _traceback.TracebackException.from_exception(error)

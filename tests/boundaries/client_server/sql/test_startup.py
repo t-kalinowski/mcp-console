@@ -13,6 +13,7 @@ from support.client import McpClient
 from support.assertions import assert_result_content, last_tool_text
 from support.checkpoints import wait_for_worker_file
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.installation import installed_console
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import POSIX, PROCESS_EVENTS, R, SQL, requires
@@ -26,6 +27,92 @@ def configure(workspace: Path, language: str, source: str) -> Path:
     config.parent.mkdir(parents=True)
     config.write_text(json.dumps({"startup": {"language": language, "code": source}}))
     return config
+
+
+@requires(R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_python_startup_preserves_aliased_connection(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return aliased_connection(binary, execution, with_r=True)
+
+
+@requires(POSIX, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_python_startup_preserves_aliased_connection_without_r(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return aliased_connection(binary, execution, with_r=False)
+
+
+def aliased_connection(
+    binary: Path, execution: Execution, *, with_r: bool
+) -> Transcript:
+    records = []
+    for startup in (False, True):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            # fmt: python
+            source = code("""
+                import sqlite3
+
+
+                class AliasedConnection:
+                    def __init__(self) -> None:
+                        self.native = sqlite3.connect(":memory:")
+                        self.result = self.native.cursor()
+
+                    def cursor(self) -> "AliasedConnection":
+                        return self
+
+                    def execute(self, source: str) -> "AliasedConnection":
+                        self.result.execute(source)
+                        return self
+
+                    @property
+                    def description(self) -> tuple | None:
+                        return self.result.description
+
+                    def fetchmany(self, size: int) -> list[tuple]:
+                        return self.result.fetchmany(size)
+
+                    def close(self) -> None:
+                        self.native.close()
+
+
+                native = AliasedConnection()
+                _ = native.execute("CREATE TABLE selected (answer INTEGER)")
+                _ = native.execute("INSERT INTO selected VALUES (42)")
+                console_sql_connection(native)
+                """)
+            if startup:
+                configure(workspace, "python", source)
+            environment = os.environ if with_r else no_r_environment(workspace)
+            with McpClient(
+                installed_console(binary),
+                execution.serve("-c", f"python={sys.executable}"),
+                environment,
+                workspace,
+            ) as client:
+                client.initialize_and_list_tools()
+                if not startup:
+                    client.expect(python=source)
+                client.expect("answer\n------\n42\n", sql="SELECT answer FROM selected")
+                client.expect(sql="UPDATE selected SET answer = 43")
+                client.expect("answer\n------\n43\n", sql="SELECT answer FROM selected")
+                client.expect(
+                    # fmt: python
+                    python=code("""
+                        assert native.native.in_transaction
+                        native.native.rollback()
+                        assert native.native.execute("SELECT count(*) FROM selected").fetchone() == (0,)
+                        """),
+                )
+                client.finish()
+                records.append(
+                    {"startup": startup, "aliased_connection_preserved": True}
+                )
+    return records
 
 
 @requires(R, SQL)
