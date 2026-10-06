@@ -7,7 +7,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8156
+        text_bytes: 8059
         concat:
           - |
             zod stdout 👩🏽‍💻
@@ -15,7 +15,7 @@ result:
             count: 3941
           - |
 
-            [output preview: omitted 4186395 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); 4194331 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 4186395 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000001.log]
           - repeat: y
             count: 3968
   isError: false

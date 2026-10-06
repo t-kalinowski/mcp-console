@@ -7,7 +7,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8140
+        text_bytes: 8042
         concat:
           - |
             preview head
@@ -15,7 +15,7 @@ result:
             count: 3955
           - |
 
-            [output preview: omitted 16769343 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); 16777279 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 16769343 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000001.log]
           - repeat: x
             count: 3918
           - |

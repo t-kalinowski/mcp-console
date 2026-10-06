@@ -12,13 +12,13 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8156
+        text_bytes: 8059
         concat:
           - repeat: x
             count: 3968
           - |
 
-            [output preview: omitted 8380742 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); 8388609 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 8380742 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000001.log]
           - repeat: x
             count: 3890
           - |
