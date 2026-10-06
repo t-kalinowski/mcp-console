@@ -47,6 +47,8 @@ These ranges identify text; they do not authorize splitting or regenerating SQL.
 | `ResourceLimit`      | More than 1 MiB of source or 1,024 INSTALL statements |
 
 The reasons describe why interception was declined, not a DuckDB diagnostic.
+`FORCE CHECKPOINT` is ordinary SQL and produces `UncertainGrammar`.
+`FORCE` is classified as `UnsupportedInstall` only when the next keyword is `INSTALL`.
 A caller must pass declined source unchanged to the real driver.
 Unknown ordinary SQL must remain usable even when this optional recognizer cannot understand it.
 Non-DuckDB connections must bypass recognition entirely.

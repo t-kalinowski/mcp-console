@@ -72,7 +72,11 @@ fn analyze(source: &str) -> Result<Plan<'_>, Decline> {
         if token.kind == Kind::Semicolon {
             continue;
         }
-        if token.keyword(source, "FORCE") {
+        if token.keyword(source, "FORCE")
+            && scanner
+                .next()?
+                .is_some_and(|token| token.keyword(source, "INSTALL"))
+        {
             return Err(Decline::UnsupportedInstall);
         }
         if !token.keyword(source, "INSTALL") {

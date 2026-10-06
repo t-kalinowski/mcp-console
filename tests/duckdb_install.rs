@@ -96,9 +96,38 @@ fn never_extracts_requests_from_ordinary_or_unknown_grammar() {
 }
 
 #[test]
-fn classifies_unsupported_install_forms_without_a_partial_plan() {
+fn distinguishes_ordinary_force_statements_from_force_install() {
+    for source in [
+        "FORCE CHECKPOINT",
+        "force checkpoint; INSTALL json;",
+        "FORCE",
+        "FORCE; INSTALL json;",
+        "FORCE INSTALLATION json",
+        "FORCE \"INSTALL\" json",
+        "INSTALL json; FORCE CHECKPOINT",
+    ] {
+        assert_eq!(
+            recognize(source),
+            Preflight::Passthrough(Decline::UncertainGrammar),
+            "{source:?}"
+        );
+    }
     for source in [
         "FORCE INSTALL json",
+        "force /* nested /* 🦆 */ comment */ install json",
+        "INSTALL json; FORCE INSTALL httpfs",
+    ] {
+        assert_eq!(
+            recognize(source),
+            Preflight::Passthrough(Decline::UnsupportedInstall),
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
+fn classifies_unsupported_install_forms_without_a_partial_plan() {
+    for source in [
         "INSTALL json VERSION '1.0'",
         "INSTALL json FROM 'core'",
         "INSTALL json FROM 'https://example.org'",
