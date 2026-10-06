@@ -31,7 +31,7 @@ members = ["mcp-console-sandbox", "windows-sandbox"]
 resolver = "3"
 """,
                 "codex-rs/mcp-console-sandbox/Cargo.toml": """[package]
-name = "codex-mcp-console-sandbox"
+name = "mcp-console-sandbox"
 version = "0.0.0"
 edition = "2024"
 [[bin]]
@@ -111,7 +111,6 @@ path = "main.rs"
                         "repository": "fixture/runner",
                         "release": "fixture",
                         "commit": revision,
-                        "protocol_version": 2,
                     }
                 )
             )

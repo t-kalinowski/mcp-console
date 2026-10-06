@@ -74,7 +74,6 @@ class SandboxInstallationTests(unittest.TestCase):
         result = self.run_sandbox()
         self.assertEqual(result.returncode, 0, result.stderr)
         request = {
-            "version": 2,
             "command": ["/bin/sh", "-c", "printf 'ready\\n'; exec /bin/cat"],
             "cwd": str(self.root.resolve()),
             "environment": {},

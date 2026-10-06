@@ -67,7 +67,7 @@ Windows redirects cache paths but still prepares dependencies with host permissi
 
 Use the top-level `resolver` mapping in `.agents/console/config.yaml`, the home configuration, or `-c` overrides.
 It accepts native sandbox fields independently of the worker's `sandbox` mapping, profiles, and writable roots.
-Console supplies `version`, `lifecycle`, and private temporary storage; `extends` and `workspace` are also reserved.
+Console supplies `lifecycle` and private temporary storage; `extends` and `workspace` are also reserved.
 Other values pass through to the native runner for validation.
 See [native policy fields](SANDBOX_CONFIGURATION.md).
 

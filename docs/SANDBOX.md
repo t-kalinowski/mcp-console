@@ -2,7 +2,7 @@
 
 Console selects application policy and verifies the private native executable; the runner owns OS enforcement, signals/terminals, descendant retirement, and private storage.
 Console does not implement a second native supervisor or recovery monitor.
-[`sandbox-runner.json`](../sandbox-runner.json) pins the runner and its protocol; its executable contract/tests define native behavior.
+[`sandbox-runner.json`](../sandbox-runner.json) pins the runner revision; its unversioned protocol and executable contract/tests define native behavior.
 
 Console uses native sandbox enforcement on the local host.
 
@@ -73,13 +73,13 @@ A final forced launcher kill cannot establish successful cleanup.
 Cleanup failures are nonzero errors with diagnostics; unproven retirement retains private storage.
 **Windows x64:** The elevated native backend uses Console-specific sandbox accounts, filesystem ACLs, network rules, and a non-breakaway Job.
 Account provisioning is an explicit interactive setup operation.
-Restricted-token execution is opt-in and requires enabled networking and host reads.
+Unelevated execution is opt-in and requires enabled networking and host reads.
 Both modes confirm Job retirement before returning, and private storage is removed only after confirmation.
 Forced frontend exit is not a cleanup receipt.
 See [Windows setup, validation, and limits](WINDOWS.md).
 Other operating systems are unsupported.
 
-Unrestricted, external, and explicit Landlock modes have different guarantees; read [enforcement modes](SANDBOX_CONFIGURATION.md#filesystem-and-enforcement-modes).
+Unrestricted and external modes have different guarantees; read [enforcement modes](SANDBOX_CONFIGURATION.md#filesystem-and-enforcement-modes).
 `--no-sandbox` removes native enforcement and descendant cleanup; normal relay shutdown still reaps the direct worker.
 
 ## Policy extensions and compatibility

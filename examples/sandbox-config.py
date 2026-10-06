@@ -5,7 +5,6 @@ import subprocess
 import sys
 
 config = {
-    "version": 2,
     "filesystem": {
         "kind": "restricted",
         "entries": [

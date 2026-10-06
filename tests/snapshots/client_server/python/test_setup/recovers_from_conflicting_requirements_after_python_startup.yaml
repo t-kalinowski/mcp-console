@@ -42,8 +42,6 @@ result:
           ]
         }
         uv output:
-        INFO Start conflict resolution because incompat satisfied:
-           root ==0a0.dev0 is forbidden    
         error: No solution found when resolving tool dependencies
           cause: you require py-yaml12<0, which does not allow any versions
   isError: true
