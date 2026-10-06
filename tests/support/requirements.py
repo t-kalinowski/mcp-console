@@ -11,7 +11,6 @@ from typing import TypeVar
 
 from support.linux_sandbox import (
     fresh_procfs_available,
-    landlock_available,
     nested_namespaces_available,
     process_events_available,
 )
@@ -184,13 +183,6 @@ NON_UTF8_FILENAMES = Requirement(
     "non-UTF-8 filenames",
     sys.platform == "linux",
     "requires Linux; macOS rejects non-UTF-8 filenames",
-)
-
-
-LANDLOCK = Requirement(
-    "Landlock filesystem enforcement",
-    landlock_available(),
-    "requires Landlock with truncate enforcement (ABI 3 or later)",
 )
 
 

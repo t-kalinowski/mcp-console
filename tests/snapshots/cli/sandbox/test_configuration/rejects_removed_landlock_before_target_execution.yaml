@@ -1,0 +1,12 @@
+---
+filesystem: restricted
+stderr: >
+  mcp-console-sandbox: linux_backend landlock has been removed; omit
+  linux_backend or use bubblewrap
+exit_code: 1
+---
+filesystem: unrestricted
+stderr: >
+  mcp-console-sandbox: linux_backend landlock has been removed; omit
+  linux_backend or use bubblewrap
+exit_code: 1

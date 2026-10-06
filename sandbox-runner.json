@@ -1,6 +1,5 @@
 {
   "repository": "t-kalinowski/cobox",
-  "release": "rust-v0.154.0",
-  "commit": "6a18b21c2e75a10229a842424403d71cbd1e60ef",
-  "protocol_version": 2
+  "release": "rust-v0.160.1",
+  "commit": "85d407d8a4544ed0916aff3c7a273461e739f215"
 }

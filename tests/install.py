@@ -107,14 +107,14 @@ class InstallationTests(unittest.TestCase):
             (workspace / ".cargo/config.toml").touch()
             for package, binary in (
                 ("mcp-console-sandbox", "mcp-console-sandbox"),
-                ("bwrap", "bwrap"),
+                ("codex-bwrap", "bwrap"),
             ):
-                crate = workspace / package
+                crate = workspace / binary
                 (crate / "src").mkdir(parents=True)
                 (crate / "Cargo.toml").write_text(
                     code(f"""
                         [package]
-                        name = "codex-{package}"
+                        name = "{package}"
                         version = "0.1.0"
                         edition = "2024"
                         [[bin]]
@@ -205,7 +205,6 @@ class InstallationTests(unittest.TestCase):
                 "commit": subprocess.check_output(
                     ["git", "rev-parse", "HEAD"], cwd=runner_source, text=True
                 ).strip(),
-                "protocol_version": 2,
             }
             (source / "sandbox-runner.json").write_text(json.dumps(pin))
             environment = os.environ.copy()

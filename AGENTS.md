@@ -52,6 +52,8 @@ See the [boundary test guide](tests/boundaries/README.md) for fixtures and snaps
 Never hand-edit `tests/snapshots/`.
 Update them through `scripts/test --update` or formatting.
 Client/server transcripts should generally include initialization and tool discovery before ordinary calls.
+Generally keep one `mcp-console` invocation per YAML transcript.
+Include initialization once near the top, normally via a matching canonical `!same-as` reference; use separate transcript files for additional invocations.
 Use the existing exact canonical-handshake comparison for `!same-as` references; preserve different or incomplete exchanges in full.
 Preserve errors and tracebacks; normalize incidental values, not behavior.
 Fix the producer or serializer when regeneration is wrong.
