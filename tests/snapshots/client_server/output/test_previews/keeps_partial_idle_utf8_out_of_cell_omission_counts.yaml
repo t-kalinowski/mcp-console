@@ -7,7 +7,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8055
+        text_bytes: 8039
         concat:
           - |
             idle head
@@ -15,7 +15,7 @@ result:
             count: 3958
           - |
 
-            [output omitted: 44866 UTF-8 bytes; retained logs on Console host: .agents/console/sessions/<run ID>/outputs/]
+            [output omitted: 44866 UTF-8 bytes; retained logs: .agents/console/sessions/<run ID>/outputs/]
 
             […]
           - repeat: x

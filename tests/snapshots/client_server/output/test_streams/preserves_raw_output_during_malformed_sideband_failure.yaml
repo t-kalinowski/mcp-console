@@ -7,14 +7,14 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8116
+        text_bytes: 8100
         concat:
           - "zod malformed stdout: "
           - repeat: x
             count: 3882
           - |
 
-            [output omitted: <omitted byte count> UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000001.log]
+            [output omitted: <omitted byte count> UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000001.log]
           - repeat: z
             count: 3832
           - |-
@@ -33,14 +33,14 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8116
+        text_bytes: 8100
         concat:
           - "zod malformed stderr: "
           - repeat: x
             count: 3882
           - |
 
-            [output omitted: <omitted byte count> UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000002.log]
+            [output omitted: <omitted byte count> UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000002.log]
           - repeat: z
             count: 3832
           - |-
