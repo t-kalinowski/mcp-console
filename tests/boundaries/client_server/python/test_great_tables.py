@@ -70,6 +70,8 @@ def great_tables_client(
             text=True,
         ).strip()
         environment = dict(os.environ, RETICULATE_PYTHON=str(python))
+        environment.pop("PYTHONPATH", None)
+        environment.pop("RETICULATE_PYTHONPATH", None)
         if image:
             config = root / "matplotlib"
             config.mkdir()
