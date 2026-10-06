@@ -223,7 +223,7 @@ def stage(args: argparse.Namespace, pin: dict) -> None:
             "--locked",
             "--release",
             "-p",
-            "codex-mcp-console-sandbox",
+            "mcp-console-sandbox",
             "--bin",
             "mcp-console-sandbox",
             *(

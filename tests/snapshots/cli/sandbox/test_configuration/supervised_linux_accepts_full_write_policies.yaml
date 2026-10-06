@@ -1,5 +1,5 @@
 ---
-scenario: direct full-write positive control
+scenario: full-write positive control
 stdout: |
   target started
 ---

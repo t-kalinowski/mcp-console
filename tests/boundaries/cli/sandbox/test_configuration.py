@@ -3,7 +3,6 @@
 import errno
 import json
 import os
-import re
 import socket
 import subprocess
 import sys
@@ -15,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import (
-    LANDLOCK,
     LINUX_NATIVE,
     LINUX_SANDBOX,
     MACOS_SANDBOX,
@@ -24,13 +22,12 @@ from support.requirements import (
     SANDBOX,
     requires,
 )
-from support.linux_sandbox import root_metadata_prefix, without_landlock
+from support.linux_sandbox import root_metadata_prefix
 from support.suites import run_this_suite
 
 
 def configuration() -> dict:
     return {
-        "version": 2,
         "filesystem": {
             "kind": "restricted",
             "entries": [
@@ -317,7 +314,8 @@ def test_rejects_malformed_and_conflicting_configuration(binary: Path) -> Transc
         ("malformed JSON", "{"),
         ("file reference", "@config.json"),
         ("missing policy", "{}"),
-        ("duplicate field", '{"version":2,"version":2}'),
+        ("duplicate field", '{"network":"restricted","network":"restricted"}'),
+        ("removed version", {**configuration(), "version": 2}),
         ("duplicate command", {**configuration(), "command": ["/bin/true"]}),
         ("duplicate cwd", {**configuration(), "cwd": "/"}),
         ("file include", {**configuration(), "include": ["policy.json"]}),
@@ -594,85 +592,46 @@ def test_child_specific_shell_python_and_processx_examples(binary: Path) -> Tran
     return transcript
 
 
-@requires(LANDLOCK)
-def test_explicit_landlock_preserves_policy_and_rejects_supervised_lifetime(
-    binary: Path,
-) -> Transcript:
-    config = configuration() | {"linux_backend": "landlock"}
-    result = invoke(binary, config, "/bin/echo", "explicit Landlock")
-    assert result.returncode == 0, result
-    assert result.stderr == ""
-    assert result.stdout == "explicit Landlock\n"
-    transcript = [{"stdout": result.stdout}]
-    with TemporaryDirectory() as directory:
-        sentinel = Path(directory) / "sentinel"
-        sentinel.write_text("synthetic sentinel")
-        result = invoke(
-            binary,
-            config,
-            sys.executable,
-            "-c",
-            # fmt: python
-            code(r"""
-                import os
-                import sys
-
-                try:
-                    os.truncate(sys.argv[1], 0)
-                except PermissionError:
-                    print("truncate denied")
-                else:
-                    raise AssertionError("host truncation succeeded")
-                """),
-            str(sentinel),
-        )
-        assert result.returncode == 0 and not result.stderr, result
-        assert result.stdout == "truncate denied\n"
-        assert sentinel.read_text() == "synthetic sentinel"
-        transcript.append({"stdout": result.stdout})
-    config["lifecycle"] = {"private_tmp": {"environment": ["TMPDIR"]}}
-    result = invoke(binary, config, "/bin/echo", "must not run")
-    assert result.returncode == 1 and not result.stdout, result
-    assert "landlock does not provide supervised lifetime" in result.stderr
-    transcript.append({"stderr": result.stderr, "exit_code": result.returncode})
-    for lifecycle in (
-        {},
-        {
-            "parent_pid": None,
-            "private_tmp": None,
-            "cleanup_timeout_ms": None,
-            "sigterm": "forward",
-        },
-    ):
-        config["lifecycle"] = lifecycle
-        result = invoke(binary, config, "/bin/echo", "explicit Landlock defaults")
-        assert (result.returncode, result.stdout, result.stderr) == (
-            0,
-            "explicit Landlock defaults\n",
-            "",
+@requires(LINUX_NATIVE)
+def test_rejects_removed_landlock_before_target_execution(binary: Path) -> Transcript:
+    transcript = []
+    for filesystem in (configuration()["filesystem"], {"kind": "unrestricted"}):
+        config = {
+            **configuration(),
+            "filesystem": filesystem,
+            "network": "enabled",
+            "linux_backend": "landlock",
+        }
+        result = invoke(binary, config, "/bin/echo", "must not run")
+        assert result.returncode == 1 and result.stdout == "", result
+        assert result.stderr == (
+            "mcp-console-sandbox: linux_backend landlock has been removed; "
+            "omit linux_backend or use bubblewrap\n"
         ), result
-        transcript.append({"lifecycle": lifecycle, "stdout": result.stdout})
+        transcript.append(
+            {
+                "filesystem": filesystem["kind"],
+                "stderr": result.stderr,
+                "exit_code": result.returncode,
+            }
+        )
     return transcript
 
 
-def target_start_control(binary: Path, *, launch_prefix=()) -> Transcript:
-    # Full-write direct execution needs neither namespaces nor Landlock FS
-    # support. Stdout proves the marker works independently of file permissions.
+def target_start_control(binary: Path) -> Transcript:
+    # Stdout proves the marker works independently of file permissions.
     config = {
         **configuration(),
-        "linux_backend": "landlock",
         "filesystem": {"kind": "unrestricted"},
         "network": "enabled",
     }
-    result = invoke(
-        binary, config, "/bin/echo", "target started", launch_prefix=launch_prefix
-    )
+    result = invoke(binary, config, "/bin/echo", "target started")
     assert (result.returncode, result.stdout, result.stderr) == (
         0,
         "target started\n",
         "",
     ), result
-    return [{"scenario": "direct full-write positive control", "stdout": result.stdout}]
+    return [{"scenario": "full-write positive control", "stdout": result.stdout}]
 
 
 @requires(LINUX_SANDBOX)
@@ -720,141 +679,6 @@ def test_supervised_linux_accepts_full_write_policies(binary: Path) -> Transcrip
                         "exit_code": result.returncode,
                     }
                 )
-    return transcript
-
-
-@requires(LINUX_SANDBOX)
-def test_landlock_rejects_incompatible_options_before_native_setup(
-    binary: Path,
-) -> Transcript:
-    transcript = target_start_control(binary)
-    for name, options, diagnostic in (
-        (
-            "external enforcement",
-            {"filesystem": {"kind": "external-sandbox"}},
-            "external-sandbox delegates enforcement; omit the legacy landlock override",
-        ),
-        (
-            "private storage without exports",
-            {"lifecycle": {"private_tmp": {"environment": []}}},
-            "landlock does not provide supervised lifetime; omit lifecycle options",
-        ),
-        (
-            "caller-death observation",
-            {"lifecycle": {"parent_pid": os.getpid()}},
-            "landlock does not provide supervised lifetime; omit lifecycle options",
-        ),
-        (
-            "retirement SIGTERM",
-            {"lifecycle": {"sigterm": "retire"}},
-            "landlock does not provide supervised lifetime; omit lifecycle options",
-        ),
-        (
-            "explicit default deadline",
-            {"lifecycle": {"cleanup_timeout_ms": 1000}},
-            "landlock does not provide supervised lifetime; omit lifecycle options",
-        ),
-        (
-            "managed proxy",
-            {
-                "proxy": {
-                    "enabled": True,
-                    "enableSocks5": True,
-                    "enableSocks5Udp": False,
-                    "allowUpstreamProxy": False,
-                    "dangerouslyAllowAllUnixSockets": False,
-                    "mode": "full",
-                    "domains": {"127.0.0.1": "allow"},
-                    "unixSockets": None,
-                    "allowLocalBinding": True,
-                }
-            },
-            "landlock does not support managed proxy routing",
-        ),
-    ):
-        result = invoke(
-            binary,
-            {**configuration(), "linux_backend": "landlock", **options},
-            "/bin/echo",
-            "target started",
-        )
-        assert result.returncode == 1 and result.stdout == "", result
-        assert result.stderr == f"mcp-console-sandbox: {diagnostic}\n", result
-        transcript.append(
-            {"scenario": name, "stderr": result.stderr, "exit_code": result.returncode}
-        )
-    return transcript
-
-
-@requires(LINUX_NATIVE)
-def test_landlock_requires_truncate_capability_before_target_execution(
-    binary: Path,
-) -> Transcript:
-    with TemporaryDirectory() as directory:
-        prefix = (str(without_landlock(Path(directory))),)
-        transcript = target_start_control(binary, launch_prefix=prefix)
-        result = invoke(
-            binary,
-            {**configuration(), "linux_backend": "landlock"},
-            "/bin/echo",
-            "target started",
-            launch_prefix=prefix,
-        )
-        assert result.returncode == 1 and result.stdout == "", result
-        assert result.stderr == (
-            "mcp-console-sandbox: Landlock filesystem policy requires "
-            "truncate enforcement (ABI 3 or later)\n"
-        ), result
-        transcript.append({"stderr": result.stderr, "exit_code": result.returncode})
-        return transcript
-
-
-@requires(LANDLOCK)
-def test_landlock_rejects_policies_requiring_direct_enforcement(
-    binary: Path,
-) -> Transcript:
-    transcript = target_start_control(binary)
-    with TemporaryDirectory() as directory:
-        for root_access, carveout in (
-            (None, None),
-            ("read", "deny"),
-            ("write", "read"),
-            ("write", "deny"),
-        ):
-            config = {**configuration(), "linux_backend": "landlock"}
-            if root_access:
-                config["filesystem"]["entries"][0]["access"] = root_access
-                config["filesystem"]["entries"].append(
-                    {
-                        "path": {
-                            "type": "path",
-                            "path": str(Path(directory).resolve()),
-                        },
-                        "access": carveout,
-                    }
-                )
-            else:
-                config["filesystem"]["entries"] = []
-            result = invoke(binary, config, "/bin/echo", "target started")
-            assert result.returncode == 101 and result.stdout == "", result
-            assert (
-                "permission profiles requiring direct runtime enforcement are "
-                "incompatible with --use-legacy-landlock"
-            ) in result.stderr, result
-            stderr = re.sub(
-                r"(thread 'main' \()\d+(\) panicked at)",
-                r"\1<runner pid>\2",
-                result.stderr,
-            )
-            transcript.append(
-                {
-                    "root_access": root_access,
-                    "carveout": carveout,
-                    "stderr": stderr,
-                    "exit_code": result.returncode,
-                    "transcript_normalization": {"runner_pid": "omitted"},
-                }
-            )
     return transcript
 
 
