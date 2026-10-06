@@ -41,6 +41,9 @@ This preserves reads without adding resolver write grants for host package locat
 `RENV_PATHS_CACHE`, `RENV_PATHS_SOURCE`, and `RENV_PATHS_BINARY` are redirected explicitly so an inherited override cannot share host artifacts.
 Worker Matplotlib and general XDG caches retain their private temporary storage and read prepared font caches from the captured location.
 Workers link the warmed font cache into their private Matplotlib directory.
+Valid prepared font caches are reused across dependency activation and worker restarts.
+An absent or invalid cache can trigger construction; Matplotlib emits its own delayed diagnostic when construction takes several seconds, and Console forwards it.
+Replacing a worker-private cache does not update the prepared source.
 Host Matplotlib configuration remains selected independently of this cache.
 Font-cache warmup selects the persistent cache explicitly so a read-only host configuration directory cannot redirect it to temporary storage.
 Explicitly selected Python uses its preinstalled packages and DuckDB extensions.
@@ -201,9 +204,11 @@ With `cache: host`, cache paths and write grants follow the resolver's effective
 | renv                | `RENV_PATHS_ROOT`, otherwise R's cache base plus `R/renv`; explicit `RENV_PATHS_CACHE`, `RENV_PATHS_SOURCE`, and `RENV_PATHS_BINARY` also receive writes |
 | pak/pkgcache        | R's cache base plus `R/pkgcache`; explicit `PKG_CACHE_DIR` and `R_PKG_CACHE_DIR` also receive writes                                                     |
 | DuckDB              | `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY`, otherwise `$HOME/.duckdb/extensions`                                                                           |
-| Matplotlib          | `MPLCONFIGDIR`, otherwise `${XDG_CACHE_HOME:-$HOME/.cache}/matplotlib`                                                                                   |
+| Matplotlib writes   | `MPLCONFIGDIR`, otherwise `${XDG_CACHE_HOME:-$HOME/.cache}/matplotlib`                                                                                   |
 
 R's cache base is `R_USER_CACHE_DIR`, then `XDG_CACHE_HOME`, then `$HOME/Library/Caches/org.R-project.R` on macOS or `$HOME/.cache` on Linux.
+On macOS, Matplotlib's default host cache reads use `$HOME/.matplotlib`.
+Select `MPLCONFIGDIR` explicitly to warm and reuse a host font cache in a writable location; the default write grant above follows XDG selection.
 An explicit `IR_LIBRARY_ROOT` also receives writes.
 When uv's cache, Python installation, and tool directories are not all explicitly selected, macOS additionally permits uv's legacy `$HOME/Library/Caches/uv` and `$HOME/Library/Application Support/uv` locations.
 Host cache mode on macOS also grants Darwin's user temporary directory, which `mktemp` and shell here-documents select independently of `TMPDIR`.
