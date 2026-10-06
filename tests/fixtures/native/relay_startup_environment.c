@@ -17,7 +17,7 @@ static int observe_thread(pthread_t *thread, const pthread_attr_t *attributes,
     // Read the native environment before the relay becomes multithreaded.
     int descriptor = open(getenv("MCP_CONSOLE_TEST_STARTUP_ENVIRONMENT"),
                           O_WRONLY | O_CREAT | O_APPEND, 0600);
-    char present = getenv("MCP_CONSOLE_STARTUP") == NULL ? '0' : '1';
+    char present = getenv("MCP_CONSOLE_STARTUP_FILE") == NULL ? '0' : '1';
     if (descriptor < 0 || write(descriptor, &present, 1) != 1) _exit(90);
     close(descriptor);
 #ifdef __APPLE__

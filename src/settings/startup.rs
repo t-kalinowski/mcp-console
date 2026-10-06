@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_STARTUP";
-// Leave room below Linux's per-string exec limit for a second JSON encoding
-// inside sandbox launcher settings and the rest of that launch envelope.
-const MAX_ENVIRONMENT_BYTES: usize = 32 * 1024;
+pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_STARTUP_FILE";
+const MAX_ENCODED_BYTES: usize = 32 * 1024;
 
 /// Consume process-handoff data before native or interpreter setup.
 ///
@@ -14,6 +12,18 @@ pub(crate) unsafe fn take_environment() -> Option<std::ffi::OsString> {
     // SAFETY: the caller owns the single-threaded process bootstrap.
     unsafe { std::env::remove_var(ENVIRONMENT) };
     value
+}
+
+/// The launch owner removes private storage even if the worker never consumes it.
+pub(crate) struct Transport {
+    _file: tempfile::NamedTempFile,
+    directory: tempfile::TempDir,
+}
+
+impl Transport {
+    pub fn directory(&self) -> &std::path::Path {
+        self.directory.path()
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -36,32 +46,47 @@ impl Startup {
             return Err("startup.code must be nonempty source without NUL".into());
         }
         let encoded = serde_json::to_string(self).map_err(|error| error.to_string())?;
-        // Count UTF-8 bytes after escaping, including NAME= and the final NUL.
-        let bytes = ENVIRONMENT.len() + 1 + encoded.len() + 1;
-        if bytes > MAX_ENVIRONMENT_BYTES {
+        let bytes = encoded.len();
+        if bytes > MAX_ENCODED_BYTES {
             return Err(format!(
-                "startup encoded environment entry is {bytes} bytes; maximum is {MAX_ENVIRONMENT_BYTES} bytes"
+                "startup encoded source is {bytes} bytes; maximum is {MAX_ENCODED_BYTES} bytes"
             ));
         }
         Ok(())
     }
 
-    pub fn configure(&self, command: &mut std::process::Command) -> Result<(), String> {
-        command.env(
-            ENVIRONMENT,
-            serde_json::to_string(self).map_err(|error| error.to_string())?,
-        );
-        Ok(())
+    pub fn configure(&self, command: &mut std::process::Command) -> Result<Transport, String> {
+        let mut builder = tempfile::Builder::new();
+        builder.prefix("mcp-console-startup-");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(std::fs::Permissions::from_mode(0o700));
+        }
+        let directory = builder
+            .tempdir()
+            .map_err(|error| format!("cannot create startup transport directory: {error}"))?;
+        let mut file = tempfile::NamedTempFile::new_in(directory.path())
+            .map_err(|error| format!("cannot create startup transport file: {error}"))?;
+        serde_json::to_writer(file.as_file_mut(), self)
+            .map_err(|error| format!("cannot write startup transport: {error}"))?;
+        command.env(ENVIRONMENT, file.path());
+        Ok(Transport {
+            _file: file,
+            directory,
+        })
     }
 
-    /// # Safety
-    /// Must run at worker entry, before native or interpreter threads start.
-    pub unsafe fn from_environment() -> Result<Option<Self>, String> {
-        // SAFETY: the caller owns the single-threaded worker bootstrap.
-        let Some(value) = (unsafe { take_environment() }) else {
+    pub fn from_file(path: Option<&std::ffi::OsStr>) -> Result<Option<Self>, String> {
+        let Some(path) = path else {
             return Ok(None);
         };
-        let startup: Self = serde_json::from_str(value.to_str().ok_or("startup must be UTF-8")?)
+        let source = std::fs::read(path)
+            .map_err(|error| format!("cannot read startup transport: {error}"))?;
+        // Remove before decoding or interpreter setup, including invalid source.
+        std::fs::remove_file(path)
+            .map_err(|error| format!("cannot consume startup transport: {error}"))?;
+        let startup: Self = serde_json::from_slice(&source)
             .map_err(|error| format!("invalid startup configuration: {error}"))?;
         startup.validate()?;
         Ok(Some(startup))

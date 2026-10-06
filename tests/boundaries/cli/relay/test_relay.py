@@ -41,21 +41,26 @@ def test_consumes_startup_environment_before_forwarding(binary: Path) -> Transcr
         payload = json.dumps(
             {"language": "python", "code": "password = 'startup-token'"}
         )
+        transport = root / "startup.json"
+        transport.write_text(payload)
+        transport.chmod(0o600)
         environment = os.environ | {
             "TMPDIR": str(root),
-            "MCP_CONSOLE_STARTUP": payload,
+            "MCP_CONSOLE_STARTUP_FILE": str(transport),
             "MCP_CONSOLE_TEST_STARTUP_ENVIRONMENT": str(observations),
             LOADER_VARIABLE: str(build_interposer(root, "relay_startup_environment")),
         }
-        # The independent child observes the payload passed at the launch seam.
+        # The independent child consumes the file passed at the launch seam.
         # fmt: python
         source = code("""
             import os
+            import stat
             from pathlib import Path
 
-            Path(os.environ["TMPDIR"]).joinpath("forwarded").write_text(
-                os.environ["MCP_CONSOLE_STARTUP"]
-            )
+            transport = Path(os.environ.pop("MCP_CONSOLE_STARTUP_FILE"))
+            assert stat.S_IMODE(transport.stat().st_mode) == 0o600
+            Path(os.environ["TMPDIR"]).joinpath("forwarded").write_text(transport.read_text())
+            transport.unlink()
             """)
         process = subprocess.Popen(
             [binary, "worker-relay", sys.executable, "-c", source],
@@ -75,6 +80,7 @@ def test_consumes_startup_environment_before_forwarding(binary: Path) -> Transcr
             events = [json.loads(line) for line in stdout.splitlines()]
             assert {"kind": "worker_exited", "code": 0} in events, events
             assert (root / "forwarded").read_text() == payload
+            assert not transport.exists()
             observed = observations.read_bytes()
             assert observed and set(observed) == {ord("0")}, observed
         finally:

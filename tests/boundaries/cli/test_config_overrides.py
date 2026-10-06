@@ -558,13 +558,13 @@ def test_overrides_do_not_bypass_file_errors_or_explicit_inputs(
 def test_rejects_oversized_startup_before_launch(binary: Path) -> Transcript:
     limit = 32 * 1024
 
-    def entry_bytes(language: str, source: str) -> int:
+    def encoded_bytes(language: str, source: str) -> int:
         payload = json.dumps(
             {"language": language, "code": source},
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        return len("MCP_CONSOLE_STARTUP=") + len(payload.encode("utf-8")) + 1
+        return len(payload.encode("utf-8"))
 
     cases = []
     for language, padding in (
@@ -573,11 +573,11 @@ def test_rejects_oversized_startup_before_launch(binary: Path) -> Transcript:
         ("python", "\x01"),
         ("python", "雪"),
     ):
-        remaining = limit + 1 - entry_bytes(language, "#\npass")
-        unit_bytes = entry_bytes(language, padding) - entry_bytes(language, "")
+        remaining = limit + 1 - encoded_bytes(language, "#\npass")
+        unit_bytes = encoded_bytes(language, padding) - encoded_bytes(language, "")
         count, remainder = divmod(remaining, unit_bytes)
         source = "#" + padding * count + "a" * remainder + "\npass"
-        assert entry_bytes(language, source) == limit + 1
+        assert encoded_bytes(language, source) == limit + 1
         cases.append((language, repr(padding), source))
     cases.append(("python", "70,000 leading newlines", "\n" * 70_000 + "pass"))
 
@@ -604,7 +604,7 @@ def test_rejects_oversized_startup_before_launch(binary: Path) -> Transcript:
             )
             assert result.returncode == 1 and result.stdout == "", result
             expected = (
-                f"startup encoded environment entry is {entry_bytes(language, source)} bytes; "
+                f"startup encoded source is {encoded_bytes(language, source)} bytes; "
                 f"maximum is {limit} bytes"
             )
             assert expected in result.stderr, result.stderr

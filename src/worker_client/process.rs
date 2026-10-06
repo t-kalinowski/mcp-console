@@ -205,9 +205,13 @@ impl WorkerRuntime {
             command.env("TMPDIR", temporary.path());
         }
         command.env_remove(crate::settings::startup::ENVIRONMENT);
-        if builtin && let Some(startup) = startup_source {
-            startup.configure(&mut command)?;
-        }
+        // Retain the private file through worker readiness; failures also drop
+        // its owner. The worker consumes it before any interpreter can run.
+        let startup_transport = if builtin && let Some(startup) = startup_source {
+            Some(startup.configure(&mut command)?)
+        } else {
+            None
+        };
         command.env_remove("MCP_CONSOLE_MATPLOTLIB_CACHE");
         if !no_sandbox
             && cfg!(unix)
@@ -244,6 +248,14 @@ impl WorkerRuntime {
         }
         if !no_sandbox {
             let mut settings = sandbox_settings.clone();
+            if let Some(transport) = &startup_transport {
+                settings = crate::sandbox::materialize_settings(
+                    settings,
+                    vec![transport.directory().to_owned()],
+                    &std::env::current_dir()
+                        .map_err(|error| format!("cannot find launch workspace: {error}"))?,
+                )?;
+            }
             crate::settings::preserve_environment(&mut settings, command.get_envs())?;
             command.env(
                 crate::settings::ENVIRONMENT,

@@ -18,7 +18,7 @@ from support.installation import installed_console
 from support.normalization import code
 from support.progress import without_elapsed_result
 from support.records import ToolResult, Transcript
-from support.requirements import POSIX, PROCESS_EVENTS, R, SQL, requires
+from support.requirements import POSIX, PROCESS_EVENTS, R, SQL, command, requires
 from support.resolvers import matplotlib_test_environment
 from support.snapshots import normalize_request_ids
 from boundaries.client_server.python.test_startup import isolated_python
@@ -30,6 +30,64 @@ def configure(workspace: Path, language: str, source: str) -> Path:
     config.parent.mkdir(parents=True)
     config.write_text(json.dumps({"startup": {"language": language, "code": source}}))
     return config
+
+
+@requires(POSIX, R, SQL, command("ps"))
+@executions(DIRECT)
+def test_startup_source_absent_from_exec_environments(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    marker = "captured-startup-credential-marker"
+    for language in ("python", "r"):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            if language == "python":
+                # fmt: python
+                source = code("""
+                    import sqlite3
+
+                    native = sqlite3.connect(":memory:")
+                    console_sql_connection(native)
+                    """)
+            else:
+                # fmt: r
+                source = code("""
+                    native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+                    console_sql_connection(native)
+                    """)
+            configure(workspace, language, f"# {marker}\n" + source)
+            with McpClient(
+                binary,
+                execution.serve(),
+                os.environ | {"TMPDIR": str(workspace)},
+                workspace,
+            ) as client:
+                client.initialize_and_list_tools()
+                for restart in (False, True):
+                    if restart:
+                        client.send(control="restart")
+                    client.expect(sql="CREATE TABLE ready (answer INTEGER)")
+                    assert not list(workspace.glob("mcp-console-startup-*"))
+                    # Observe the worker and its relay after startup handoff.
+                    # Neither live environments nor the OS exec snapshot may
+                    # retain the credential-bearing captured source.
+                    # fmt: python
+                    inspect = code("""
+                        import os
+                        import subprocess
+
+                        marker = "captured-startup-credential-marker"
+                        assert marker not in repr(dict(os.environ))
+                        assert marker.encode() not in subprocess.check_output(["/usr/bin/env"])
+                        for pid in (os.getpid(), os.getppid()):
+                            environment = subprocess.check_output(["ps", "eww", "-p", str(pid)])
+                            assert marker.encode() not in environment, "captured startup source remains in OS environment"
+                        """)
+                    client.expect(python=inspect)
+                client.finish()
+            records.append({"startup": language, "exec_environment_consumed": True})
+    return records
 
 
 @requires(R, SQL)
@@ -269,8 +327,8 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
 
 
             def assert_startup_transport_consumed() -> None:
-                assert "MCP_CONSOLE_STARTUP" not in os.environ
-                assert b"MCP_CONSOLE_STARTUP=" not in subprocess.check_output(["/usr/bin/env"])
+                assert "MCP_CONSOLE_STARTUP_FILE" not in os.environ
+                assert b"MCP_CONSOLE_STARTUP_FILE=" not in subprocess.check_output(["/usr/bin/env"])
 
 
             assert_startup_transport_consumed()
@@ -282,23 +340,21 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
             console_sql_connection(native)
             """)
         # Exercise the documented limit with UTF-8 and JSON-escaped characters,
-        # including the launcher's nested JSON envelope and captured restart.
+        # including disabled environment inheritance and captured restart.
         source = "#" + 'é雪"\\' * 1000 + "\n" + source
         payload = json.dumps(
             {"language": "python", "code": source},
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        entry_bytes = len("MCP_CONSOLE_STARTUP=") + len(payload.encode("utf-8")) + 1
-        source = "#" + "a" * (32 * 1024 - entry_bytes - 3) + "\n" + source
+        encoded_bytes = len(payload.encode("utf-8"))
+        source = "#" + "a" * (32 * 1024 - encoded_bytes - 3) + "\n" + source
         payload = json.dumps(
             {"language": "python", "code": source},
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        assert (
-            len("MCP_CONSOLE_STARTUP=") + len(payload.encode("utf-8")) + 1 == 32 * 1024
-        )
+        assert len(payload.encode("utf-8")) == 32 * 1024
         config = configure(workspace, "r", source)
         with McpClient(
             binary,
@@ -388,8 +444,8 @@ def test_python_startup_without_r(binary: Path, execution: Execution) -> Transcr
 
 
             def assert_startup_transport_consumed() -> None:
-                assert "MCP_CONSOLE_STARTUP" not in os.environ
-                assert b"MCP_CONSOLE_STARTUP=" not in subprocess.check_output(["/usr/bin/env"])
+                assert "MCP_CONSOLE_STARTUP_FILE" not in os.environ
+                assert b"MCP_CONSOLE_STARTUP_FILE=" not in subprocess.check_output(["/usr/bin/env"])
 
 
             assert_startup_transport_consumed()
@@ -421,11 +477,14 @@ def test_r_startup_preserves_native_identity_and_transaction(
         # fmt: r
         source = code("""
             assert_startup_transport_consumed <- function() {
-              stopifnot(is.na(Sys.getenv("MCP_CONSOLE_STARTUP", unset = NA_character_)))
+              stopifnot(is.na(Sys.getenv(
+                "MCP_CONSOLE_STARTUP_FILE",
+                unset = NA_character_
+              )))
               stopifnot(
                 !any(startsWith(
                   system2("/usr/bin/env", stdout = TRUE),
-                  "MCP_CONSOLE_STARTUP="
+                  "MCP_CONSOLE_STARTUP_FILE="
                 ))
               )
             }

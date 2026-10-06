@@ -15,7 +15,7 @@ pub(super) fn prepare_r_library_path(
     _installation: Option<&crate::local_runtime::RInstallation>,
     _reader: &crate::sideband::Reader,
     _writer: &crate::sideband::Writer,
-    _startup: Option<&crate::settings::startup::Startup>,
+    _startup: Option<&std::ffi::OsStr>,
 ) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
@@ -25,7 +25,7 @@ pub(super) fn prepare_r_library_path(
     installation: Option<&crate::local_runtime::RInstallation>,
     reader: &crate::sideband::Reader,
     writer: &crate::sideband::Writer,
-    startup: Option<&crate::settings::startup::Startup>,
+    startup: Option<&std::ffi::OsStr>,
 ) -> Result<(), Box<dyn Error>> {
     if let Some(installation) = installation {
         reexec_with_r_library_path(&installation.home, reader, writer, startup)?;
@@ -38,7 +38,7 @@ fn reexec_with_r_library_path(
     r_home: &std::path::Path,
     reader: &crate::sideband::Reader,
     writer: &crate::sideband::Writer,
-    startup: Option<&crate::settings::startup::Startup>,
+    startup: Option<&std::ffi::OsStr>,
 ) -> Result<(), Box<dyn Error>> {
     use std::os::unix::process::CommandExt;
 
@@ -56,10 +56,10 @@ fn reexec_with_r_library_path(
     command
         .args(std::env::args_os().skip(1))
         .env("LD_LIBRARY_PATH", std::env::join_paths(paths)?);
-    // Worker entry already consumed the transport; only this loader re-exec
-    // may forward it again, before any interpreter has evaluated the source.
+    // Entry consumed the path from the environment. Forward only that path
+    // across loader re-exec; the replacement unlinks it before runtime setup.
     if let Some(startup) = startup {
-        startup.configure(&mut command)?;
+        command.env(crate::settings::startup::ENVIRONMENT, startup);
     }
     crate::sideband::configure_exec(reader, writer, &mut command)?;
     Err(command.exec().into())
