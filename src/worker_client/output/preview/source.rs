@@ -1,6 +1,33 @@
 use super::Gap;
 use std::path::Path;
 
+const LOCATION_BYTES: usize = super::TEXT_BYTES / 16;
+
+/// Keep the generated session/file suffix exact when the configured recording
+/// prefix is too long. That suffix is bounded independently of the host path.
+fn recording_location(path: &Path, session: &Path, directory: bool) -> String {
+    let separator = if directory {
+        std::path::MAIN_SEPARATOR_STR
+    } else {
+        ""
+    };
+    let full = format!("{}{separator}", path.display());
+    if full.len() <= LOCATION_BYTES {
+        return full;
+    }
+    let console = session
+        .parent()
+        .expect("recording sessions directory")
+        .parent()
+        .expect("Console recording directory");
+    format!(
+        "{}{separator} (relative to Console recording directory)",
+        path.strip_prefix(console)
+            .expect("session-owned recording location")
+            .display()
+    )
+}
+
 #[derive(Clone, Default)]
 pub(in crate::worker_client::output) struct Source {
     pub(in crate::worker_client::output) file: Option<crate::transcript::OutputRecord>,
@@ -46,14 +73,17 @@ impl Location {
 
     pub(super) fn describe(&self, singular: &str, plural: &str) -> Option<String> {
         self.path.as_ref().map(|path| {
+            let path = Path::new(path);
+            let directory = if self.directory {
+                path
+            } else {
+                path.parent().expect("recorded file directory")
+            };
+            let session = directory.parent().expect("recording session directory");
             format!(
-                "{} on Console host: {path}{}",
+                "{} on Console host: {}",
                 if self.directory { plural } else { singular },
-                if self.directory {
-                    std::path::MAIN_SEPARATOR_STR
-                } else {
-                    ""
-                }
+                recording_location(path, session, self.directory)
             )
         })
     }
@@ -67,12 +97,10 @@ impl Location {
         } else {
             directory.parent().expect("recording session directory")
         };
-        // Sharing the session prefix also keeps two near-limit filesystem paths
-        // inside the complete text budget. The relative names remain usable.
+        // Share and bound the session prefix once; filenames stay exact.
         Some(format!(
-            "retained output on Console host: {}{}; logs: {}{}; images: {}{}",
-            session.display(),
-            std::path::MAIN_SEPARATOR_STR,
+            "retained output on Console host: {}; logs: {}{}; images: {}{}",
+            recording_location(session, session, true),
             logs.strip_prefix(session)
                 .expect("session-owned logs")
                 .display(),

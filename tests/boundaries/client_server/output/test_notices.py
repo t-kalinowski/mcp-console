@@ -22,33 +22,44 @@ def test_names_readable_logs_once_with_long_unicode_paths(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        recording = root.joinpath(*(["recording-" + "é" * 70] * 4))
-        recording.mkdir(parents=True)
         workspace = root / "workspace"
         workspace.mkdir()
-        with McpClient(
-            binary,
-            execution.serve(),
-            {**os.environ, "MCP_CONSOLE_HOME": str(recording)},
-            workspace,
-            record_in_project=False,
-            use_home_configuration=True,
-        ) as client:
-            client.initialize_and_list_tools()
-            client.expect("normal 🙂", python="print('normal 🙂', end='')")
-            client.send(python="print('a€🙂b' * 4000, end='')")
-            text = last_tool_text(client)
-            assert_preview(text, "a€🙂b" * 4000)
-            session = next((recording / "sessions").iterdir())
-            path = session / "outputs/call-000002.log"
-            assert path.read_text() == "a€🙂b" * 4000
-            (marker,) = OMISSION.finditer(text)
-            _, advertised_path = marker[0].split("; raw log on Console host: ", 1)
-            assert Path(advertised_path.removesuffix("]\n")) == path
-            assert text.count(str(recording)) == 1
-            client.send()
-            assert last_tool_text(client) == "\n[idle]"
-            client.finish()
+        for compact in (False, True):
+            recording = (
+                root.joinpath(*(["recording-" + "é" * 70] * 4))
+                if compact
+                else root / "recording"
+            )
+            recording.mkdir(parents=True)
+            with McpClient(
+                binary,
+                execution.serve(),
+                {**os.environ, "MCP_CONSOLE_HOME": str(recording)},
+                workspace,
+                record_in_project=False,
+                use_home_configuration=True,
+            ) as client:
+                client.initialize_and_list_tools()
+                client.expect("normal 🙂", python="print('normal 🙂', end='')")
+                client.send(python="print('a€🙂b' * 4000, end='')")
+                text = last_tool_text(client)
+                assert_preview(text, "a€🙂b" * 4000)
+                session = next((recording / "sessions").iterdir())
+                path = session / "outputs/call-000002.log"
+                assert path.read_text() == "a€🙂b" * 4000
+                (marker,) = OMISSION.finditer(text)
+                _, advertised_path = marker[0].split("; raw log on Console host: ", 1)
+                advertised_path = advertised_path.removesuffix("]\n")
+                if compact:
+                    suffix = " (relative to Console recording directory)"
+                    assert advertised_path.endswith(suffix)
+                    assert recording / advertised_path.removesuffix(suffix) == path
+                else:
+                    assert Path(advertised_path) == path
+                assert text.count(str(recording)) == int(not compact)
+                client.send()
+                assert last_tool_text(client) == "\n[idle]"
+                client.finish()
     return [
         {
             "normal_text_exact": True,

@@ -22,6 +22,7 @@ from support.previews import (
     cell_text,
     normalize_preview_paths,
     session_directory,
+    TEXT_BUDGET,
 )
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, requires
@@ -264,6 +265,8 @@ def compact_cancelled_exchanges(
 @contextmanager
 def recovery_client(
     binary: Path,
+    *,
+    recording_directory: Path | None = None,
 ) -> Iterator[tuple[McpClient, AllocationProfile, FifoCheckpoint, FifoCheckpoint]]:
     worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
     with tempfile.TemporaryDirectory() as temporary:
@@ -281,7 +284,14 @@ def recovery_client(
                     "MCP_CONSOLE_TEST_RESULT_REACHED": str(reached.path),
                     "MCP_CONSOLE_TEST_RESULT_RELEASE": str(release.path),
                     "MCP_CONSOLE_TEST_PREVIEW_DIRECTORY": str(root),
+                    **(
+                        {"MCP_CONSOLE_HOME": str(recording_directory)}
+                        if recording_directory is not None
+                        else {}
+                    ),
                 },
+                record_in_project=recording_directory is None,
+                use_home_configuration=recording_directory is not None,
             ) as client,
         ):
             client.initialize_and_list_tools()
@@ -492,6 +502,75 @@ def test_composed_image_omission_names_existing_artifact(binary: Path) -> Transc
         {
             "composed_image_omission_has_readable_artifact": True,
             "accepted_image_preserved": True,
+            "poll_consumed_notice": True,
+        }
+    ]
+
+
+@requires(NATIVE_FIXTURES)
+def test_long_recording_paths_keep_image_omissions_readable(binary: Path) -> Transcript:
+    for mixed in (False, True):
+        with tempfile.TemporaryDirectory() as temporary:
+            recording = Path(temporary).joinpath(*(["recording-" + "é" * 70] * 4))
+            recording.mkdir(parents=True)
+            with recovery_client(binary, recording_directory=recording) as (
+                client,
+                profile,
+                reached,
+                release,
+            ):
+                for _ in range(2):
+                    pending = client.start_send(
+                        control="interrupt",
+                        r=(
+                            "preview allocation image and text"
+                            if mixed
+                            else "preview allocation image"
+                        ),
+                    )
+                    cancel_result(client, pending, reached, release)
+                profile.pause_results(False)
+                result = client.send(control="interrupt")
+                assert not result["isError"], result
+                text = "".join(
+                    block["text"]
+                    for block in result["content"]
+                    if block["type"] == "text"
+                )
+                assert len(text.encode()) <= TEXT_BUDGET
+                assert text.count("[output omitted:") == 1, text
+                session = next((recording / "sessions").iterdir())
+                artifacts = sorted((session / "artifacts").iterdir())
+                assert len(artifacts) == 2, artifacts
+                omitted = artifacts[1]
+                assert omitted.read_bytes() == bytes(6 * 1024 * 1024)
+                if mixed:
+                    location = (
+                        f"retained output on Console host: sessions/{session.name}/"
+                        " (relative to Console recording directory)"
+                    )
+                    assert location in text
+                    assert "logs: outputs/" in text
+                    assert f"images: artifacts/{omitted.name}" in text
+                else:
+                    marker = re.search(r"\n\[output omitted: [^\n]*\]\n", text)
+                    assert marker is not None, text
+                    _, advertised = marker[0].split(
+                        "; retained image on Console host: ", 1
+                    )
+                    suffix = " (relative to Console recording directory)]\n"
+                    assert advertised.endswith(suffix)
+                    assert recording / advertised.removesuffix(suffix) == omitted
+                assert str(recording) not in text
+                assert sum(block["type"] == "image" for block in result["content"]) == 1
+                client.send()
+                assert last_tool_text(client) == "\n[idle]"
+                client.finish()
+    return [
+        {
+            "long_path_image_only_omission_readable": True,
+            "long_path_mixed_omission_readable": True,
+            "complete_text_budget_preserved": True,
             "poll_consumed_notice": True,
         }
     ]

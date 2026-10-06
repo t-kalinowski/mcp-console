@@ -279,6 +279,7 @@ Images have independent limits: 8 MiB encoded data, 64 KiB MIME metadata, and 4,
 Whole images are admitted; text limits do not consume their allowance.
 One notice reports omitted text/images and names available raw logs or image artifacts on the Console host.
 Multiple sources share a directory location; later gaps use `[…]` without repeating retrieval instructions.
+Long locations use exact session/file paths explicitly relative to the Console recording directory, keeping retrieval notices within the text budget.
 If recording is disabled or fails, the notice says when omitted output is unavailable.
 Partially retained logs are identified as prefixes, and images rejected before recording are marked as not retained.
 
