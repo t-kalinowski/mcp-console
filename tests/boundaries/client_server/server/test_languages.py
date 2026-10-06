@@ -15,6 +15,7 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.installation import installed_console
 from support.linux_sandbox import retain_system_bwrap
+from support.normalization import code
 from support.records import Transcript
 from support.requirements import POSIX, R, SQL, requires
 
@@ -121,7 +122,7 @@ def test_configures_captured_tool_surface(binary: Path) -> Transcript:
 @requires(SQL)
 def test_builtin_guidance_matches_visible_languages(binary: Path) -> Transcript:
     transcript = []
-    for languages in (["sql"], ["sql", "python"]):
+    for languages in (["sql"], ["sql", "python"], ["r", "sql"]):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _configure(root, languages)
@@ -130,16 +131,28 @@ def test_builtin_guidance_matches_visible_languages(binary: Path) -> Transcript:
                 tool = _tool(client)
                 assert (
                     "Persistent "
-                    + ("Python and SQL" if "python" in languages else "SQL")
+                    + " and ".join(
+                        name
+                        for name in ("R", "Python", "SQL")
+                        if name.lower() in languages
+                    )
                     + " workbench"
                     in tool["description"]
                 )
                 assert "without a setup cell" in tool["description"]
-                assert "`r`" not in tool["description"]
+                if "r" not in languages:
+                    assert "`r`" not in tool["description"]
                 properties = tool["inputSchema"]["properties"]
-                assert "from an R cell" not in properties["sql"]["description"]
+                sql_guidance = properties["sql"]["description"]
+                assert "With R-owned managed DuckDB" in sql_guidance
+                assert "Without R, managed DuckDB uses Python" in sql_guidance
+                if "r" not in languages:
+                    assert "from an R cell" not in sql_guidance
                 if "python" in languages:
-                    assert "`r.name`" not in properties["python"]["description"]
+                    python_guidance = properties["python"]["description"]
+                    assert "With R-owned DuckDB" in python_guidance
+                    assert "`r.name`" in python_guidance
+                    assert "Without R, `sql_connection()`" in python_guidance
                     assert "R plot rules" not in properties["python"]["description"]
                 else:
                     assert (
@@ -150,6 +163,72 @@ def test_builtin_guidance_matches_visible_languages(binary: Path) -> Transcript:
                 )
                 client.finish()
                 transcript.append({"languages": languages, "tool": _surface(tool)})
+    return transcript
+
+
+@requires(SQL, R)
+@executions(DIRECT, SANDBOXED)
+def test_sql_provider_guidance_is_independent_of_visibility(
+    binary: Path, execution: Execution
+) -> Transcript:
+    transcript = []
+    for languages in (["sql", "python"], ["r", "sql"]):
+        advertised = None
+        for without_r in (False, True):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                _configure(root, languages)
+                with McpClient(
+                    installed_console(binary),
+                    execution.serve(),
+                    _environment(root, without_r=without_r),
+                    root,
+                ) as client:
+                    client.initialize_and_list_tools()
+                    tool = _tool(client)
+                    description = tool["description"]
+                    assert "R when available and Python otherwise" in description
+                    if advertised is None:
+                        advertised = tool
+                    else:
+                        assert tool == advertised
+                    if "python" in languages:
+                        assert "R-owned managed DuckDB" in description
+                        assert "Without R, Python-owned DuckDB" in description
+                        client.send(
+                            # fmt: python
+                            python=code("""
+                                import pandas as pd
+
+                                frame = pd.DataFrame({"value": [19, 23]})
+                                """)
+                        )
+                        assert "Error" not in last_tool_text(client)
+                        if without_r:
+                            client.send(
+                                python='_ = sql_connection().register("visible_frame", frame)'
+                            )
+                        else:
+                            client.send(python="r.visible_frame = frame")
+                        assert "Error" not in last_tool_text(client)
+                        client.send(
+                            sql="SELECT sum(value) AS answer FROM visible_frame"
+                        )
+                    else:
+                        client.send(sql="SELECT 42 AS answer")
+                    assert "42" in last_tool_text(client), last_tool_text(client)
+                    assert _tool(client) == tool
+                    transcript.append(
+                        {
+                            "languages": languages,
+                            "provider": "Python" if without_r else "R",
+                            "calls": [
+                                entry
+                                for entry in client.finish()[3:]
+                                if "send" in entry
+                            ],
+                        }
+                    )
     return transcript
 
 

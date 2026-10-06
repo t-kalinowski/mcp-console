@@ -250,14 +250,13 @@ pub(super) fn python_description() -> String {
 
 fn python_description_for(languages: Languages) -> String {
     let mut description = sections::PYTHON_RUNTIME.to_string();
-    if languages.r {
+    // SQL may use hidden R; its Python bridge remains usable from a Python cell.
+    if languages.r || languages.sql {
         description.push_str(sections::PYTHON_BRIDGE);
     }
     if languages.sql {
         description.push_str(sections::PYTHON_SQL);
-        if languages.r {
-            description.push_str(sections::PYTHON_SQL_R);
-        }
+        description.push_str(sections::PYTHON_SQL_R);
         description.push_str(sections::PYTHON_SQL_CONNECTION);
     }
     description.push_str(sections::PYTHON_PLOTS);
@@ -274,15 +273,16 @@ pub(super) fn sql_description() -> String {
 
 fn sql_description_for(languages: Languages) -> String {
     let mut description = sections::SQL_RUNTIME.to_string();
-    if languages.r {
-        description.push_str(sections::SQL_R_FRAMES);
-    }
+    // Provider contingencies follow runtime capability, not visible code fields.
+    description.push_str(sections::SQL_R_FRAMES);
     description.push_str(sections::SQL_DRIVERS);
     if languages.r {
         description.push_str(sections::SQL_R_STATEMENTS);
     }
     if languages.python {
         description.push_str(sections::SQL_PYTHON_FRAMES);
+    } else {
+        description.push_str(sections::SQL_HIDDEN_PYTHON);
     }
     description.push_str(sections::SQL_OPERATIONS);
     description

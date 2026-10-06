@@ -133,11 +133,11 @@ interrupted evaluation remains active. When `requirements` is available, restart
 same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
 and unread-stdin state and sends same-call stdin and code only to the replacement."#;
 
-pub(super) const MANAGED_SQL_R: &str = r#"R-owned managed DuckDB SQL can query R data frames by name. R accesses its SQL connection through `sql_connection()` and can select a user-owned connection with `console_sql_connection(connection)`. "#;
+pub(super) const MANAGED_SQL_R: &str = r#"With R-owned managed DuckDB active, SQL can query R data frames by name. R accesses its SQL connection through `sql_connection()` and can select a user-owned connection with `console_sql_connection(connection)`. "#;
 
-pub(super) const MANAGED_SQL_PYTHON: &str = r#"Without R, Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
+pub(super) const MANAGED_SQL_PYTHON: &str = r#"With R-owned managed DuckDB, bind Python data frames to R names through `r.name` before querying them. Without R, Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
 
-pub(super) const SQL_PROVIDER: &str = r#"SQL uses its configured provider without a setup cell. Hidden R or Python runtimes can implement SQL. Keep `requirements.r` and `requirements.python` available for provider preparation; a missing-provider diagnostic identifies the required package and restart. "#;
+pub(super) const SQL_PROVIDER: &str = r#"SQL uses its configured provider without a setup cell. Managed DuckDB uses R when available and Python otherwise, independently of visible language fields. Hidden R or Python runtimes can implement SQL. Keep `requirements.r` and `requirements.python` available for provider preparation; a missing-provider diagnostic identifies the required package and restart. "#;
 
 pub(super) const WINDOWS_PREPARATION: &str = r#" Managed R and Python requirements are prepared by ir and uv on the host. Explicit Python selections use preinstalled packages. SQL is not yet supported."#;
 
@@ -158,6 +158,9 @@ interface."#;
 
 pub(super) const SQL_PYTHON_FRAMES: &str = r#" Without R, managed DuckDB uses Python and requires explicit frame registration
 through `sql_connection().register(name, frame)`; it does not scan Python globals."#;
+
+pub(super) const SQL_HIDDEN_PYTHON: &str =
+    r#" Without R, managed DuckDB uses Python; it does not scan Python globals."#;
 
 pub(super) const SQL_OPERATIONS: &str = r#"
 Managed DuckDB conveniences and extension requirements apply only to the managed
