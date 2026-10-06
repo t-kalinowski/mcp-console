@@ -20,12 +20,13 @@ from boundaries.client_server.server.test_startup import (
     discovery_environment,
     wait_for_send_admission,
 )
-from support.checkpoints import FifoCheckpoint
-from support.assertions import wait_for_idle_output
+from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
+from support.assertions import last_tool_text, wait_for_idle_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
+from support.previews import assert_preview, compact_previews
 from support.processes import (
     capture_process_identity,
     child_process_identities,
@@ -60,6 +61,140 @@ def preparation_reap_environment(root: Path, python: Path) -> dict[str, str]:
         }
     )
     return environment
+
+
+@requires(NATIVE_FIXTURES)
+def test_retry_retains_preparation_startup_and_idle_output(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        python, site = isolated_python(root)
+        python.unlink()
+        environment = selected_python(root, python)
+        environment.pop("R_HOME", None)
+        environment["PATH"] = str(root)
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(root, "discovery_diagnostic")
+        )
+        startup_text = "recorded Python startup\n"
+        idle_text = "idle head\n" + "s" * 32768 + "\nidle tail\n"
+        with (
+            closing(FifoCheckpoint.create(root / "startup-release")) as startup,
+            closing(FifoCheckpoint.create(root / "idle-release")) as idle,
+            McpClient(
+                binary,
+                DIRECT.serve(),
+                environment,
+                root,
+            ) as client,
+        ):
+            (site / "sitecustomize.py").write_text(
+                # fmt: python
+                code(f"""
+                    import sys
+                    from pathlib import Path
+
+                    if sys.argv[0] != "-c":
+                        with Path({str(startup.path)!r}).open("rb", buffering=0) as gate:
+                            assert gate.read(1) == b"1"
+                        print({startup_text!r}, end="", flush=True)
+                    """),
+            )
+            client.initialize_and_list_tools()
+            failure = client.send()
+            assert failure.get("isError"), failure
+            assert "selected Python executable is not an absolute file" in str(failure)
+            (log,) = (root / ".agents/console/sessions").glob("*/outputs/session.log")
+            preparation = b"preparation detail\n"
+            assert log.read_bytes() == preparation
+            inode = log.stat().st_ino
+
+            python.symlink_to(sys.executable)
+            restart = client.start_send(control="restart", timeout_ms=60_000)
+            wait_for_checkpoint(
+                lambda: log if log.read_bytes() == preparation * 2 else None,
+                "retry preparation appends to the original session log",
+                root=log.parent,
+                client=client,
+            )
+            client.receive(restart)
+            repaired = restart["result"]
+            assert not repaired.get("isError"), repaired
+            assert last_tool_text(client) == preparation.decode() + "\n[idle]", repaired
+            startup.release()
+            wait_for_idle_output(
+                client, startup_text + "\n[idle]", "repaired startup output"
+            )
+            assert log.read_bytes() == preparation * 2 + startup_text.encode()
+
+            client.expect(
+                "[done]",
+                # fmt: python
+                python=code(f"""
+                    from pathlib import Path
+                    from threading import Thread
+
+                    def emit_idle():
+                        with Path({str(idle.path)!r}).open("rb", buffering=0) as gate:
+                            assert gate.read(1) == b"1"
+                        print("idle head\\n" + "s" * 32768 + "\\nidle tail", flush=True)
+
+                    thread = Thread(target=emit_idle)
+                    thread.start()
+                    """),
+            )
+            idle.release()
+            expected_raw = preparation * 2 + startup_text.encode() + idle_text.encode()
+            wait_for_checkpoint(
+                lambda: log if log.read_bytes() == expected_raw else None,
+                "post-repair idle text is retained outside the completed cell",
+                root=log.parent,
+                client=client,
+            )
+            client.send()
+            preview = last_tool_text(client)
+            assert preview.endswith("\n[idle]"), preview
+            omitted = assert_preview(preview.removesuffix("\n[idle]"), idle_text)
+            assert (
+                f"raw log: .agents/console/sessions/{log.parent.parent.name}/outputs/session.log"
+                in preview
+            )
+            client.expect("42\n", python="thread.join(); 42")
+            assert log.stat().st_ino == inode
+            compact_previews(client, "s")
+            transcript = client.finish()
+            assert log.read_bytes() == expected_raw
+            events = [
+                json.loads(line)
+                for line in (log.parent.parent / "internal/events.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            (summary,) = [
+                event for event in events if event["event"] == "session_output"
+            ]
+            assert summary["retained_bytes"] == len(expected_raw), summary
+            assert summary["discarded_bytes"] == 0, summary
+            assert summary["inline_omitted_bytes"] == omitted, summary
+            return json.loads(
+                json.dumps(transcript)
+                .replace(str(root), "<workspace>")
+                .replace(log.parent.parent.name, "<run ID>")
+            ) + [
+                {
+                    "session_output": {
+                        key: summary[key]
+                        for key in (
+                            "path",
+                            "retained_bytes",
+                            "discarded_bytes",
+                            "inline_omitted_bytes",
+                        )
+                    },
+                    "original_log_preserved": True,
+                }
+            ]
 
 
 @requires(POSIX, PYTHON_FRAMEWORK, command("uv"))

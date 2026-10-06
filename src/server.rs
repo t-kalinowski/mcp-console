@@ -509,6 +509,8 @@ pub async fn run(
                 let runtime = startup.runtime();
                 if runtime.worker.is_configured() {
                     runtime.worker.shutdown(deadline).await?;
+                } else {
+                    runtime.worker.finish_recording();
                 }
                 startup.finish_failed_preparation(error)
             }

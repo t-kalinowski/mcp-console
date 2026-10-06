@@ -1142,6 +1142,13 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
             assert results[-1]["result"]["isError"], results[-1]
             assert "fixture R discovery failed" in str(results[-1]), results[-1]
             assert sum(event["event"] == "startup_failed" for event in events) == 1
+            (session_output,) = [
+                event for event in events if event["event"] == "session_output"
+            ]
+            raw = (session / "outputs/session.log").read_bytes()
+            assert raw == b"preparation detail\n"
+            assert session_output["retained_bytes"] == len(raw), session_output
+            assert session_output["discarded_bytes"] == 0, session_output
             assert events[0]["dynamic_resolution"] is None, events[0]
             assert events[0]["python_preparation"] is None, events[0]
             quarto = (session / "transcript.qmd").read_text()

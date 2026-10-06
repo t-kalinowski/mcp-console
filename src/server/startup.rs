@@ -114,9 +114,9 @@ impl Startup {
             .await
             .map_err(|error| format!("runtime preparation task failed: {error}"))
             .and_then(|result| result);
+            // Recording belongs to the connection, including later setup retries.
             if let Err(error) = &result {
                 recording.startup_failed(error);
-                worker.finish_recording();
             }
             let mut control = completion.lock().expect("startup cancellation lock");
             worker.finish_startup(result);
