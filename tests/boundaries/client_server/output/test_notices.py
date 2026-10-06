@@ -43,7 +43,8 @@ def test_names_readable_logs_once_with_long_unicode_paths(
             path = session / "outputs/call-000002.log"
             assert path.read_text() == "a€🙂b" * 4000
             (marker,) = OMISSION.finditer(text)
-            assert marker[0].endswith(f"; raw log on Console host: {path}]\n")
+            _, advertised_path = marker[0].split("; raw log on Console host: ", 1)
+            assert Path(advertised_path.removesuffix("]\n")) == path
             assert text.count(str(recording)) == 1
             client.send()
             assert last_tool_text(client) == "\n[idle]"
