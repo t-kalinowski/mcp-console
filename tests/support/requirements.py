@@ -137,16 +137,6 @@ SYSTEM_FONTS = Requirement(
     "requires macOS system_profiler font discovery",
 )
 
-GREAT_TABLES_BROWSER = Requirement(
-    "Great Tables browser rendering",
-    all(
-        (path := Path(os.environ.get(name, ""))).is_absolute() and path.is_file()
-        for name in ("MCP_CONSOLE_TEST_CHROME", "MCP_CONSOLE_TEST_CHROMEDRIVER")
-    ),
-    "requires absolute MCP_CONSOLE_TEST_CHROME and MCP_CONSOLE_TEST_CHROMEDRIVER "
-    "paths selecting Chrome and a matching preinstalled driver (direct mode)",
-)
-
 
 def command(name: str) -> Requirement:
     return Requirement(
