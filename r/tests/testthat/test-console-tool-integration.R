@@ -202,7 +202,7 @@ test_that("console_tool works when registered with an ellmer chat", {
             )
             expect_match(
               text,
-              paste0(" UTF-8 bytes; raw log on Console host: ", raw_log, "]"),
+              paste0(" UTF-8 bytes; raw log: ", raw_log, "]"),
               fixed = TRUE
             )
             expect_true(file.exists(raw_log))
