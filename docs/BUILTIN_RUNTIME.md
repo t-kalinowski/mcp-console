@@ -141,7 +141,7 @@ The working-directory import entry follows `os.chdir()`.
 NumPy/pandas display defaults use width 200 without overwriting nondefault startup settings or later user changes.
 Bridge attachment preserves the running interpreter, objects, selected connection, and user stream redirections.
 Interrupted setup can retry completed-safe steps; incompatible identity or unsafe partial initialization requires replacement.
-Python-owned SQL cells also finish incomplete Python setup before execution, including when Python is hidden in a SQL-only session.
+Python-owned SQL cells also finish incomplete Python setup before execution.
 See [current limitations](#current-limitations).
 
 Main-thread text uses Console channels.
@@ -169,10 +169,9 @@ Both interpreters and reentrant bridge calls share the worker's owning thread.
 
 ## SQL and DuckDB
 
-Managed SQL keeps one connection and catalog per worker.
-[SQL configuration](CONFIGURATION.md#managed-sql-connection) selects the native provider, database, read-only mode, and startup options.
-The default `auto` selects R/DBI when R is available, otherwise Python/DB-API.
-Explicit Python selection works with R installed and does not depend on the first initialized interpreter.
+Managed SQL uses one in-memory DuckDB connection and persistent catalog.
+With R available it belongs to R/DBI; without R it belongs to Python/DB-API.
+[Captured startup source](CONFIGURATION.md#session-startup-source) can select a native DBI or DB-API connection after session helpers are installed and before SQL runs, without opening an unused managed default.
 SQL-only use still needs one of those adapters.
 DuckDB CLI dot commands are not supported.
 Defaults prepare SQLite for read-only attachment; use `READ_ONLY` when opening databases outside sandbox-writable paths.
@@ -180,7 +179,7 @@ Defaults prepare SQLite for read-only attachment; use `READ_ONLY` when opening d
 With R-owned DuckDB, unqualified relation names can refer to R global data frames; a table/view with that name takes precedence.
 A view sees later rebinding of the R name.
 Python frames must be assigned to an R global first.
-With Python-selected DuckDB, register frames explicitly with `sql_connection().register("name", frame)`; Python and R globals are not scanned or copied into the Python catalog.
+With Python-owned DuckDB, register frames explicitly with `sql_connection().register("name", frame)`; Python and R globals are not scanned or copied into the Python catalog.
 
 Select another backend without moving its connection between languages:
 
@@ -200,18 +199,16 @@ console_sql_connection(None)  # Restore the existing managed catalog.
 ```
 
 The latest selection controls SQL cells.
-An R connection selected before Python initializes can execute SQL without starting the configured Python managed provider; later Python initialization preserves that selection.
+An R connection selected before Python initializes can execute SQL without starting Python; later Python initialization preserves that selection.
 SQL on a selected R connection can continue while Python setup is incomplete without resuming that setup.
 Interrupting selection replay leaves Python setup incomplete; a later Python cell retries setup while preserving the R connection, its transaction, and live worker state.
 User connections remain user-owned; restoring managed DuckDB does not close them.
 Never disconnect Console's managed connection.
 R `sql_connection()` returns its selected R-owned connection even while SQL cells use a Python selection.
-With a Python managed default and no selected R connection, it reports guidance to use Python `sql_connection()`; no native handle is proxied.
-Python `sql_connection()` is available with the Python managed default and returns its active Python connection.
-Reset from either language restores the configured managed provider and the same managed catalog without closing user connections or changing their transactions.
-If initializing Python during an R reset is interrupted or fails, the reset reports an error and preserves the selected R connection; retry the reset after initialization succeeds.
-R previews of user DBI connections use a private in-memory rendering catalog independently of the managed provider and its connection settings.
-Managed database or startup-option failures do not block these previews.
+Without R, Python `sql_connection()` returns its active Python connection.
+Reset from either language restores the automatic managed provider and the same managed catalog without closing user connections or changing their transactions.
+Reset does not replay captured startup; failed startup keeps SQL withheld until explicit restart.
+R previews of user DBI connections use a private in-memory rendering catalog, opened only when a preview needs it.
 
 R submits cells through `DBI::dbSendQuery()`.
 Python uses the connection's `execute()` when available, otherwise its cursor protocol.

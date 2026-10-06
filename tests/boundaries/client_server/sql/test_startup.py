@@ -1,0 +1,540 @@
+"""Captured startup source selects native connections before the first SQL cell."""
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from support.client import McpClient
+from support.assertions import last_tool_text
+from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.normalization import code
+from support.records import Transcript
+from support.requirements import POSIX, PROCESS_EVENTS, R, SQL, requires
+
+
+def configure(workspace: Path, language: str, source: str) -> Path:
+    config = workspace / ".agents/console/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"startup": {"language": language, "code": source}}))
+    return config
+
+
+@requires(R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_python_startup_preserves_identity_transactions_and_captured_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        # fmt: python
+        source = code("""
+            import sqlite3
+
+            startup_count = globals().get("startup_count", 0) + 1
+            native = sqlite3.connect(":memory:")
+            _ = native.execute("CREATE TABLE selected (answer INTEGER)")
+            _ = native.execute("INSERT INTO selected VALUES (42)")
+            console_sql_connection(native)
+            """)
+        config = configure(workspace, "r", source)
+        with McpClient(
+            binary,
+            execution.serve("-c", "startup.language=python"),
+            os.environ,
+            workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            schema = json.dumps(client.transcript[-1])
+            assert "startup_count" not in schema and "sqlite3.connect" not in schema
+            client.expect("answer\n------\n42\n", sql="SELECT answer FROM selected")
+            client.expect(
+                # fmt: python
+                python=code("""
+                    assert startup_count == 1
+                    assert native.in_transaction
+                    native_identity = id(native)
+                    """),
+            )
+            client.expect(sql="UPDATE selected SET answer = 43")
+            client.expect(
+                # fmt: python
+                python=code("""
+                    assert startup_count == 1 and id(native) == native_identity
+                    assert native.execute("SELECT answer FROM selected").fetchone() == (43,)
+                    native.rollback()
+                    assert native.execute("SELECT count(*) FROM selected").fetchone() == (0,)
+                    """),
+            )
+            client.expect(python="console_sql_connection(None)")
+            client.expect(sql="CREATE TABLE managed_retained AS SELECT 7 AS answer")
+            client.expect(
+                python="console_sql_connection(None); assert startup_count == 1 and id(native) == native_identity"
+            )
+            client.expect(
+                "# A tibble: 1 × 1\n   answer\n  <int32>\n1       7\n",
+                sql="SELECT answer FROM managed_retained",
+            )
+            client.expect(
+                python="assert native.execute('SELECT count(*) FROM selected').fetchone() == (0,)"
+            )
+            # Restart uses launch-captured source, not the changed configuration file.
+            config.write_text(
+                json.dumps(
+                    {
+                        "startup": {
+                            "language": "python",
+                            "code": "raise RuntimeError('changed')",
+                        }
+                    }
+                )
+            )
+            client.send(control="restart")
+            client.expect("answer\n------\n42\n", sql="SELECT answer FROM selected")
+            client.expect(python="assert startup_count == 1 and native.in_transaction")
+            client.finish()
+    return [
+        {
+            "startup": "native Python with R present",
+            "once_per_generation": True,
+            "identity_and_transactions": True,
+            "restart_uses_captured_source": True,
+        }
+    ]
+
+
+@requires(POSIX, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_python_startup_without_r(binary: Path, execution: Execution) -> Transcript:
+    from boundaries.client_server.sql.test_without_r import environment, sql_client
+
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        # fmt: python
+        source = code("""
+            import sqlite3
+
+            native = sqlite3.connect(":memory:")
+            _ = native.execute("CREATE TABLE selected AS SELECT 42 AS answer")
+            console_sql_connection(native)
+            """)
+        config = configure(workspace, "python", source)
+        settings = json.loads(config.read_text())
+        settings["python"] = sys.executable
+        config.write_text(json.dumps(settings))
+        with sql_client(binary, execution, environment(workspace), workspace) as client:
+            client.expect("answer\n------\n42\n", sql="SELECT answer FROM selected")
+            client.expect(
+                python="assert sql_connection() is native; assert native.execute('SELECT answer FROM selected').fetchone() == (42,)"
+            )
+            client.finish()
+    return [{"startup": "native Python without R", "selected_connection": True}]
+
+
+@requires(R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_r_startup_preserves_native_identity_and_transaction(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        # fmt: r
+        source = code("""
+            startup_count <- if (exists("startup_count")) startup_count + 1L else 1L
+            native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+            invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
+            DBI::dbBegin(native)
+            invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
+            console_sql_connection(native)
+            """)
+        configure(workspace, "r", source)
+        with McpClient(binary, execution.serve(), os.environ, workspace) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                "# A tibble: 1 × 1\n   answer\n  <int32>\n1      42\n",
+                sql="SELECT answer FROM selected",
+            )
+            client.expect(
+                # fmt: r
+                r=code("""
+                    stopifnot(startup_count == 1L, identical(sql_connection(), native))
+                    DBI::dbRollback(native)
+                    stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
+                    """),
+            )
+            client.send(control="restart")
+            client.expect(
+                "# A tibble: 1 × 1\n   answer\n  <int32>\n1      42\n",
+                sql="SELECT answer FROM selected",
+            )
+            client.expect(
+                r="stopifnot(startup_count == 1L, identical(sql_connection(), native))"
+            )
+            client.finish()
+    return [
+        {
+            "startup": "native R",
+            "once_per_generation": True,
+            "identity_and_transactions": True,
+        }
+    ]
+
+
+@requires(R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_failed_startup_withholds_sql_and_preserves_partial_effects(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for language in ("python", "r"):
+        sources = (
+            [
+                (
+                    "startup_count = 1\nraise RuntimeError('startup failure')",
+                    "startup failure",
+                ),
+                ("private_credential = 'sentinel-secret'; invalid !!!", "SyntaxError"),
+                ("console_sql_connection(object())", "cursor()"),
+                (
+                    "import sqlite3\nnative = sqlite3.connect(':memory:')\nnative.close()\nconsole_sql_connection(native)",
+                    "closed database",
+                ),
+                ("startup_count = 1", "startup must select"),
+                (
+                    "import sqlite3\nnative = sqlite3.connect(':memory:')\nconsole_sql_connection(native)\nstartup_count = 1\nraise RuntimeError('after selection')",
+                    "after selection",
+                ),
+            ]
+            if language == "python"
+            else [
+                ('startup_count <- 1L; stop("startup failure")', "startup failure"),
+                (
+                    'private_credential <- "sentinel-secret"; invalid !!!',
+                    "R startup syntax error",
+                ),
+                ("console_sql_connection(new.env())", "valid DBIConnection"),
+                (
+                    "native <- DBI::dbConnect(duckdb::duckdb()); DBI::dbDisconnect(native); console_sql_connection(native)",
+                    "valid DBIConnection",
+                ),
+                ("startup_count <- 1L", "startup must select"),
+                (
+                    'native <- DBI::dbConnect(duckdb::duckdb()); console_sql_connection(native); startup_count <- 1L; stop("after selection")',
+                    "after selection",
+                ),
+            ]
+        )
+        for source, diagnostic in sources:
+            with tempfile.TemporaryDirectory() as temporary:
+                workspace = Path(temporary)
+                configure(workspace, language, source)
+                with McpClient(
+                    binary, execution.serve(), os.environ, workspace
+                ) as client:
+                    client.initialize_and_list_tools()
+                    client.send(sql="CREATE TABLE never_run AS SELECT 99 AS answer")
+                    first = last_tool_text(client)
+                    assert diagnostic in first and "SQL unavailable" in first, first
+                    assert "Unexpected vector type" not in first, first
+                    assert "sentinel-secret" not in first, first
+                    client.send(sql="SELECT 42 AS answer")
+                    second = last_tool_text(client)
+                    assert "SQL unavailable" in second and "42" not in second, second
+                    if "startup_count" in source:
+                        client.expect(
+                            **{
+                                language: "assert startup_count == 1"
+                                if language == "python"
+                                else "stopifnot(startup_count == 1L)"
+                            }
+                        )
+                    if diagnostic == "after selection":
+                        # The native interpreter remains usable. Explicit reset selects
+                        # the managed default but cannot erase a failed startup receipt.
+                        client.expect(
+                            **{
+                                language: "console_sql_connection(None)"
+                                if language == "python"
+                                else "console_sql_connection(NULL)"
+                            }
+                        )
+                        client.send(sql="SELECT 42 AS answer")
+                        assert "SQL unavailable" in last_tool_text(client)
+                    client.finish()
+                    records.append(
+                        {
+                            "language": language,
+                            "failure": diagnostic,
+                            "first_sql": first,
+                            "later_sql": second,
+                        }
+                    )
+    return records
+
+
+@requires(POSIX, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_missing_r_startup_withholds_sql(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.sql.test_without_r import environment, sql_client
+
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        config = configure(workspace, "r", 'stop("must not execute")')
+        settings = json.loads(config.read_text())
+        settings["python"] = sys.executable
+        config.write_text(json.dumps(settings))
+        with sql_client(binary, execution, environment(workspace), workspace) as client:
+            client.send(sql="SELECT 42 AS answer")
+            output = last_tool_text(client)
+            assert "R is unavailable" in output and "SQL unavailable" in output, output
+            client.expect(python="assert 6 * 7 == 42")
+            client.send(sql="SELECT 42 AS answer")
+            assert "SQL unavailable" in last_tool_text(client)
+            client.finish()
+    return [{"missing_runtime_withholds_sql": output}]
+
+
+@requires(POSIX, R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_missing_selected_python_has_no_sql_fallback(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        config = configure(
+            workspace, "python", "raise RuntimeError('source must not execute')"
+        )
+        settings = json.loads(config.read_text())
+        settings["python"] = "/mcp-console-startup-missing-python"
+        config.write_text(json.dumps(settings))
+        with McpClient(binary, execution.serve(), os.environ, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(sql="SELECT 42 AS answer")
+            output = client.transcript[-1]["result"]["content"][0]["text"]
+            assert "mcp-console-startup-missing-python" in output, output
+            assert "source must not execute" not in output and "42" not in output, (
+                output
+            )
+            client.finish()
+    return [{"missing_selected_python": output}]
+
+
+@requires(POSIX, R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_startup_gate_preserves_discovery_ordering_and_interrupt(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for interrupt in (False, True):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            # fmt: python
+            source = code("""
+                import sqlite3
+
+                startup_count = globals().get("startup_count", 0) + 1
+                native = sqlite3.connect(":memory:")
+                console_sql_connection(native)
+                input("Startup gate> ")
+                _ = native.execute("CREATE TABLE selected AS SELECT 42 AS answer")
+                """)
+            configure(workspace, "python", source)
+            with McpClient(binary, execution.serve(), os.environ, workspace) as client:
+                # Discovery and ping complete while source cannot pass its input gate.
+                client.initialize_and_list_tools()
+                client.request("ping")
+                client.expect(
+                    '[input requested: "Startup gate> "]\n[waiting for stdin]',
+                    sql="CREATE TABLE first_cell AS SELECT answer FROM selected",
+                )
+                if interrupt:
+                    client.send(control="interrupt", timeout_ms=0)
+                    interrupted = last_tool_text(client)
+                    assert "KeyboardInterrupt" in interrupted, interrupted
+                    client.expect(
+                        # fmt: python
+                        python=code("""
+                            assert startup_count == 1
+                            assert native.execute("SELECT count(*) FROM sqlite_master").fetchone() == (0,)
+                            """),
+                    )
+                    client.send(sql="SELECT 42 AS answer")
+                    assert "SQL unavailable" in last_tool_text(client)
+                    # Explicit restart authorizes one new attempt; same-call input
+                    # and SQL belong to the replacement generation.
+                    client.send(
+                        control="restart",
+                        stdin="continue\n",
+                        sql="SELECT answer FROM selected",
+                    )
+                    assert "42" in last_tool_text(client), client.transcript[-1]
+                    client.expect(python="assert startup_count == 1")
+                else:
+                    client.send(stdin="continue\n")
+                    client.expect(
+                        "answer\n------\n42\n", sql="SELECT answer FROM first_cell"
+                    )
+                    client.expect(python="assert startup_count == 1")
+                records.append({"interrupted": interrupt, "calls": client.finish()[3:]})
+    return records
+
+
+@requires(POSIX, R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_crashed_startup_is_not_automatically_replayed(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        # fmt: python
+        source = code("""
+            import os
+            import sqlite3
+            from pathlib import Path
+
+            attempts = Path("attempts")
+            previous = attempts.read_text() if attempts.exists() else ""
+            _ = attempts.write_text(previous + "x")
+            if not previous:
+                os._exit(17)
+            native = sqlite3.connect(":memory:")
+            console_sql_connection(native)
+            """)
+        configure(workspace, "python", source)
+        arguments = execution.serve(
+            *(("--writable-root", str(workspace)) if execution is SANDBOXED else ())
+        )
+        with McpClient(binary, arguments, os.environ, workspace) as client:
+            client.initialize_and_list_tools()
+            client.send(sql="SELECT 42 AS answer")
+            first = client.transcript[-1]["result"]["content"][0]["text"]
+            assert "worker stopped" in first or "worker failed" in first, first
+            client.send(sql="SELECT 42 AS answer")
+            refusal = client.transcript[-1]["result"]["content"][0]["text"]
+            assert "explicit restart required" in refusal, refusal
+            assert (workspace / "attempts").read_text() == "x"
+            client.send(control="restart", sql="SELECT 42 AS answer")
+            assert "42" in last_tool_text(client), client.transcript[-1]
+            assert (workspace / "attempts").read_text() == "xx"
+            client.finish()
+    return [
+        {
+            "crashed_startup": first,
+            "automatic_replay_refused": refusal,
+            "explicit_restart_attempts": 2,
+        }
+    ]
+
+
+@requires(POSIX, R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_incomplete_python_setup_never_retries_startup_source(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.sql.test_configuration import python_setup_checkpoint
+
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        configure(workspace, "python", "startup_count = 1")
+        (workspace / "sitecustomize.py").write_text(
+            f"exec(compile({json.dumps(python_setup_checkpoint())}, '<SQL setup checkpoint>', 'exec'))"
+        )
+        environment = dict(os.environ, RETICULATE_PYTHONPATH=str(workspace))
+        with McpClient(binary, execution.serve(), environment, workspace) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                '[input requested: "Python SQL setup> "]\n[waiting for stdin]',
+                sql="CREATE TABLE never_run AS SELECT 99 AS answer",
+            )
+            client.send(control="interrupt", timeout_ms=0)
+            assert "KeyboardInterrupt" in last_tool_text(client)
+            client.expect(
+                "Python setup resumed with same objects\n",
+                python='assert "startup_count" not in globals()',
+            )
+            client.send(sql="SELECT 42 AS answer")
+            assert "SQL unavailable" in last_tool_text(client)
+            return client.finish()[3:]
+
+
+@requires(POSIX, R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_r_startup_interrupt_preserves_transaction_without_replay(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        # fmt: r
+        source = code("""
+            startup_count <- 1L
+            native <- DBI::dbConnect(duckdb::duckdb())
+            invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
+            DBI::dbBegin(native)
+            console_sql_connection(native)
+            invisible(readline("R startup gate> "))
+            invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
+            """)
+        configure(workspace, "r", source)
+        with McpClient(binary, execution.serve(), os.environ, workspace) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                '[input requested: "R startup gate> "]\n[waiting for stdin]',
+                sql="UPDATE selected SET answer = 99",
+            )
+            client.send(control="interrupt", timeout_ms=0)
+            assert "R startup interrupted" in last_tool_text(client)
+            client.expect(
+                # fmt: r
+                r=code("""
+                    stopifnot(startup_count == 1L, identical(sql_connection(), native))
+                    stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
+                    DBI::dbRollback(native)
+                    """),
+            )
+            client.send(sql="SELECT 42 AS answer")
+            assert "SQL unavailable" in last_tool_text(client)
+            return client.finish()[3:]
+
+
+@requires(PROCESS_EVENTS, R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_closure_retires_captured_startup_resources(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from support.processes import (
+        capture_process_identity,
+        child_process_identities,
+        kill_processes,
+        live_processes,
+    )
+
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        configure(workspace, "python", 'input("Startup close gate> ")')
+        with McpClient(binary, execution.serve(), os.environ, workspace) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                '[input requested: "Startup close gate> "]\n[waiting for stdin]',
+                sql="SELECT 42 AS answer",
+            )
+            descendants = []
+            pending = [capture_process_identity(client.process.pid)]
+            while pending:
+                children = child_process_identities(pending.pop())
+                descendants.extend(children)
+                pending.extend(children)
+            assert descendants
+            try:
+                client.close()
+                assert not live_processes(descendants), (
+                    "startup resources survived closure"
+                )
+                assert client.process.returncode == 0
+            finally:
+                kill_processes(descendants)
+    return [{"blocked_captured_startup_retired": True}]

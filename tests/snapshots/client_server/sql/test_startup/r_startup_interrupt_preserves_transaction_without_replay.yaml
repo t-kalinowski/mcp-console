@@ -1,0 +1,42 @@
+---
+send:
+  sql: UPDATE selected SET answer = 99
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "R startup gate> "]
+        [waiting for stdin]
+  isError: false
+---
+send:
+  control: interrupt
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |
+        R startup interrupted
+        Error: configured startup did not complete; SQL withheld; explicit restart required
+  isError: false
+---
+send:
+  r: |
+    stopifnot(startup_count == 1L, identical(sql_connection(), native))
+    stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
+    DBI::dbRollback(native)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: >
+        Error: SQL unavailable: configured startup did not complete; explicit
+        restart required
+  isError: false

@@ -45,7 +45,7 @@ impl ConsoleServer {
         sandbox_settings: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
         resolver: crate::settings::SandboxSettings,
-        sql: crate::settings::sql::Sql,
+        startup: Option<crate::settings::startup::Startup>,
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
         let languages = Languages::from_environment()?;
@@ -92,7 +92,7 @@ impl ConsoleServer {
                         started,
                     )?
                 };
-                let configuration = configuration.with_sql_settings(sql);
+                let configuration = configuration.with_startup(startup);
                 let transcript = crate::transcript::Transcript::configured(
                     recording_directory,
                     configuration.dynamic_resolution(),
@@ -443,7 +443,7 @@ pub async fn run(
     sandbox_settings: crate::settings::SandboxSettings,
     python: Option<PathBuf>,
     resolver: crate::settings::SandboxSettings,
-    sql: crate::settings::sql::Sql,
+    startup: Option<crate::settings::startup::Startup>,
 ) -> Result<(), Box<dyn Error>> {
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input_closed = InputClosed(Arc::new(Mutex::new(Some(input_closed))));
@@ -457,7 +457,7 @@ pub async fn run(
         sandbox_settings,
         python,
         resolver,
-        sql,
+        startup,
     )
     .map_err(std::io::Error::other)?;
     let startup = server.startup.clone();

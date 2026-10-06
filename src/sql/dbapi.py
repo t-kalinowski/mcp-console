@@ -275,24 +275,20 @@ def take_managed_restore_request():
 # Native Python sessions use the same evaluator and preview formatter. Keep
 # their connection setup below the R-present adapter so its traceback lines
 # remain stable in public transcripts.
-import json as _json
 import os as _os
 from pathlib import Path as _Path
 
 _native_storage = None
 _native_extension_directory = None
 _managed_connection = None
-_settings = None  # Supplied from the worker's captured settings during installation.
 
 
-def enable_native(managed: bool) -> None:
+def enable_native() -> None:
     global _native_storage, _native_extension_directory
 
     _native_storage = _Path(_os.environ["TMPDIR"]) / "mcp-console-duckdb"
-    # R still needs its prepared cache in mixed sessions. A selected Python
-    # keeps DuckDB's native cache instead of inheriting that R directory.
-    _native_extension_directory = (
-        _os.environ.get("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", "") if managed else ""
+    _native_extension_directory = _os.environ.get(
+        "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", ""
     )
     _builtins.sql_connection = sql_connection
 
@@ -311,17 +307,12 @@ def _ensure_managed_connection():
             )
             raise RuntimeError(message) from error
         config = {
-            **_settings.get("options", {}),
             "extension_directory": _native_extension_directory,
             "secret_directory": str(_native_storage / "stored-secrets"),
             "temp_directory": str(_native_storage / "spill"),
             "python_enable_replacements": "false",
         }
-        connection = duckdb.connect(
-            _settings.get("database", ":memory:"),
-            read_only=_settings.get("read_only", False),
-            config=config,
-        )
+        connection = duckdb.connect(":memory:", config=config)
         try:
             connection.execute("SET enable_progress_bar = false")
         except BaseException:
@@ -382,5 +373,25 @@ def sql_connection():
     return _connection
 
 
-def uses_r() -> bool:
-    return _r_selected
+def initialize_connection(source: str) -> int:
+    import __main__
+
+    try:
+        exec(compile(source, "<console startup>", "exec"), __main__.__dict__)
+        if _connection is None or _r_selected:
+            raise RuntimeError(
+                "startup must select a native connection with console_sql_connection(connection)"
+            )
+        # DB-API has no common is-open predicate. Opening and closing a cursor
+        # validates usability without executing a query or changing transactions.
+        cursor = _connection.cursor()
+        cursor.close()
+        return 1
+    except BaseException as error:
+        rendered = _traceback.TracebackException.from_exception(error)
+        if isinstance(error, SyntaxError):
+            # Configuration is not a model-visible cell. Keep the syntax location
+            # and diagnosis without echoing a potentially credential-bearing line.
+            rendered.text = None
+        print("".join(rendered.format()), end="", file=__import__("sys").stderr)
+        return -1 if isinstance(error, KeyboardInterrupt) else 0

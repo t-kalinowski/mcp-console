@@ -151,18 +151,6 @@ impl Client {
         };
         self.clear_resolver_stop_handle(&generation)?;
         self.ensure_generation(&generation)?;
-        let extensions = duckdb_extensions
-            .as_ref()
-            .unwrap_or(&environment.duckdb_extensions);
-        if environment.python_sql && !extensions.is_empty() {
-            self.resolve_python_duckdb_extensions(
-                &generation,
-                &managed,
-                resolver,
-                &extensions.iter().cloned().collect::<Vec<_>>(),
-            )
-            .map_err(|failure| failure.into_message())?;
-        }
         let inspected = self
             .inspect_managed_python(&generation, &managed, resolver)
             .map_err(|failure| failure.into_message())?;
@@ -314,10 +302,7 @@ impl Client {
                                 selected: Box::new(configuration),
                                 explicit: None,
                                 managed: true,
-                                duckdb_extension_directory: environment
-                                    .python_sql
-                                    .then(|| self.0.duckdb_extension_directory.clone())
-                                    .flatten(),
+                                duckdb_extension_directory: None,
                             })
                         }
                     }

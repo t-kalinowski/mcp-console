@@ -1,6 +1,5 @@
 import duckdb
 import os
-import json
 import __main__
 import builtins
 
@@ -21,15 +20,7 @@ def observed_connect(*args, **kwargs):
             raise RuntimeError("optional SQL warmup failed")
         elif behavior == "system-exit":
             raise SystemExit("optional SQL warmup failed")
-    settings = json.loads(os.environ.get("MCP_CONSOLE_SQL_SETTINGS", "{}"))
-    if settings.get("options", {}).get("threads") is not None:
-        assert kwargs["config"]["threads"] == settings["options"]["threads"]
-        assert args == (settings["database"],)
     connection = connect(*args, **kwargs)
-    if settings.get("options", {}).get("threads") is not None:
-        assert connection.execute("SELECT current_setting('threads')").fetchone() == (
-            settings["options"]["threads"],
-        )
     connection.execute("CREATE TABLE startup_catalog AS SELECT 42 AS answer")
     if behavior == "observe":
         with open(

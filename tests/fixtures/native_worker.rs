@@ -514,7 +514,6 @@ fn native_probe() {
     interrupt::normalize_signal().expect("normalize worker signal");
     core::initialize(reader, writer.clone()).expect("initialize sideband");
     let integration = Integration::new(None).expect("initialize native integration");
-    crate::sql::configure().expect("capture SQL settings");
     writer
         .send(&WorkerMessage::Ready)
         .expect("report readiness");

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-pub(crate) mod sql;
+pub(crate) mod startup;
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 
@@ -73,7 +73,7 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Project {
-    sql: sql::Sql,
+    startup: Option<startup::Startup>,
     cache: Option<Cache>,
     python: Option<std::path::PathBuf>,
     extends: Option<String>,
@@ -83,7 +83,7 @@ struct Project {
 
 #[derive(Default)]
 pub(crate) struct Captured {
-    pub sql: sql::Sql,
+    pub startup: Option<startup::Startup>,
     pub cache: Option<Cache>,
     pub python: Option<std::path::PathBuf>,
     pub source: Option<String>,
@@ -118,10 +118,11 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
     };
     let mut project: Project =
         serde_path_to_error::deserialize(value).map_err(|error| format!("{name}: {error}"))?;
-    project
-        .sql
-        .validate()
-        .map_err(|error| format!("{name}: {error}"))?;
+    if let Some(startup) = &project.startup {
+        startup
+            .validate()
+            .map_err(|error| format!("{name}: {error}"))?;
+    }
     // These fields belong to Console's launch protocol and worker lifetime.
     // All other sandbox fields and values are interpreted by the native runner.
     for field in ["version", "lifecycle", "extends", "workspace"] {
@@ -136,7 +137,7 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
         project.sandbox.insert("extends".into(), profile.into());
     }
     Ok(Captured {
-        sql: project.sql,
+        startup: project.startup,
         cache: project.cache,
         python: project
             .python

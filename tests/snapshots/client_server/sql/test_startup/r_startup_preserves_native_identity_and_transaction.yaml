@@ -1,0 +1,4 @@
+---
+startup: native R
+once_per_generation: true
+identity_and_transactions: true

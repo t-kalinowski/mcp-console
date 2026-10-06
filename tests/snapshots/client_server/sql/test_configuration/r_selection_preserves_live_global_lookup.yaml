@@ -1,4 +1,0 @@
----
-explicit_r_live_view_rebinding: true
-catalog_precedence: true
-python_first: true

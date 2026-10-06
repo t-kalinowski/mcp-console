@@ -104,9 +104,9 @@ Do not split evaluators across threads without a new ownership design.
 [Runtime limitations](BUILTIN_RUNTIME.md#current-limitations) include the remaining late-R-startup environment constraint.
 
 SQL routes to an R DBI or Python DB-API provider.
-Captured SQL configuration selects the managed provider independently of initialization order and visible languages.
-Automatic selection uses R capability; explicit Python selection can retain R for native DBI connections.
-Managed constructors receive captured database and engine settings before background warmup; launch inputs retain them across generations.
+R capability selects the default managed provider independently of initialization order; without R, Python owns the managed DuckDB connection.
+An optional captured startup source runs on its owning interpreter after helpers and runtime setup, before cell dispatch; it selects a native connection without managed warmup.
+The worker retains failed startup admission, and the server refuses automatic replay after a configured launch; only explicit restart authorizes another attempt after confirmed retirement.
 Explicitly selected connections remain user-owned.
 The [runtime guide](BUILTIN_RUNTIME.md) owns connection and interoperability rules.
 

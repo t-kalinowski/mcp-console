@@ -443,9 +443,7 @@ pub(super) fn install_sql_runtime(source: &str) -> Result<bool, String> {
         }
         library.api
     };
-    let settings =
-        serde_json::to_string(&crate::sql::settings_json()?).map_err(|error| error.to_string())?;
-    let source = CString::new(format!("{source}\n_settings = _json.loads({settings})\n"))
+    let source = CString::new(source)
         .map_err(|_| "embedded Python SQL runtime source contains NUL".to_string())?;
     let installed = api.with_gil(|api| unsafe {
         let result = api.run_module_result(c"_mcp_console_sql", &source)?;
@@ -750,18 +748,6 @@ pub(super) fn evaluate(source: &str, filename: &str) -> Result<(), String> {
     })
 }
 
-pub(super) fn sql_needs_initialization() -> Result<bool, String> {
-    if runtime_configured()? || PENDING_R_SQL.with(|selected| selected.get()) {
-        return Ok(false);
-    }
-    let Some(api) = installed_sql_api()? else {
-        return Ok(true);
-    };
-    // SQL installation precedes setup completion. Resume native Python setup,
-    // but let a selected R connection run without completing unrelated setup.
-    api.with_gil(|api| api.call_sql_bool(c"uses_r").map(|selected| !selected))
-}
-
 pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
     let Some(api) = installed_sql_api()? else {
         return Ok(super::SqlProvider::R);
@@ -769,8 +755,28 @@ pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
     api.with_gil(|api| api.call_sql_dispatch(source))
 }
 
-pub(super) fn reset_managed_sql() -> Result<(), String> {
-    api()?.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"console_sql_connection"))
+pub(super) fn initialize_sql_source(source: &str) -> Result<bool, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console_sql", c"initialize_connection")?;
+        let argument =
+            (api.unicode_from_string_and_size)(source.as_ptr().cast(), source.len() as isize);
+        if argument.is_null() {
+            return Err("cannot encode startup source".into());
+        }
+        let result =
+            (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(argument);
+        if result.is_null() {
+            api.display_pending_exception();
+            return Err("Python startup did not complete".into());
+        }
+        let complete = (api.long_as_long)(result);
+        (api.dec_ref)(result);
+        if complete == -1 {
+            crate::worker::record_bootstrap_interrupt();
+        }
+        Ok(complete == 1)
+    })
 }
 
 pub(super) fn use_r_sql() -> Result<(), String> {
@@ -806,28 +812,15 @@ pub(super) fn initialize_managed_sql() -> Result<(), String> {
     })
 }
 
-pub(super) fn configure_native_sql(managed: bool) -> Result<(), String> {
-    api()?.with_gil(|api| unsafe {
-        let source = if managed {
-            c"enable_native(True)"
-        } else {
-            c"enable_native(False)"
-        };
-        let result = api.run_module_result(c"_mcp_console_sql", source)?;
-        if result.is_null() {
-            api.display_pending_exception();
-            return Err(python_function_error(c"_mcp_console_sql", c"enable_native"));
-        }
-        (api.dec_ref)(result);
-        Ok(())
-    })
+pub(super) fn configure_native_sql() -> Result<(), String> {
+    api()?.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"enable_native"))
 }
 
 pub(super) fn take_sql_restore_request() -> Result<bool, String> {
     let Some(api) = installed_sql_api()? else {
         return Ok(false);
     };
-    api.with_gil(|api| api.call_sql_bool(c"take_managed_restore_request"))
+    api.with_gil(PythonApi::call_take_sql_restore_request)
 }
 
 fn installed_sql_api() -> Result<Option<PythonApi>, String> {
@@ -1205,24 +1198,21 @@ impl PythonApi {
         }
     }
 
-    fn call_sql_bool(&self, name: &CStr) -> Result<bool, String> {
+    fn call_take_sql_restore_request(&self) -> Result<bool, String> {
         // SAFETY: The GIL is held for the private Python call and reference release.
         unsafe {
-            let function = self.function(c"_mcp_console_sql", name)?;
+            let function = self.function(c"_mcp_console_sql", c"take_managed_restore_request")?;
             let result = (self.call_no_args)(function);
             if result.is_null() {
                 self.display_pending_exception();
-                return Err(python_function_error(c"_mcp_console_sql", name));
+                return Err("Python SQL restore request failed".to_string());
             }
             let requested = (self.long_as_long)(result);
             (self.dec_ref)(result);
             match requested {
                 0 => Ok(false),
                 1 => Ok(true),
-                _ => Err(format!(
-                    "Python SQL {} returned an invalid boolean",
-                    name.to_string_lossy()
-                )),
+                _ => Err("Python SQL restore request returned an invalid value".to_string()),
             }
         }
     }

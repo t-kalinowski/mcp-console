@@ -12,7 +12,8 @@ pub(crate) struct ClientConfiguration {
     pub(super) relay: Option<PathBuf>,
     pub(super) no_sandbox: bool,
     pub(super) sandbox_settings: crate::settings::SandboxSettings,
-    pub(super) sql_settings: crate::settings::sql::Sql,
+    pub(super) startup_source: Option<crate::settings::startup::Startup>,
+    pub(super) startup_permitted: AtomicBool,
     pub(super) resolver_settings: crate::settings::SandboxSettings,
     pub(super) duckdb_extension_directory: Option<PathBuf>,
     pub(super) worker: Mutex<WorkerState>,
@@ -45,20 +46,11 @@ pub(super) struct BuiltinSetup {
 }
 
 impl ClientConfiguration {
-    pub(crate) fn with_sql_settings(mut self, settings: crate::settings::sql::Sql) -> Self {
-        if let Some(environment) = &mut self.environment {
-            let environment = environment.get_mut().expect("unshared environment lock");
-            environment.python_sql = match settings.provider {
-                crate::settings::sql::Provider::Auto => self.python_only,
-                crate::settings::sql::Provider::R => false,
-                crate::settings::sql::Provider::Python => true,
-            };
-            *self
-                .requirements_snapshot
-                .get_mut()
-                .expect("unshared requirements lock") = environment.inspection();
-        }
-        self.sql_settings = settings;
+    pub(crate) fn with_startup(
+        mut self,
+        startup: Option<crate::settings::startup::Startup>,
+    ) -> Self {
+        self.startup_source = startup;
         self
     }
 
@@ -92,7 +84,6 @@ impl ClientConfiguration {
             Environment {
                 local_runtime: None,
                 custom_worker: true,
-                python_sql: false,
                 duckdb_extensions: Default::default(),
                 duckdb_r_targets: Vec::new(),
                 python: None,
@@ -271,7 +262,6 @@ impl ClientConfiguration {
             Environment {
                 local_runtime,
                 custom_worker: false,
-                python_sql: false,
                 duckdb_extensions,
                 duckdb_r_targets: Vec::new(),
                 python,
@@ -292,14 +282,13 @@ impl ClientConfiguration {
         relay: Option<PathBuf>,
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
-        mut environment: Environment,
+        environment: Environment,
     ) -> Self {
         let dynamic_resolution = !matches!(environment.r_resolver, RResolver::Disabled);
         let python_only = environment
             .local_runtime
             .as_ref()
             .is_some_and(crate::local_runtime::Selection::python_only);
-        environment.python_sql = python_only;
         let python_preparation = python_only
             && environment
                 .python
@@ -313,7 +302,8 @@ impl ClientConfiguration {
             relay,
             no_sandbox,
             sandbox_settings,
-            sql_settings: Default::default(),
+            startup_source: None,
+            startup_permitted: AtomicBool::new(true),
             resolver_settings: Default::default(),
             duckdb_extension_directory: None,
             worker: Mutex::new(WorkerState::Initial),

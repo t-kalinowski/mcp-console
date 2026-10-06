@@ -54,50 +54,55 @@ Without R or an explicit selection, Console uses uv on the local host.
 A broken selected interpreter is an error, not a reason to fall back.
 See [runtime selection](BUILTIN_RUNTIME.md).
 
-## Managed SQL connection
+## Session startup source
 
-The built-in worker captures SQL settings when the server starts:
+The built-in worker can run one captured R or Python program after its interpreter and session helpers are ready, before the first SQL cell:
 
 ```yaml
-sql:
-  provider: python
-  database: analysis.duckdb
-  read_only: false
-  options:
-    threads: 2
-    memory_limit: 256MB
+startup:
+  language: python
+  code: |
+    import sqlite3
+    connection = sqlite3.connect("analysis.sqlite")
+    console_sql_connection(connection)
 ```
 
-`provider` accepts `auto` (the default), `r`, or `python`.
-Automatic selection uses execution-host R availability; explicit Python selection works with R installed, including SQL-only sessions.
-A broken explicit provider or connection configuration reports an error without switching providers.
-Model-visible languages and interpreter initialization order do not select the managed provider.
+For R, set `language: r` and construct a normal DBI connection:
 
-`database` defaults to `:memory:`.
-File paths resolve on the execution host, relative to the worker workspace; the controller does not inspect or expand them.
-The worker anchors relative paths before interpreter startup hooks or user cells run, so changing directories does not change the managed database, including after restart.
-Parent directories must already exist.
-`read_only` defaults to false and requires a file-backed database.
-A persistent catalog survives worker restart; an in-memory catalog belongs to its worker generation.
-Restart retains the captured settings, even if the configuration file changes.
+```yaml
+startup:
+  language: r
+  code: |
+    connection <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+    console_sql_connection(connection)
+```
 
-`options` supports only `threads` (an integer from 1 through 2147483647) and `memory_limit` (a nonempty DuckDB memory-size string).
-DuckDB validates engine values during connection construction.
-These settings apply to the first managed connection, including background warmup.
-A Python provider needs DuckDB in its selected environment; managed Python includes it in startup defaults.
-After replacing or clearing requirements, include `duckdb` in `requirements.python` before SQL use.
-SQL demand does not reinstall packages removed from the session requirements.
-Unknown fields and options fail configuration decoding.
-YAML and ordered CLI overrides use the ordinary merge rules, for example `-c sql.options.threads=4`.
+Use normal driver arguments for database paths, read-only access, threads, memory, and other engine settings.
+The connection remains a native object on its owning interpreter; Console does not proxy it or commit its transactions.
+Source uses the existing YAML/CLI layering, for example `-c startup.language=python`.
+It is captured once at server launch, including across explicit worker restarts; edits to the file require a new server to be captured.
+Source is not included in the tool schema or automatically echoed as a submitted cell.
+Output explicitly emitted by the program and runtime errors remain visible.
 
-Engine settings grant no filesystem or network access.
-A writable database requires an existing sandbox write grant; read-only workspace access remains read-only.
-Console owns spill/secret storage, extension-cache handoff, progress output, and disabled Python replacement scans; SQL options cannot override them.
-SQL configuration does not change resolver/cache policy or ambient DuckDB configuration.
+The program must finish by leaving a usable connection selected through the existing `console_sql_connection(connection)` helper.
+It runs once per worker generation, on the serialized interpreter thread with the ordinary resolver, input, output, and interrupt services.
+MCP initialization, discovery, and ping remain available while it runs; early cells wait behind startup.
+Dependencies should be installed or prepared normally; startup source does not run inside the trusted host resolver.
+DuckDB extension preparation still follows the automatic managed provider; a user-selected driver owns its own extension configuration.
 
-A runtime-selected DBI or DB-API connection takes precedence until reset; these options apply only to the managed default, not user connections.
-See [native connection selection and registration](BUILTIN_RUNTIME.md#sql-and-duckdb).
-Nondefault SQL settings require the built-in worker.
+Failure, missing runtime, invalid connection, or interruption withholds SQL for that generation.
+Console neither selects a managed fallback nor retries partially executed source when runtime setup resumes or the worker crashes.
+Explicit restart authorizes one new attempt after confirmed retirement; it does not undo earlier side effects.
+Startup code is ordinary user code, not a transaction, and may already have changed files or external systems.
+A worker launched with configured startup no longer qualifies for automatic unused-worker replacement on a changed requirements declaration; use explicit restart.
+
+With no startup source, the automatic managed DuckDB default is unchanged.
+After successful startup, ordinary connection selection and reset apply: reset restores the automatic managed default, does not rerun source, and leaves user connections and transactions open.
+A failed startup receipt cannot be cleared by resetting the connection helper.
+See [native connection selection](BUILTIN_RUNTIME.md#sql-and-duckdb).
+
+Startup requires the built-in worker and relay and is currently supported on macOS and Linux.
+It does not grant filesystem or network permissions; persistent writable databases still need an existing sandbox write grant.
 SQL remains unsupported on Windows.
 
 ## Keys and values

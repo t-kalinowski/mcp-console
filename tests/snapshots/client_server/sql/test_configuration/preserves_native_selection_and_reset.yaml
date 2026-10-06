@@ -1,5 +1,0 @@
----
-native_connections_and_transactions_retained: true
-reset_from_both_languages: true
-explicit_python_registration: true
-r_preview_with_python_file_owner: true

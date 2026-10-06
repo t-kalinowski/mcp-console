@@ -4,7 +4,7 @@ pub(super) const BUILTIN_SCOPE: &str = r#"Persistent R, Python, and SQL workbenc
 
 pub(super) const SHARING: &str = r#"Language fields describe the configured interface, not installed runtimes. With both runtimes and their bridge available, Python reads R globals through `r.name` and R reads Python globals through `py$name`. "#;
 
-pub(super) const MANAGED_SQL_SHARING: &str = r#"R-owned managed DuckDB SQL can query R data frames by name; Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
+pub(super) const MANAGED_SQL_SHARING: &str = r#"R-owned managed DuckDB SQL can query R data frames by name; without R, Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. R accesses its SQL connection through `sql_connection()`; R or Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
 
 pub(super) const MANAGED_PREPARATION: &str = r#"Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages, and explicitly selected Python uses its preinstalled Python packages."#;
 
@@ -98,7 +98,7 @@ available, read R globals and call R functions through `r.name`."#;
 pub(super) const PYTHON_SQL: &str = r#" Select a user-owned DB-API
 connection for later SQL cells with `console_sql_connection(connection)` and restore managed DuckDB with
 `console_sql_connection(None)`. With R-owned DuckDB, bind Python data frames to an R name
-before querying them. With a Python managed default, `sql_connection()` returns the Python-owned connection;
+before querying them. Without R, `sql_connection()` returns the Python-owned connection;
 register frames explicitly with `sql_connection().register(name, frame)`."#;
 
 pub(super) const PYTHON_PLOTS: &str = r#" At cell end,
@@ -119,5 +119,5 @@ pub(super) const CONTROL_END: &str = r#" and preserves in-memory state. After
 successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
 earlier evaluation or attempting an optional following cell; the cell is not run if the
 interrupted evaluation remains active. When `requirements` is available, restart resolves
-same-call requirements before replacement. It then discards R, Python, in-memory SQL, debugger,
+same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
 and unread-stdin state and sends same-call stdin and code only to the replacement."#;

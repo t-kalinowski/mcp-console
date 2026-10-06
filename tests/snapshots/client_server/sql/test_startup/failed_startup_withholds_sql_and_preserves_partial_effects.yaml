@@ -1,0 +1,138 @@
+---
+language: python
+failure: startup failure
+first_sql: |
+  Traceback (most recent call last):
+    File "<string>", line 380, in initialize_connection
+    File "<console startup>", line 2, in <module>
+  RuntimeError: startup failure
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: python
+failure: SyntaxError
+first_sql: |
+  Traceback (most recent call last):
+    File "<string>", line 380, in initialize_connection
+    File "<console startup>", line 1
+  SyntaxError: invalid syntax
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: python
+failure: cursor()
+first_sql: |
+  Traceback (most recent call last):
+    File "<string>", line 380, in initialize_connection
+    File "<console startup>", line 1, in <module>
+    File "<string>", line 45, in console_sql_connection
+    File "<string>", line 31, in _validate_connection
+  TypeError: `connection` must provide a callable cursor() method or be None
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: python
+failure: closed database
+first_sql: |
+  Traceback (most recent call last):
+    File "<string>", line 387, in initialize_connection
+  sqlite3.ProgrammingError: Cannot operate on a closed database.
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: python
+failure: startup must select
+first_sql: |
+  Traceback (most recent call last):
+    File "<string>", line 382, in initialize_connection
+  RuntimeError: startup must select a native connection with console_sql_connection(connection)
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: python
+failure: after selection
+first_sql: |
+  Traceback (most recent call last):
+    File "<string>", line 380, in initialize_connection
+    File "<console startup>", line 5, in <module>
+  RuntimeError: after selection
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: r
+failure: startup failure
+first_sql: |
+  Error: startup failure
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: r
+failure: R startup syntax error
+first_sql: |
+  Error: R startup syntax error: <text>:1:50: unexpected '!'
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: r
+failure: valid DBIConnection
+first_sql: |
+  Error: `connection` must be a valid DBIConnection or NULL
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: r
+failure: valid DBIConnection
+first_sql: |
+  Error: `connection` must be a valid DBIConnection or NULL
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: r
+failure: startup must select
+first_sql: |
+  Error: startup must select a valid native connection with console_sql_connection(connection)
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required
+---
+language: r
+failure: after selection
+first_sql: |
+  Error: after selection
+  Error: configured startup did not complete; SQL withheld; explicit restart required
+  Error: SQL unavailable: configured startup did not complete; explicit restart required
+later_sql: >
+  Error: SQL unavailable: configured startup did not complete; explicit
+  restart required

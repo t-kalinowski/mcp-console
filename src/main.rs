@@ -121,7 +121,7 @@ fn run_server(
     overrides: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
-        sql,
+        startup,
         cache,
         python,
         source: _,
@@ -135,12 +135,12 @@ fn run_server(
         &mut resolver,
         &mut policy,
     )?;
-    if sql != settings::sql::Sql::default() {
+    if startup.is_some() {
         if worker.is_some() || relay.is_some() {
-            return Err("SQL settings require the built-in worker and relay".into());
+            return Err("startup requires the built-in worker and relay".into());
         }
         if cfg!(windows) {
-            return Err("SQL is not supported on Windows".into());
+            return Err("configured startup is not supported on Windows".into());
         }
     }
     if python.is_some() && (worker.is_some() || relay.is_some()) {
@@ -157,7 +157,7 @@ fn run_server(
         .enable_all()
         .build()?;
     let result = runtime.block_on(server::run(
-        worker, relay, no_sandbox, settings, python, resolver, sql,
+        worker, relay, no_sandbox, settings, python, resolver, startup,
     ));
     // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client

@@ -555,29 +555,20 @@ def test_overrides_do_not_bypass_file_errors_or_explicit_inputs(
 
 
 @requires(POSIX)
-def test_rejects_invalid_sql_settings(binary: Path) -> Transcript:
+def test_rejects_invalid_startup(binary: Path) -> Transcript:
     cases = (
-        ("sql.provider=unknown", "sql.provider"),
-        ("sql.database=''", "sql.database must not be empty"),
-        ("sql.read_only=true", "sql.read_only requires a file-backed database"),
-        ("sql.options.threads=0", "sql.options.threads must be between"),
-        ("sql.options.threads=-1", "sql.options.threads"),
-        ("sql.options.threads=2147483648", "sql.options.threads must be between"),
-        ("sql.options.memory_limit=42", "sql.options.memory_limit"),
-        ("sql.options.memory_limit=''", "sql.options.memory_limit must not be empty"),
-        (
-            "sql.options.extension_directory=private-cache",
-            "unknown field `extension_directory`",
-        ),
-        (
-            "sql.options.enable_external_access=true",
-            "unknown field `enable_external_access`",
-        ),
+        ("startup.language=sql", "startup.language"),
+        ("startup.language=unknown", "startup.language"),
+        ("startup.code=''", "startup.code must be nonempty"),
+        ("startup.code=42", "startup.code"),
+        ("startup.code=null", "startup.code"),
+        ("startup.extra=true", "unknown field `extra`"),
+        ("sql.provider=python", "unknown field `sql`"),
     )
     records = []
     with TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        configure(workspace, {})
+        configure(workspace, {"startup": {"language": "python", "code": "pass"}})
         for override, expected in cases:
             result = subprocess.run(
                 [binary, "serve", "--no-sandbox", "-c", override],
@@ -591,15 +582,7 @@ def test_rejects_invalid_sql_settings(binary: Path) -> Transcript:
             assert expected in result.stderr, result.stderr
             records.append({"override": override, "error": result.stderr})
         result = subprocess.run(
-            [
-                binary,
-                "serve",
-                "--no-sandbox",
-                "--worker",
-                "unused",
-                "-c",
-                "sql.provider=python",
-            ],
+            [binary, "serve", "--no-sandbox", "--worker", "unused"],
             cwd=workspace,
             input="",
             capture_output=True,
@@ -607,9 +590,7 @@ def test_rejects_invalid_sql_settings(binary: Path) -> Transcript:
             timeout=10,
         )
         assert result.returncode == 1 and result.stdout == "", result
-        assert "SQL settings require the built-in worker" in result.stderr, (
-            result.stderr
-        )
+        assert "startup requires the built-in worker" in result.stderr, result.stderr
         records.append({"custom_worker_error": result.stderr})
     return records
 

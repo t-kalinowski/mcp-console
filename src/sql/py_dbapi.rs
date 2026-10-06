@@ -34,23 +34,3 @@ pub extern "C-unwind" fn mcp_console_sql_take_restore_request() -> harp::Result<
         crate::python::take_sql_restore_request().map_err(|error| harp::anyhow!("{error}"))?;
     Ok(harp::object::RObject::from(requested).sexp)
 }
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_sql_settings() -> harp::Result<SEXP> {
-    let settings = super::settings_json().map_err(|error| harp::anyhow!("{error}"))?;
-    Ok(harp::object::RObject::from(settings).sexp)
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_sql_default_is_r() -> harp::Result<SEXP> {
-    Ok(harp::object::RObject::from(super::managed_is_r()).sexp)
-}
-
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_sql_reset_python() -> harp::Result<SEXP> {
-    crate::python::reset_managed_sql().map_err(|error| harp::anyhow!("{error}"))?;
-    unsafe { Ok(libr::R_NilValue) }
-}

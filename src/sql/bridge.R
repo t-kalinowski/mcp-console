@@ -2,7 +2,6 @@ base::local(
   {
     managed_connection <- NULL
     rendering_connection <- NULL
-    settings_json <- .Call("mcp_console_sql_settings")
     selected_connection <- NULL
     source <- NULL
     printer_ready <- FALSE
@@ -25,22 +24,18 @@ base::local(
       envir = globalenv()
     )
 
-    open_connection <- function(database, read_only, options) {
+    open_connection <- function() {
       storage <- file.path(Sys.getenv("TMPDIR"), "mcp-console-duckdb")
       connection <- DBI::dbConnect(
         duckdb::duckdb(
-          dbdir = database,
-          read_only = read_only,
-          config = c(
-            lapply(options, as.character),
-            list(
-              # Cache and worker storage remain Console-owned settings.
-              extension_directory = Sys.getenv(
-                "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
-              ),
-              secret_directory = file.path(storage, "stored-secrets"),
-              temp_directory = file.path(storage, "spill")
-            )
+          dbdir = ":memory:",
+          config = list(
+            # Cache and worker storage remain Console-owned settings.
+            extension_directory = Sys.getenv(
+              "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
+            ),
+            secret_directory = file.path(storage, "stored-secrets"),
+            temp_directory = file.path(storage, "spill")
           ),
           environment_scan = TRUE
         )
@@ -67,16 +62,8 @@ base::local(
     }
 
     ensure_managed_connection <- function() {
-      if (!.Call("mcp_console_sql_default_is_r")) {
-        stop("The managed SQL provider is Python; use Python sql_connection()")
-      }
       if (is.null(managed_connection)) {
-        settings <- jsonlite::fromJSON(settings_json, simplifyVector = FALSE)
-        managed_connection <<- open_connection(
-          if (is.null(settings$database)) ":memory:" else settings$database,
-          isTRUE(settings$read_only),
-          settings$options
-        )
+        managed_connection <<- open_connection()
       }
       invisible(managed_connection)
     }
@@ -88,7 +75,7 @@ base::local(
       # User DBI previews must not depend on the managed database or its options.
       # This scratch catalog opens only for a DBI preview, never the SQL default.
       if (is.null(rendering_connection)) {
-        rendering_connection <<- open_connection(":memory:", FALSE, list())
+        rendering_connection <<- open_connection()
       }
       rendering_connection
     }
@@ -133,11 +120,6 @@ base::local(
 
     console_sql_connection <- function(connection) {
       if (is.null(connection)) {
-        if (!.Call("mcp_console_sql_default_is_r")) {
-          invisible(.Call("mcp_console_sql_reset_python"))
-          selected_connection <<- NULL
-          return(invisible(NULL))
-        }
         connection <- ensure_managed_connection()
       } else {
         if (
@@ -153,6 +135,47 @@ base::local(
       invisible(.Call("mcp_console_sql_use_r"))
       selected_connection <<- connection
       invisible(selected_connection)
+    }
+
+    initialize_connection <- function(source) {
+      program <- tryCatch(
+        parse(text = source, keep.source = FALSE),
+        error = function(condition) {
+          # R's parse diagnostic appends the source excerpt on later lines.
+          cat(
+            "Error: R startup syntax error: ",
+            strsplit(conditionMessage(condition), "\n", fixed = TRUE)[[1L]][1L],
+            "\n",
+            sep = ""
+          )
+          NULL
+        }
+      )
+      if (is.null(program)) {
+        return("failed")
+      }
+      tryCatch(
+        {
+          eval(program, envir = globalenv())
+          if (
+            is.null(selected_connection) ||
+              !isTRUE(DBI::dbIsValid(selected_connection))
+          ) {
+            stop(
+              "startup must select a valid native connection with console_sql_connection(connection)"
+            )
+          }
+          "ready"
+        },
+        interrupt = function(condition) {
+          cat("R startup interrupted\n")
+          "interrupted"
+        },
+        error = function(condition) {
+          cat("Error: ", conditionMessage(condition), "\n", sep = "")
+          "failed"
+        }
+      )
     }
 
     restore_managed_connection <- function() {

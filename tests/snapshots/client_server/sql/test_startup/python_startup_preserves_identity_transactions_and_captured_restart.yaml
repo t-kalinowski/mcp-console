@@ -1,0 +1,5 @@
+---
+startup: native Python with R present
+once_per_generation: true
+identity_and_transactions: true
+restart_uses_captured_source: true

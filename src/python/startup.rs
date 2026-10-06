@@ -94,8 +94,8 @@ pub(crate) fn setup_runtime(libpython: &Path, managed: bool) -> Result<bool, Str
     if !crate::sql::install_python_runtime()? {
         return Ok(false);
     }
-    if !crate::sql::managed_is_r() {
-        super::library::configure_native_sql(managed)?;
+    if !crate::worker::r_available() {
+        super::library::configure_native_sql()?;
     }
     if !super::library::configure_environment()? {
         return Err("Python environment setup failed; restart required".into());

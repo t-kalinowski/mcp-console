@@ -195,18 +195,10 @@ pub(crate) fn install_sql_runtime(source: &str) -> Result<bool, String> {
 }
 
 pub(crate) fn dispatch_sql(source: &str) -> Result<SqlProvider, String> {
-    if !crate::sql::managed_is_r() && library::sql_needs_initialization()? && !ensure_initialized()?
-    {
+    if !crate::worker::r_available() && !library::runtime_configured()? && !ensure_initialized()? {
         return Ok(SqlProvider::Handled);
     }
     library::dispatch_sql(source)
-}
-
-pub(crate) fn reset_managed_sql() -> Result<(), String> {
-    if !ensure_initialized()? {
-        return Err("Python initialization is incomplete; SQL connection was not reset".into());
-    }
-    library::reset_managed_sql()
 }
 
 pub(crate) fn use_r_sql() -> Result<(), String> {
@@ -218,6 +210,13 @@ pub(crate) fn initialize_managed_sql() -> Result<(), String> {
         library::initialize_managed_sql()?;
     }
     Ok(())
+}
+
+pub(crate) fn initialize_sql_source(source: &str) -> Result<bool, String> {
+    if !ensure_initialized()? {
+        return Err("Python initialization is incomplete".into());
+    }
+    library::initialize_sql_source(source)
 }
 
 pub(crate) fn take_sql_restore_request() -> Result<bool, String> {

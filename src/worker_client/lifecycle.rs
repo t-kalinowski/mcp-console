@@ -750,6 +750,9 @@ impl Client {
         }
         response.push_notice_line(super::output::WORKER_STARTING_NOTICE);
 
+        self.0
+            .startup_permitted
+            .store(true, std::sync::atomic::Ordering::Release);
         let completion_generation = generation.clone();
         if let Err(mut failure) = self.start_worker(
             &mut worker,

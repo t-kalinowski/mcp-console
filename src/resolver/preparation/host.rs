@@ -10,6 +10,7 @@ use crate::process_io::{Io, duplicate};
 use crate::resolver::{self, ResolverControlOutcome, ResolverStopHandle};
 
 struct Context {
+    mode: Mode,
     bootstrap: Option<resolver::ManagedRBootstrap>,
     r: Option<resolver::ManagedRResolverConfiguration>,
     python: resolver::ManagedPythonResolverConfiguration,
@@ -42,6 +43,7 @@ impl Context {
             let has_uv = python.has_uv();
             return Ok((
                 Self {
+                    mode,
                     bootstrap: None,
                     r: None,
                     python,
@@ -88,6 +90,7 @@ impl Context {
         };
         Ok((
             Self {
+                mode,
                 bootstrap,
                 r: None,
                 python,
@@ -179,7 +182,7 @@ impl Context {
                 extensions,
                 extension_directory,
             } => {
-                if !self.managed_python {
+                if !matches!(self.mode, Mode::PythonOnly) || !self.managed_python {
                     return Err("Python-backed DuckDB preparation requires managed Python".into());
                 }
                 resolver::resolve_python_duckdb_extensions(

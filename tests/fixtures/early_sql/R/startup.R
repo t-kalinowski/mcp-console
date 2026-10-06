@@ -7,18 +7,6 @@
     observed <- FALSE
     observe_connection <- function(connection) {
       stopifnot(DBI::dbIsValid(connection))
-      sql_json <- Sys.getenv("MCP_CONSOLE_SQL_SETTINGS")
-      if (nzchar(sql_json)) {
-        settings <- jsonlite::fromJSON(sql_json)
-        if (!is.null(settings$options$threads)) {
-          stopifnot(
-            DBI::dbGetQuery(connection, "SELECT current_setting('threads')")[[
-              1L
-            ]] ==
-              settings$options$threads
-          )
-        }
-      }
       DBI::dbExecute(
         connection,
         "CREATE TABLE IF NOT EXISTS startup_catalog AS SELECT 42 AS answer"

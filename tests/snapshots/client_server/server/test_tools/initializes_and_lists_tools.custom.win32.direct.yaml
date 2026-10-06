@@ -88,7 +88,7 @@ result:
               successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
               earlier evaluation or attempting an optional following cell; the cell is not run if the
               interrupted evaluation remains active. When `requirements` is available, restart resolves
-              same-call requirements before replacement. It then discards R, Python, in-memory SQL, debugger,
+              same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
               and unread-stdin state and sends same-call stdin and code only to the replacement.
             type: string
             enum:

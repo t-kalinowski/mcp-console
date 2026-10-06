@@ -1,0 +1,5 @@
+---
+missing_runtime_withholds_sql: |
+  Error: R is unavailable in this session; SQL withheld; explicit restart required
+  [output produced while idle]
+  Error: SQL unavailable: R is unavailable in this session; explicit restart required

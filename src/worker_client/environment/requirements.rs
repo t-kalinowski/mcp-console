@@ -134,7 +134,11 @@ impl RequirementDelta {
             _ => None,
         };
         if pending.is_some() {
-            duckdb.extend(environment.startup_declaration().duckdb);
+            duckdb.extend(
+                super::super::DEFAULT_DUCKDB_EXTENSIONS
+                    .iter()
+                    .map(|name| (*name).to_string()),
+            );
         }
 
         let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
@@ -153,17 +157,14 @@ impl RequirementDelta {
                 .and_then(PythonEnvironment::managed),
             python_additions.iter().cloned().collect(),
         );
-        if pending.is_some_and(|setup| {
-            PythonEnvironment::uses_managed(setup.configured_python.as_deref())
-        }) {
-            let defaults = environment.startup_declaration().python_manifest();
-            match &mut python_candidate {
-                Some(candidate) => candidate.packages.extend(defaults.packages),
-                None => python_candidate = Some(defaults),
-            }
+        if python_candidate.is_none()
+            && pending.is_some_and(|setup| {
+                PythonEnvironment::uses_managed(setup.configured_python.as_deref())
+            })
+        {
+            python_candidate = Some(crate::worker_protocol::default_python_requirement_manifest());
         }
 
-        python_candidate = python_candidate.map(|candidate| candidate.normalized());
         let current_python = environment.declaration().python_manifest();
         let mut candidate = python_candidate
             .clone()

@@ -1,7 +1,0 @@
----
-first_constructor_receives_options: true
-discovery_during_warmup: true
-early_sql_runs_once: true
-providers:
-  - r
-  - python
