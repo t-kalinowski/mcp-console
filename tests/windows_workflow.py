@@ -565,6 +565,80 @@ class WindowsWorkflow(unittest.TestCase):
         self.assertIn("accepts --full or --quick", result.stderr)
         self.assertFalse((self.root / "target").exists())
 
+    def windows_preparation_fixture(self):
+        r_home = self.root / "R installation"
+        (r_home / "bin").mkdir(parents=True)
+        (r_home / "bin/R.exe").touch()
+        self.stub("R", f"print({str(r_home)!r})\n")
+        self.environment.pop("R_HOME", None)
+        self.environment["SETUP_LOG"] = str(self.root / "setup.jsonl")
+        self.stub(
+            "console",
+            dedent("""
+                import json
+                import os
+                from pathlib import Path
+                import sys
+
+                arguments = sys.argv[1:]
+                with Path(os.environ['SETUP_LOG']).open('a') as log:
+                    log.write(json.dumps(arguments) + '\\n')
+                state = Path(arguments[arguments.index('--state-dir') + 1])
+                if '--status' in arguments:
+                    configured = (state / 'ready').is_file()
+                    print(json.dumps({'configured': configured, 'helpers_available': True}))
+                    sys.exit(0 if configured else 1)
+                state.mkdir(parents=True, exist_ok=True)
+                if not os.environ.get('UNCONFIRMED_SETUP'):
+                    (state / 'ready').touch()
+                """),
+        )
+        state = self.root / "sandbox state"
+        exported = self.root / "github-env"
+        arguments = (
+            "--binary",
+            str(self.commands / "console.cmd"),
+            "--state-dir",
+            str(state),
+            "--github-env",
+            str(exported),
+        )
+        return r_home, state, exported, arguments
+
+    def test_prepares_provisioned_windows_tests_and_reuses_ready_state(self):
+        r_home, state, exported, arguments = self.windows_preparation_fixture()
+        result = self.run_command("prepare-windows-tests", *arguments)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            exported.read_text().splitlines(),
+            [
+                f"R_HOME={r_home}",
+                f"MCP_CONSOLE_TEST_WINDOWS_STATE_DIR={state}",
+            ],
+        )
+        for _ in range(2):
+            # A ready machine, including a local developer's existing setup,
+            # must not request provisioning again.
+            result = self.run_command("prepare-windows-tests", *arguments)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        commands = [
+            json.loads(line)
+            for line in (self.root / "setup.jsonl").read_text().splitlines()
+        ]
+        provisioned = [command for command in commands if "--status" not in command]
+        self.assertEqual(provisioned, [["sandbox-setup", "--state-dir", str(state)]])
+
+    def test_unconfirmed_windows_setup_does_not_enable_tests(self):
+        _, _, exported, arguments = self.windows_preparation_fixture()
+        result = self.run_command(
+            "prepare-windows-tests",
+            *arguments,
+            environment=self.environment | {"UNCONFIRMED_SETUP": "1"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Windows sandbox setup is not ready", result.stderr)
+        self.assertFalse(exported.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

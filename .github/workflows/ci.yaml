@@ -102,6 +102,14 @@ jobs:
           scripts/preflight.cmd --json
       - name: Stage native Windows sandbox
         run: scripts/stage-sandbox-runner.cmd
+      - name: Provision native Windows sandbox acceptance
+        run: |
+          scripts/with-checkout.cmd cargo build --target-dir target
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python scripts/prepare-windows-tests `
+            --state-dir "$env:RUNNER_TEMP/console-windows-sandbox" `
+            --github-env "$env:GITHUB_ENV"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Run native Windows development and installation checks
         run: |
           scripts/check.cmd --full
