@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -15,9 +16,10 @@ from support.checkpoints import wait_for_worker_file
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.installation import installed_console
 from support.normalization import code
-from support.records import Transcript
+from support.records import ToolResult, Transcript
 from support.requirements import POSIX, PROCESS_EVENTS, R, SQL, requires
 from support.resolvers import matplotlib_test_environment
+from support.snapshots import normalize_request_ids
 from boundaries.client_server.python.test_startup import isolated_python
 from boundaries.client_server.server.test_no_r import no_r_environment
 
@@ -131,6 +133,41 @@ def test_python_startup_publishes_plots_without_r(
     return startup_plots(binary, execution, with_r=False)
 
 
+def startup_sql_result(client: McpClient) -> ToolResult:
+    """Submit once and collect ordered startup output until SQL completes."""
+    deadline = time.monotonic() + client.response_timeout
+    first_call = len(client.transcript)
+    result = client.send(sql="SELECT 42 AS answer", timeout_ms=0)
+    content: list[dict] = []
+    running = "\n[running; poll with an empty send]"
+    while True:
+        assert result.get("isError") is not True, result
+        chunk = result["content"]
+        last = chunk[-1]
+        pending = last["type"] == "text" and last["text"].endswith(running)
+        for item in chunk:
+            if item is last and pending:
+                item = {**item, "text": item["text"].removesuffix(running)}
+                if not item["text"]:
+                    continue
+            if item == {"type": "text", "text": "[done]"} and content:
+                continue
+            if content and content[-1]["type"] == item["type"] == "text":
+                content[-1]["text"] += item["text"]
+            else:
+                content.append(item.copy())
+        if not pending:
+            break
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, "startup SQL did not complete"
+        result = client.send(timeout_ms=max(1, int(remaining * 1_000)))
+    result["content"] = content
+    submitted = client.transcript[first_call]
+    submitted["result"] = result
+    client.transcript[first_call:] = [submitted]
+    return result
+
+
 def startup_plots(binary: Path, execution: Execution, *, with_r: bool) -> Transcript:
     records = []
     with tempfile.TemporaryDirectory() as temporary:
@@ -176,8 +213,7 @@ def startup_plots(binary: Path, execution: Execution, *, with_r: bool) -> Transc
             config.write_text(json.dumps(settings))
             with McpClient(binary, execution.serve(), environment, workspace) as client:
                 client.initialize_and_list_tools()
-                client.send(sql="SELECT 42 AS answer")
-                result = client.transcript[-1]["result"]
+                result = startup_sql_result(client)
                 text = "".join(
                     item["text"] for item in result["content"] if item["type"] == "text"
                 )
@@ -569,12 +605,17 @@ def test_startup_gate_preserves_discovery_ordering_and_interrupt(
                     assert "42" in last_tool_text(client), client.transcript[-1]
                     client.expect(python="assert startup_count == 1")
                 else:
-                    client.send(stdin="continue\n")
+                    client.expect(stdin="continue\n", timeout_ms=0)
                     client.expect(
                         "answer\n------\n42\n", sql="SELECT answer FROM first_cell"
                     )
                     client.expect(python="assert startup_count == 1")
-                records.append({"interrupted": interrupt, "calls": client.finish()[3:]})
+                records.append(
+                    {
+                        "interrupted": interrupt,
+                        "calls": normalize_request_ids(client.finish()[3:]),
+                    }
+                )
     return records
 
 

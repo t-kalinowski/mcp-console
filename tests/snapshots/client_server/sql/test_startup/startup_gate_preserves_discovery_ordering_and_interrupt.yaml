@@ -1,12 +1,10 @@
 ---
 interrupted: false
 calls:
-  - id: 3
-    input:
+  - input:
       method: ping
     result: {}
-  - id: 4
-    send:
+  - send:
       sql: CREATE TABLE first_cell AS SELECT answer FROM selected
     result:
       content:
@@ -15,17 +13,16 @@ calls:
             [input requested: "Startup gate> "]
             [waiting for stdin]
       isError: false
-  - id: 5
-    send:
+  - send:
       stdin: |
         continue
+      timeout_ms: 0
     result:
       content:
         - type: text
           text: "[done]"
       isError: false
-  - id: 6
-    send:
+  - send:
       sql: SELECT answer FROM first_cell
     result:
       content:
@@ -35,8 +32,7 @@ calls:
             ------
             42
       isError: false
-  - id: 7
-    send:
+  - send:
       python: assert startup_count == 1
     result:
       content:
@@ -46,12 +42,10 @@ calls:
 ---
 interrupted: true
 calls:
-  - id: 3
-    input:
+  - input:
       method: ping
     result: {}
-  - id: 4
-    send:
+  - send:
       sql: CREATE TABLE first_cell AS SELECT answer FROM selected
     result:
       content:
@@ -60,8 +54,7 @@ calls:
             [input requested: "Startup gate> "]
             [waiting for stdin]
       isError: false
-  - id: 5
-    send:
+  - send:
       control: interrupt
       timeout_ms: 0
     result:
@@ -75,8 +68,7 @@ calls:
             KeyboardInterrupt
             Error: configured startup did not complete; SQL withheld; explicit restart required
       isError: false
-  - id: 6
-    send:
+  - send:
       python: |
         assert startup_count == 1
         assert native.execute("SELECT count(*) FROM sqlite_master").fetchone() == (0,)
@@ -85,8 +77,7 @@ calls:
         - type: text
           text: "[done]"
       isError: false
-  - id: 7
-    send:
+  - send:
       sql: SELECT 42 AS answer
     result:
       content:
@@ -95,8 +86,7 @@ calls:
             Error: SQL unavailable: configured startup did not complete; explicit
             restart required
       isError: false
-  - id: 8
-    send:
+  - send:
       control: restart
       stdin: |
         continue
@@ -113,8 +103,7 @@ calls:
             42
             [done]
       isError: false
-  - id: 9
-    send:
+  - send:
       python: assert startup_count == 1
     result:
       content:

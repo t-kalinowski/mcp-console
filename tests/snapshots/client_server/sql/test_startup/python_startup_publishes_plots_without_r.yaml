@@ -3,6 +3,7 @@ failed_startup: false
 ---
 send:
   sql: SELECT 42 AS answer
+  timeout_ms: 0
 result:
   content:
     - type: image
@@ -36,6 +37,7 @@ failed_startup: true
 ---
 send:
   sql: SELECT 42 AS answer
+  timeout_ms: 0
 result:
   content:
     - type: text
