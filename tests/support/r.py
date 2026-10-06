@@ -24,7 +24,7 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
         home = Path(r_home)
     else:
         output = subprocess.run(
-            ["R", "RHOME"],
+            [shutil.which("R") or "R", "RHOME"],
             check=True,
             capture_output=True,
             text=True,

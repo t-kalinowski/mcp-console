@@ -581,6 +581,75 @@ class WindowsConsole(unittest.TestCase):
             "FALSE", json.dumps(session.send(control="restart", r="exists('answer')"))
         )
 
+    def test_discovers_r_from_batch_launcher(self):
+        r_home = Path(
+            os.environ.get("R_HOME")
+            or subprocess.check_output(
+                [shutil.which("R") or "R", "RHOME"], text=True
+            ).strip()
+        )
+        for extension in ("bat", "cmd"):
+            with (
+                self.subTest(extension=extension),
+                tempfile.TemporaryDirectory(prefix="console R launcher ") as directory,
+            ):
+                root = Path(directory)
+                launcher = root / f"R.{extension}"
+                launcher.write_text(f'@"{r_home / "bin/R.exe"}" %*\n')
+                later = root / "later"
+                later.mkdir()
+                # An earlier batch launcher takes precedence over a later exe.
+                (later / "R.exe").write_text("broken later installation")
+                environment = dict(
+                    os.environ,
+                    PATH=os.pathsep.join(
+                        (
+                            str(root),
+                            str(later),
+                            str(Path(os.environ["SystemRoot"]) / "System32"),
+                        )
+                    ),
+                    RETICULATE_PYTHON=sys.executable,
+                )
+                environment.pop("R_HOME", None)
+                session = Session(environment, bare_r=True)
+                try:
+                    session.initialize()
+                    result = session.send(r="answer <- 42L; answer")
+                    self.assertFalse(result.get("isError"), result)
+                    self.assertIn("42", json.dumps(result))
+                    # The selected installation survives changes to the launcher.
+                    launcher.write_text("@exit /b 91\n")
+                    result = session.send(control="restart", r="exists('answer')")
+                    self.assertFalse(result.get("isError"), result)
+                    self.assertIn("FALSE", json.dumps(result))
+                finally:
+                    session.close()
+
+    def test_reports_broken_r_batch_launcher(self):
+        with tempfile.TemporaryDirectory(prefix="console broken R ") as directory:
+            root = Path(directory)
+            (root / "R.bat").write_text(
+                "@echo deliberate R discovery failure 1>&2\n@exit /b 91\n"
+            )
+            environment = dict(
+                os.environ,
+                PATH=os.pathsep.join(
+                    (str(root), str(Path(os.environ["SystemRoot"]) / "System32"))
+                ),
+                RETICULATE_PYTHON=sys.executable,
+            )
+            environment.pop("R_HOME", None)
+            session = Session(environment)
+            try:
+                session.initialize()
+                result = session.send(r="42L")
+                self.assertTrue(result.get("isError"), result)
+                self.assertIn("worker R home discovery failed", json.dumps(result))
+                self.assertIn("deliberate R discovery failure", json.dumps(result))
+            finally:
+                session.close()
+
     def test_python_sleep_interrupt(self):
         session = self.session(defer_bootstrap=True)
         session.send(python="import time; saved = 42")
