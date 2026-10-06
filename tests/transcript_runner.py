@@ -1752,7 +1752,7 @@ runner: orphan
         self.assertIn("fixture failed before snapshot update", retried.stderr)
         self.assertNotIn("orphan snapshot:", retried.stderr)
 
-    def test_default_concurrency_runs_twice_the_cpu_count(self) -> None:
+    def test_default_concurrency_reserves_one_logical_cpu(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
@@ -1777,7 +1777,7 @@ runner: orphan
             (self.snapshots / f"{name}.yaml").write_text(
                 "---\nrunner: concurrent\n...\n", encoding="utf-8"
             )
-        launcher = self.root / "two_cpu_host.py"
+        launcher = self.root / "five_cpu_host.py"
         launcher.write_text(
             # fmt: python
             code("""
@@ -1786,7 +1786,7 @@ runner: orphan
                 from unittest.mock import patch
 
                 runner = sys.argv.pop(1)
-                with patch("os.cpu_count", return_value=2):
+                with patch("os.cpu_count", return_value=5):
                     runpy.run_path(runner, run_name="__main__")
                 """),
             encoding="utf-8",
@@ -1809,7 +1809,7 @@ runner: orphan
                 ready, _, _ = select.select([started], [], [], 10)
                 self.assertTrue(
                     ready,
-                    f"only {len(acknowledgements)} of four cases started on a two-CPU host",
+                    f"only {len(acknowledgements)} of four cases started on a five-CPU host",
                 )
                 acknowledgements += os.read(started, 4 - len(acknowledgements))
             self.assertEqual(os.write(release, b"1111"), 4)
@@ -1822,6 +1822,33 @@ runner: orphan
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
+
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("default concurrency fixture failed")
+                """),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                launcher,
+                self.boundaries / "_run.py",
+                "--full",
+                "--update",
+                "--jobs",
+                "4",
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rerun: scripts/test --full --update\n", result.stderr)
 
     def write_failure_collection_suite(self, failures: set[int]) -> list[str]:
         names = ["initializes_and_lists_tools", *[f"case_{i:02}" for i in range(1, 20)]]
