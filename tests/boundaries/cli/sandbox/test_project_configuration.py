@@ -8,13 +8,15 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from yaml12 import parse_yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.snapshots import platform_snapshots
 from support.client import McpClient
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
-from support.records import Transcript
+from support.records import Transcript, TranscriptEntry
 from support.requirements import SANDBOX, requires
 from support.sandbox_configuration import NATIVE_PROXY
 from support.suites import run_this_suite
@@ -23,7 +25,7 @@ from support.suites import run_this_suite
 CONFIG = ".agents/console/config.yaml"
 
 
-def accepted(binary: Path, host: Path, *arguments: str) -> None:
+def accepted(binary: Path, host: Path, *arguments: str) -> TranscriptEntry:
     with McpClient(
         binary,
         arguments or ("serve", "--worker", "unused-worker"),
@@ -33,6 +35,12 @@ def accepted(binary: Path, host: Path, *arguments: str) -> None:
         client.initialize_and_list_tools()
         _, stderr = client.finish_with_standard_error()
         assert stderr == "", stderr
+        return {
+            "command": ["mcp-console", *client.process.args[1:]],
+            "initialized": True,
+            "exit_status": client.process.returncode,
+            "stderr": stderr,
+        }
 
 
 def invoke(binary: Path, host: Path, *arguments: str):
@@ -350,7 +358,7 @@ def test_accepts_supported_project_settings(binary: Path) -> Transcript:
         config.parent.mkdir(parents=True)
         for yaml in cases:
             config.write_text(yaml, encoding="utf-8")
-            accepted(
+            launch = accepted(
                 binary,
                 host,
                 "serve",
@@ -361,7 +369,8 @@ def test_accepts_supported_project_settings(binary: Path) -> Transcript:
             )
             assert not (host / "future café 雪").exists()
             assert not (host / "future CLI").exists()
-            transcript.append({"yaml": yaml, "initialized": True})
+            # Decode only the known fixture input, preserving literal diagnostics.
+            transcript.append({"configuration": parse_yaml(yaml), **launch})
     return transcript
 
 
