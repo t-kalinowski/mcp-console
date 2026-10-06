@@ -1,5 +1,0 @@
----
-close_receipt_lost: true
-exit_status: 1
-stderr: |
-  MCP connection closed during runtime preparation; resolver input closed

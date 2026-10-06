@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -12,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.requirements import NATIVE_FIXTURES, SQL, requires
+from support.requirements import NATIVE_FIXTURES, R, SQL, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
@@ -22,6 +23,48 @@ from support.r import r_test_environment
 from support.native import SHARED_LIBRARY_FLAG, build_interposer
 from support.records import Transcript
 from support.suites import run_this_suite
+
+
+@requires(R, SQL)
+@executions(SANDBOXED)
+def test_prepares_builtin_extensions_without_downloads(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment, _ = r_test_environment()
+        environment["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"] = str(root / "extensions")
+        arguments = execution.serve("-c", "cache=host")
+        with McpClient(binary, arguments, environment, root) as client:
+            client.initialize_and_list_tools()
+            client.expect(r="invisible(sql_connection())")
+            client.finish()
+        assert not list((root / "extensions").glob("**/parquet.duckdb_extension"))
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps({"resolver": {"proxy": {"domains": {}}}}))
+        environment["UV_OFFLINE"] = "1"
+        with McpClient(binary, arguments, environment, root) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                # fmt: r
+                r=code(r"""
+                    retained_connection <- sql_connection()
+                    invisible(DBI::dbExecute(
+                      retained_connection,
+                      "CREATE TABLE retained AS SELECT 42 AS answer"
+                    ))
+                    """),
+            )
+            client.expect("[prepared]", requirements={"duckdb": ["parquet"]})
+            client.expect(
+                "[1] TRUE\n", r="identical(sql_connection(), retained_connection)"
+            )
+            client.expect(
+                "[1] 42\n",
+                r="DBI::dbGetQuery(sql_connection(), 'SELECT answer FROM retained')$answer",
+            )
+            return client.finish()[3:]
 
 
 @requires(SQL)

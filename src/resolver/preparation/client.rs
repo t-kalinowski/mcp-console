@@ -104,6 +104,7 @@ struct Control {
     id: u64,
     events: mpsc::Sender<Event>,
     state: Arc<State>,
+    blocked: Arc<Mutex<Option<String>>>,
 }
 
 impl ResolverControl for Control {
@@ -144,6 +145,15 @@ impl ResolverControl for Control {
     }
     fn cleanup_confirmed(&self) -> bool {
         self.state.confirmed.load(Ordering::SeqCst)
+    }
+    fn failure_is_controlled(&self) -> bool {
+        // Cancellation cannot account for a separate connection-close failure.
+        self.control_outcome().is_some()
+            && self
+                .blocked
+                .lock()
+                .expect("preparation session lock")
+                .is_none()
     }
 }
 
@@ -443,6 +453,7 @@ impl Preparation {
             id: 0,
             events,
             state,
+            blocked: connection.0.blocked.clone(),
         });
         if let Err(error) = on_started(handle.clone()) {
             let _ = handle.stop();
@@ -489,6 +500,7 @@ impl Preparation {
             id,
             events: self.0.events.clone(),
             state: state.clone(),
+            blocked: self.0.blocked.clone(),
         });
         let (reply, response) = mpsc::channel();
         self.0
