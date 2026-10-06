@@ -840,6 +840,111 @@ class WindowsConsole(unittest.TestCase):
         )
         self.assertIn("bridge ready", json.dumps(result))
 
+    def test_direct_py_access_attaches_on_demand(self):
+        for getter in ("reticulate::py", "py"):
+            with self.subTest(getter=getter):
+                session = self.session()
+                for restart in (False, True):
+                    if restart:
+                        session.send(control="restart")
+                    # fmt: python
+                    session.send(
+                        python=dedent("""
+                            bridge_value = "startup value"
+                            bridge_object = object()
+                            bridge_identity = id(bridge_object)
+                            """)
+                    )
+                    # fmt: r
+                    result = session.send(
+                        r=dedent("""
+                            stopifnot(!reticulate::py_available(initialize = FALSE))
+                            suppressPackageStartupMessages(library(reticulate))
+                            stopifnot(!reticulate::py_available(initialize = FALSE))
+                            main <- GETTER
+                            stopifnot(!reticulate::py_available(initialize = FALSE))
+                            stopifnot(
+                              identical(main$bridge_value, "startup value"),
+                              identical(GETTER$bridge_value, "startup value"),
+                              reticulate::py_available(initialize = FALSE)
+                            )
+                            bridge_from_r <- 42L
+                            cat("direct bridge ready")
+                            """).replace("GETTER", getter)
+                    )
+                    self.assertIn("direct bridge ready", json.dumps(result))
+                    # fmt: python
+                    result = session.send(
+                        python=dedent("""
+                            assert id(bridge_object) == bridge_identity
+                            assert bridge_value == "startup value"
+                            assert int(r.bridge_from_r) == 42
+                            print("bridge state retained")
+                            """)
+                    )
+                    self.assertIn("bridge state retained", json.dumps(result))
+
+    def test_loading_reticulate_does_not_start_python(self):
+        session = Session(dict(os.environ, MCP_CONSOLE_LANGUAGES="r"))
+        self.addCleanup(session.close)
+        session.initialize()
+        # fmt: r
+        result = session.send(
+            r=dedent("""
+                Sys.setenv(RETICULATE_PYTHON = "__console_missing_python__")
+                suppressPackageStartupMessages(library(reticulate))
+                stopifnot(!reticulate::py_available(initialize = FALSE))
+                cat("reticulate loaded without Python")
+                """)
+        )
+        self.assertIn("reticulate loaded without Python", json.dumps(result))
+
+    def test_py_reads_in_initialization_hooks_do_not_reenter(self):
+        for clear_callback in (False, True):
+            with self.subTest(clear_callback=clear_callback):
+                session = self.session()
+                session.send(python='hook_value = "existing Python value"')
+                # fmt: r
+                result = session.send(
+                    r=dedent("""
+                        callback_calls <- 0L
+                        after_calls <- 0L
+                        options(reticulate.python.beforeInitialized = function() {
+                          callback_calls <<- callback_calls + 1L
+                          if (callback_calls > 1L) {
+                            stop("recursive bridge initialization")
+                          }
+                          if (CLEAR_CALLBACK) {
+                            options(reticulate.python.beforeInitialized = NULL)
+                          }
+                          stopifnot(
+                            is.null(reticulate::py),
+                            is.null(py$hook_value),
+                            !reticulate::py_available(initialize = FALSE)
+                          )
+                        })
+                        options(reticulate.python.afterInitialized = function() {
+                          after_calls <<- after_calls + 1L
+                          stopifnot(identical(py$hook_value, "existing Python value"))
+                        })
+                        stopifnot(
+                          identical(reticulate::py$hook_value, "existing Python value"),
+                          callback_calls == 1L,
+                          after_calls == 1L
+                        )
+                        options(reticulate.python.beforeInitialized = NULL)
+                        options(reticulate.python.afterInitialized = NULL)
+                        cat("initialization callback ran once")
+                        """).replace(
+                        "CLEAR_CALLBACK", "TRUE" if clear_callback else "FALSE"
+                    )
+                )
+                self.assertIn("initialization callback ran once", json.dumps(result))
+                self.assertIn(
+                    "existing Python value",
+                    json.dumps(session.send(python="hook_value")),
+                )
+
     def test_selected_virtualenv_with_unicode_path(self):
         directory = tempfile.TemporaryDirectory(prefix="console Python \u03bb ")
         self.addCleanup(directory.cleanup)
