@@ -14,6 +14,16 @@ from support.records import Transcript
 from support.requirements import POSIX, R, SQL, requires
 from support.suites import run_this_suite
 
+SQL_R_REQUIREMENTS = (
+    "reticulate",
+    "DBI",
+    "duckdb",
+    "arrow",
+    "nanoarrow",
+    "pillar",
+    "tibble",
+)
+
 
 @requires(SQL, R)
 @executions(DIRECT, SANDBOXED)
@@ -22,7 +32,9 @@ def test_selected_r_connection_does_not_initialize_python(
 ) -> Transcript:
     from boundaries.client_server.python.test_setup import deferred_selection_client
 
-    with deferred_selection_client(binary, execution.serve()) as client:
+    with deferred_selection_client(
+        binary, execution.serve(), r_requirements=SQL_R_REQUIREMENTS
+    ) as client:
         client.expect(
             # fmt: r
             r=code("""
@@ -127,7 +139,9 @@ def test_interrupted_selection_replay_preserves_r_connection(
         (modules / "sitecustomize.py").write_text(
             f"exec(compile({json.dumps(checkpoint)}, '<SQL selection checkpoint>', 'exec'))"
         )
-        with deferred_selection_client(binary, execution.serve()) as client:
+        with deferred_selection_client(
+            binary, execution.serve(), r_requirements=SQL_R_REQUIREMENTS
+        ) as client:
             client.expect(
                 r=f"Sys.setenv(RETICULATE_PYTHONPATH = {json.dumps(str(modules))})"
             )
@@ -221,7 +235,9 @@ def test_selected_r_bypasses_incomplete_python_setup(
         (modules / "sitecustomize.py").write_text(
             f"exec(compile({json.dumps(python_setup_checkpoint())}, '<SQL setup checkpoint>', 'exec'))"
         )
-        with deferred_selection_client(binary, execution.serve()) as client:
+        with deferred_selection_client(
+            binary, execution.serve(), r_requirements=SQL_R_REQUIREMENTS
+        ) as client:
             client.expect(
                 r=f"Sys.setenv(RETICULATE_PYTHONPATH = {json.dumps(str(modules))})"
             )
