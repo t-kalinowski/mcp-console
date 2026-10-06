@@ -81,10 +81,10 @@ parser.add_argument(
     "-j",
     "--jobs",
     type=int,
-    default=min(6, 2 * max(2, os.cpu_count() or 2))
+    default=min(6, max(1, (os.cpu_count() or 2) - 1))
     if os.name == "nt"
-    else 2 * max(2, os.cpu_count() or 2),
-    help="concurrent transcript cases (default: twice the CPU count, at least 4; capped at 6 on Windows)",
+    else max(1, (os.cpu_count() or 2) - 1),
+    help="concurrent transcript cases (default: logical CPU count minus one, at least 1; capped at 6 on Windows)",
 )
 parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
@@ -144,7 +144,7 @@ binary = Path(
         / "target"
         / ("debug/mcp-console.exe" if os.name == "nt" else "release/mcp-console"),
     )
-).absolute()
+).resolve()
 boundaries = {"client_server", "server_relay", "relay_worker", "cli"}
 suite_paths = sorted(
     path

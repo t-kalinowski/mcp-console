@@ -16,7 +16,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.installation import installed_console
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
-from support.records import Transcript
+from support.records import McpTranscript, Transcript, TranscriptWithCompanions
 from support.requirements import POSIX, R, SQL, requires
 
 
@@ -54,8 +54,8 @@ def _tool(client: McpClient) -> dict:
 
 
 @requires(SQL)
-def test_configures_captured_tool_surface(binary: Path) -> Transcript:
-    transcript = []
+def test_configures_captured_tool_surface(binary: Path) -> TranscriptWithCompanions:
+    transcripts = {}
     for languages in (
         ["sql"],
         ["sql", "python"],
@@ -100,14 +100,20 @@ def test_configures_captured_tool_surface(binary: Path) -> Transcript:
                 } == set(languages)
                 config.write_text("languages: [r]\n", encoding="utf-8")
                 assert _tool(client) == tool
-                transcript.append({"languages": languages})
-                transcript.extend(client.finish()[:3])
-    return transcript
+                name = "-".join(languages) + ("-only" if len(languages) == 1 else "")
+                transcripts[f"{name}.yaml"] = McpTranscript(
+                    [{"languages": languages}] + client.finish()[:3]
+                )
+    return TranscriptWithCompanions(
+        transcripts.pop("sql-only.yaml").transcript, transcripts
+    )
 
 
 @requires(SQL)
-def test_builtin_guidance_matches_visible_languages(binary: Path) -> Transcript:
-    transcript = []
+def test_builtin_guidance_matches_visible_languages(
+    binary: Path,
+) -> TranscriptWithCompanions:
+    transcripts = {}
     for languages in (["sql"], ["sql", "python"], ["r", "sql"]):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -147,17 +153,21 @@ def test_builtin_guidance_matches_visible_languages(binary: Path) -> Transcript:
                 assert {"r", "python", "duckdb"} <= set(
                     properties["requirements"]["properties"]
                 )
-                transcript.append({"languages": languages})
-                transcript.extend(client.finish()[:3])
-    return transcript
+                name = "-".join(languages) + ("-only" if len(languages) == 1 else "")
+                transcripts[f"{name}.yaml"] = McpTranscript(
+                    [{"languages": languages}] + client.finish()[:3]
+                )
+    return TranscriptWithCompanions(
+        transcripts.pop("sql-only.yaml").transcript, transcripts
+    )
 
 
 @requires(SQL, R)
 @executions(DIRECT, SANDBOXED)
 def test_sql_provider_guidance_is_independent_of_visibility(
     binary: Path, execution: Execution
-) -> Transcript:
-    transcript = []
+) -> TranscriptWithCompanions:
+    transcripts = {}
     for languages in (["sql", "python"], ["r", "sql"]):
         advertised = None
         for without_r in (False, True):
@@ -209,16 +219,17 @@ def test_sql_provider_guidance_is_independent_of_visibility(
                         client.send(sql="SELECT 42 AS answer")
                     assert "42" in last_tool_text(client), last_tool_text(client)
                     assert _tool(client) == tool
-                    transcript.append(
-                        {
-                            "languages": languages,
-                            "provider": "Python" if without_r else "R",
-                        }
-                    )
+                    provider = "Python" if without_r else "R"
+                    name = "-".join(languages) + f"-{provider.lower()}-provider"
                     session = client.finish()
-                    transcript.extend(session[:3])
-                    transcript.extend(entry for entry in session[3:] if "send" in entry)
-    return transcript
+                    transcripts[f"{name}.yaml"] = McpTranscript(
+                        [{"languages": languages, "provider": provider}]
+                        + session[:3]
+                        + [entry for entry in session[3:] if "send" in entry]
+                    )
+    return TranscriptWithCompanions(
+        transcripts.pop("sql-python-r-provider.yaml").transcript, transcripts
+    )
 
 
 @requires(SQL, POSIX)
@@ -257,11 +268,19 @@ def test_rejects_hidden_source_before_custom_worker_effects(binary: Path) -> Tra
 
 
 @requires(SQL)
-def test_invalid_language_configuration_fails_launch(binary: Path) -> Transcript:
-    transcript = []
+def test_invalid_language_configuration_fails_launch(
+    binary: Path,
+) -> TranscriptWithCompanions:
+    transcripts = {}
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        for value in ([], ["SQL"], ["ruby"], "sql", [1]):
+        for name, value in (
+            ("empty-languages", []),
+            ("uppercase-language", ["SQL"]),
+            ("unknown-language", ["ruby"]),
+            ("scalar-language", "sql"),
+            ("non-string-language", [1]),
+        ):
             result = subprocess.run(
                 [
                     str(binary),
@@ -281,8 +300,12 @@ def test_invalid_language_configuration_fails_launch(binary: Path) -> Transcript
             )
             assert result.returncode != 0, result
             assert "languages" in result.stderr, result.stderr
-            transcript.append({"languages": value, "stderr": result.stderr})
-    return transcript
+            transcripts[f"{name}.yaml"] = [
+                {"languages": value, "stderr": result.stderr}
+            ]
+    return TranscriptWithCompanions(
+        transcripts.pop("empty-languages.yaml"), transcripts
+    )
 
 
 def _catalog(client: McpClient) -> None:
