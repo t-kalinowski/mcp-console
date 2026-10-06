@@ -56,6 +56,8 @@ A retry that succeeds accepts its environment once; joining restart callers do n
 After configuration is accepted, restart uses the retained environment and ordinary worker replacement.
 Same-call code, stdin, and requirements proceed only after readiness succeeds and retain their ordinary admission rules.
 Retries require confirmed cleanup of the failed preparation attempt.
+The preparation connection must also close and reap its child; a completed operation does not prove that retirement.
+An unconfirmed connection retirement blocks further retries in that session and retains its diagnostic.
 After discovery, a failed built-in worker prelaunch is reported once by the next idle poll, cell, or requirements inspection, with its diagnostics.
 The declaration remains available and ordinary worker recovery still applies.
 The first failure response includes captured startup diagnostics, including for requirements-only calls and restart.

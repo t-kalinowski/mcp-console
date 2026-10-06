@@ -25,6 +25,7 @@ struct Connection {
     owner: Mutex<Option<thread::JoinHandle<Result<(), String>>>>,
     unconfirmed: Arc<Mutex<Option<UnconfirmedChild>>>,
     blocked: Arc<Mutex<Option<String>>>,
+    retired: Arc<AtomicBool>,
 }
 
 struct UnconfirmedChild {
@@ -105,6 +106,7 @@ struct Control {
     events: mpsc::Sender<Event>,
     state: Arc<State>,
     blocked: Arc<Mutex<Option<String>>>,
+    retired: Arc<AtomicBool>,
 }
 
 impl ResolverControl for Control {
@@ -145,6 +147,9 @@ impl ResolverControl for Control {
     }
     fn cleanup_confirmed(&self) -> bool {
         self.state.confirmed.load(Ordering::SeqCst)
+    }
+    fn retirement_confirmed(&self) -> bool {
+        self.retired.load(Ordering::SeqCst)
     }
     fn failure_is_controlled(&self) -> bool {
         // Cancellation cannot account for a separate connection-close failure.
@@ -371,6 +376,8 @@ impl Preparation {
         let owner_blocked = blocked.clone();
         let unconfirmed = Arc::new(Mutex::new(None));
         let owner_unconfirmed = unconfirmed.clone();
+        let retired = Arc::new(AtomicBool::new(false));
+        let owner_retired = retired.clone();
         let owner = thread::spawn(move || {
             let result = run(received, &outgoing, pending, open, &owner_blocked);
             drop(outgoing);
@@ -440,6 +447,9 @@ impl Preparation {
                     LABEL
                 ));
             }
+            // Operation receipts precede connection closure. Publish this
+            // separate receipt only after successful retirement and I/O joins.
+            owner_retired.store(result.is_ok(), Ordering::SeqCst);
             result
         });
         let connection = Self(Arc::new(Connection {
@@ -448,12 +458,14 @@ impl Preparation {
             owner: Mutex::new(Some(owner)),
             unconfirmed,
             blocked,
+            retired,
         }));
         let handle = ResolverStopHandle::new(Control {
             id: 0,
             events,
             state,
             blocked: connection.0.blocked.clone(),
+            retired: connection.0.retired.clone(),
         });
         if let Err(error) = on_started(handle.clone()) {
             let _ = handle.stop();
@@ -501,6 +513,7 @@ impl Preparation {
             events: self.0.events.clone(),
             state: state.clone(),
             blocked: self.0.blocked.clone(),
+            retired: self.0.retired.clone(),
         });
         let (reply, response) = mpsc::channel();
         self.0

@@ -22,11 +22,136 @@ from boundaries.client_server.server.test_startup import (
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
+from support.processes import (
+    capture_process_identity,
+    child_process_identities,
+    kill_processes,
+    live_processes,
+)
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import POSIX, R, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
 from support.suites import run_this_suite
+
+
+def preparation_reap_environment(root: Path, python: Path) -> dict[str, str]:
+    environment = selected_python(root, python)
+    environment.pop("R_HOME", None)
+    environment.update(
+        {
+            "PATH": str(root),
+            LOADER_VARIABLE: str(build_interposer(root, "preparation_reap_interposer")),
+            "MCP_CONSOLE_TEST_REAP_PID": str(root / "resolver-pid"),
+            "MCP_CONSOLE_TEST_REAP_DONE": str(root / "reaped"),
+        }
+    )
+    return environment
+
+
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_restart_accepts_repair_after_preparation_reaping(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        python = root / "selected-python"
+        environment = preparation_reap_environment(root, python)
+        with McpClient(binary, DIRECT.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            failure = client.send(python="42")
+            assert failure.get("isError"), failure
+            assert (root / "resolver-pid").exists(), "preparation did not close"
+            assert (root / "reaped").exists(), "startup finished before reaping"
+            python.symlink_to(sys.executable)
+            client.expect(
+                "[runtime discovery retried]\n42\n[done]",
+                control="restart",
+                python="42",
+            )
+            return json.loads(
+                json.dumps(client.finish()).replace(str(root), "<workspace>")
+            )
+
+
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_restart_rejects_unretired_preparation_after_selection_failure(
+    binary: Path,
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        python = root / "selected-python"
+        environment = preparation_reap_environment(root, python)
+        environment.update(
+            {
+                "MCP_CONSOLE_TEST_REAP_BLOCK_CLOSE": str(root / "blocked-close"),
+                "MCP_CONSOLE_TEST_REAP_DENY_KILL": str(root / "denied-kill"),
+            }
+        )
+        identity = None
+        with (
+            closing(FifoCheckpoint.create(root / "blocked-close")) as blocked,
+            McpClient(binary, DIRECT.serve(), environment, root) as client,
+        ):
+            try:
+                client.initialize_and_list_tools()
+                tools = client.transcript[2]["result"]
+                initial = client.start_send(python="42")
+                blocked.wait(
+                    "selection failed and preparation cannot acknowledge Close"
+                )
+                identity = capture_process_identity(
+                    int((root / "resolver-pid").read_text())
+                )
+                python.symlink_to(sys.executable)
+                client.receive(initial)
+                failure = initial["result"]
+                assert failure.get("isError"), failure
+                assert "retirement unconfirmed" in str(failure), failure
+                assert (root / "denied-kill").exists()
+                assert not (root / "reaped").exists()
+                assert live_processes([identity]), "preparation must still be alive"
+
+                rejected = client.send(control="restart", python="42")
+                assert rejected.get("isError"), rejected
+                assert rejected["content"] == [
+                    {
+                        "type": "text",
+                        "text": "runtime discovery retry requires confirmed preparation cleanup",
+                    }
+                ], rejected
+                assert client.send(python="42") == failure
+                assert client.send(control="restart") == rejected
+                assert live_processes([identity]), "retry must retain the old owner"
+                assert child_process_identities(
+                    capture_process_identity(client.process.pid)
+                ) == (identity,), "retry started another preparation process"
+                assert client.request("tools/list")["result"] == tools
+                client.transcript[-1] = {"tools_schema_unchanged": True}
+                transcript, stderr = client.finish_with_standard_error(
+                    expected_exit_status=1
+                )
+                return json.loads(
+                    json.dumps(
+                        transcript
+                        + [
+                            {
+                                "stderr": stderr,
+                                "unretired_preparation_blocked_retry": True,
+                            }
+                        ]
+                    ).replace(str(root), "<workspace>")
+                )
+            finally:
+                # A failing regression can admit a second preparation process.
+                # Retire all fixture children before disposing the server.
+                if client.process.poll() is None:
+                    kill_processes(
+                        child_process_identities(
+                            capture_process_identity(client.process.pid)
+                        )
+                    )
+                if identity is not None:
+                    kill_processes([identity])
 
 
 @requires(POSIX)

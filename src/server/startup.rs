@@ -137,11 +137,9 @@ impl Startup {
         if self.runtime.worker.is_configured() || !self.runtime.worker.startup_finished() {
             return Ok(false);
         }
-        if control
-            .resolver
-            .as_ref()
-            .is_some_and(|resolver| !resolver.cleanup_confirmed())
-        {
+        if control.resolver.as_ref().is_some_and(|resolver| {
+            !resolver.cleanup_confirmed() || !resolver.retirement_confirmed()
+        }) {
             return Err("runtime discovery retry requires confirmed preparation cleanup".into());
         }
         if !self.runtime.worker.retry_failed_startup() {
@@ -184,6 +182,7 @@ impl Startup {
         if control.closed
             && control.resolver.as_ref().is_none_or(|resolver| {
                 resolver.cleanup_confirmed()
+                    && resolver.retirement_confirmed()
                     // A close/retirement failure appended by the initializer is
                     // independent of the registration refusal and must survive.
                     && if control.registration_closed {
