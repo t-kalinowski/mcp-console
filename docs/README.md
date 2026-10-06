@@ -21,13 +21,14 @@ Source and public acceptance tests take precedence over prose; [`design-sketches
 
 ## Changing Console
 
-| Question                                | Guide                                                                          |
-| --------------------------------------- | ------------------------------------------------------------------------------ |
-| Who owns state, processes, and cleanup? | [Architecture](ARCHITECTURE.md)                                                |
-| What crosses the internal transports?   | [Relay protocol](RELAY_PROTOCOL.md), [worker protocol](WORKER_PROTOCOL.md)     |
-| How should MCP tool prose be written?   | [Tool descriptions](TOOL_DESCRIPTIONS.md)                                      |
-| How do I develop and test a change?     | [Development](DEVELOPMENT.md), [boundary tests](../tests/boundaries/README.md) |
-| What does Linux enforcement require?    | [Linux compatibility](LINUX_COMPATIBILITY.md)                                  |
-| How do I build and publish a release?   | [Release](../RELEASE.md)                                                       |
+| Question                                                 | Guide                                                                          |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Who owns state, processes, and cleanup?                  | [Architecture](ARCHITECTURE.md)                                                |
+| What can the optional DuckDB INSTALL recognizer promise? | [INSTALL preflight contract](DUCKDB_INSTALL_PREFLIGHT.md)                      |
+| What crosses the internal transports?                    | [Relay protocol](RELAY_PROTOCOL.md), [worker protocol](WORKER_PROTOCOL.md)     |
+| How should MCP tool prose be written?                    | [Tool descriptions](TOOL_DESCRIPTIONS.md)                                      |
+| How do I develop and test a change?                      | [Development](DEVELOPMENT.md), [boundary tests](../tests/boundaries/README.md) |
+| What does Linux enforcement require?                     | [Linux compatibility](LINUX_COMPATIBILITY.md)                                  |
+| How do I build and publish a release?                    | [Release](../RELEASE.md)                                                       |
 
 Before changing isolation or lifecycle behavior, read the [sandbox limits](SANDBOX.md#supported-hosts-and-lifetime-limits) and [dependency trust boundary](REQUIREMENTS.md#host-resolution-and-trust).

@@ -2,6 +2,9 @@ use std::process::ExitCode;
 
 use clap::Parser;
 
+// Retain the library's build-script native link metadata in the executable.
+use mcp_console as _;
+
 #[cfg(windows)]
 mod windows;
 

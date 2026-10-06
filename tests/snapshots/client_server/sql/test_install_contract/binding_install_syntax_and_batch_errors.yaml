@@ -1,0 +1,186 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    local({
+      connection <- DBI::dbConnect(
+        duckdb::duckdb(),
+        dbdir = ":memory:",
+        config = list(enable_external_access = "false")
+      )
+      on.exit(DBI::dbDisconnect(connection, shutdown = TRUE))
+      syntax_error <- "Parser Error: syntax error at end of input"
+      for (statement in c(
+        "INSTALL json",
+        "INSTALL 'json'",
+        'INSTALL "json"',
+        "INSTALL json FROM core",
+        'INSTALL json FROM "core"',
+        "INSTALL json FROM 'core'"
+      )) {
+        error <- tryCatch(
+          DBI::dbExecute(connection, paste0(statement, "; SELECT (")),
+          error = identity
+        )
+        stopifnot(inherits(error, "error"))
+        stopifnot(identical(
+          strsplit(conditionMessage(error), "\n", fixed = TRUE)[[1]][1],
+          syntax_error
+        ))
+        cat(statement, "\n", conditionMessage(error), "\n", sep = "")
+      }
+      error <- tryCatch(
+        DBI::dbExecute(connection, "CREATE TABLE before_syntax(i INT); SELECT ("),
+        error = identity
+      )
+      stopifnot(
+        inherits(error, "error"),
+        !DBI::dbExistsTable(connection, "before_syntax")
+      )
+      cat(conditionMessage(error), "\n", sep = "")
+      error <- tryCatch(
+        DBI::dbExecute(
+          connection,
+          paste(
+            "CREATE TABLE before_bind(i INT);",
+            "INSERT INTO before_bind VALUES (1);",
+            "SELECT * FROM missing_batch;",
+            "CREATE TABLE after_error(i INT)"
+          )
+        ),
+        error = identity
+      )
+      stopifnot(inherits(error, "error"))
+      stopifnot(identical(
+        DBI::dbGetQuery(connection, "SELECT * FROM before_bind")$i,
+        1L
+      ))
+      stopifnot(!DBI::dbExistsTable(connection, "after_error"))
+      cat(conditionMessage(error), "\n", sep = "")
+      error <- tryCatch(
+        DBI::dbExecute(
+          connection,
+          paste(
+            "BEGIN; CREATE TABLE in_tx(i INT);",
+            "INSERT INTO in_tx VALUES (2);",
+            "SELECT * FROM missing_batch; COMMIT"
+          )
+        ),
+        error = identity
+      )
+      stopifnot(inherits(error, "error"))
+      stopifnot(identical(DBI::dbGetQuery(connection, "SELECT * FROM in_tx")$i, 2L))
+      cat(conditionMessage(error), "\n", sep = "")
+      DBI::dbRollback(connection)
+      stopifnot(!DBI::dbExistsTable(connection, "in_tx"))
+      cat("R binding contract verified\n")
+    })
+result:
+  content:
+    - type: text
+      text: |
+        INSTALL json
+        Parser Error: syntax error at end of input
+        ℹ Context: rapi_prepare
+        ℹ Error type: PARSER
+        INSTALL 'json'
+        Parser Error: syntax error at end of input
+        ℹ Context: rapi_prepare
+        ℹ Error type: PARSER
+        INSTALL "json"
+        Parser Error: syntax error at end of input
+        ℹ Context: rapi_prepare
+        ℹ Error type: PARSER
+        INSTALL json FROM core
+        Parser Error: syntax error at end of input
+        ℹ Context: rapi_prepare
+        ℹ Error type: PARSER
+        INSTALL json FROM "core"
+        Parser Error: syntax error at end of input
+        ℹ Context: rapi_prepare
+        ℹ Error type: PARSER
+        INSTALL json FROM 'core'
+        Parser Error: syntax error at end of input
+        ℹ Context: rapi_prepare
+        ℹ Error type: PARSER
+        Parser Error: syntax error at end of input
+        ℹ Context: rapi_prepare
+        ℹ Error type: PARSER
+        Catalog Error: Table with name missing_batch does not exist!
+        Did you mean "pg_namespace"?
+        ℹ Context: rapi_prepare
+        ℹ Error type: CATALOG
+        Catalog Error: Table with name missing_batch does not exist!
+        Did you mean "pg_namespace"?
+        ℹ Context: rapi_prepare
+        ℹ Error type: CATALOG
+        R binding contract verified
+  isError: false
+---
+send:
+  requirements:
+    python:
+      - duckdb
+  python: |
+    import duckdb
+
+    for source in [
+        "INSTALL json",
+        "INSTALL 'json'",
+        'INSTALL "json"',
+        "INSTALL json FROM core",
+        'INSTALL json FROM "core"',
+        "INSTALL json FROM 'core'",
+    ]:
+        statements = duckdb.extract_statements(source)
+        assert len(statements) == 1
+        assert statements[0].query == source
+        print(source, "parsed")
+
+    with duckdb.connect(
+        ":memory:", config={"enable_external_access": "false"}
+    ) as connection:
+        for source, error_type in [
+            ("CREATE TABLE before_syntax(i INT); SELECT (", duckdb.ParserException),
+            (
+                "CREATE TABLE before_bind(i INT); INSERT INTO before_bind VALUES (1); SELECT * FROM missing_batch; CREATE TABLE after_error(i INT)",
+                duckdb.CatalogException,
+            ),
+            (
+                "BEGIN; CREATE TABLE in_tx(i INT); INSERT INTO in_tx VALUES (2); SELECT * FROM missing_batch; COMMIT",
+                duckdb.CatalogException,
+            ),
+        ]:
+            try:
+                connection.execute(source)
+            except error_type as error:
+                print(str(error))
+            else:
+                raise AssertionError("expected batch failure")
+        assert connection.execute("SHOW TABLES").fetchall() == [
+            ("before_bind",),
+            ("in_tx",),
+        ]
+        assert connection.execute("SELECT * FROM before_bind").fetchall() == [(1,)]
+        assert connection.execute("SELECT * FROM in_tx").fetchall() == [(2,)]
+        connection.execute("ROLLBACK")
+        assert connection.execute("SHOW TABLES").fetchall() == [("before_bind",)]
+    print("Python binding contract verified")
+result:
+  content:
+    - type: text
+      text: |
+        INSTALL json parsed
+        INSTALL 'json' parsed
+        INSTALL "json" parsed
+        INSTALL json FROM core parsed
+        INSTALL json FROM "core" parsed
+        INSTALL json FROM 'core' parsed
+        Parser Error: syntax error at end of input
+        Catalog Error: Table with name missing_batch does not exist!
+        Did you mean "pg_namespace"?
+        Catalog Error: Table with name missing_batch does not exist!
+        Did you mean "pg_namespace"?
+        Python binding contract verified
+  isError: false
