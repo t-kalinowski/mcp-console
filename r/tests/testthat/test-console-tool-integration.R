@@ -191,13 +191,29 @@ test_that("console_tool works when registered with an ellmer chat", {
             expect_lte(nchar(text, type = "bytes"), 8192L)
             expect_match(text, "adapter head\n", fixed = TRUE)
             expect_match(text, "adapter tail\n", fixed = TRUE)
-            expect_match(text, "rendered UTF-8 bytes", fixed = TRUE)
+            expect_match(text, "[output omitted: ", fixed = TRUE)
+            sessions <- list.dirs("console/sessions", recursive = FALSE)
+            expect_length(sessions, 1L)
+            raw_log <- file.path(
+              getwd(),
+              sessions,
+              "outputs",
+              "call-000001.log"
+            )
             expect_match(
               text,
-              file.path(getwd(), "console", "sessions"),
+              paste0(" UTF-8 bytes; raw log on Console host: ", raw_log, "]"),
               fixed = TRUE
             )
-            expect_length(list.dirs("console/sessions", recursive = FALSE), 1L)
+            expect_true(file.exists(raw_log))
+            expect_identical(
+              readChar(raw_log, file.info(raw_log)$size, useBytes = TRUE),
+              paste0(
+                "adapter head\n",
+                strrep("x", 10000),
+                "\nadapter tail\n[1] 42\n"
+              )
+            )
           },
           finally = {
             rm(chat)
