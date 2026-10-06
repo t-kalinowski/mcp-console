@@ -40,8 +40,8 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 909, in _mcp_console_configure_module_defaults
-          File "<string>", line 867, in apply
+          File "<string>", line 919, in _mcp_console_configure_module_defaults
+          File "<string>", line 877, in apply
           File "<SQL setup checkpoint>", line 16, in configuration_checkpoint
           File "<string>", line 50, in _console_input
         KeyboardInterrupt

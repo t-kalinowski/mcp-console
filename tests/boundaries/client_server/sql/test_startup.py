@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -9,11 +10,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
-from support.assertions import last_tool_text
+from support.assertions import assert_result_content, last_tool_text
+from support.checkpoints import wait_for_worker_file
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import POSIX, PROCESS_EVENTS, R, SQL, requires
+from support.resolvers import matplotlib_test_environment
+from boundaries.client_server.python.test_startup import isolated_python
+from boundaries.client_server.server.test_no_r import no_r_environment
 
 
 def configure(workspace: Path, language: str, source: str) -> Path:
@@ -21,6 +26,108 @@ def configure(workspace: Path, language: str, source: str) -> Path:
     config.parent.mkdir(parents=True)
     config.write_text(json.dumps({"startup": {"language": language, "code": source}}))
     return config
+
+
+@requires(R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_python_startup_publishes_plots_before_sql(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return startup_plots(binary, execution, with_r=True)
+
+
+@requires(POSIX, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_python_startup_publishes_plots_without_r(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return startup_plots(binary, execution, with_r=False)
+
+
+def startup_plots(binary: Path, execution: Execution, *, with_r: bool) -> Transcript:
+    records = []
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        python, _ = isolated_python(root)
+        subprocess.run(
+            ["uv", "pip", "install", "--python", python, "matplotlib"],
+            check=True,
+            capture_output=True,
+        )
+        for failed in (False, True):
+            workspace = root / ("failure" if failed else "success")
+            workspace.mkdir()
+            environment = (
+                matplotlib_test_environment(workspace / "cache")
+                if with_r
+                else no_r_environment(workspace)
+            )
+            environment.update(
+                TMPDIR=str(workspace), MPLBACKEND="Agg", MPL_IGNORE_SYSTEM_FONTS="1"
+            )
+            # fmt: python
+            source = code("""
+                import os
+                import sqlite3
+                from pathlib import Path
+
+                import matplotlib.pyplot as plt
+
+                startup_count = globals().get("startup_count", 0) + 1
+                native = sqlite3.connect(":memory:")
+                console_sql_connection(native)
+                figure, axes = plt.subplots(figsize=(3, 2), dpi=100)
+                _ = axes.plot([1, 2, 3], [3, 1, 2])
+                figure.savefig(Path(os.environ["TMPDIR"]) / "startup.png", format="png")
+                plt.show()
+                """)
+            if failed:
+                source += "\nraise RuntimeError('startup failed after plotting')"
+            config = configure(workspace, "python", source)
+            settings = json.loads(config.read_text())
+            settings["python"] = str(python)
+            config.write_text(json.dumps(settings))
+            with McpClient(binary, execution.serve(), environment, workspace) as client:
+                client.initialize_and_list_tools()
+                client.send(sql="SELECT 42 AS answer")
+                result = client.transcript[-1]["result"]
+                text = "".join(
+                    item["text"] for item in result["content"] if item["type"] == "text"
+                )
+                if failed:
+                    assert "RuntimeError: startup failed after plotting" in text, text
+                    assert "SQL unavailable" in text, text
+                else:
+                    assert text == "answer\n------\n42\n", text
+                reference = wait_for_worker_file(workspace, "startup.png", client)
+                assert (
+                    sum(item["type"] == "image" for item in result["content"]) == 1
+                ), (failed, text)
+                assert_result_content(
+                    client,
+                    [
+                        reference.read_bytes()
+                        if item["type"] == "image"
+                        else item["text"]
+                        for item in result["content"]
+                    ],
+                    image_reference="live startup savefig {page}",
+                )
+                client.expect("\n[idle]")
+                client.expect(
+                    python="assert startup_count == 1; assert not plt.get_fignums()"
+                )
+                if failed:
+                    client.send(sql="SELECT 42 AS answer")
+                    assert "SQL unavailable" in last_tool_text(client)
+                    assert all(
+                        item["type"] == "text"
+                        for item in client.transcript[-1]["result"]["content"]
+                    )
+                client.finish()
+                records.append({"failed_startup": failed})
+                records.extend(client.transcript[3:])
+    return records
 
 
 @requires(R, SQL)

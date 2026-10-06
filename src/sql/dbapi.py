@@ -395,3 +395,5 @@ def initialize_connection(source: str) -> int:
             rendered.text = None
         print("".join(rendered.format()), end="", file=__import__("sys").stderr)
         return -1 if isinstance(error, KeyboardInterrupt) else 0
+    finally:
+        _runtime.finalize_plots()

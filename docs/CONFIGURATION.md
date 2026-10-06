@@ -83,6 +83,7 @@ Source uses the existing YAML/CLI layering, for example `-c startup.language=pyt
 It is captured once at server launch, including across explicit worker restarts; edits to the file require a new server to be captured.
 Source is not included in the tool schema or automatically echoed as a submitted cell.
 Output explicitly emitted by the program and runtime errors remain visible.
+Python figures are finalized and published before startup completes, including when the program fails; the first cell response or idle poll can collect them without running a Python cell.
 
 The program must finish by leaving a usable connection selected through the existing `console_sql_connection(connection)` helper.
 It runs once per worker generation, on the serialized interpreter thread with the ordinary resolver, input, output, and interrupt services.
