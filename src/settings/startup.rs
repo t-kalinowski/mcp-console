@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_STARTUP";
+// Leave room below Linux's per-string exec limit for a second JSON encoding
+// inside sandbox launcher settings and the rest of that launch envelope.
+const MAX_ENVIRONMENT_BYTES: usize = 32 * 1024;
 
 /// Consume process-handoff data before native or interpreter setup.
 ///
@@ -31,6 +34,14 @@ impl Startup {
     pub fn validate(&self) -> Result<(), String> {
         if self.code.trim().is_empty() || self.code.contains('\0') {
             return Err("startup.code must be nonempty source without NUL".into());
+        }
+        let encoded = serde_json::to_string(self).map_err(|error| error.to_string())?;
+        // Count UTF-8 bytes after escaping, including NAME= and the final NUL.
+        let bytes = ENVIRONMENT.len() + 1 + encoded.len() + 1;
+        if bytes > MAX_ENVIRONMENT_BYTES {
+            return Err(format!(
+                "startup encoded environment entry is {bytes} bytes; maximum is {MAX_ENVIRONMENT_BYTES} bytes"
+            ));
         }
         Ok(())
     }

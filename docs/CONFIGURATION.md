@@ -113,6 +113,9 @@ Use normal driver arguments for database paths, read-only access, threads, memor
 The connection remains a native object on its owning interpreter; Console does not proxy it or commit its transactions.
 Source uses the existing YAML/CLI layering, for example `-c startup.language=python`.
 It is captured once at server launch, including across explicit worker restarts; edits to the file require a new server to be captured.
+The encoded startup environment entry is limited to 32 KiB (32,768 bytes), including the JSON language/code fields, UTF-8 source, JSON escaping, environment name, equals sign, and terminating NUL.
+This leaves room for the sandbox launcher to encode the source again inside its settings, below Linux's per-entry launch limit.
+Oversized effective configuration is rejected before spawning, with its encoded byte count and the limit; newline and other escape-heavy source can reach the limit before its source file does.
 Source is not included in the tool schema or automatically echoed as a submitted cell.
 Its process-transport environment value is consumed before runtime setup, so startup code, later cells, and their subprocesses do not inherit it.
 Output explicitly emitted by the program and runtime errors remain visible.

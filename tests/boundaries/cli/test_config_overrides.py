@@ -555,6 +555,69 @@ def test_overrides_do_not_bypass_file_errors_or_explicit_inputs(
 
 
 @requires(POSIX)
+def test_rejects_oversized_startup_before_launch(binary: Path) -> Transcript:
+    limit = 32 * 1024
+
+    def entry_bytes(language: str, source: str) -> int:
+        payload = json.dumps(
+            {"language": language, "code": source},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return len("MCP_CONSOLE_STARTUP=") + len(payload.encode("utf-8")) + 1
+
+    cases = []
+    for language, padding in (
+        ("r", "a"),
+        ("python", "\n"),
+        ("python", "\x01"),
+        ("python", "雪"),
+    ):
+        remaining = limit + 1 - entry_bytes(language, "#\npass")
+        unit_bytes = entry_bytes(language, padding) - entry_bytes(language, "")
+        count, remainder = divmod(remaining, unit_bytes)
+        source = "#" + padding * count + "a" * remainder + "\npass"
+        assert entry_bytes(language, source) == limit + 1
+        cases.append((language, repr(padding), source))
+    cases.append(("python", "70,000 leading newlines", "\n" * 70_000 + "pass"))
+
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        for language, description, source in cases:
+            configured_language = "r" if description == repr("\n") else language
+            configure(
+                workspace,
+                {"startup": {"language": configured_language, "code": source}},
+            )
+            # Override after loading: validation must use the effective source.
+            arguments = [binary, "serve", "--no-sandbox"]
+            if configured_language != language:
+                arguments.extend(["-c", "startup.language=python"])
+            result = subprocess.run(
+                arguments,
+                cwd=workspace,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            expected = (
+                f"startup encoded environment entry is {entry_bytes(language, source)} bytes; "
+                f"maximum is {limit} bytes"
+            )
+            assert expected in result.stderr, result.stderr
+            records.append(
+                {
+                    "source": description,
+                    "error": result.stderr.replace(str(workspace), "<workspace>"),
+                }
+            )
+    return records
+
+
+@requires(POSIX)
 def test_rejects_invalid_startup(binary: Path) -> Transcript:
     cases = (
         ("startup.language=sql", "startup.language"),

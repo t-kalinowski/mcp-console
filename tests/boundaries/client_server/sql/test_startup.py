@@ -281,10 +281,33 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
             _ = native.execute("INSERT INTO selected VALUES (42)")
             console_sql_connection(native)
             """)
+        # Exercise the documented limit with UTF-8 and JSON-escaped characters,
+        # including the launcher's nested JSON envelope and captured restart.
+        source = "#" + 'é雪"\\' * 1000 + "\n" + source
+        payload = json.dumps(
+            {"language": "python", "code": source},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        entry_bytes = len("MCP_CONSOLE_STARTUP=") + len(payload.encode("utf-8")) + 1
+        source = "#" + "a" * (32 * 1024 - entry_bytes - 3) + "\n" + source
+        payload = json.dumps(
+            {"language": "python", "code": source},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        assert (
+            len("MCP_CONSOLE_STARTUP=") + len(payload.encode("utf-8")) + 1 == 32 * 1024
+        )
         config = configure(workspace, "r", source)
         with McpClient(
             binary,
-            execution.serve("-c", "startup.language=python"),
+            execution.serve(
+                "-c",
+                "startup.language=python",
+                "-c",
+                "sandbox.inherit_environment=false",
+            ),
             os.environ,
             workspace,
         ) as client:
