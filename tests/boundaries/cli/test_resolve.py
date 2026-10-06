@@ -73,6 +73,48 @@ def test_rejects_invalid_preparation_frames(binary: Path) -> Transcript:
     return transcript
 
 
+def test_opens_and_closes_with_batched_frames(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        environment = {
+            **os.environ,
+            "PATH": "",
+            "MCP_CONSOLE_HOME": str(Path(temporary) / "console"),
+        }
+        environment.pop("RETICULATE_PYTHON", None)
+        frames = '{"Open":{"mode":"PythonOnly"}}\n"Close"\n'
+        process = subprocess.Popen(
+            [binary, "resolve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+            cwd=temporary,
+        )
+        try:
+            assert process.stdin is not None
+            assert process.stdout is not None and process.stderr is not None
+            process.stdin.write(frames)
+            process.stdin.flush()
+            # Keep stdin open: Close must survive a read alongside Open.
+            assert process.wait(timeout=10) == 0
+            messages = [json.loads(line) for line in process.stdout]
+            assert len(messages) == 3, messages
+            assert messages[0] == "Hello" and messages[2] == "Closed", messages
+            assert messages[1]["Completed"]["id"] == 0, messages
+            assert messages[1]["Completed"]["confirmed"] is True, messages
+            errors = process.stderr.read()
+            assert errors == "", errors
+            return [{"input": frames, "stdout": messages, "stderr": errors, "exit": 0}]
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=10)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+
+
 @requires(POSIX)
 def test_resolves_python_version_over_json(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:

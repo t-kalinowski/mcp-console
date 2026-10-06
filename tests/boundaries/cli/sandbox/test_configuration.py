@@ -22,6 +22,7 @@ from support.requirements import (
     NESTED_PROCFS,
     POSIX,
     SANDBOX,
+    command,
     requires,
 )
 from support.linux_sandbox import root_metadata_prefix, without_landlock
@@ -568,7 +569,7 @@ def test_launcher_marker_cannot_replace_selected_configuration(
     return [{"stdout": result.stdout}]
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("Rscript"))
 def test_child_specific_shell_python_and_processx_examples(binary: Path) -> Transcript:
     examples = Path(__file__).resolve().parents[4] / "examples"
     transcript = []

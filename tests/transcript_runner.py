@@ -383,7 +383,11 @@ class TranscriptRunnerTests(TranscriptRunnerFixture):
         installed = self.root / "installation" / "bin" / "mcp-console"
         installed.parent.mkdir(parents=True)
         installed.write_text("installed", encoding="utf-8")
-        environment["MCP_CONSOLE_TEST_BINARY"] = str(installed)
+        (installed.parent.parent / "installation.marker").touch()
+        command = self.root / "bin" / "mcp-console"
+        command.parent.mkdir()
+        command.symlink_to(installed)
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(command)
         cargo = self.root / "commands" / "cargo"
         cargo.write_text("#!/bin/sh\nexit 91\n", encoding="utf-8")
         self.suite.write_text(
@@ -392,6 +396,7 @@ class TranscriptRunnerTests(TranscriptRunnerFixture):
             + code("""
                 def test_selected(binary: Path) -> list[dict[str, str]]:
                     assert binary.read_text(encoding="utf-8") == "installed"
+                    assert (binary.parent.parent / "installation.marker").is_file()
                     return record(binary, "selected")
                 """),
             encoding="utf-8",
@@ -910,9 +915,7 @@ runner: different
         )
         self.assertTrue(all(r["elapsed_seconds"] > 0 for r in rows))
 
-    def test_repository_cases_skip_missing_resolver_and_formatter_commands(
-        self,
-    ) -> None:
+    def test_repository_cases_skip_missing_commands(self) -> None:
         shutil.copytree(
             ROOT / "tests" / "support",
             self.root / "tests" / "support",
@@ -920,20 +923,25 @@ runner: different
             ignore=shutil.ignore_patterns("__pycache__"),
         )
         selectors = {
-            "recording/test_markdown::emits_yamark_formatted_documents": ("yamark",),
-            "lifecycle/test_startup": ("ir", "uv"),
-            "lifecycle/test_startup_interrupt": ("ir", "uv"),
-            "requirements/test_r_automatic": ("ir",),
-            "requirements/test_r::failed_mixed_preparation_retains_live_python_activation": (
+            "client_server/recording/test_markdown::emits_yamark_formatted_documents": (
+                "yamark",
+            ),
+            "client_server/lifecycle/test_startup": ("ir", "uv"),
+            "client_server/lifecycle/test_startup_interrupt": ("ir", "uv"),
+            "client_server/requirements/test_r_automatic": ("ir",),
+            "client_server/requirements/test_r::failed_mixed_preparation_retains_live_python_activation": (
                 "ir",
                 "uv",
+            ),
+            "cli/sandbox/test_configuration::child_specific_shell_python_and_processx_examples": (
+                "Rscript",
             ),
         }
         for selector, commands in selectors.items():
             suite = selector.partition("::")[0] + ".py"
-            destination = self.boundaries / "client_server" / suite
+            destination = self.boundaries / suite
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(RUNNER.parent / "client_server" / suite, destination)
+            shutil.copy2(RUNNER.parent / suite, destination)
             for missing in commands:
                 with self.subTest(selector=selector, missing=missing):
                     with tempfile.TemporaryDirectory(dir=self.root) as path:
@@ -947,7 +955,7 @@ runner: different
                                 self.boundaries / "_run.py",
                                 "--jobs",
                                 "1",
-                                f"client_server/{selector}",
+                                selector,
                             ],
                             cwd=self.root,
                             env={**os.environ, "PATH": path},
@@ -1154,6 +1162,104 @@ runner: different
         self.assertNotEqual(differing.returncode, 0)
         self.assertIn("result: sandbox", differing.stderr)
         self.assertIn("::selected[direct] differs", differing.stderr)
+
+    def test_mcp_companions_preserve_each_invocation_and_execution(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.execution import Execution, executions
+                from support.records import McpTranscript, TranscriptWithCompanions
+
+
+                def handshake(tool):
+                    return [
+                        {
+                            "id": 1,
+                            "input": {"method": "initialize"},
+                            "result": {"protocolVersion": "test"},
+                        },
+                        {"notification": {"method": "notifications/initialized"}},
+                        {"id": 2, "input": {"method": "tools/list"}, "result": {"tools": [tool]}},
+                    ]
+
+
+                def test_initializes_and_lists_tools(binary):
+                    return TranscriptWithCompanions(
+                        handshake("sandbox"),
+                        {
+                            "direct.yaml": handshake("direct"),
+                            "sql-python.yaml": handshake("sql-python sandbox"),
+                            "sql-python.direct.yaml": handshake("sql-python direct"),
+                        },
+                    )
+
+
+                @executions(Execution("sandbox"), Execution("direct"))
+                def test_selected(binary, execution):
+                    primary = handshake(execution.name)
+                    companion = handshake("sql-python " + execution.name)
+                    send = [
+                        {
+                            "id": 4,
+                            "send": {"python": "print(42)"},
+                            "result": {"content": [{"type": "text", "text": "42"}]},
+                        }
+                    ]
+                    return TranscriptWithCompanions(
+                        [{"configuration": "default"}] + primary + send,
+                        {
+                            "sql-python.yaml": McpTranscript(
+                                [{"configuration": "sql-python"}] + companion + send
+                            ),
+                            "changed.yaml": McpTranscript(handshake("different") + send),
+                            "partial.yaml": McpTranscript(primary[:2]),
+                            "wire.yaml": handshake("direct") + send,
+                        },
+                    )
+                """),
+            encoding="utf-8",
+        )
+        updated = self.run_runner("--full", "--update", "--jobs", "1")
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        for suffix, reference in (
+            ("", "MCP initialization for this execution mode"),
+            (".sql-python", "sql-python MCP initialization for this execution mode"),
+        ):
+            snapshot = (self.snapshots / f"selected{suffix}.yaml").read_text()
+            self.assertEqual(snapshot.count("!same-as"), 1, snapshot)
+            self.assertIn(reference, snapshot)
+            self.assertLess(
+                snapshot.index("configuration:"), snapshot.index("!same-as")
+            )
+            self.assertLess(snapshot.index("!same-as"), snapshot.index("send:"))
+            self.assertNotIn("id:", snapshot)
+        for suffix in ("changed", "partial"):
+            snapshot = (self.snapshots / f"selected.{suffix}.yaml").read_text()
+            self.assertNotIn("!same-as", snapshot)
+            self.assertEqual(snapshot.count("method: initialize"), 1, snapshot)
+            self.assertNotIn("id:", snapshot)
+        changed = (self.snapshots / "selected.changed.yaml").read_text()
+        self.assertIn("different", changed)
+        wire = (self.snapshots / "selected.wire.yaml").read_text()
+        self.assertNotIn("!same-as", wire)
+        self.assertIn("id: 2", wire)
+        self.assertIn("id: 4", wire)
+        strict = self.run_runner("--full", "--jobs", "1")
+        self.assertEqual(strict.returncode, 0, strict.stderr)
+
+        # A second execution must compare its companions, including during updates.
+        self.suite.write_text(
+            self.suite.read_text().replace(
+                'handshake("sql-python " + execution.name)',
+                'handshake("sql-python sandbox")',
+            )
+        )
+        for arguments in (("--full",), ("--full", "--update")):
+            differing = self.run_runner(*arguments, "--jobs", "1")
+            self.assertNotEqual(differing.returncode, 0)
+            self.assertIn("selected.sql-python.yaml", differing.stderr)
+            self.assertIn("::selected[direct] differs", differing.stderr)
 
     def test_project_proxy_sessions_use_a_canonical_reference(self) -> None:
         references = ROOT / "tests/snapshots/client_server/server/test_tools"
@@ -1745,7 +1851,7 @@ runner: orphan
         self.assertIn("fixture failed before snapshot update", retried.stderr)
         self.assertNotIn("orphan snapshot:", retried.stderr)
 
-    def test_default_concurrency_runs_twice_the_cpu_count(self) -> None:
+    def test_default_concurrency_reserves_one_logical_cpu(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
@@ -1770,7 +1876,7 @@ runner: orphan
             (self.snapshots / f"{name}.yaml").write_text(
                 "---\nrunner: concurrent\n...\n", encoding="utf-8"
             )
-        launcher = self.root / "two_cpu_host.py"
+        launcher = self.root / "five_cpu_host.py"
         launcher.write_text(
             # fmt: python
             code("""
@@ -1779,7 +1885,7 @@ runner: orphan
                 from unittest.mock import patch
 
                 runner = sys.argv.pop(1)
-                with patch("os.cpu_count", return_value=2):
+                with patch("os.cpu_count", return_value=5):
                     runpy.run_path(runner, run_name="__main__")
                 """),
             encoding="utf-8",
@@ -1802,7 +1908,7 @@ runner: orphan
                 ready, _, _ = select.select([started], [], [], 10)
                 self.assertTrue(
                     ready,
-                    f"only {len(acknowledgements)} of four cases started on a two-CPU host",
+                    f"only {len(acknowledgements)} of four cases started on a five-CPU host",
                 )
                 acknowledgements += os.read(started, 4 - len(acknowledgements))
             self.assertEqual(os.write(release, b"1111"), 4)
@@ -1815,6 +1921,33 @@ runner: orphan
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
+
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("default concurrency fixture failed")
+                """),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                launcher,
+                self.boundaries / "_run.py",
+                "--full",
+                "--update",
+                "--jobs",
+                "4",
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rerun: scripts/test --full --update\n", result.stderr)
 
     def write_failure_collection_suite(self, failures: set[int]) -> list[str]:
         names = ["initializes_and_lists_tools", *[f"case_{i:02}" for i in range(1, 20)]]
