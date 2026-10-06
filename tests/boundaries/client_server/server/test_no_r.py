@@ -381,5 +381,33 @@ def test_no_r_extension_preparation_uses_candidate_provider(
         return client.finish()
 
 
+@requires(SQL)
+@executions(DIRECT)
+def test_no_r_extension_preparation_accepts_older_duckdb(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with no_r_client(binary, execution) as client:
+        client.initialize_and_list_tools()
+        client.expect("42\n", python="retained = 42; retained")
+        client.send(
+            control="restart",
+            requirements={
+                "action": "set",
+                "python": ["numpy<2", "pandas", "duckdb==0.9.2"],
+                "python_version": ["<3.12"],
+                "duckdb": ["not_a_real_duckdb_extension"],
+            },
+        )
+        output = last_result_text(client)
+        platform = re.search(r"/v0\.9\.2/([^/]+)/not_a_real_duckdb_extension", output)
+        assert platform is not None, output
+        assert client.transcript[-1]["result"]["isError"] is True
+        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+            platform[1], "<duckdb platform>"
+        )
+        client.expect("42\n", python="retained")
+        return client.finish()
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

@@ -42,7 +42,14 @@ base::local({
     )
   }
 
-  for (extension in extensions) {
+  builtin_extensions <- DBI::dbGetQuery(
+    connection,
+    paste(
+      "SELECT unnest(aliases || [extension_name]) AS name FROM duckdb_extensions()",
+      "WHERE install_path = '(BUILT-IN)'"
+    )
+  )$name
+  for (extension in base::setdiff(extensions, builtin_extensions)) {
     identifier <- DBI::dbQuoteIdentifier(connection, extension)
     DBI::dbExecute(
       connection,

@@ -674,10 +674,7 @@ def test_idle_stdin_preserves_used_worker_and_input(
             client.send(requirements={"action": "get"})["structuredContent"] == initial
         )
         client.transcript[-1]["result"] = "<unchanged default manifest>"
-        client.send(python="input()")
-        assert last_result_text(client) == (
-            "[input requested: \"\"]\n'retained input'\n"
-        ), last_result_text(client)
+        client.expect("[input requested: \"\"]\n'retained input'\n", python="input()")
         return client.finish()[3:]
 
 

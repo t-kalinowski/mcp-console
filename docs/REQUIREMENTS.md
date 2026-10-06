@@ -182,6 +182,7 @@ Successful activation is its own commit boundary: it survives later import/cell 
 ### DuckDB extension preparation
 
 The resolver uses DuckDB's installation API and normal repository/signature checks.
+Extensions built into the selected DuckDB library are already available and need no download.
 Under managed native networking, it explicitly supplies the runner's HTTP proxy to DuckDB.
 Loading happens later in the worker.
 No SQL catalog, user connection, or runtime object is replaced by an extension-only addition.

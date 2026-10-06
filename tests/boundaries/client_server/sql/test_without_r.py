@@ -80,6 +80,48 @@ def extension_cache(root: Path, execution: Execution) -> Path:
 
 
 @requires(SQL)
+@executions(SANDBOXED)
+def test_prepares_builtin_extensions_without_downloads(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "uv").symlink_to(shutil.which("uv"))
+        env = dict(
+            environment(root),
+            MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY=str(root / "extensions"),
+        )
+        arguments = ("-c", "cache=host")
+        # Prepare the ordinary dependencies before denying downloads. Only
+        # the subsequent built-in extension declaration needs to be offline.
+        with sql_client(binary, execution, env, root, arguments=arguments) as client:
+            client.expect(
+                "(42,)\n", python="sql_connection().execute('SELECT 42').fetchone()"
+            )
+            client.finish()
+        assert not list((root / "extensions").glob("**/json.duckdb_extension"))
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps({"resolver": {"proxy": {"domains": {}}}}))
+        env["UV_OFFLINE"] = "1"
+        with sql_client(binary, execution, env, root, arguments=arguments) as client:
+            client.expect(
+                "42\n",
+                # fmt: python
+                python=code("""
+                    retained = 42
+                    retained
+                    """),
+            )
+            client.expect("[prepared]", requirements={"duckdb": ["json"]})
+            client.expect(
+                "('42',)\n",
+                python="sql_connection().execute('SELECT ?::JSON', [retained]).fetchone()",
+            )
+            return client.finish()[3:]
+
+
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_sqlite_is_available_by_default(
     binary: Path, execution: Execution

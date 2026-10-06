@@ -15,10 +15,10 @@ result:
   isError: true
 ---
 send:
-  python: print('replacement initializes on demand')
+  python: print('replacement initializes successfully')
 result:
   content:
     - type: text
       text: |
-        replacement initializes on demand
+        replacement initializes successfully
   isError: false

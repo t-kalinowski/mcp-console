@@ -167,6 +167,78 @@ class WindowsSandbox(unittest.TestCase):
         os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
         "explicitly provisioned elevated Windows sandbox",
     )
+    def test_provisioned_input_and_interrupt_with_private_installation(self):
+        # A private bundle outside the user's profile models hosted CI's
+        # nonstandard installation paths, without relying on another drive.
+        public = Path(os.environ["PUBLIC"]).resolve()
+        with tempfile.TemporaryDirectory(
+            prefix="console-ci-assets-", dir=public
+        ) as directory:
+            prefix = Path(directory).resolve()
+            self.assertTrue(prefix.is_relative_to(public))
+            owner = f"{os.environ['USERDOMAIN']}\\{os.environ['USERNAME']}"
+            subprocess.run(
+                [
+                    "icacls",
+                    str(prefix),
+                    "/inheritance:r",
+                    "/grant:r",
+                    f"{owner}:(OI)(CI)F",
+                    "*S-1-5-18:(OI)(CI)F",
+                    "*S-1-5-32-544:(OI)(CI)F",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            source = native_console(BINARY)
+            (prefix / "bin").mkdir()
+            binary = prefix / "bin/mcp-console.exe"
+            shutil.copy2(source, binary)
+            for relative in ("libexec", "share"):
+                assets = source.resolve().parent.parent / relative
+                if assets.exists():
+                    shutil.copytree(assets, prefix / relative)
+            prepared = subprocess.run(
+                [
+                    sys.executable,
+                    ROOT / "scripts/prepare-windows-tests",
+                    "--binary",
+                    binary,
+                    "--state-dir",
+                    os.environ["MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"],
+                    "--github-env",
+                    prefix / "github-env",
+                    "--read-root",
+                    prefix,
+                    "--require-configured",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                timeout=60,
+            )
+            self.assertEqual(prepared.returncode, 0, (prepared.stdout, prepared.stderr))
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    ROOT / "tests/windows.py",
+                    "WindowsSandbox.test_provisioned_network_restricted_input_and_interrupt",
+                ],
+                cwd=ROOT,
+                env=os.environ
+                | {
+                    "MCP_CONSOLE_TEST_BINARY": str(binary),
+                    "MCP_CONSOLE_TEST_NATIVE_BINARY": str(binary),
+                },
+                capture_output=True,
+                timeout=240,
+            )
+            self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+
+    @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "explicitly provisioned elevated Windows sandbox",
+    )
     def test_provisioned_network_restricted_input_and_interrupt(self):
         from windows import Session, exercise_input_and_interrupt
 
