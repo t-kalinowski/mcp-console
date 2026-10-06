@@ -88,14 +88,13 @@ def main() -> None:
         sys.path.insert(0, str(ROOT / "tests"))
         from support.requirements import (
             FRESH_PROCFS,
-            LANDLOCK,
             NESTED_PROCFS,
             PROCESS_EVENTS,
         )
 
         capabilities = {
             item.name: {"available": item.available, "reason": item.reason}
-            for item in (PROCESS_EVENTS, LANDLOCK, NESTED_PROCFS, FRESH_PROCFS)
+            for item in (PROCESS_EVENTS, NESTED_PROCFS, FRESH_PROCFS)
         }
     report = {
         "checkout": str(ROOT),

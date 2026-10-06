@@ -257,9 +257,11 @@ fn perform<T>(
 
 pub(super) fn run() -> Result<(), String> {
     #[cfg(unix)]
-    let mut input = Io::new(duplicate(0)?, None)?;
+    let (input_cancelled, input_cancel) = io::pipe().map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    let mut input = BufReader::new(Io::new(duplicate(0)?, Some(input_cancelled))?);
     #[cfg(windows)]
-    let mut input = io::stdin();
+    let mut input = BufReader::new(io::stdin());
     let first: Input = super::read_jsonl(&mut input)?;
     let Input::Open { mode } = first else {
         return Err("expected resolver open".into());
@@ -267,16 +269,12 @@ pub(super) fn run() -> Result<(), String> {
     let (events, received) = mpsc::channel();
     let (outgoing, output) = mpsc::channel::<Output>();
     #[cfg(unix)]
-    let (input_cancelled, input_cancel) = io::pipe().map_err(|e| e.to_string())?;
-    #[cfg(unix)]
     let (output_cancelled, output_cancel) = io::pipe().map_err(|e| e.to_string())?;
     let input_events = events.clone();
     let input_task = thread::spawn(move || {
+        // Preserve frames prefetched alongside Open when transferring input ownership.
+        let mut input = input;
         let result = (|| {
-            #[cfg(unix)]
-            let mut input = BufReader::new(Io::new(duplicate(0)?, Some(input_cancelled))?);
-            #[cfg(windows)]
-            let mut input = BufReader::new(io::stdin());
             loop {
                 input_events
                     .send(Event::Input(Ok(super::read_jsonl(&mut input)?)))

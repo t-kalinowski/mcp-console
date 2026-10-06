@@ -401,7 +401,6 @@ def test_explicit_policy_bypasses_project_configuration(binary: Path) -> Transcr
         print(sys.stdin.read())
         """)
     policy = {
-        "version": 2,
         "filesystem": {
             "kind": "restricted",
             "entries": [
