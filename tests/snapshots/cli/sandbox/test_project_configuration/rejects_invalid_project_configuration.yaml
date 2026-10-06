@@ -77,25 +77,25 @@ case: top-level field
 command: serve
 stderr: >
   .agents/console/config.yaml: profile: unknown field `profile`, expected
-  one of `cache`, `python`, `extends`, `sandbox`, `resolver`
+  one of `cache`, `python`, `languages`, `extends`, `sandbox`, `resolver`
 ---
 case: top-level field
 command: sandbox
 stderr: >
   .agents/console/config.yaml: profile: unknown field `profile`, expected
-  one of `cache`, `python`, `extends`, `sandbox`, `resolver`
+  one of `cache`, `python`, `languages`, `extends`, `sandbox`, `resolver`
 ---
 case: tagged unknown field
 command: serve
 stderr: >
   .agents/console/config.yaml: profile: unknown field `profile`, expected
-  one of `cache`, `python`, `extends`, `sandbox`, `resolver`
+  one of `cache`, `python`, `languages`, `extends`, `sandbox`, `resolver`
 ---
 case: tagged unknown field
 command: sandbox
 stderr: >
   .agents/console/config.yaml: profile: unknown field `profile`, expected
-  one of `cache`, `python`, `extends`, `sandbox`, `resolver`
+  one of `cache`, `python`, `languages`, `extends`, `sandbox`, `resolver`
 ---
 case: sandbox type
 command: serve
