@@ -32,7 +32,8 @@ error: >
 override: sql.provider=python
 error: >
   configuration with CLI overrides: sql: unknown field `sql`, expected one
-  of `startup`, `cache`, `python`, `extends`, `sandbox`, `resolver`
+  of `startup`, `cache`, `python`, `languages`, `extends`, `sandbox`,
+  `resolver`
 ---
 custom_worker_error: |
   startup requires the built-in worker and relay

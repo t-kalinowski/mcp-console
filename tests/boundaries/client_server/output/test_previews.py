@@ -83,10 +83,9 @@ after final image
             assert "omitted" in text
             assert "UTF-8 bytes" in text
             assert (
-                f".agents/console/sessions/{session.name}/outputs/call-000001.log"
+                f"raw log: .agents/console/sessions/{session.name}/outputs/call-000001.log"
                 in text
             )
-            assert "Console host" in text
         for block in result["content"]:
             if block["type"] == "text":
                 block["text"] = block["text"].replace(session.name, "<run ID>")
@@ -536,7 +535,7 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
         assert text.endswith("after final image\n[done]")
         assert text.count("[output omitted:") == 1
         assert (
-            f"retained logs on Console host: .agents/console/sessions/{session_directory(client).name}/outputs"
+            f"retained logs: .agents/console/sessions/{session_directory(client).name}/outputs"
             in text
         )
         assert not result.get("isError", False), result
@@ -583,7 +582,7 @@ def test_keeps_partial_idle_utf8_out_of_cell_omission_counts(
         idle_omitted = len(idle.encode()) - len(head.encode())
         cell_omitted = len(cell.encode()) - len(tail.encode())
         assert int(marker[1]) == idle_omitted + cell_omitted
-        assert "retained logs on Console host:" in marker[0]
+        assert "retained logs:" in marker[0]
         session = session_directory(client)
         assert f".agents/console/sessions/{session.name}/outputs/" in marker[0]
         assert (session / "outputs/session.log").read_text(errors="replace") == idle

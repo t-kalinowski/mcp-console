@@ -26,15 +26,15 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8018
+        text_bytes: 8130
         concat:
           - repeat: x
-            count: 3840
+            count: 3904
           - |
 
-            [output omitted: 1073734149 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000002.log; logs contain prefixes; later raw text unavailable]
+            [output omitted: 1073734021 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000002.log; logs contain prefixes; later raw text unavailable]
           - repeat: x
-            count: 3835
+            count: 3899
           - |
             tail
             [cell output retention limit reached at 1073741824 bytes for .agents/console/sessions/<run ID>/outputs/call-000002.log; later text is not retained in this file]

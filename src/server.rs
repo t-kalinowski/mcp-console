@@ -32,6 +32,7 @@ struct ConsoleServer {
     startup: startup::Startup,
     deliveries: crate::server_transport::ResponseDeliveries,
     languages: Languages,
+    language_setting: &'static str,
     tool_router: ToolRouter<Self>,
 }
 
@@ -46,15 +47,20 @@ impl ConsoleServer {
         python: Option<PathBuf>,
         resolver: crate::settings::SandboxSettings,
         startup: Option<crate::settings::startup::Startup>,
+        visibility: Option<Languages>,
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
-        let languages = Languages::from_environment()?;
+        let (languages, language_setting) = match visibility {
+            Some(languages) => (languages, "languages"),
+            None => (Languages::from_environment()?, LANGUAGES_ENV),
+        };
         if worker.is_none() && relay.is_some() {
             return Err("a custom relay requires a custom worker".into());
         }
         // Presentation has no dependency on the client or its discovered capabilities.
         let tool_router = Self::configured_tool_router(
             languages,
+            visibility.is_some(),
             worker.is_none(),
             &sandbox_settings,
             no_sandbox,
@@ -109,6 +115,7 @@ impl ConsoleServer {
             startup,
             deliveries: crate::server_transport::ResponseDeliveries::default(),
             languages,
+            language_setting,
             tool_router,
         })
     }
@@ -148,17 +155,12 @@ impl ConsoleServer {
             }),
             (None, None, None) => None,
             _ => {
-                return Err("only one of `r`, `python`, or `sql` may be supplied".to_string());
+                return Err(format!(
+                    "only one of {} may be supplied",
+                    self.languages.cell_fields()
+                ));
             }
         };
-        if let Some(cell) = cell.as_ref()
-            && !self.languages.enables(cell.language)
-        {
-            return Err(format!(
-                "`{}` cells are disabled by `{LANGUAGES_ENV}`",
-                Languages::field(cell.language)
-            ));
-        }
         if let Some(requirements) = &requirements {
             use crate::worker_client::RequirementsAction::{Get, Reset};
             if matches!(requirements.action, Get | Reset)
@@ -395,7 +397,15 @@ impl ServerHandler for ConsoleServer {
             .get("send")
             .expect("send tool must be registered");
         let cancellation = context.ct.clone();
-        let call_future = (send.call)(ToolCallContext::new(self, request, context));
+        let validation = SendArguments::validate_fields(
+            request.arguments.as_ref(),
+            self.languages,
+            self.language_setting,
+        );
+        let call_future = async {
+            validation.map_err(|message| ErrorData::invalid_params(message, None))?;
+            (send.call)(ToolCallContext::new(self, request, context)).await
+        };
         let result = if waiting_for_startup {
             tokio::select! {
                 biased;
@@ -444,6 +454,7 @@ pub async fn run(
     python: Option<PathBuf>,
     resolver: crate::settings::SandboxSettings,
     startup: Option<crate::settings::startup::Startup>,
+    visibility: Option<Languages>,
 ) -> Result<(), Box<dyn Error>> {
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input_closed = InputClosed(Arc::new(Mutex::new(Some(input_closed))));
@@ -458,6 +469,7 @@ pub async fn run(
         python,
         resolver,
         startup,
+        visibility,
     )
     .map_err(std::io::Error::other)?;
     let startup = server.startup.clone();

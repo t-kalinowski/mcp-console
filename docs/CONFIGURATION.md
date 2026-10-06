@@ -35,6 +35,38 @@ Empty or relative values are errors when fallback is needed; `~` is not expanded
 Project configuration and project recordings take precedence independently: configuration requires the project file, while recordings require only an existing project `.agents/console` directory.
 See [recording](RECORDING.md).
 
+## Model-visible languages
+
+Expose SQL alone, or SQL and Python, with a top-level list:
+
+```yaml
+languages: [sql]
+```
+
+```sh
+mcp-console serve -c 'languages=[sql,python]'
+```
+
+The list accepts a nonempty subset of `r`, `python`, and `sql`; SQL is not yet supported on Windows.
+An override replaces the entire list.
+Omitting `languages` preserves the standard full interface and the internal `MCP_CONSOLE_LANGUAGES` filter.
+An explicit list determines the public interface independently of that internal runtime setting.
+
+The selection is captured at server launch.
+Tool discovery, descriptions, and source-argument validation use the same selection, including before runtime discovery and after worker restart.
+Editing the configuration file requires a new server connection to change the interface.
+A hidden source field is rejected even when its value is `null`, before any same-call restart, dependency preparation, or input delivery.
+
+Visibility does not select or disable embedded runtimes or choose a SQL provider.
+SQL can use hidden R or Python without a model-facing setup cell.
+Runtime availability still determines whether an exposed language can execute.
+Polling, stdin, controls, and all supported requirements remain available, including R/Python requirements needed by SQL.
+For a missing managed provider, follow the SQL diagnostic's package requirements and restart; selected Python environments require preinstalled packages.
+Custom workers retain their own language, SQL, and preparation contracts; Console does not supply their SQL backend.
+
+This is a usability setting.
+It does not restrict what SQL can do or change the sandbox and dependency trust boundaries.
+
 ## Python environment selection
 
 Select an existing interpreter with:

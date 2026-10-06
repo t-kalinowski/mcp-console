@@ -13,7 +13,12 @@ Descriptions depend on captured configuration, not completed runtime discovery.
 The presentation profile selects sections from configured languages, built-in or custom worker selection, and host preparation.
 Small platform conditionals select Windows language and interrupt guidance without matching or removing sentences.
 For the same configuration, they stay stable as background startup finishes or fails.
-`MCP_CONSOLE_LANGUAGES` filters direct code fields; execution still checks actual runtime availability.
+The captured `languages` list selects direct code fields, field guidance, and language-sharing sections together.
+Omission retains the legacy `MCP_CONSOLE_LANGUAGES` filter; neither discovery nor interpreter initialization changes the advertised schema.
+Hidden source keys, including null values, are rejected before same-call effects.
+Requirements remain visible for hidden SQL providers, and execution still checks actual runtime availability.
+SQL provider guidance describes both runtime contingencies: managed DuckDB uses R when available and Python otherwise, even when the provider's source field is hidden.
+Visibility selects direct code fields and applicable examples, not SQL ownership; Python frame-sharing guidance includes the R bridge whenever SQL is exposed.
 
 Advertising an unavailable language lets an agent identify the missing prerequisite and ask for installation authorization, at the cost of a rejected call before discovery is known.
 It neither proves availability nor authorizes installation.

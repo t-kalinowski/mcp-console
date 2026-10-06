@@ -76,6 +76,7 @@ struct Project {
     startup: Option<startup::Startup>,
     cache: Option<Cache>,
     python: Option<std::path::PathBuf>,
+    languages: Option<Vec<crate::cell::Language>>,
     extends: Option<String>,
     sandbox: Map<String, Value>,
     resolver: Map<String, Value>,
@@ -86,6 +87,7 @@ pub(crate) struct Captured {
     pub startup: Option<startup::Startup>,
     pub cache: Option<Cache>,
     pub python: Option<std::path::PathBuf>,
+    pub languages: Option<crate::cell::Languages>,
     pub source: Option<String>,
     pub policy: SandboxSettings,
     pub resolver: SandboxSettings,
@@ -123,6 +125,32 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
             .validate()
             .map_err(|error| format!("{name}: {error}"))?;
     }
+    let languages = project
+        .languages
+        .map(|selected| {
+            if selected.is_empty() {
+                return Err(format!(
+                    "{name}: languages must contain at least one of r, python, or sql"
+                ));
+            }
+            let mut languages = crate::cell::Languages::default();
+            for language in selected {
+                match language {
+                    crate::cell::Language::R => languages.r = true,
+                    crate::cell::Language::Python => languages.python = true,
+                    crate::cell::Language::Sql => {
+                        if cfg!(windows) {
+                            return Err(format!(
+                                "{name}: languages: SQL is not yet supported on Windows"
+                            ));
+                        }
+                        languages.sql = true;
+                    }
+                }
+            }
+            Ok(languages)
+        })
+        .transpose()?;
     // These fields belong to Console's launch protocol and worker lifetime.
     // All other sandbox fields and values are interpreted by the native runner.
     for field in ["version", "lifecycle", "extends", "workspace"] {
@@ -139,6 +167,7 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
     Ok(Captured {
         startup: project.startup,
         cache: project.cache,
+        languages,
         python: project
             .python
             .map(|path| {
