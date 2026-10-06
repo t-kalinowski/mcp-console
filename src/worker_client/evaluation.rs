@@ -17,6 +17,7 @@ pub(super) struct Evaluation {
     call_id: Option<u64>,
     output: OutputTape,
     runtime: tokio::runtime::Handle,
+    admitted_at: Instant,
 }
 
 struct EvaluationState {
@@ -47,6 +48,7 @@ struct EvaluationState {
     #[cfg(any(unix, windows))]
     stdin: Option<super::platform::StdinSender>,
     pending_stdin: String,
+    observed_worker_revision: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -121,6 +123,7 @@ impl Evaluation {
         control_prelude: Response,
         idle_prelude: Response,
         controlled_completion: bool,
+        worker_revision: u64,
     ) -> Self {
         let delivery_changed = Arc::new(tokio::sync::Notify::new());
         Self {
@@ -142,6 +145,7 @@ impl Evaluation {
                 #[cfg(any(unix, windows))]
                 stdin: None,
                 pending_stdin: String::new(),
+                observed_worker_revision: worker_revision,
             }),
             changed: tokio::sync::Notify::new(),
             delivery_changed,
@@ -149,6 +153,7 @@ impl Evaluation {
             call_id,
             output,
             runtime: tokio::runtime::Handle::current(),
+            admitted_at: Instant::now(),
         }
     }
 
@@ -578,6 +583,13 @@ impl Evaluation {
         self.try_claim_wait(WaitKind::Interrupt)
     }
 
+    /// A control response without output ownership cannot claim a silent interval.
+    pub(super) fn unobserved_progress(&self) -> Response {
+        let mut response = Response::default();
+        response.evaluation_progress(self.admitted_at.elapsed(), false);
+        response
+    }
+
     /// A poll already waiting for startup can encounter a later call's reply
     /// before its transport write settles. Retain observation within the call's
     /// deadline; expiry or cancellation leaves the response unclaimed.
@@ -710,6 +722,9 @@ impl Evaluation {
             if at_deadline {
                 let cut = self.output.cut();
                 let mut output = take_owned_response(&mut state, &self.output, cut);
+                let no_new_output = cut.worker_revision == state.observed_worker_revision;
+                state.observed_worker_revision = cut.worker_revision;
+                output.evaluation_progress(self.admitted_at.elapsed(), no_new_output);
                 state.track_delivery(&mut output);
                 return Ok(EvaluationStatus::Report(EvaluationWait::Running(output)));
             }
@@ -721,6 +736,7 @@ impl Evaluation {
         }
         let cut = self.output.cut();
         let mut output = take_owned_response(&mut state, &self.output, cut);
+        state.observed_worker_revision = cut.worker_revision;
         state.track_delivery(&mut output);
         Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
             output,

@@ -18,6 +18,7 @@ from boundaries.server_relay._harness import (
     _normalize_shutdown_grace,
     _receive_checkpointed,
 )
+from support.progress import without_elapsed
 from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
@@ -204,7 +205,7 @@ def test_controlled_restart_resolves_requirements_before_replacement_and_timeout
                 evaluation,
                 "the controlled evaluation after restart requirement resolution",
             )
-            assert _tool_text(evaluation["result"]) == (
+            assert without_elapsed(_tool_text(evaluation["result"])) == (
                 "[worker stopped: in-memory state lost]\n"
                 "[starting new worker]\n\n"
                 "[running; poll with an empty send]"

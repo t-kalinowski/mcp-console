@@ -18,6 +18,7 @@ from boundaries.client_server.python.test_startup import (
 from boundaries.client_server.python.test_without_r import (
     environment as without_r_environment,
 )
+from support.progress import without_elapsed
 from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.allocations import AllocationProfile
@@ -208,7 +209,7 @@ def test_restart_retires_bootstrap_before_new_cell(
             timeout_ms=0,
         )
         assert (
-            last_result_text(client)
+            without_elapsed(last_result_text(client))
             == "[worker stopped: in-memory state lost]\n[starting new worker]\n"
             + RUNNING
         ), repr(last_result_text(client))
@@ -239,7 +240,7 @@ def test_failed_bootstrap_withholds_cell_and_replaces_worker(
         )
         client.initialize_and_list_tools()
         client.send(python="never_run = True", timeout_ms=0)
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         release.release()
         output = wait_for_evaluation_output(
             client,
@@ -260,7 +261,7 @@ def test_failed_bootstrap_withholds_cell_and_replaces_worker(
             stdin="replacement\n",
             timeout_ms=0,
         )
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         release.release()
         wait_for_evaluation_output(
             client,
@@ -283,7 +284,7 @@ def test_incomplete_bootstrap_preserves_waiting_cell(
     ) as (client, release):
         client.initialize_and_list_tools()
         client.send(r="counter <- 1L; counter", timeout_ms=0)
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         release.release()
         output = wait_for_evaluation_output(
             client,
@@ -305,9 +306,13 @@ def queued_input(client: McpClient, release: FifoCheckpoint) -> list:
     client.send(
         python="import builtins; counter = 1; builtins.bootstrap_input", timeout_ms=0
     )
-    assert last_result_text(client) == RUNNING, repr(last_result_text(client))
+    assert without_elapsed(last_result_text(client)) == RUNNING, repr(
+        last_result_text(client)
+    )
     client.send(timeout_ms=20)
-    assert last_result_text(client) == RUNNING, repr(last_result_text(client))
+    assert without_elapsed(last_result_text(client)) == RUNNING, repr(
+        last_result_text(client)
+    )
     client.send(python="counter += 1", timeout_ms=0)
     assert client.transcript[-1]["result"]["isError"]
     release.release()
@@ -335,7 +340,7 @@ def test_short_startup_transcript(binary: Path, execution: Execution) -> list:
             stdin="hello\n",
             timeout_ms=0,
         )
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         release.release()
         wait_for_evaluation_output(
             client,
@@ -633,7 +638,7 @@ def test_cancelled_response_preserves_bootstrap_and_first_cell(
             profile.pause_results(False)
             result_release.release()
         client.send(timeout_ms=0)
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         assert "result" not in pending
         release.release()
         wait_for_evaluation_output(
@@ -765,7 +770,7 @@ def test_first_declaration_replaces_blocked_bootstrap(
             stdin="retained input\n",
             timeout_ms=0,
         )
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         reached.wait("replacement generation bootstrap", timeout=600)
         workers = identities.read_text().splitlines()
         assert len(workers) == 2, workers
@@ -824,7 +829,7 @@ def test_failed_declaration_preserves_bootstrap_and_reset_remains_allowed(
             python="counter = 1; counter",
             timeout_ms=0,
         )
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         reached.wait("reset starts its replacement bootstrap", timeout=600)
         workers = identities.read_text().splitlines()
         assert len(workers) == 2, workers

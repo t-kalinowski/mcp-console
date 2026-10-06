@@ -51,7 +51,7 @@ impl Client {
         }
         self.ensure_evaluation_admission(&generation, control)?;
         let startup = self.reserve_worker_startup(&generation)?;
-        let idle_prelude = self.0.output.take_prelude();
+        let (idle_prelude, worker_revision) = self.0.output.take_admission_prelude();
         let evaluation = Arc::new(Evaluation::new(
             transcript,
             call_id,
@@ -59,6 +59,7 @@ impl Client {
             control_prelude.take().unwrap_or_default(),
             idle_prelude,
             control.is_some(),
+            worker_revision,
         ));
         let wait_claim = evaluation
             .claim()

@@ -7,6 +7,7 @@ from typing import Any
 from support.client import McpClient
 from support.checkpoints import wait_for_path
 from support.records import ToolResult, TranscriptEntry
+from support.progress import ELAPSED, without_elapsed
 
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
 
@@ -201,12 +202,14 @@ def wait_for_evaluation_output(
     cuts = output_cuts if output_cuts is not None else []
     cuts.extend(cut for cut in initial_cuts if cut)
     collected = "".join(cuts)
+    final_progress = ""
 
     result = _send_before(client, deadline, description, **send_arguments)
     while True:
         content = result["content"]
         assert len(content) == 1 and content[0]["type"] == "text", content
-        output = content[0]["text"]
+        raw_output = content[0]["text"]
+        output = without_elapsed(raw_output)
         if output.endswith(running):
             assert result.get("isError") is not True, result
             cut = output.removesuffix(running)
@@ -215,6 +218,8 @@ def wait_for_evaluation_output(
                 collected += cut
             if isinstance(expected, str) and collected + running == expected:
                 collected += running
+                if progress := ELAPSED.search(raw_output):
+                    final_progress = progress[0]
                 break
         elif output.endswith(waiting):
             assert result.get("isError") is not True, result
@@ -255,7 +260,11 @@ def wait_for_evaluation_output(
     assert expected_error is None or result.get("isError", False) is expected_error, (
         result
     )
-    content[0]["text"] = collected
+    content[0]["text"] = (
+        collected.removesuffix(running) + final_progress + running
+        if final_progress
+        else collected
+    )
     calls = client.transcript[poll_start:]
     submitted = calls[0]
     submitted["result"] = calls[-1]["result"]

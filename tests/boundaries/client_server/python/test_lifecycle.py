@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
@@ -208,11 +209,17 @@ def test_interrupts_running_python_evaluation(
                     os.close(wakeup_write)
                 """)
             client.send(python=python, timeout_ms=0)
-            assert last_result_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_result_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             started.wait("Python evaluation entered native interrupt checkpoint")
 
             client.send(control="interrupt", timeout_ms=0)
-            assert last_result_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_result_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             release.release()
             release = None
             client.send()
@@ -707,7 +714,7 @@ def test_interrupts_live_python_resolver(
                 "control-only interrupt waited for Python preparation to settle"
             )
             client.receive(interrupt)
-            assert interrupt["result"] == {
+            assert without_elapsed_result(interrupt["result"]) == {
                 "content": [
                     {
                         "type": "text",

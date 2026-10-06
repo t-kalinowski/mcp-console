@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.checkpoints import (
     release_fixture_checkpoint,
@@ -192,7 +193,10 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
         try:
             client.initialize_and_list_tools()
             client.send(r="kill relay and remain live", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             started = wait_for_marker(
                 temporary_path,
                 "zod-relay-exit-evaluation-started",

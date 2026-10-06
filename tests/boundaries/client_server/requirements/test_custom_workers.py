@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed, without_elapsed_result
 from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, SQL, requires
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
@@ -488,7 +489,10 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
             observer_entered.wait("materializer exit observation held")
 
             client.send(control="interrupt", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             observer_release.release()
             holder_release.release()
             client.receive(pending)
@@ -597,7 +601,10 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(
         assert (session / artifact["path"]).read_bytes() == base64.b64decode(PNG_1X1)
 
         client.send(r="emit output and image before completion", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         image_started = wait_for_marker(
             temporary_path,
             "zod-image-evaluation-started",
@@ -624,7 +631,7 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(
             }, result
 
             client.send(timeout_ms=0)
-            assert client.transcript[-1]["result"] == {
+            assert without_elapsed_result(client.transcript[-1]["result"]) == {
                 "content": [
                     {"type": "text", "text": "before pending image\n"},
                     {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},

@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -428,7 +429,8 @@ def test_compacts_native_duckdb_progress_bar(
                 )
                 client.receive(initial)
                 assert (
-                    last_result_text(client) == "\n[running; poll with an empty send]"
+                    without_elapsed(last_result_text(client))
+                    == "\n[running; poll with an empty send]"
                 )
 
                 progress = (root / "progress.bin").read_bytes()

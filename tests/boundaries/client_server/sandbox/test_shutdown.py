@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint, release_partial_sideband
 from support.client import McpClient
@@ -59,7 +60,10 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
         try:
             client.initialize_and_list_tools()
             client.send(r="start partial sideband descendant", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             marker = wait_for_marker(
                 temporary_path,
                 "zod-sideband-descendant-pid",
@@ -335,7 +339,10 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
         try:
             client.initialize_and_list_tools()
             client.send(r="start partial sideband descendant", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             marker = wait_for_marker(
                 temporary_path,
                 "zod-sideband-descendant-pid",

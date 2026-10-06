@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.checkpoints import (
     FifoCheckpoint,
@@ -116,7 +117,10 @@ def test_reports_partial_retention_and_later_unretained_output(
         ) as client:
             client.initialize_and_list_tools()
             client.send(r="overflow cell output file", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             release = wait_for_worker_file(
                 workspace, "zod-release-spooled-output", client
             )
@@ -150,7 +154,7 @@ def test_reports_partial_retention_and_later_unretained_output(
             first_payload = (
                 first_text[:failure_start].removesuffix("\n") + first_text[failure_end:]
             )
-            first_payload = first_payload.removesuffix(
+            first_payload = without_elapsed(first_payload).removesuffix(
                 "\n[running; poll with an empty send]"
             )
             first_omitted = assert_preview(
@@ -213,7 +217,10 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
         client.send(r="complete silently")
         assert last_tool_text(client) == "[done]"
         client.send(r="overflow cell retention limit", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         release = wait_for_worker_file(
             Path(temporary), "zod-release-retention-output", client
         )
