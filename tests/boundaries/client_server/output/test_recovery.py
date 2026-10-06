@@ -188,7 +188,7 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
                     )
                     == 1
                 )
-                assert "retained logs on Console host:" in text
+                assert "retained logs:" in text
                 omitted = sum(
                     map(int, re.findall(r"output omitted: (\d+) UTF-8 bytes", text))
                 )
@@ -466,7 +466,7 @@ def test_composed_image_omission_names_existing_artifact(binary: Path) -> Transc
             block["text"] for block in result["content"] if block["type"] == "text"
         )
         assert text.count("[output omitted:") == 1, text
-        assert "1 image" in text and "retained output on Console host:" in text
+        assert "1 image" in text and "retained output:" in text
         session = session_directory(client)
         assert text.count(f".agents/console/sessions/{session.name}") == 1
         assert "logs: outputs/" in text
@@ -546,7 +546,7 @@ def test_long_recording_paths_keep_image_omissions_readable(binary: Path) -> Tra
                 assert omitted.read_bytes() == bytes(6 * 1024 * 1024)
                 if mixed:
                     location = (
-                        f"retained output on Console host: sessions/{session.name}/"
+                        f"retained output: sessions/{session.name}/"
                         " (relative to Console recording directory)"
                     )
                     assert location in text
@@ -555,9 +555,7 @@ def test_long_recording_paths_keep_image_omissions_readable(binary: Path) -> Tra
                 else:
                     marker = re.search(r"\n\[output omitted: [^\n]*\]\n", text)
                     assert marker is not None, text
-                    _, advertised = marker[0].split(
-                        "; retained image on Console host: ", 1
-                    )
+                    _, advertised = marker[0].split("; retained image: ", 1)
                     suffix = " (relative to Console recording directory)]\n"
                     assert advertised.endswith(suffix)
                     assert recording / advertised.removesuffix(suffix) == omitted

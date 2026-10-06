@@ -12,12 +12,19 @@ result:
   isError: false
 ---
 send:
+  r: invisible(NULL)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   r: |
     interrupt_state <- 41L
-    invisible(file.create(file.path(
-      tempdir(),
-      "r-interrupt-started"
-    )))
+    checkpoint <- fifo("r-interrupt-started", open = "wb")
+    writeBin(charToRaw("1"), checkpoint)
+    close(checkpoint)
     repeat {
       Sys.sleep(60)
     }
@@ -55,10 +62,9 @@ send:
       "mcp_test_register_input_handler",
       file.path(tempdir(), "input-handler-fifo"),
       function() {
-        invisible(file.create(file.path(
-          tempdir(),
-          "r-boundary-interrupt-started"
-        )))
+        checkpoint <- fifo("r-boundary-interrupt-started", open = "wb")
+        writeBin(charToRaw("1"), checkpoint)
+        close(checkpoint)
         on.exit(boundary_interrupt_cleanup <<- TRUE)
         repeat {
           Sys.sleep(60)

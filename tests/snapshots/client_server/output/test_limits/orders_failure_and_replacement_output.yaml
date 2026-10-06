@@ -15,7 +15,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8072
+        text_bytes: 8056
         concat:
           - |
             zod old stdout
@@ -23,7 +23,7 @@ result:
             count: 3889
           - |
 
-            [output omitted: 4186527 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000002.log]
+            [output omitted: 4186527 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000002.log]
           - repeat: y
             count: 3888
           - |-

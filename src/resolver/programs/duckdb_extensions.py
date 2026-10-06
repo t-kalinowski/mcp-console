@@ -31,7 +31,15 @@ connection = duckdb.connect(
 )
 connection.execute("SET enable_progress_bar = false")
 try:
+    builtin_extensions = {
+        name
+        for (name,) in connection.execute(
+            "SELECT unnest(aliases || [extension_name]) FROM duckdb_extensions() "
+            "WHERE install_path = '(BUILT-IN)'"
+        ).fetchall()
+    }
     for extension in extensions:
-        connection.install_extension(extension)
+        if extension not in builtin_extensions:
+            connection.install_extension(extension)
 finally:
     connection.close()

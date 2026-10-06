@@ -13,17 +13,23 @@ use crate::settings::SandboxSettings;
 /// Requested interface and preparation mode, never discovered runtime availability.
 struct Profile {
     languages: Languages,
+    configured_visibility: bool,
     builtin: bool,
 }
 
 impl ConsoleServer {
     pub(super) fn configured_tool_router(
         languages: Languages,
+        configured_visibility: bool,
         builtin: bool,
         policy: &SandboxSettings,
         no_sandbox: bool,
     ) -> ToolRouter<Self> {
-        let profile = Profile { languages, builtin };
+        let profile = Profile {
+            languages,
+            configured_visibility,
+            builtin,
+        };
         let mut router = Self::tool_router();
         let send = router
             .map
@@ -81,30 +87,78 @@ impl Profile {
     }
 
     fn description(&self, policy: &SandboxSettings, no_sandbox: bool) -> String {
+        // The internal environment filter retains its legacy presentation.
+        // Only the public setting selects the new language-specific guidance.
+        let described_languages = if self.configured_visibility {
+            self.languages
+        } else {
+            Languages::all()
+        };
         let mut description = if !self.builtin {
             let mut scope = sections::CUSTOM_SCOPE.to_string();
             if self.multiple_languages() {
                 scope.push_str(sections::CUSTOM_SWITCHING);
             }
             scope
-        } else if cfg!(windows) {
+        } else if cfg!(windows) && described_languages.r && described_languages.python {
             sections::WINDOWS_SCOPE.to_string()
         } else {
-            let mut scope = sections::BUILTIN_SCOPE.to_string();
+            let mut scope = if described_languages.r
+                && described_languages.python
+                && described_languages.sql
+            {
+                sections::BUILTIN_SCOPE.to_string()
+            } else {
+                let names = self
+                    .languages
+                    .fields()
+                    .iter()
+                    .map(|field| match *field {
+                        "r" => "R",
+                        "python" => "Python",
+                        "sql" => "SQL",
+                        _ => unreachable!(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                format!(
+                    "Persistent {names} workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls."
+                )
+            };
+            if cfg!(windows) {
+                scope.push_str(sections::WINDOWS_PREPARATION);
+            }
             scope.push_str("\n\n");
             scope.push_str(&self.language_guidance());
             scope.push_str("\n\n");
-            scope.push_str(sections::SHARING);
-            scope.push_str(sections::MANAGED_SQL_SHARING);
+            scope.push_str(sections::INTERFACE);
+            if described_languages.r && described_languages.python {
+                scope.push_str(sections::SHARING);
+            }
+            if described_languages.sql {
+                if described_languages.r && described_languages.python {
+                    scope.push_str(sections::MANAGED_SQL_SHARING);
+                } else {
+                    if described_languages.r {
+                        scope.push_str(sections::MANAGED_SQL_R);
+                    }
+                    if described_languages.python {
+                        scope.push_str(sections::MANAGED_SQL_PYTHON);
+                    }
+                    scope.push_str(sections::SQL_PROVIDER);
+                }
+            }
             scope.push_str(sections::MANAGED_PREPARATION);
             scope
         };
         description.push_str("\n\nSend one complete ");
-        description.push_str(if self.builtin && cfg!(windows) {
-            sections::WINDOWS_CELL_FIELDS
+        if self.configured_visibility {
+            description.push_str(&self.languages.cell_fields());
+        } else if cfg!(windows) && self.builtin {
+            description.push_str("`r` or `python`");
         } else {
-            sections::CELL_FIELDS
-        });
+            description.push_str("`r`, `python`, or `sql`");
+        }
         description.push_str(sections::SEND_ORDERING);
         description.push_str("\n\n");
         description.push_str(sections::POLLING);
@@ -142,7 +196,17 @@ impl Profile {
     }
 
     fn configure_fields(&self, properties: &mut Map<String, Value>) {
-        if !self.builtin {
+        if self.builtin && self.configured_visibility {
+            for (field, description) in [
+                ("r", r_description_for(self.languages)),
+                ("python", python_description_for(self.languages)),
+                ("sql", sql_description_for(self.languages)),
+            ] {
+                if let Some(property) = properties.get_mut(field) {
+                    property["description"] = description.into();
+                }
+            }
+        } else if !self.builtin {
             for (field, section) in [
                 ("r", sections::CUSTOM_R),
                 ("python", sections::CUSTOM_PYTHON),
@@ -153,14 +217,27 @@ impl Profile {
                 }
             }
         }
+        if self.configured_visibility
+            && self.languages.fields().len() < Languages::all().fields().len()
+        {
+            properties["stdin"]["description"] =
+                format!("{}{}", sections::STDIN_SELECTED, sections::STDIN_ORDERING).into();
+        }
     }
 }
 
 // Schemars uses the same named sections for the ordinary field metadata.
 // SQL-only sections are omitted on Windows at construction, never removed by prose matching.
 pub(super) fn r_description() -> String {
+    r_description_for(Languages::all())
+}
+
+fn r_description_for(languages: Languages) -> String {
     let mut description = sections::R_RUNTIME.to_string();
-    if !cfg!(windows) {
+    if languages.python {
+        description.push_str(sections::R_BRIDGE);
+    }
+    if languages.sql {
         description.push_str(sections::R_SQL);
     }
     description.push_str(sections::R_PLOTS);
@@ -168,11 +245,46 @@ pub(super) fn r_description() -> String {
 }
 
 pub(super) fn python_description() -> String {
+    python_description_for(Languages::all())
+}
+
+fn python_description_for(languages: Languages) -> String {
     let mut description = sections::PYTHON_RUNTIME.to_string();
-    if !cfg!(windows) {
+    // SQL may use hidden R; its Python bridge remains usable from a Python cell.
+    if languages.r || languages.sql {
+        description.push_str(sections::PYTHON_BRIDGE);
+    }
+    if languages.sql {
         description.push_str(sections::PYTHON_SQL);
+        description.push_str(sections::PYTHON_SQL_R);
+        description.push_str(sections::PYTHON_SQL_CONNECTION);
     }
     description.push_str(sections::PYTHON_PLOTS);
+    if languages.r {
+        description.push_str(sections::PYTHON_R_PLOTS);
+    }
+    description.push_str(sections::PYTHON_END);
+    description
+}
+
+pub(super) fn sql_description() -> String {
+    sql_description_for(Languages::all())
+}
+
+fn sql_description_for(languages: Languages) -> String {
+    let mut description = sections::SQL_RUNTIME.to_string();
+    // Provider contingencies follow runtime capability, not visible code fields.
+    description.push_str(sections::SQL_R_FRAMES);
+    description.push_str(sections::SQL_DRIVERS);
+    if languages.r {
+        description.push_str(sections::SQL_R_STATEMENTS);
+    }
+    if languages.python {
+        description.push_str(sections::SQL_PYTHON_FRAMES);
+    } else {
+        description.push_str(sections::SQL_HIDDEN_PYTHON);
+    }
+    description.push_str(sections::SQL_OPERATIONS);
     description
 }
 
@@ -240,4 +352,8 @@ fn description_for_launch(policy: &SandboxSettings, no_sandbox: bool) -> String 
             "Evaluated code {sandbox_access}. Dependency resolution, when available, uses a separate native resolver sandbox on macOS and Linux with configurable host reads, cache writes, and proxy destinations. Installation or build code may run there; use only trusted dependencies."
         )
     }
+}
+
+pub(super) fn stdin_description() -> String {
+    format!("{}{}", sections::STDIN_START, sections::STDIN_ORDERING)
 }

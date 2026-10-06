@@ -53,7 +53,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8092
+        text_bytes: 8076
         concat:
           - |
             interval 0 head
@@ -61,7 +61,7 @@ result:
             count: 3952
           - |
 
-            [output omitted: 24865 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000002.log]
+            [output omitted: 24865 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000002.log]
           - repeat: x
             count: 3951
           - |-
@@ -77,7 +77,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8092
+        text_bytes: 8076
         concat:
           - |
             interval 1 head
@@ -85,7 +85,7 @@ result:
             count: 3952
           - |
 
-            [output omitted: 57666 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000002.log]
+            [output omitted: 57666 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000002.log]
           - repeat: x
             count: 3951
           - |-

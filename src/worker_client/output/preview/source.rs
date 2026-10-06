@@ -81,7 +81,7 @@ impl Location {
             };
             let session = directory.parent().expect("recording session directory");
             format!(
-                "{} on Console host: {}",
+                "{}: {}",
                 if self.directory { plural } else { singular },
                 recording_location(path, session, self.directory)
             )
@@ -99,7 +99,7 @@ impl Location {
         };
         // Share and bound the session prefix once; filenames stay exact.
         Some(format!(
-            "retained output on Console host: {}; logs: {}{}; images: {}{}",
+            "retained output: {}; logs: {}{}; images: {}{}",
             recording_location(session, session, true),
             logs.strip_prefix(session)
                 .expect("session-owned logs")

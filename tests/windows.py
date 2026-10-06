@@ -629,7 +629,7 @@ class WindowsConsole(unittest.TestCase):
                 "content": [
                     {
                         "type": "text",
-                        "text": "only one of `r`, `python`, or `sql` may be supplied",
+                        "text": "only one of `r` or `python` may be supplied",
                     }
                 ],
                 "isError": True,

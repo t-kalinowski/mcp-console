@@ -106,9 +106,21 @@ jobs:
         run: |
           scripts/with-checkout.cmd cargo build --target-dir target
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python scripts/prepare-windows-tests `
-            --state-dir "$env:RUNNER_TEMP/console-windows-sandbox" `
-            --github-env "$env:GITHUB_ENV"
+          # Hosted runtimes and the checkout live outside the sandbox's
+          # standard read roots. Prepare their read ACLs on the trusted host.
+          $ciReadRoots = @("$env:GITHUB_WORKSPACE/target", $env:UV_CACHE_DIR)
+          $ciReadRoots += python -c "import sys; print(sys.prefix); print(sys.base_prefix)"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $ciReadRoots += & (Get-Command Rscript.exe).Source --vanilla -e 'cat(R.home(), .libPaths(), sep="\n")'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $prepareArguments = @(
+            "--state-dir", "$env:RUNNER_TEMP/console-windows-sandbox",
+            "--github-env", "$env:GITHUB_ENV"
+          )
+          foreach ($root in $ciReadRoots) {
+            $prepareArguments += @("--read-root", $root)
+          }
+          python scripts/prepare-windows-tests @prepareArguments
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Run native Windows development and installation checks
         run: |

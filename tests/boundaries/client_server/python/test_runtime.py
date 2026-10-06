@@ -26,6 +26,7 @@ from support.r import r_test_environment, reference_plots
 from support.records import Transcript
 from support.requirements import POSIX, R, requires
 from support.resolvers import matplotlib_test_environment
+from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 from boundaries.client_server.server.test_no_r import no_r_environment
 from boundaries.client_server.python.test_setup import deferred_selection_client
@@ -614,6 +615,7 @@ def test_runs_async_python_explicitly(binary: Path, execution: Execution) -> Tra
     return client.finish()
 
 
+@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_runs_python_thread_while_idle(
     binary: Path, execution: Execution
@@ -673,7 +675,7 @@ def test_runs_python_thread_while_idle(
                 )
                 wait_for_idle_output(
                     client,
-                    "hello from background thread\n\n[idle]",
+                    f"hello from background thread{os.linesep}\n[idle]",
                     "idle Python thread output",
                     timeout_ms=0,
                 )

@@ -1,0 +1,67 @@
+---
+send:
+  r: ~
+  control: restart
+  requirements:
+    r:
+      - must-not-prepare
+  stdin: |
+    must not queue
+result:
+  content:
+    - type: text
+      text: "`r` source fields are hidden by `languages`"
+  isError: true
+---
+send:
+  r: must not run
+  control: restart
+  requirements:
+    r:
+      - must-not-prepare
+  stdin: |
+    must not queue
+result:
+  content:
+    - type: text
+      text: "`r` source fields are hidden by `languages`"
+  isError: true
+---
+send:
+  python: ~
+  control: restart
+  requirements:
+    r:
+      - must-not-prepare
+  stdin: |
+    must not queue
+result:
+  content:
+    - type: text
+      text: "`python` source fields are hidden by `languages`"
+  isError: true
+---
+send:
+  python: must not run
+  control: restart
+  requirements:
+    r:
+      - must-not-prepare
+  stdin: |
+    must not queue
+result:
+  content:
+    - type: text
+      text: "`python` source fields are hidden by `languages`"
+  isError: true
+---
+send:
+  sql: SELECT 1
+  wait_ms: 0
+result:
+  content:
+    - type: text
+      text: >-
+        failed to deserialize parameters: unknown field `wait_ms`, expected one
+        of `sql`, `control`, `requirements`, `stdin`, `timeout_ms`
+  isError: true

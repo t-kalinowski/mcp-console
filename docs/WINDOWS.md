@@ -130,6 +130,7 @@ It also includes `tests/windows_resolver.py`, covering the resolver protocol, ir
 Run native commands exclusively in a checkout.
 The default workflow runs native Windows acceptance.
 The full workflow also discovers and runs the shared boundary cases whose declared capabilities are available.
+The transcript supervisor merges private per-case timing logs after process completion, serializing Windows append writes so parallel cases cannot overwrite records.
 Installation checks additionally exercise the copied public command from an isolated `uv tool install`, including sandbox setup inspection, worker state/restart, stdio, and full-width exit status.
 The `.cmd` launchers work in PowerShell and Command Prompt; `python scripts/COMMAND` is an equivalent entry point using an explicitly selected Python.
 Python 3.11 or newer is required; CI uses Python 3.13.
@@ -179,8 +180,12 @@ Without that opt-in directory, it reports unavailable coverage; a skip does not 
 Windows CI builds the staged Console and runs `python scripts/prepare-windows-tests` before the full gate.
 GitHub-hosted Windows runners [run as administrators with UAC disabled](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges), so setup can provision their sandbox without an interactive elevation prompt.
 Preparation provisions the runner's sandbox state when needed, verifies setup readiness, and exports both `R_HOME` and `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to subsequent steps.
+Hosted Console and runtime installations can live outside the native backend's standard read roots.
+CI passes those asset directories to preparation with repeated `--read-root` arguments, which grant read/execute ACLs to the verified Console sandbox accounts before exporting the test environment.
+This is a trusted host preparation operation requiring permission to update the selected directories; local callers can omit these grants when their installations are already readable.
 The full gate therefore includes the provisioned elevated test in both checkout and installed-wheel acceptance.
 Local validation uses the same test: inspect `mcp-console sandbox-setup --status`, then set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to its reported state directory before running `scripts/check.cmd` or `scripts/check.cmd --full`.
+The private-installation regression uses preparation's `--require-configured` mode so an unavailable setup fails without provisioning accounts.
 Provision an unconfigured local machine explicitly with `mcp-console sandbox-setup`; the acceptance tests themselves do not provision it.
 
 Inspection, resolver, raw relay, and inherited-writer fixture checkpoints use unique local named pipes with ordinary host ACLs and non-inheritable handles.
@@ -208,7 +213,8 @@ The native child-launch fixture uses ASCII arguments because the stock `R.exe` d
 | Shell/shebang fake workers and resolvers, FIFO checkpoints, Unix virtualenv or R-library layouts                           | Remaining fixture debt for otherwise supported behavior. These cases declare `POSIX`; Windows native tests cover some corresponding contracts, but do not replace every skipped admission, SDK, resolver, and lifecycle scenario. Port the fixture before removing its requirement. |
 | Unix staging/release executable fixtures and Rust Unix descriptor fixtures                                                 | Keep the native ABI/build requirements. Windows checkout ownership, packaging, and installation are exercised through the native workflow; portable release-manifest, client, and runner checks run on both platforms.                                                              |
 
-Handshakes, CLI usage, and early explicit-selection failures retain Windows snapshots where public behavior differs.
+Handshakes, CLI usage, early explicit-selection failures, and background Python stdout retain Windows snapshots where public behavior differs.
+Background Python threads use their original stdout stream and its CRLF line endings on Windows.
 Generic snapshots remain the Unix references; platform updates preserve both and remove only obsolete companions owned by the updated case.
 Use `test --full --list` and capability skip diagnostics to audit current coverage instead of treating native acceptance alone as parity.
 
