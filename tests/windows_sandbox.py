@@ -144,6 +144,25 @@ class WindowsSandbox(unittest.TestCase):
                 session.close()
 
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
+    def test_restricted_token_idle_later_callbacks(self):
+        from windows import Session, exercise_later_callbacks
+
+        with workspace() as root:
+            session = Session(
+                sandbox=True,
+                overrides=[
+                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.network="enabled"',
+                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
+                ],
+            )
+            try:
+                session.initialize()
+                exercise_later_callbacks(session)
+            finally:
+                session.close()
+
+    @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
     @unittest.skipUnless(
         os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
         "explicitly provisioned elevated Windows sandbox",

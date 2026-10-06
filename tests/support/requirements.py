@@ -108,8 +108,8 @@ SQL = Requirement(
 )
 R_EVENT_LOOP = Requirement(
     "R event loop",
-    POSIX.available,
-    "Windows idle R callback integration is deferred",
+    WORKER.available,
+    "requires a supported built-in worker host",
 )
 SYSTEM_PYTHON = Path("/usr/bin/python3")
 FRAMEWORK_PYTHON = Path(

@@ -1,11 +1,51 @@
-//! Windows R startup and interrupt callback; idle R event servicing is unsupported.
+//! Windows R startup and message events. R calls stay on the coordinator thread.
 
 use std::error::Error;
 use std::ffi::{CString, c_char, c_int};
 use std::io;
 use std::sync::OnceLock;
 
-use super::{mcp_r_read_console, r_busy, r_show_message, r_write_console};
+use super::{TopLevelExec, mcp_r_read_console, r_busy, r_show_message, r_write_console};
+
+static R_EVENTS: OnceLock<Events> = OnceLock::new();
+type ProcessEvents = unsafe extern "C-unwind" fn();
+
+pub(super) struct Events {
+    top_level_exec: TopLevelExec,
+    process_events: ProcessEvents,
+}
+
+unsafe extern "C" {
+    fn mcp_r_run_windows_events(top_level_exec: TopLevelExec, process_events: ProcessEvents);
+}
+
+impl Events {
+    pub(super) fn load(
+        library: &libloading::os::windows::Library,
+        top_level_exec: TopLevelExec,
+    ) -> Result<Self, Box<dyn Error>> {
+        Ok(Self {
+            top_level_exec,
+            process_events: unsafe { *library.get::<ProcessEvents>(b"R_ProcessEvents\0")? },
+        })
+    }
+
+    pub(super) fn install(self) -> Result<(), Box<dyn Error>> {
+        R_EVENTS
+            .set(self)
+            .map_err(|_| io::Error::other("R event handlers were already initialized"))?;
+        Ok(())
+    }
+}
+
+pub(super) fn run_ready_handlers() {
+    let events = R_EVENTS
+        .get()
+        .expect("R event handlers should be initialized");
+    unsafe {
+        mcp_r_run_windows_events(events.top_level_exec, events.process_events);
+    }
+}
 
 pub(super) extern "C-unwind" fn process_events() {
     super::super::interrupt::deliver_windows_r_interrupt();

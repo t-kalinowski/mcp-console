@@ -65,6 +65,11 @@ def test_host_cache_opt_out(binary: Path) -> Transcript:
 
 
 @requires(SANDBOX)
+def test_host_matplotlib_cache_uses_platform_default(binary: Path) -> Transcript:
+    return cache_locations(binary, host=True, sources=("platform",))
+
+
+@requires(SANDBOX)
 def test_selected_python_preserves_user_site_packages(binary: Path) -> Transcript:
     with TemporaryDirectory(prefix="console-user-site-", dir=Path.home()) as directory:
         root = Path(directory).resolve()
@@ -324,6 +329,17 @@ def cache_locations(
                 env.pop("XDG_CACHE_HOME")
                 home = root / "account"
                 settings["resolver"] = {"environment": {"HOME": str(home)}}
+                if host:
+                    settings["cache"] = "host"
+                    env.pop("MPLCONFIGDIR", None)
+                    env["CACHE_TEST_MATPLOTLIB"] = str(
+                        home
+                        / (
+                            ".matplotlib"
+                            if sys.platform == "darwin"
+                            else ".cache/matplotlib"
+                        )
+                    )
                 console_base = home / (
                     "Library/Caches/mcp-console"
                     if sys.platform == "darwin"
@@ -417,6 +433,10 @@ def cache_locations(
                             else:
                                 raise AssertionError("resolver wrote to companion build cache")
                     cache.joinpath("resolver-probe").write_text("prepared")
+                    if {host and source == "platform"!r}:
+                        matplotlib = Path(os.environ["CACHE_TEST_MATPLOTLIB"])
+                        matplotlib.mkdir(parents=True, exist_ok=True)
+                        matplotlib.joinpath("resolver-probe").write_text("prepared")
                     if {metadata!r}:
                         for name in (".git", ".agents", ".codex"):
                             directory = cache / name
@@ -461,6 +481,13 @@ def cache_locations(
                     client.expect("cache selection retained\n", python=check)
                 client.finish()
             assert not (root / "host-write").exists()
+            if host and source == "platform":
+                assert (
+                    Path(env["CACHE_TEST_MATPLOTLIB"])
+                    .joinpath("resolver-probe")
+                    .read_text()
+                    == "prepared"
+                )
             for file in companion_files:
                 assert file.read_text() == "trusted companion cache", file
             if not host:

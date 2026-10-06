@@ -48,7 +48,6 @@ def uses_resolver_font_cache(binary: Path, *, with_r: bool) -> Transcript:
             else "cache/mcp-console/dependencies/matplotlib"
         )
         if with_r:
-            # Host cache defaults differ by platform; select the fixture's cache.
             env["MPLCONFIGDIR"] = str(cache)
         env["MCP_CONSOLE_TEST_FONT_CACHE"] = str(cache)
         config = root / "matplotlibrc"

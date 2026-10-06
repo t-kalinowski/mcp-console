@@ -95,7 +95,9 @@ The public MCP messages, server-relay JSONL, and worker sideband message shapes 
 R and Python interrupts are cooperative and preserve state when handled; a native call that does not check for interruption may require `restart`.
 The worker updates interpreter pending state and invokes the C runtime's current SIGINT handler without requiring a console window.
 Its idle command wait also wakes for interrupts and consumes them before dispatching a following cell, including an interrupt and cell supplied in the same `send`.
-The Windows worker does not service R's background event loop while waiting between cells; idle callbacks such as `later` are unsupported.
+After R initializes, the idle wait also wakes for Windows messages and services R's background event loop, including `later` timers, on the interpreter thread.
+The wait retires pending pipe I/O and releases the command-reader lock before dispatching callbacks, so callback input and resolver requests can use the same sideband.
+Incomplete command frames survive message and interrupt wakeups.
 
 Resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code.
 Cancellation and resolver interruption terminate the Job, and results are accepted only after the Job has no active processes.
@@ -174,6 +176,12 @@ The same scenario runs directly and with an explicitly network-enabled restricte
 To run it against an already-provisioned elevated, network-restricted backend, set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to its absolute state directory and run `WindowsSandbox.test_provisioned_network_restricted_input_and_interrupt`.
 The test never provisions accounts or chooses another backend.
 Without that opt-in directory, it reports unavailable coverage; a skip does not establish network-restricted compatibility.
+Windows CI builds the staged Console and runs `python scripts/prepare-windows-tests` before the full gate.
+GitHub-hosted Windows runners [run as administrators with UAC disabled](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges), so setup can provision their sandbox without an interactive elevation prompt.
+Preparation provisions the runner's sandbox state when needed, verifies setup readiness, and exports both `R_HOME` and `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to subsequent steps.
+The full gate therefore includes the provisioned elevated test in both checkout and installed-wheel acceptance.
+Local validation uses the same test: inspect `mcp-console sandbox-setup --status`, then set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to its reported state directory before running `scripts/check.cmd` or `scripts/check.cmd --full`.
+Provision an unconfigured local machine explicitly with `mcp-console sandbox-setup`; the acceptance tests themselves do not provision it.
 
 Inspection, resolver, raw relay, and inherited-writer fixture checkpoints use unique local named pipes with ordinary host ACLs and non-inheritable handles.
 Their readiness and release operations have bounded deadlines; cancellation joins pending native I/O before releasing its storage.
@@ -187,8 +195,9 @@ Windows full checks exercise portable R/Python execution, startup, bridge attach
 The shared Windows pipe reader uses blocking native reads with socket notifications.
 Each shared case runs in a kill-on-close Job; cancellation gives the case 15 seconds to run cleanup, then requires confirmed descendant retirement before deleting its workspace.
 Owner-loss cleanup remains independent of the case interpreter, including native calls holding Python's GIL.
-Idle R callbacks remain a runtime parity gap: Windows command waiting does not integrate R's polled-event hooks.
-Those cases declare `R_EVENT_LOOP`; Unix FIFO input-handler fixtures declare `POSIX`.
+Portable idle R callback cases declare `R_EVENT_LOOP` and run on Windows; Unix FIFO input-handler fixtures retain `POSIX`.
+Windows `later` uses window messages and timers rather than Unix polled-event hooks.
+Native acceptance also exercises callback input, plots, interruption, and shared R/Python state directly and with a restricted token, and preserves incomplete UTF-8 commands across timer dispatch.
 Shared interpreter-identity cases launch native `R.exe` and `Rscript.exe` and compare resource paths by filesystem identity, since the stock Windows launcher may shorten `R_HOME` to an 8.3 path.
 The native child-launch fixture uses ASCII arguments because the stock `R.exe` delegates through an ANSI command line; shared cell tests separately exercise Unicode R input.
 

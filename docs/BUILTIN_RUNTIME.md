@@ -107,9 +107,10 @@ R's native bootstrap and event APIs are component-local to Unix and Windows.
 Both use the same console callbacks, parser, REPL, graphics scopes, and environment integration on the coordinator's interpreter thread.
 Bootstrap restores the captured R installation immediately before startup; argument strings and Windows startup paths live until worker exit.
 Bootstrap defers default packages when needed to attach runtime services and the R/Python adapter first.
-Windows installs an interrupt-delivery callback; its idle command wait does not service R event handlers.
+Windows installs an interrupt-delivery callback and wakes its idle command wait for R's window messages.
+Event dispatch runs inside R's top-level error boundary, after releasing the command reader and within the ordinary graphics/input scope.
 
-On macOS and Linux, R event handlers, including `later` callbacks, run while idle.
+On macOS, Linux, and Windows, R event handlers, including `later` callbacks, run while idle.
 They may change state and produce output returned by a later poll, Python cell, or SQL cell.
 When needed, `[output produced while idle]` separates that region from new-cell output.
 The initial display width is 200 columns and remains user-configurable.
@@ -154,6 +155,10 @@ Explicit Python environments and bare workers require installed packages.
 ## R and Python interoperability
 
 Reticulate supplies the on-demand bridge: Python uses `r.name` for R globals and functions; R uses `py$name` for Python globals.
+Accessing attributes through `py` or `reticulate::py` initializes the bridge on demand, including after restart.
+When Python is already running, the bridge attaches to that same interpreter and preserves its existing objects; no preceding `py_eval()` or `py_available(initialize = TRUE)` call is needed.
+Loading reticulate or reading its `py` module proxy alone does not initialize Python or attach the bridge.
+During a `reticulate.python.beforeInitialized` callback, `py` retains reticulate's `NULL` behavior until attachment publishes its configuration, so reading it does not reenter initialization.
 An actual `r` access can initialize R when shared bootstrap has not completed it.
 Conversion follows reticulate's rules; objects/proxies do not survive worker replacement.
 
