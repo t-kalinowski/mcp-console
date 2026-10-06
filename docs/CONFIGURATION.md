@@ -142,7 +142,7 @@ A failed startup receipt cannot be cleared by resetting the connection helper.
 See [native connection selection](BUILTIN_RUNTIME.md#sql-and-duckdb).
 
 Startup requires the built-in worker and relay and is currently supported on macOS and Linux.
-It does not grant filesystem or network permissions; persistent writable databases still need an existing sandbox write grant.
+It does not grant access to databases or other host paths, or add network permissions; persistent writable databases still need an existing sandbox write grant.
 SQL remains unsupported on Windows.
 
 ## Keys and values
