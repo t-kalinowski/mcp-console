@@ -56,6 +56,7 @@ def test_phase_observation_does_not_wait_for_failed_worker_retirement(
         blocked, release, returned = checkpoints
         environment = {
             **os.environ,
+            "TMPDIR": str(root),
             "MCP_CONSOLE_TEST_LOADER": LOADER_VARIABLE,
             "MCP_CONSOLE_TEST_RETIREMENT_LIBRARY": str(
                 build_interposer(root, "launcher_retirement_interposer")
@@ -87,7 +88,7 @@ def test_phase_observation_does_not_wait_for_failed_worker_retirement(
         resources.callback(release.release)
         client.initialize_and_list_tools()
         client.send(r="42")
-        assert last_result_text(client) == "[done]"
+        assert last_result_text(client) == "[done]", client.transcript[-1]
         failed = client.start_send(r="42", timeout_ms=500)
         blocked.wait("failed-worker retirement owns the lifecycle lock")
         client.response_timeout = 2
