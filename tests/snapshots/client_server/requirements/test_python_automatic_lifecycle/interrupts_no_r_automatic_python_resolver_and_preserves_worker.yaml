@@ -55,6 +55,8 @@ result:
           "packages": [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
             "duckdb",
             "mcp_console_blocked_automatic_import"
           ]

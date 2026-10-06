@@ -1863,6 +1863,8 @@ def test_failed_managed_preparation_preserves_worker_and_input(
             assert set(accepted[0]["packages"]) == {
                 "numpy",
                 "pandas",
+                "matplotlib",
+                "plotnine",
                 "duckdb",
                 "py-yaml12",
             }

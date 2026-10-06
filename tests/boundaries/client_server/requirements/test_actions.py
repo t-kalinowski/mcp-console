@@ -586,6 +586,8 @@ def test_records_requirement_boundaries(
         assert boundaries[2]["snapshot"]["requirements"]["python"] == [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
         ]
         quarto = (session / "transcript.qmd").read_text()
         assert "execute:\n  eval: false" in quarto
