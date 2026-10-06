@@ -17,8 +17,12 @@ The captured `languages` list selects direct code fields, field guidance, and la
 Omission retains the legacy `MCP_CONSOLE_LANGUAGES` filter; neither discovery nor interpreter initialization changes the advertised schema.
 Hidden source keys, including null values, are rejected before same-call effects.
 Requirements remain visible for hidden SQL providers, and execution still checks actual runtime availability.
-SQL provider guidance describes both runtime contingencies: managed DuckDB uses R when available and Python otherwise, even when the provider's source field is hidden.
-Visibility selects direct code fields and applicable examples, not SQL ownership; Python frame-sharing guidance includes the R bridge whenever SQL is exposed.
+For an explicit `languages` configuration, tool and exposed-field descriptions mention only visible languages, including requirements, control, and timeout guidance.
+SQL-only guidance uses provider-neutral wording; missing-provider diagnostics identify the preparation field, package, and restart needed.
+Requirement keys remain available even when their language is hidden; their descriptions then explain host-provider preparation without advertising a direct code field.
+Visibility selects direct code fields and applicable examples, not SQL ownership: managed DuckDB still uses R when available and Python otherwise.
+Show bridge examples only when both source languages are visible.
+When Python and SQL are visible but R is hidden, describe user-owned DB-API selection and qualify managed `sql_connection()` and frame registration: those helpers are available only when Python owns the provider.
 
 Advertising an unavailable language lets an agent identify the missing prerequisite and ask for installation authorization, at the cost of a rejected call before discovery is known.
 It neither proves availability nor authorizes installation.

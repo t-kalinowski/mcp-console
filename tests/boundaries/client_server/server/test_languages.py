@@ -130,15 +130,15 @@ def test_builtin_guidance_matches_visible_languages(binary: Path) -> Transcript:
                     assert "`r`" not in tool["description"]
                 properties = tool["inputSchema"]["properties"]
                 sql_guidance = properties["sql"]["description"]
-                assert "With R-owned managed DuckDB" in sql_guidance
-                assert "Without R, managed DuckDB uses Python" in sql_guidance
+                assert ("With R-owned managed DuckDB" in sql_guidance) == (
+                    "r" in languages
+                )
                 if "r" not in languages:
                     assert "from an R cell" not in sql_guidance
                 if "python" in languages:
                     python_guidance = properties["python"]["description"]
-                    assert "With R-owned DuckDB" in python_guidance
-                    assert "`r.name`" in python_guidance
-                    assert "Without R, `sql_connection()`" in python_guidance
+                    assert "only when Python owns" in " ".join(python_guidance.split())
+                    assert "`r.name`" not in python_guidance
                     assert "R plot rules" not in properties["python"]["description"]
                 else:
                     assert (
@@ -173,14 +173,19 @@ def test_sql_provider_guidance_is_independent_of_visibility(
                     client.initialize_and_list_tools()
                     tool = _tool(client)
                     description = tool["description"]
-                    assert "R when available and Python otherwise" in description
+                    assert (
+                        "Provider choice is independent of visible language fields"
+                        in description
+                    )
                     if advertised is None:
                         advertised = tool
                     else:
                         assert tool == advertised
                     if "python" in languages:
-                        assert "R-owned managed DuckDB" in description
-                        assert "Without R, Python-owned DuckDB" in description
+                        assert (
+                            "available only when Python owns the provider"
+                            in description
+                        )
                         client.send(
                             # fmt: python
                             python=code("""
