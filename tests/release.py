@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -29,6 +30,19 @@ STAGE_SCRIPT = ROOT / "scripts" / "stage-sandbox-runner"
 def write_executable(path: Path, source: str) -> None:
     path.write_text(code(source), encoding="utf-8")
     path.chmod(0o755)
+
+
+def write_python_executable(path: Path, source: str) -> None:
+    # The shell/Python header preserves the selected interpreter with spaces,
+    # without PATH lookup or consuming the fixture's MCP stdin.
+    launcher = code(
+        f"""
+        #!/bin/sh
+        '''exec' {shlex.quote(sys.executable)} "$0" "$@"
+        ' '''
+        """
+    )
+    write_executable(path, launcher + code(source))
 
 
 def bubblewrap_notice(
@@ -483,7 +497,6 @@ class ReleaseScriptTests(ReleaseFixture):
 
         # fmt: python
         executable_source = """
-            #!/usr/bin/env python3
             import hashlib
             import json
             import os
@@ -503,6 +516,7 @@ class ReleaseScriptTests(ReleaseFixture):
                             json.dumps(
                                 {
                                     "command": sys.argv[1],
+                                    "interpreter": sys.executable,
                                     "cwd": str(Path.cwd()),
                                     "home": os.environ.get("HOME"),
                                     "console": os.environ.get("MCP_CONSOLE_HOME"),
@@ -613,15 +627,12 @@ class ReleaseScriptTests(ReleaseFixture):
             else:
                 raise SystemExit(2)
         """
-        executable_source = executable_source.replace(
-            "#!/usr/bin/env python3", f"#!{sys.executable}"
-        )
         cargo_directory = directory / "cargo-target"
         (cargo_directory / "release").mkdir(parents=True)
         cargo_bin = cargo_directory / "release" / "mcp-console"
-        write_executable(cargo_bin, executable_source)
+        write_python_executable(cargo_bin, executable_source)
         installed = tool_directory / "mcp-console"
-        write_executable(installed, executable_source)
+        write_python_executable(installed, executable_source)
         (tool_bin / "mcp-console").symlink_to(installed)
 
         write_executable(
@@ -1581,6 +1592,7 @@ class ReleaseScriptTests(ReleaseFixture):
                 [item["command"] for item in launches], ["sandbox", "sandbox", "serve"]
             )
             for launch in launches:
+                self.assertEqual(launch["interpreter"], sys.executable)
                 self.assertEqual(launch["home"], environment.get("HOME"))
                 self.assertNotEqual(launch["cwd"], str(directory.resolve()))
                 self.assertNotEqual(launch["console"], str(ambient))
@@ -1649,6 +1661,29 @@ class ReleaseScriptTests(ReleaseFixture):
                 self.assertEqual(calls.count(["sandbox", "--", "/usr/bin/true"]), 1)
                 self.assertIn(["serve"], calls)
                 self.assertEqual(list(empty.iterdir()), [])
+
+    def test_release_fixtures_use_python_with_spaces(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = Path(temporary) / "python with spaces"
+            subprocess.run(
+                [sys.executable, "-m", "venv", "--without-pip", str(environment)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            result = subprocess.run(
+                [
+                    str(environment / "bin/python"),
+                    str(Path(__file__).resolve()),
+                    "ReleaseScriptTests.test_smoke_wheel_evaluates_peers_and_bounds_response_waits",
+                    "ReleaseScriptTests.test_smoke_wheel_isolates_console_files",
+                    "RuntimeSourceValidationTests.test_r_home_selects_the_syntax_checker_without_r_on_path",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_smoke_wheel_evaluates_peers_and_bounds_response_waits(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -2528,13 +2563,13 @@ class RuntimeSourceValidationTests(unittest.TestCase):
             )
             r_home = root / "selected-R"
             (r_home / "bin").mkdir(parents=True)
-            write_executable(
+            write_python_executable(
                 r_home / "bin/Rscript",
                 # fmt: python
                 f"""
-                #!{sys.executable}
                 import sys
 
+                assert sys.executable == {sys.executable!r}
                 assert sys.argv[1:3] == ["--vanilla", "-e"]
                 print("selected R syntax checker rejected source", file=sys.stderr)
                 raise SystemExit(1)
