@@ -11,6 +11,7 @@ Source and public acceptance tests take precedence over prose; [`design-sketches
 | ---------------------------------------------------- | ----------------------------------------------------------------------- |
 | How do I configure a session?                        | [Configuration](CONFIGURATION.md)                                       |
 | How do cells, input, plots, and languages work?      | [Built-in runtime](BUILTIN_RUNTIME.md)                                  |
+| How can Python Great Tables reach the model?         | [Great Tables previews](GREAT_TABLES.md)                                |
 | What happens when a call combines actions?           | [`send` operations](SEND_OPERATIONS.md)                                 |
 | How are dependencies selected and changed?           | [Requirements](REQUIREMENTS.md), [resolver policy](RESOLVER.md)         |
 | Where are transcripts, retained output, and exports? | [Recordings](RECORDING.md)                                              |
