@@ -201,7 +201,7 @@ With `cache: host`, cache paths and write grants follow the resolver's effective
 | renv                | `RENV_PATHS_ROOT`, otherwise R's cache base plus `R/renv`; explicit `RENV_PATHS_CACHE`, `RENV_PATHS_SOURCE`, and `RENV_PATHS_BINARY` also receive writes |
 | pak/pkgcache        | R's cache base plus `R/pkgcache`; explicit `PKG_CACHE_DIR` and `R_PKG_CACHE_DIR` also receive writes                                                     |
 | DuckDB              | `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY`, otherwise `$HOME/.duckdb/extensions`                                                                           |
-| Matplotlib          | `MPLCONFIGDIR`, otherwise `${XDG_CACHE_HOME:-$HOME/.cache}/matplotlib`                                                                                   |
+| Matplotlib          | `MPLCONFIGDIR`, otherwise `$HOME/.matplotlib` on macOS or `${XDG_CACHE_HOME:-$HOME/.cache}/matplotlib` on Linux                                          |
 
 R's cache base is `R_USER_CACHE_DIR`, then `XDG_CACHE_HOME`, then `$HOME/Library/Caches/org.R-project.R` on macOS or `$HOME/.cache` on Linux.
 An explicit `IR_LIBRARY_ROOT` also receives writes.
