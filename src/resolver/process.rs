@@ -20,7 +20,7 @@ use std::process::ExitStatus;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 
 use crate::process_exit::ChildExitWaiter;
@@ -28,11 +28,24 @@ use crate::process_exit::ChildExitWaiter;
 #[derive(Clone)]
 pub(crate) struct ResolverStopHandle(Arc<dyn ResolverControl>);
 
+/// Observes one operation without keeping its cancellation owner alive.
+pub(crate) struct ResolverPhase(Weak<dyn ResolverControl>);
+
+impl ResolverPhase {
+    pub(crate) fn phase(&self) -> Option<&'static str> {
+        self.0.upgrade()?.phase()
+    }
+}
+
 pub(crate) trait ResolverControl: Send + Sync {
     fn stop(&self) -> Result<(), String>;
     fn interrupt(&self) -> Result<bool, String>;
     fn control_outcome(&self) -> Option<super::ResolverControlOutcome>;
     fn cleanup_confirmed(&self) -> bool;
+    /// Presentation only; signaling is not completion of the owned operation.
+    fn phase(&self) -> Option<&'static str> {
+        (!self.cleanup_confirmed()).then_some("dependency preparation")
+    }
     /// Setup consumers must retain an independent operation failure even when
     /// a control and confirmed cleanup accompanied it.
     fn failure_is_controlled(&self) -> bool {
@@ -58,6 +71,9 @@ impl ResolverStopHandle {
     }
     pub(crate) fn failure_is_controlled(&self) -> bool {
         self.0.failure_is_controlled()
+    }
+    pub(crate) fn phase_observation(&self) -> ResolverPhase {
+        ResolverPhase(Arc::downgrade(&self.0))
     }
 }
 

@@ -48,6 +48,28 @@ pub(super) struct Preview {
 }
 
 impl Preview {
+    pub(super) fn phase_before_terminal(&mut self, phase: &str, cell_clock: bool) {
+        if let Some(progress) = self.parts.iter_mut().rev().find_map(|part| match part {
+            Part::Notice(control) if cell_clock && control.head.starts_with("\n[elapsed: ") => {
+                Some(control)
+            }
+            _ => None,
+        }) {
+            assert!(
+                progress.head.ends_with(']') && progress.tail.is_empty() && progress.omitted == 0
+            );
+            progress.head.pop();
+            progress.head.push_str(&format!("; phase: {phase}]"));
+            return;
+        }
+        let Some(Part::Notice(terminal)) = self.parts.pop() else {
+            unreachable!("a phase response has a terminal banner");
+        };
+        let prefix = if self.ends_with_newline() { "" } else { "\n" };
+        self.notice(format!("{prefix}[phase: {phase}]"));
+        self.control(terminal);
+    }
+
     pub(super) fn text(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -400,6 +422,11 @@ impl Preview {
 
     /// Reserve notices first, then divide ordinary text between its head and tail.
     pub(super) fn render(&mut self) -> Vec<Content> {
+        self.bound();
+        self.project(true).content.expect("rendered projection")
+    }
+
+    pub(super) fn bound(&mut self) {
         let mut allowance = TEXT_BYTES;
         loop {
             self.trim(allowance);
@@ -409,7 +436,7 @@ impl Preview {
                 bytes = self.project(false).text_bytes;
             }
             if bytes <= TEXT_BYTES {
-                return self.project(true).content.expect("rendered projection");
+                return;
             }
             assert!(
                 allowance > 0,

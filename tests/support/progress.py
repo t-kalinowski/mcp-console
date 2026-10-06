@@ -5,7 +5,17 @@ import re
 from support.records import ToolResult
 
 RUNNING = "\n[running; poll with an empty send]"
-ELAPSED = re.compile(r"\n\[elapsed: (\d+\.\d)s since admission(; no new output)?\]")
+ELAPSED = re.compile(
+    r"\n\[elapsed: (\d+\.\d)s since admission(; no new output)?"
+    r"(?:; phase: (startup|dependency preparation|replacement))?\]"
+)
+PHASE = re.compile(r"(?:\[|; )phase: (startup|dependency preparation|replacement)\]")
+
+
+def phase_progress(text: str) -> str:
+    matches = list(PHASE.finditer(text))
+    assert len(matches) == 1, text
+    return matches[0][1]
 
 
 def elapsed_progress(text: str) -> tuple[float, bool]:

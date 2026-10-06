@@ -11,6 +11,7 @@ mod execution;
 mod lifecycle;
 mod output;
 mod send;
+mod status;
 
 #[cfg(any(unix, windows))]
 mod events;
@@ -119,6 +120,8 @@ pub(crate) struct Client(Arc<ClientInner>);
 struct ClientInner {
     configuration: OnceLock<ClientConfiguration>,
     startup: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    /// Identity of connection startup, including the interval before admission.
+    startup_generation: WorkerGeneration,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
     /// Settles operations admitted before inline control reserves its optional new cell.
@@ -295,14 +298,17 @@ struct ActiveEvaluation {
 impl Client {
     pub(crate) fn pending() -> Self {
         let (startup, _) = tokio::sync::watch::channel(None);
+        let lifecycle = LifecycleControl::new();
+        let startup_generation = lifecycle.generation.clone();
         Self(Arc::new(ClientInner {
             configuration: OnceLock::new(),
             startup,
+            startup_generation,
             evaluation: Mutex::new(None),
             admission: tokio::sync::RwLock::new(()),
             preparation: tokio::sync::RwLock::new(()),
             output: OutputTape::new(),
-            lifecycle: Mutex::new(LifecycleControl::new()),
+            lifecycle: Mutex::new(lifecycle),
             recording: Mutex::new(None),
             startup_failed: AtomicBool::new(false),
             startup_stdin: Mutex::new(String::new()),

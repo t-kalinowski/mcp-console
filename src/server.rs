@@ -197,8 +197,7 @@ impl ConsoleServer {
                         ));
                     }
                     Err(_) => {
-                        let mut response = crate::worker_client::Response::default();
-                        response.push_notice("worker starting");
+                        let response = runtime.worker.starting_response();
                         return Ok(response_to_tool_result(
                             response,
                             &call,

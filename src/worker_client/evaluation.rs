@@ -202,6 +202,19 @@ impl Evaluation {
         ))
     }
 
+    /// None invalidates the observation; true identifies owned replacement work.
+    pub(super) fn replacement_observation(&self) -> Option<bool> {
+        let state = self.state.lock().ok()?;
+        if state.retired {
+            return None;
+        }
+        match state.phase {
+            EvaluationPhase::Evaluating => Some(false),
+            EvaluationPhase::ReplacementStarting => Some(true),
+            EvaluationPhase::CellCompletionGrace(_) | EvaluationPhase::Complete(_) => None,
+        }
+    }
+
     pub(super) fn interrupt_bootstrap(&self) -> Result<(), String> {
         let mut state = self
             .state

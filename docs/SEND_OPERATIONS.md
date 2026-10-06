@@ -27,6 +27,13 @@ Its evaluation frame waits behind interpreter bootstrap; timeout and polling nev
 An empty poll or `get` without an accepted cell can instead return `[worker starting]`.
 `timeout_ms=0` observes immediately; it does not skip validation or create another worker.
 
+Starting and running responses include the latest Console-owned phase when available.
+An accepted cell can report `[elapsed: 2.3s since admission; phase: dependency preparation]`; startup without a cell instead reports `[phase: startup]` alongside `[worker starting]`, with no cell clock.
+Phases are broad observations of startup, dependency preparation, or replacement owners.
+They do not describe interpreter activity or promise initialization completion.
+Completion and generation retirement invalidate the matching observation; sending an interrupt or cancelling a poll does not.
+Phase updates do not accumulate in output, and their text shares the complete 8 KiB response budget with diagnostics and other notices.
+
 Early standalone requirements that time out before readiness have **not** been accepted and must be submitted again.
 Early code-free stdin is buffered for its generation; a cell's bundled stdin waits for its requirements.
 Startup hooks can emit output, plots, errors, and managed input requests without a submitted cell.

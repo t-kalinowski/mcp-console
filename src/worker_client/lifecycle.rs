@@ -114,6 +114,16 @@ impl LifecycleControl {
             .is_some_and(|startup| startup.interrupted && startup.owner.strong_count() != 0)
     }
 
+    pub(super) fn starting(&self) -> bool {
+        self.startup
+            .as_ref()
+            .is_some_and(|startup| startup.owner.strong_count() != 0)
+    }
+
+    pub(super) fn startup_observation(&self) -> Option<Weak<WorkerStartupAdmission>> {
+        self.startup.as_ref().map(|startup| startup.owner.clone())
+    }
+
     fn interrupt_startup(&mut self) -> bool {
         let Some(startup) = self.startup.as_mut() else {
             return false;

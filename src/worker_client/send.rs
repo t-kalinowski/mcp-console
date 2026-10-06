@@ -31,6 +31,18 @@ pub(super) fn send_response_from_wait(wait: EvaluationWait) -> SendResponse {
 impl Client {
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
     pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
+        let replacing = matches!(request.control, Some(SendControl::Restart));
+        let generation = self.status_generation();
+        let mut response = self.send_observed(request).await?;
+        response.observe_phase(self.status_source(if replacing {
+            self.status_generation()
+        } else {
+            generation
+        }));
+        Ok(response)
+    }
+
+    async fn send_observed(&self, request: SendRequest) -> Result<Response, String> {
         if self.is_configured()
             && let Some(cell) = &request.cell
         {

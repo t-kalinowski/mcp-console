@@ -44,6 +44,8 @@ pub(crate) struct Response {
     preview: Box<Preview>,
     is_error: bool,
     delivery: Option<ResponseDeliveryTarget>,
+    phase_terminal: Option<TerminalState>,
+    phase: Option<super::status::Source>,
 }
 
 pub(super) enum ResponseAcknowledgment {
@@ -174,7 +176,25 @@ impl Response {
 
     /// Consumes the response for the MCP adapter.
     pub(crate) fn into_parts(mut self) -> (Vec<Content>, bool, Option<ResponseDelivery>) {
-        let content = self.preview.render();
+        // Phase observations are rendered inside the ordinary complete-response
+        // budget, but never enter retained output or delivery recovery history.
+        let content = match self
+            .phase
+            .as_ref()
+            .filter(|_| self.phase_terminal.is_some())
+            .and_then(|source| source.phase())
+        {
+            Some(phase) => {
+                self.preview.bound();
+                let mut preview = self.preview.clone();
+                preview.phase_before_terminal(
+                    phase,
+                    matches!(self.phase_terminal, Some(TerminalState::Running)),
+                );
+                preview.render()
+            }
+            None => self.preview.render(),
+        };
         let is_error = self.is_error;
         let delivery = self.delivery.take().map(|target| ResponseDelivery {
             target: Some(target),
@@ -182,9 +202,17 @@ impl Response {
                 preview: std::mem::take(&mut self.preview),
                 is_error,
                 delivery: None,
+                phase_terminal: self.phase_terminal,
+                phase: self.phase.take(),
             }),
         });
         (content, is_error, delivery)
+    }
+
+    pub(super) fn observe_phase(&mut self, source: Option<super::status::Source>) {
+        if self.phase.is_none() {
+            self.phase = source;
+        }
     }
 
     pub(super) fn extend(&mut self, mut other: Self) {
@@ -371,6 +399,10 @@ impl ResponseBuilder {
     }
 
     pub(super) fn terminal(&mut self, state: TerminalState) {
+        self.response.phase_terminal = match state {
+            TerminalState::Running | TerminalState::WorkerStarting => Some(state),
+            _ => None,
+        };
         match state {
             TerminalState::Completed => {
                 if self.response.is_empty() {
@@ -448,6 +480,8 @@ impl Drop for Response {
             preview: std::mem::take(&mut self.preview),
             is_error: self.is_error,
             delivery: None,
+            phase_terminal: self.phase_terminal,
+            phase: self.phase.take(),
         };
         target.unclaimed(response);
     }

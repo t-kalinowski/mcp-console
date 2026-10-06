@@ -57,6 +57,9 @@ def test_silent_polls_retain_admission_age(
             ) as client,
         ):
             client.initialize_and_list_tools()
+            # Resolve connection startup before measuring the admitted cell's
+            # age; discovery time precedes that clock.
+            client.send(requirements={"action": "get"})
             client.send(r="42", timeout_ms=250)
             first_age, silent = elapsed_progress(last_tool_text(client))
             assert first_age >= 0.2 and silent

@@ -10,13 +10,13 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.progress import without_elapsed
+from support.progress import phase_progress, without_elapsed
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SQL, command, requires
 from support.assertions import (
     collect_running_output,
@@ -458,6 +458,7 @@ def test_restart_replaces_first_use_cell_and_stdin(
         client.initialize_and_list_tools()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
+        assert phase_progress(last_tool_text(client)) == "startup"
         fixture.wait_for_resolver()
         armed.touch()
         client.response_timeout = 600
@@ -495,9 +496,37 @@ def test_restart_replaces_first_use_cell_and_stdin(
         assert last_tool_text(client).count("replacement only\n") == 1, (
             client.transcript[-1]
         )
+        # The replacement's active cell cannot borrow the still-pending initial
+        # startup observation, even before its late outcome reaches the server.
+        new_cell_release = resources.enter_context(
+            closing(
+                FifoCheckpoint.create(
+                    Path(client.temporary_directory.name) / "new-cell-release"
+                )
+            )
+        )
+        resources.callback(new_cell_release.release)
+        # fmt: python
+        python = code("""
+            with open("new-cell-release", "rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            input("replacement> ")
+            """)
+        client.send(python=python, timeout_ms=0)
+        assert without_elapsed(last_tool_text(client)) == RUNNING
+        assert "phase:" not in last_tool_text(client)
         fixture.wait_for_resolver_exit()
         release.release()
         parked.wait("cancelled startup task returned to the pool")
+        client.send(timeout_ms=0)
+        assert without_elapsed(last_tool_text(client)) == RUNNING
+        assert "phase:" not in last_tool_text(client)
+        new_cell_release.release()
+        client.send(stdin="replacement still usable\n")
+        assert last_tool_text(client) == (
+            "[input requested: \"replacement> \"]\n'replacement still usable'\n"
+        )
+        assert "phase:" not in last_tool_text(client)
         client.send()
         assert last_tool_text(client) == "\n[idle]"
         return client.finish()

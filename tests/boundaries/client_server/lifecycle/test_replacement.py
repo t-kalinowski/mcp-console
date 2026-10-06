@@ -217,6 +217,7 @@ def test_polls_replacement_startup_after_send_timeout(
                             "[worker exited with status 86]\n"
                             "[worker stopped: in-memory state lost]\n"
                             "[starting new worker]\n"
+                            "[phase: replacement]\n"
                             "[worker starting]"
                         ),
                     }
