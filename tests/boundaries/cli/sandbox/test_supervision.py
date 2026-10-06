@@ -1,6 +1,8 @@
 #!/usr/bin/env -S uv run --script
 
+import ctypes
 import os
+import selectors
 import signal
 import subprocess
 import sys
@@ -28,6 +30,7 @@ from support.macos import (
 from support.macos import (
     kill_darwin_processes as _kill_survivors,
 )
+from support.checkpoints import FifoCheckpoint
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import MACOS_SANDBOX, PROCESS_EVENTS, SANDBOX, requires
@@ -359,6 +362,144 @@ def test_delivers_terminal_interrupt_once(binary: Path) -> Transcript:
             "stdin": "sandbox input\n<Ctrl-C>",
             "stdout": stdout.decode("utf-8"),
             "terminal_ownership": "transferred to target",
+        }
+    ]
+
+
+@requires(MACOS_SANDBOX, PROCESS_EVENTS)
+def test_preserves_status_after_its_controlling_terminal_closes(
+    binary: Path,
+) -> Transcript:
+    # Port of sandbox_preserves_status_after_its_controlling_terminal_closes
+    # from tests/sandbox_terminal.rs at 660a9aaf (PR #5). The FIFO replaces its
+    # sleep so the target cannot exit before terminal revocation and closure.
+    # fmt: python
+    sandboxed_script = code(r"""
+        import os
+        import signal
+        import sys
+
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+        assert os.isatty(0)
+        with open(sys.argv[1], "rb", buffering=0) as release:
+            print(f"ready {os.getpid()} {os.getpgrp()}", flush=True)
+            assert release.read(1) == b"1"
+        assert not os.isatty(0)
+        print("terminal closed before release", flush=True)
+        raise SystemExit(23)
+        """)
+
+    with tempfile.TemporaryDirectory() as directory:
+        release = FifoCheckpoint.create(Path(directory) / "release")
+        try:
+            process, master, slave_name = _start_with_controlling_terminal(
+                [
+                    binary,
+                    "sandbox",
+                    "--",
+                    "python",
+                    "-c",
+                    sandboxed_script,
+                    release.path,
+                ]
+            )
+            # File ownership makes the explicit master close and failure-path
+            # closure idempotent, without ever closing a reused descriptor.
+            with (
+                os.fdopen(master, "rb", buffering=0) as terminal,
+                process.stdout,
+                process.stderr,
+            ):
+                identities: list[_ProcessIdentity] = []
+                stdout = stderr = b""
+                phase = "foreground readiness with SIGHUP ignored"
+                try:
+                    readiness = _read_lines(process.stdout, 1, phase)[0].split()
+                    assert len(readiness) == 3 and readiness[0] == "ready", readiness
+                    target_pid, target_group = map(int, readiness[1:])
+                    target = _capture_identity(target_pid)
+                    identities.append(target)
+                    root = _capture_identity(_sandbox_root_pid(process.pid))
+                    identities.append(root)
+                    assert target == root
+                    assert target_group == target_pid
+                    assert target_group != process.pid
+                    # Observe ownership from the host: the sandbox denies the
+                    # target's foreground-group ioctl on an inherited PTY.
+                    assert os.tcgetpgrp(terminal.fileno()) == target_group
+
+                    phase = "terminal revocation"
+                    libc = ctypes.CDLL(None, use_errno=True)
+                    libc.revoke.argtypes = [ctypes.c_char_p]
+                    libc.revoke.restype = ctypes.c_int
+                    ctypes.set_errno(0)
+                    status = libc.revoke(os.fsencode(slave_name))
+                    assert status == 0, ("revoke", status, ctypes.get_errno())
+                    phase = "master closure while target remains gated"
+                    terminal.close()
+                    assert process.poll() is None, process.returncode
+
+                    phase = "post-loss release and status preservation"
+                    release.release()
+                    stdout, stderr = process.communicate(timeout=TIMEOUT)
+                    assert process.returncode == 23, process.returncode
+                    assert stdout == b"terminal closed before release\n", stdout
+                    assert stderr == b"", stderr
+                    assert _kill_survivors(identities) == [], (
+                        "terminal sandbox survived launcher completion"
+                    )
+                except BaseException as error:
+                    if isinstance(error, subprocess.TimeoutExpired):
+                        stdout = error.output or b""
+                        stderr = error.stderr or b""
+                    # Capture currently available diagnostics without waiting
+                    # for a hung runner or an inherited pipe to reach EOF.
+                    with selectors.DefaultSelector() as selector:
+                        for stream, name in (
+                            (process.stdout, "stdout"),
+                            (process.stderr, "stderr"),
+                        ):
+                            if not stream.closed:
+                                selector.register(stream, selectors.EVENT_READ, name)
+                        for key, _ in selector.select(0):
+                            chunk = os.read(key.fd, 4096)
+                            if key.data == "stdout":
+                                stdout += chunk
+                            else:
+                                stderr += chunk
+                    error.add_note(
+                        f"terminal-loss phase: {phase}; returncode: {process.poll()}\n"
+                        f"stdout: {stdout!r}\nstderr: {stderr!r}"
+                    )
+                    raise
+                finally:
+                    try:
+                        if process.poll() is None:
+                            # Ask the native owner to retire its target before
+                            # forcing termination of captured identities.
+                            process.terminate()
+                            try:
+                                process.wait(timeout=TIMEOUT)
+                            except subprocess.TimeoutExpired:
+                                _kill_survivors(identities)
+                                process.kill()
+                                process.wait(timeout=TIMEOUT)
+                    finally:
+                        _kill_survivors(identities)
+        finally:
+            release.close()
+
+    return [
+        {
+            "command": _command(
+                "sandbox", "--", "python", "-c", sandboxed_script, "<release gate>"
+            ),
+            "terminal_foreground_group": "target",
+            "terminal_loss": "revoke slave, close master, then release FIFO",
+            "stdout": stdout.decode("utf-8"),
+            "exit_code": process.returncode,
+            "stderr": stderr.decode("utf-8"),
         }
     ]
 
