@@ -763,6 +763,49 @@ class WindowsConsole(unittest.TestCase):
         )
         self.assertIn("bridge ready", json.dumps(result))
 
+    def test_direct_py_access_attaches_on_demand(self):
+        for getter in ("reticulate::py", "py"):
+            with self.subTest(getter=getter):
+                session = self.session()
+                for restart in (False, True):
+                    if restart:
+                        session.send(control="restart")
+                    # fmt: python
+                    session.send(
+                        python=dedent("""
+                            bridge_value = "startup value"
+                            bridge_object = object()
+                            bridge_identity = id(bridge_object)
+                            """)
+                    )
+                    # fmt: r
+                    result = session.send(
+                        r=dedent("""
+                            stopifnot(!reticulate::py_available(initialize = FALSE))
+                            library(reticulate, warn.conflicts = FALSE)
+                            stopifnot(!reticulate::py_available(initialize = FALSE))
+                            main <- GETTER
+                            stopifnot(
+                              identical(main$bridge_value, "startup value"),
+                              identical(GETTER$bridge_value, "startup value"),
+                              reticulate::py_available(initialize = FALSE)
+                            )
+                            bridge_from_r <- 42L
+                            cat("direct bridge ready")
+                            """).replace("GETTER", getter)
+                    )
+                    self.assertIn("direct bridge ready", json.dumps(result))
+                    # fmt: python
+                    result = session.send(
+                        python=dedent("""
+                            assert id(bridge_object) == bridge_identity
+                            assert bridge_value == "startup value"
+                            assert int(r.bridge_from_r) == 42
+                            print("bridge state retained")
+                            """)
+                    )
+                    self.assertIn("bridge state retained", json.dumps(result))
+
     def test_selected_virtualenv_with_unicode_path(self):
         directory = tempfile.TemporaryDirectory(prefix="console Python \u03bb ")
         self.addCleanup(directory.cleanup)

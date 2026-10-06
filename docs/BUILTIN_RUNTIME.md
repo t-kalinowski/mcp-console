@@ -154,6 +154,8 @@ Explicit Python environments and bare workers require installed packages.
 ## R and Python interoperability
 
 Reticulate supplies the on-demand bridge: Python uses `r.name` for R globals and functions; R uses `py$name` for Python globals.
+Reading `py` or `reticulate::py` initializes the bridge on demand, including after restart.
+When Python is already running, the bridge attaches to that same interpreter and preserves its existing objects; no preceding `py_eval()` or `py_available(initialize = TRUE)` call is needed.
 An actual `r` access can initialize R when shared bootstrap has not completed it.
 Conversion follows reticulate's rules; objects/proxies do not survive worker replacement.
 

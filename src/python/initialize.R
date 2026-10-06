@@ -344,6 +344,24 @@ base::local(
         completed <- TRUE
         invisible(result)
       })
+      original_py <- activeBindingFunction("py", namespace)
+      was_locked <- bindingIsLocked("py", namespace)
+      if (was_locked) {
+        unlockBinding("py", namespace)
+      }
+      makeActiveBinding(
+        "py",
+        function() {
+          # Reticulate's getter otherwise returns NULL until its own attachment,
+          # even when Console already owns a live Python interpreter.
+          namespace$ensure_python_initialized()
+          original_py()
+        },
+        namespace
+      )
+      if (was_locked) {
+        lockBinding("py", namespace)
+      }
       original_use_python <- get("use_python", envir = namespace)
       replace_binding("use_python", function(python, required = NULL) {
         running <- .Call("mcp_console_running_python")
