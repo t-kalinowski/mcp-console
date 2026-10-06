@@ -15,11 +15,13 @@ from boundaries.client_server.python.test_startup import (
     isolated_python,
     selected_python,
 )
+from boundaries.client_server.python.test_without_r import environment as without_r
 from boundaries.client_server.server.test_startup import (
     discovery_environment,
     wait_for_send_admission,
 )
 from support.checkpoints import FifoCheckpoint
+from support.assertions import wait_for_idle_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
@@ -32,7 +34,17 @@ from support.processes import (
 )
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
+from support.requirements import (
+    FRAMEWORK_PYTHON,
+    PYTHON_FRAMEWORK,
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    R,
+    command,
+    requires,
+)
+from support.resolvers import expose_uv
 from support.suites import run_this_suite
 
 
@@ -48,6 +60,75 @@ def preparation_reap_environment(root: Path, python: Path) -> dict[str, str]:
         }
     )
     return environment
+
+
+@requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_code_free_retry_starts_prepared_replacement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        (root / "python3").symlink_to(FRAMEWORK_PYTHON)
+        hooks = root / "hooks"
+        hooks.mkdir()
+        with closing(FifoCheckpoint.create(root / "prepared-startup")) as started:
+            (hooks / "sitecustomize.py").write_text(
+                # fmt: python
+                code(f"""
+                    import importlib.util
+                    from pathlib import Path
+
+                    # Only the replacement declaration omits default NumPy.
+                    if importlib.util.find_spec("numpy") is None:
+                        import six
+
+                        print("prepared Python startup ran", flush=True)
+                        with Path({str(started.path)!r}).open("wb", buffering=0) as ready:
+                            assert ready.write(b"1") == 1
+                    """),
+            )
+            environment = without_r(root)
+            environment.update(
+                {
+                    "UV_PYTHON_PREFERENCE": "only-system",
+                    "UV_PYTHON_DOWNLOADS": "never",
+                    "UV_TOOL_DIR": str(root),
+                    "RETICULATE_PYTHONPATH": str(hooks),
+                }
+            )
+            with McpClient(
+                binary,
+                execution.serve(
+                    "-c",
+                    "cache=host",
+                    *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+                ),
+                environment,
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                failure = client.send(python="raise AssertionError('must not run')")
+                assert failure.get("isError"), failure
+                assert "require `uv` on PATH" in str(failure), failure
+                expose_uv(root)
+                assert client.send() == failure
+                client.expect(
+                    "[runtime discovery retried]\n[idle]",
+                    control="restart",
+                    requirements={"action": "set", "python": ["six"]},
+                )
+                started.wait("prepared replacement runs startup without another cell")
+                wait_for_idle_output(
+                    client,
+                    "prepared Python startup ran\n\n[idle]",
+                    "prepared replacement startup output",
+                )
+                client.expect(
+                    "prepared cell ran\n",
+                    python="import six; print('prepared cell ran')",
+                )
+                return client.finish()
 
 
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)

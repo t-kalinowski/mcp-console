@@ -418,6 +418,13 @@ impl Client {
             let mut response = Response::default();
             response.push_notice("runtime discovery retried");
             if cell.is_none() && !stdin_follows {
+                // Changed requirements can retire the unused prewarmed worker.
+                // Empty stdin starts its prepared replacement without using it.
+                if let Err(failure) =
+                    self.write_idle_stdin_blocking(String::new(), generation.clone())
+                {
+                    return Ok(self.return_controlled_failure(response, failure));
+                }
                 response = output::project_replacement_ready(response);
             }
             super::lifecycle::RestartAttempt {

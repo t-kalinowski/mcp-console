@@ -55,6 +55,7 @@ Previously rejected cells and their bundled stdin are not replayed.
 A retry that succeeds accepts its environment once; joining restart callers do not replace that worker or discard state accepted meanwhile.
 After configuration is accepted, restart uses the retained environment and ordinary worker replacement.
 Same-call code, stdin, and requirements proceed only after readiness succeeds and retain their ordinary admission rules.
+A code-free retry with changed requirements starts the prepared replacement before returning readiness, even when preparation retired the unused prewarmed worker.
 Retries require confirmed cleanup of the failed preparation attempt.
 The preparation connection must also close and reap its child; a completed operation does not prove that retirement.
 An unconfirmed connection retirement blocks further retries in that session and retains its diagnostic.
