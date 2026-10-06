@@ -1,5 +1,4 @@
 //! Windows direct-worker owner. Process and pipe events wake blocking waits.
-use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
@@ -44,10 +43,7 @@ impl Controls {
     }
 }
 
-pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
-    let (program, arguments) = command_line
-        .split_first()
-        .ok_or("worker relay command must include an executable")?;
+pub(super) fn run(command: Command) -> Result<(), String> {
     let (sender, commands) = mpsc::channel();
     let controls = Controls {
         sender,
@@ -69,7 +65,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
         input_ready,
         interrupt,
         mut exit,
-    } = match start_worker(program, arguments, controls.clone()) {
+    } = match start_worker(command, controls.clone()) {
         Ok(worker) => worker,
         Err(message) => {
             return lifecycle::report_startup_failure(&events, event_writer, message);
@@ -356,11 +352,7 @@ struct StartedWorker {
     exit: crate::process_exit::ChildExitWaiter,
 }
 
-fn start_worker(
-    program: &OsString,
-    arguments: &[OsString],
-    controls: Controls,
-) -> Result<StartedWorker, String> {
+fn start_worker(mut command: Command, controls: Controls) -> Result<StartedWorker, String> {
     // Keep setup in one fallible scope. On failure, all partial resources and
     // any spawned child retire before the caller publishes the Fatal frame.
     let cancel =
@@ -375,9 +367,7 @@ fn start_worker(
         .map_err(|e| format!("failed to inherit worker interrupt event: {e}"))?;
     let (sideband, sideband_writer, endpoints) = crate::sideband::bind(cancel.clone())
         .map_err(|e| format!("failed to create worker sideband: {e}"))?;
-    let mut command = Command::new(program);
     command
-        .args(arguments)
         .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
         .env(
             "MCP_CONSOLE_INTERRUPT_HANDLE",

@@ -27,6 +27,9 @@ pub(crate) fn run(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
 }
 
 fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
+    // SAFETY: worker entry is single-threaded. Consume before native setup,
+    // interpreter hooks, or the R installation probe can inherit this payload.
+    let startup = unsafe { crate::settings::startup::Startup::from_environment() }?;
     bootstrap::configure_stdio()?;
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
@@ -40,7 +43,7 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
         .r
         .then(crate::local_runtime::r_installation)
         .transpose()?;
-    bootstrap::prepare_r_library_path(r_installation.as_ref(), &reader, &writer)?;
+    bootstrap::prepare_r_library_path(r_installation.as_ref(), &reader, &writer, startup.as_ref())?;
     // The launcher owns this directory through confirmed worker retirement.
     // R's session tempdir is a child, never the owner of Python/SQL storage.
     let temporary =
@@ -49,7 +52,6 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
     core::initialize(reader, writer.clone())?;
     let r = Integration::new(r_installation)?;
     let python = crate::python::Runtime::new(selection)?;
-    let startup = crate::settings::startup::Startup::from_environment()?;
     let sql = crate::sql::Bridge::new();
     writer.send(&WorkerMessage::Ready)?;
     let mut coordinator = Coordinator {

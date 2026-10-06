@@ -263,7 +263,17 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
         workspace = Path(temporary)
         # fmt: python
         source = code("""
+            import os
             import sqlite3
+            import subprocess
+
+
+            def assert_startup_transport_consumed() -> None:
+                assert "MCP_CONSOLE_STARTUP" not in os.environ
+                assert b"MCP_CONSOLE_STARTUP=" not in subprocess.check_output(["/usr/bin/env"])
+
+
+            assert_startup_transport_consumed()
 
             startup_count = globals().get("startup_count", 0) + 1
             native = sqlite3.connect(":memory:")
@@ -285,6 +295,7 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
             client.expect(
                 # fmt: python
                 python=code("""
+                    assert_startup_transport_consumed()
                     assert startup_count == 1
                     assert native.in_transaction
                     native_identity = id(native)
@@ -325,7 +336,9 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
             )
             client.send(control="restart")
             client.expect("answer\n------\n42\n", sql="SELECT answer FROM selected")
-            client.expect(python="assert startup_count == 1 and native.in_transaction")
+            client.expect(
+                python="assert_startup_transport_consumed(); assert startup_count == 1 and native.in_transaction"
+            )
             client.finish()
     return [
         {
@@ -346,7 +359,17 @@ def test_python_startup_without_r(binary: Path, execution: Execution) -> Transcr
         workspace = Path(temporary)
         # fmt: python
         source = code("""
+            import os
             import sqlite3
+            import subprocess
+
+
+            def assert_startup_transport_consumed() -> None:
+                assert "MCP_CONSOLE_STARTUP" not in os.environ
+                assert b"MCP_CONSOLE_STARTUP=" not in subprocess.check_output(["/usr/bin/env"])
+
+
+            assert_startup_transport_consumed()
 
             native = sqlite3.connect(":memory:")
             _ = native.execute("CREATE TABLE selected AS SELECT 42 AS answer")
@@ -359,7 +382,7 @@ def test_python_startup_without_r(binary: Path, execution: Execution) -> Transcr
         with sql_client(binary, execution, environment(workspace), workspace) as client:
             client.expect("answer\n------\n42\n", sql="SELECT answer FROM selected")
             client.expect(
-                python="assert sql_connection() is native; assert native.execute('SELECT answer FROM selected').fetchone() == (42,)"
+                python="assert_startup_transport_consumed(); assert sql_connection() is native; assert native.execute('SELECT answer FROM selected').fetchone() == (42,)"
             )
             client.finish()
     return [{"startup": "native Python without R", "selected_connection": True}]
@@ -374,6 +397,16 @@ def test_r_startup_preserves_native_identity_and_transaction(
         workspace = Path(temporary)
         # fmt: r
         source = code("""
+            assert_startup_transport_consumed <- function() {
+              stopifnot(is.na(Sys.getenv("MCP_CONSOLE_STARTUP", unset = NA_character_)))
+              stopifnot(
+                !any(startsWith(
+                  system2("/usr/bin/env", stdout = TRUE),
+                  "MCP_CONSOLE_STARTUP="
+                ))
+              )
+            }
+            assert_startup_transport_consumed()
             startup_count <- if (exists("startup_count")) startup_count + 1L else 1L
             native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
             invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
@@ -391,6 +424,7 @@ def test_r_startup_preserves_native_identity_and_transaction(
             client.expect(
                 # fmt: r
                 r=code("""
+                    assert_startup_transport_consumed()
                     stopifnot(startup_count == 1L, identical(sql_connection(), native))
                     DBI::dbRollback(native)
                     stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
@@ -402,7 +436,7 @@ def test_r_startup_preserves_native_identity_and_transaction(
                 sql="SELECT answer FROM selected",
             )
             client.expect(
-                r="stopifnot(startup_count == 1L, identical(sql_connection(), native))"
+                r="assert_startup_transport_consumed(); stopifnot(startup_count == 1L, identical(sql_connection(), native))"
             )
             client.finish()
     return [
