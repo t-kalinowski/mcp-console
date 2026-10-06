@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint
@@ -35,7 +36,10 @@ def _shutdown_with_collected_output(
         try:
             client.initialize_and_list_tools()
             client.send(r="shutdown output checkpoints", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             control.connect(client)
             control.wait_for(0, "evaluation_started")
             control.send_control(0, "emit_output")

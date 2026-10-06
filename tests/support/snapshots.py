@@ -7,6 +7,7 @@ from pathlib import Path
 from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
 
 from support.records import Transcript, TranscriptWithCompanions, YamlStream
+from support.progress import normalize_elapsed
 
 root = Path(__file__).resolve().parents[2]
 snapshot_directory = root / "tests" / "snapshots"
@@ -178,6 +179,16 @@ def normalize_request_ids(transcript: Transcript) -> Transcript:
     rendered = []
     for entry in transcript:
         entry = entry.copy()
+        if isinstance(result := entry.get("result"), dict) and "content" in result:
+            entry["result"] = {
+                **result,
+                "content": [
+                    {**part, "text": normalize_elapsed(part["text"])}
+                    if part["type"] == "text" and isinstance(part["text"], str)
+                    else part
+                    for part in result["content"]
+                ],
+            }
         if entry.keys() & {"input", "send"}:
             request_id = entry.pop("id", None)
             if request_id in labels:

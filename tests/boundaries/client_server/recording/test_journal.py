@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import normalize_elapsed, without_elapsed_result
 from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
 from support.assertions import last_result_text, last_tool_text
 from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
@@ -791,14 +792,15 @@ def test_flushes_calls_and_keeps_unpolled_images(
             r="emit image before completion",
             timeout_ms=0,
         )
-        assert client.transcript[-1]["result"] == {
+        assert without_elapsed_result(client.transcript[-1]["result"]) == {
             "content": [
                 {"type": "text", "text": "\n[running; poll with an empty send]"}
             ],
             "isError": False,
         }, client.transcript[-1]
-        client.transcript[-1]["result"]["content"][0]["text"] = (
-            "<leading newline>[running; poll with an empty send]"
+        block = client.transcript[-1]["result"]["content"][0]
+        block["text"] = normalize_elapsed(block["text"]).replace(
+            "\n", "<leading newline>", 1
         )
         image_started = wait_for_marker(
             temporary,

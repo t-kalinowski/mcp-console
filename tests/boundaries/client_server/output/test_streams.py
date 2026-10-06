@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import (
     LARGE_OUTPUT_SIZE,
     large_output,
@@ -438,9 +439,9 @@ def test_finishes_ansi_at_polls_but_preserves_split_utf8(
             try:
                 client.initialize_and_list_tools()
                 running = "\n[running; poll with an empty send]"
-                assert client.send(r="42", timeout_ms=0)["content"] == [
-                    {"type": "text", "text": running}
-                ]
+                assert without_elapsed_result(client.send(r="42", timeout_ms=0))[
+                    "content"
+                ] == [{"type": "text", "text": running}]
                 raw = b""
                 for data, expected in (
                     (b"first\x1b[31", "first"),
@@ -452,7 +453,7 @@ def test_finishes_ansi_at_polls_but_preserves_split_utf8(
                     processed.wait("ANSI bytes reached the output tape")
                     raw += data
                     result = client.send(timeout_ms=0)
-                    assert result == {
+                    assert without_elapsed_result(result) == {
                         "content": [{"type": "text", "text": expected + running}],
                         "isError": False,
                     }, result
@@ -460,7 +461,7 @@ def test_finishes_ansi_at_polls_but_preserves_split_utf8(
                         session_directory(client) / "outputs/call-000001.log"
                     ).read_bytes() == raw
                 release.release()
-                assert last_tool_text(client) == "€\n" + running
+                assert without_elapsed(last_tool_text(client)) == "€\n" + running
                 client.send()
                 assert last_tool_text(client) == "[done]", client.transcript[-1]
                 return client.finish()
@@ -504,9 +505,9 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
             try:
                 client.initialize_and_list_tools()
                 running = "\n[running; poll with an empty send]"
-                assert client.send(r="42", timeout_ms=0)["content"] == [
-                    {"type": "text", "text": running}
-                ]
+                assert without_elapsed_result(client.send(r="42", timeout_ms=0))[
+                    "content"
+                ] == [{"type": "text", "text": running}]
                 raw = b""
                 for data, expected in (
                     (b"A\xe2", "A"),
@@ -520,13 +521,13 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
                     session = next((directory / ".agents/console/sessions").iterdir())
                     raw += data
                     result = client.send(timeout_ms=0)
-                    assert result == {
+                    assert without_elapsed_result(result) == {
                         "content": [{"type": "text", "text": expected + running}],
                         "isError": False,
                     }, result
-                    assert client.send(timeout_ms=0)["content"] == [
-                        {"type": "text", "text": running}
-                    ]
+                    assert without_elapsed_result(client.send(timeout_ms=0))[
+                        "content"
+                    ] == [{"type": "text", "text": running}]
                     assert (session / "outputs/call-000001.log").read_bytes() == raw
                 release.release()
                 assert client.send()["content"] == [{"type": "text", "text": "�"}]
@@ -602,7 +603,10 @@ def test_compacts_each_polled_output_segment(
         client.initialize_and_list_tools()
 
         client.send(r="redraw across polls", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         marker = wait_for_marker(
             temporary_path,
             "zod-redraw-ready",
@@ -610,11 +614,14 @@ def test_compacts_each_polled_output_segment(
         )
 
         client.send(timeout_ms=0)
-        assert last_tool_text(client) == (
+        assert without_elapsed(last_tool_text(client)) == (
             "output 10%\n[running; poll with an empty send]"
         )
         client.send(timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
 
         (marker.parent / "zod-release-redraw").touch()
         client.send(timeout_ms=3_000)
@@ -881,7 +888,7 @@ def test_times_out_and_polls_running_evaluation(
         timeout_ms=10,
     )
     output = client.transcript[-1]["result"]["content"][0]["text"]
-    assert output == "\n[running; poll with an empty send]", output
+    assert without_elapsed(output) == "\n[running; poll with an empty send]", output
     client.send(timeout_ms=3_000)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "zod: complete after timeout\n", output
@@ -908,7 +915,10 @@ def test_drains_pending_sideband_output_while_running(
         client.initialize_and_list_tools()
 
         client.send(r="emit output and image before completion", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         image_started = wait_for_marker(
             temporary_path,
             "zod-image-evaluation-started",
@@ -919,7 +929,7 @@ def test_drains_pending_sideband_output_while_running(
 
         client.send(timeout_ms=0)
         result = client.transcript[-1]["result"]
-        assert result == {
+        assert without_elapsed_result(result) == {
             "content": [
                 {"type": "text", "text": "before pending image\n"},
                 {"type": "image", "data": PNG_1X1, "mimeType": "image/png"},

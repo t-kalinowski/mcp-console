@@ -18,6 +18,7 @@ result:
     - type: text
       text: |-
 
+        [elapsed: <elapsed>s since admission; no new output]
         [running; poll with an empty send]
   isError: false
 ---
@@ -48,12 +49,13 @@ input:
 result: {}
 ---
 send:
+  control: interrupt
   timeout_ms: 0
 result:
   content:
     - type: text
       text:
-        text_bytes: 8076
+        text_bytes: 8114
         concat:
           - |
             interval 0 head
@@ -68,6 +70,7 @@ result:
 
             interval 0 tail
 
+            [elapsed: <elapsed>s since admission]
             [running; poll with an empty send]
   isError: false
 ---
@@ -77,7 +80,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8076
+        text_bytes: 8114
         concat:
           - |
             interval 1 head
@@ -92,6 +95,7 @@ result:
 
             interval 2 tail
 
+            [elapsed: <elapsed>s since admission]
             [running; poll with an empty send]
   isError: false
 ---

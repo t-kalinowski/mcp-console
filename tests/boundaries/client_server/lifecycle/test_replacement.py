@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import large_output, last_tool_text
 from support.checkpoints import (
     FifoCheckpoint,
@@ -292,7 +293,10 @@ def test_orders_explicit_restart_output(
         client.initialize_and_list_tools()
 
         client.send(r="wait for stdin close", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         wait_for_marker(
             temporary_path,
             "zod-waiting-for-stdin-close",
@@ -542,7 +546,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
                     "control-only interrupt waited for explicit preparation to settle"
                 )
                 client.receive(interrupt)
-                assert interrupt["result"] == {
+                assert without_elapsed_result(interrupt["result"]) == {
                     "content": [
                         {
                             "type": "text",
@@ -616,7 +620,10 @@ def test_restart_preserves_pending_sideband_output(
         client.initialize_and_list_tools()
 
         client.send(r="emit output and image before completion", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         image_started = wait_for_marker(
             temporary_path,
             "zod-image-evaluation-started",
@@ -665,7 +672,10 @@ def test_restart_preserves_unpolled_completion(
         client.initialize_and_list_tools()
 
         client.send(r="complete before restart checkpoint", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         wait_for_marker(
             temporary_path,
             "zod-completion-processed",

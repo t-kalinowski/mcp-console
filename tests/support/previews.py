@@ -5,6 +5,7 @@ from pathlib import Path
 
 from support.client import McpClient
 from support.evidence import compact_text
+from support.progress import normalize_elapsed
 
 TEXT_BUDGET = 8 * 1024
 OMISSION = re.compile(r"\n\[output omitted: (\d+) UTF-8 bytes; [^\n]*\]\n")
@@ -86,4 +87,4 @@ def compact_previews(client: McpClient, *units: str) -> None:
     for entry in client.transcript:
         for block in entry.get("result", {}).get("content", []):
             if block["type"] == "text" and isinstance(block["text"], str):
-                block["text"] = compact_text(block["text"], *units)
+                block["text"] = compact_text(normalize_elapsed(block["text"]), *units)

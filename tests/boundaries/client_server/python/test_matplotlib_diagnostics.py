@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.client_server.server.test_no_r import no_r_environment
+from support.progress import without_elapsed
 from support.assertions import (
     last_result_text,
     wait_for_evaluation_output,
@@ -153,7 +154,8 @@ def reports_slow_font_cache_build(binary: Path, *, with_r: bool) -> Transcript:
                         """),
                 )
                 assert (
-                    last_result_text(client) == "\n[running; poll with an empty send]"
+                    without_elapsed(last_result_text(client))
+                    == "\n[running; poll with an empty send]"
                 )
                 started.wait("cold worker reached system font discovery")
                 # Hold real discovery until Matplotlib's own five-second timer

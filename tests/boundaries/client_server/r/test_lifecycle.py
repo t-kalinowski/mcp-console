@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
@@ -370,7 +371,10 @@ def test_restart_skips_direct_stdin_boundary_callback(
             r='cat("direct stdin cell ran\\n")',
             timeout_ms=0,
         )
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         wait_for_worker_file(
             directory,
             "direct-stdin-boundary-checkpoint",
@@ -435,7 +439,7 @@ def test_times_out_and_polls_running_evaluation(
         """)
     client.send(r=r, timeout_ms=10)
     output = client.transcript[-1]["result"]["content"][0]["text"]
-    assert output == "\n[running; poll with an empty send]", output
+    assert without_elapsed(output) == "\n[running; poll with an empty send]", output
     client.send(timeout_ms=3_000)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "[1] 42\n", output
@@ -499,7 +503,10 @@ def test_interrupts_running_r_evaluation(
                 }
                 """)
             client.send(r=r, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             started.wait("R evaluation reached its interruptible wait")
 
             # An interrupt can leave R unwinding after the 100 ms grace.
@@ -539,7 +546,10 @@ def test_interrupts_running_r_evaluation(
                 close(writer)
                 """)
             client.send(r=r, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             boundary_started.wait("R input handler reached its interruptible wait")
 
             wait_for_evaluation_output(

@@ -19,6 +19,9 @@ pub(super) struct OutputTapeState {
     session_output: Option<crate::transcript::CellOutput>,
     session_recording: Option<crate::transcript::Transcript>,
     raw_bytes: u64,
+    /// Worker publications before decoding, projection, or image admission.
+    /// Native diagnostics and server notices do not advance this revision.
+    worker_revision: u64,
     recovered: Option<Response>,
 }
 
@@ -120,6 +123,7 @@ impl OutputTape {
             return;
         }
         let mut state = self.lock();
+        state.worker_revision += 1;
         let notice = state.spool(text.as_bytes());
         state.flush_decoders();
         state.text(
@@ -142,6 +146,7 @@ impl OutputTape {
         F: FnOnce(&str, &str) -> Result<Option<crate::transcript::Artifact>, String>,
     {
         let mut state = self.lock();
+        state.worker_revision += 1;
         state.flush_decoders();
         state.flush_terminal();
         if state
@@ -201,6 +206,12 @@ impl OutputTape {
 
     pub(in crate::worker_client) fn take_prelude(&self) -> Response {
         self.take_prelude_before(|| {})
+    }
+
+    pub(in crate::worker_client) fn take_admission_prelude(&self) -> (Response, u64) {
+        let mut state = self.lock();
+        let cut = state.seal(true);
+        (state.drain(cut), cut.worker_revision)
     }
 
     pub(in crate::worker_client) fn take_prelude_before(
@@ -270,6 +281,7 @@ impl DirectOutput {
             return;
         }
         let mut state = self.output.lock();
+        state.worker_revision += 1;
         let notice = state.spool(bytes);
         let stream = match self.stream {
             DirectOutputStream::Stdout => Stream::Stdout,
@@ -407,7 +419,10 @@ impl OutputTapeState {
         // Only intervals with rendered text need a receipt for later accounting.
         self.sealed.push_back((cut, response));
         self.raw_bytes = 0;
-        OutputCut(cut)
+        OutputCut {
+            sequence: cut,
+            worker_revision: self.worker_revision,
+        }
     }
 
     fn drain(&mut self, cut: OutputCut) -> Response {
@@ -415,7 +430,7 @@ impl OutputTapeState {
         while self
             .sealed
             .front()
-            .is_some_and(|(sequence, _)| *sequence <= cut.0)
+            .is_some_and(|(sequence, _)| *sequence <= cut.sequence)
         {
             output.extend(self.sealed.pop_front().expect("checked sealed interval").1);
         }

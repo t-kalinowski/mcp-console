@@ -87,7 +87,7 @@ impl Client {
             if let Some(active) = self.current_evaluation()? {
                 let Some(claim) = active.evaluation.claim_for_interrupt()? else {
                     return Ok(output::render_response(SendResponse::Running(
-                        Response::default(),
+                        active.evaluation.unobserved_progress(),
                     )));
                 };
                 return Ok(output::render_response(send_response_from_wait(

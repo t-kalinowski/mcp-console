@@ -178,6 +178,7 @@ class McpClientTests(unittest.TestCase):
                 "client.py",
                 "records.py",
                 "snapshots.py",
+                "progress.py",
                 "requirements.py",
                 "linux_sandbox.py",
                 "execution.py",

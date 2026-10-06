@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.requirements import POSIX, R, requires
 from support.checkpoints import FifoCheckpoint
 from support.assertions import last_result_text
+from support.progress import elapsed_progress, without_elapsed_result
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
@@ -310,7 +311,7 @@ def test_queued_r_cell_executes_once_after_discovery(binary: Path) -> Transcript
             timeout_ms=0,
         )
         client.receive(pending)
-        assert pending["result"]["content"] == [
+        assert without_elapsed_result(pending["result"])["content"] == [
             {"type": "text", "text": "\n[running; poll with an empty send]"}
         ], pending
         client.request("ping")
@@ -340,6 +341,9 @@ def test_cancelled_wait_preserves_admitted_cell_after_discovery(
         assert "already evaluating" in str(client.transcript[-1]["result"])
         client.notify("notifications/cancelled", requestId=pending["id"])
         client.request("ping")
+        client.send(timeout_ms=250)
+        age, silent = elapsed_progress(last_result_text(client))
+        assert age >= 0.2 and silent
         release.release()
         # Releasing discovery still leaves cold R startup and the admitted
         # cell to finish. Keep the raw cancellation/poll exchange intact.

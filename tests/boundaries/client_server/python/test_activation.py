@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_result_text
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
@@ -857,7 +858,8 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
                 )
                 client.receive(evaluation)
                 assert (
-                    last_result_text(client) == "\n[running; poll with an empty send]"
+                    without_elapsed(last_result_text(client))
+                    == "\n[running; poll with an empty send]"
                 )
                 client.send(control="interrupt", timeout_ms=30_000)
                 assert not process_exists(child_pid), (child_pid, client.transcript[-1])
@@ -954,7 +956,8 @@ def test_retries_interrupted_startup_probe_with_live_r_and_sql(
                 )
                 client.receive(evaluation)
                 assert (
-                    last_result_text(client) == "\n[running; poll with an empty send]"
+                    without_elapsed(last_result_text(client))
+                    == "\n[running; poll with an empty send]"
                 )
                 client.send(control="interrupt", timeout_ms=30_000)
                 assert not process_exists(child_pid), (child_pid, client.transcript[-1])

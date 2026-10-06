@@ -12,6 +12,7 @@ result:
         [worker stopped: in-memory state lost]
         [starting new worker]
 
+        [elapsed: <elapsed>s since admission; no new output]
         [running; poll with an empty send]
   isError: false
 ---
