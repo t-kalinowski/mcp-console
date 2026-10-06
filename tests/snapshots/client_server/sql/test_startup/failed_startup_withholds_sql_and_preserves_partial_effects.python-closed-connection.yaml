@@ -3,8 +3,10 @@ config:
   startup:
     language: python
     code: |-
-      startup_count = 1
-      raise RuntimeError('startup failure')
+      import sqlite3
+      native = sqlite3.connect(':memory:')
+      native.close()
+      console_sql_connection(native)
 ---
 !same-as MCP initialization for this execution mode
 ---
@@ -15,9 +17,8 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 380, in initialize_connection
-          File "<console startup>", line 2, in <module>
-        RuntimeError: startup failure
+          File "<string>", line 387, in initialize_connection
+        sqlite3.ProgrammingError: Cannot operate on a closed database.
         Error: configured startup did not complete; SQL withheld; explicit restart required
         Error: SQL unavailable: configured startup did not complete; explicit restart required
   isError: false
@@ -32,21 +33,12 @@ result:
         restart required
   isError: false
 ---
-send:
-  python: assert startup_count == 1
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
 language: python
-failure: startup failure
+failure: closed database
 first_sql: |
   Traceback (most recent call last):
-    File "<string>", line 380, in initialize_connection
-    File "<console startup>", line 2, in <module>
-  RuntimeError: startup failure
+    File "<string>", line 387, in initialize_connection
+  sqlite3.ProgrammingError: Cannot operate on a closed database.
   Error: configured startup did not complete; SQL withheld; explicit restart required
   Error: SQL unavailable: configured startup did not complete; explicit restart required
 later_sql: >

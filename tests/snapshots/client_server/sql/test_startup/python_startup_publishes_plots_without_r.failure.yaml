@@ -2,7 +2,7 @@
 config:
   startup:
     language: python
-    code: |
+    code: |-
       import os
       import sqlite3
       from pathlib import Path
@@ -16,9 +16,11 @@ config:
       _ = axes.plot([1, 2, 3], [3, 1, 2])
       figure.savefig(Path(os.environ["TMPDIR"]) / "startup.png", format="png")
       plt.show()
+
+      raise RuntimeError('startup failed after plotting')
   python: <configured Python>
 ---
-failed_startup: false
+failed_startup: true
 ---
 !same-as MCP initialization for this execution mode
 ---
@@ -27,14 +29,19 @@ send:
   timeout_ms: 0
 result:
   content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<string>", line 380, in initialize_connection
+          File "<console startup>", line 15, in <module>
+        RuntimeError: startup failed after plotting
     - type: image
       data: <PNG byte-identical to live startup savefig 1>
       mimeType: image/png
     - type: text
       text: |
-        answer
-        ------
-        42
+        Error: configured startup did not complete; SQL withheld; explicit restart required
+        Error: SQL unavailable: configured startup did not complete; explicit restart required
   isError: false
 ---
 send: {}
@@ -52,4 +59,14 @@ result:
   content:
     - type: text
       text: "[done]"
+  isError: false
+---
+send:
+  sql: SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: >
+        Error: SQL unavailable: configured startup did not complete; explicit
+        restart required
   isError: false

@@ -17,10 +17,14 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.installation import installed_console
 from support.normalization import code
 from support.progress import without_elapsed_result
-from support.records import ToolResult, Transcript
+from support.records import (
+    McpTranscript,
+    ToolResult,
+    Transcript,
+    TranscriptWithCompanions,
+)
 from support.requirements import POSIX, PROCESS_EVENTS, R, SQL, command, requires
 from support.resolvers import matplotlib_test_environment
-from support.snapshots import normalize_request_ids
 from boundaries.client_server.python.test_startup import isolated_python
 from boundaries.client_server.server.test_no_r import no_r_environment
 
@@ -32,12 +36,21 @@ def configure(workspace: Path, language: str, source: str) -> Path:
     return config
 
 
+def captured_configuration(config: Path, *, python: str | Path | None = None) -> dict:
+    """Record explicit launch inputs before a test can rewrite the project file."""
+    settings = json.loads(config.read_text())
+    if python is not None:
+        assert settings["python"] == str(python)
+        settings["python"] = "<configured Python>"
+    return {"config": settings}
+
+
 @requires(POSIX, R, SQL, command("ps"))
 @executions(DIRECT)
 def test_startup_source_absent_from_exec_environments(
     binary: Path, execution: Execution
-) -> Transcript:
-    records = []
+) -> TranscriptWithCompanions:
+    transcripts = {}
     marker = "captured-startup-credential-marker"
     for language in ("python", "r"):
         with tempfile.TemporaryDirectory() as temporary:
@@ -56,7 +69,8 @@ def test_startup_source_absent_from_exec_environments(
                     native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
                     console_sql_connection(native)
                     """)
-            configure(workspace, language, f"# {marker}\n" + source)
+            config = configure(workspace, language, f"# {marker}\n" + source)
+            configuration = captured_configuration(config)
             with McpClient(
                 binary,
                 execution.serve(),
@@ -85,16 +99,21 @@ def test_startup_source_absent_from_exec_environments(
                             assert marker.encode() not in environment, "captured startup source remains in OS environment"
                         """)
                     client.expect(python=inspect)
-                client.finish()
-            records.append({"startup": language, "exec_environment_consumed": True})
-    return records
+                transcripts[f"{language}.yaml"] = McpTranscript(
+                    [configuration]
+                    + client.finish()
+                    + [{"startup": language, "exec_environment_consumed": True}]
+                )
+    return TranscriptWithCompanions(
+        transcripts.pop("python.yaml").transcript, transcripts
+    )
 
 
 @requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_python_startup_preserves_aliased_connection(
     binary: Path, execution: Execution
-) -> Transcript:
+) -> TranscriptWithCompanions:
     return aliased_connection(binary, execution, with_r=True)
 
 
@@ -102,14 +121,14 @@ def test_python_startup_preserves_aliased_connection(
 @executions(DIRECT, SANDBOXED)
 def test_python_startup_preserves_aliased_connection_without_r(
     binary: Path, execution: Execution
-) -> Transcript:
+) -> TranscriptWithCompanions:
     return aliased_connection(binary, execution, with_r=False)
 
 
 def aliased_connection(
     binary: Path, execution: Execution, *, with_r: bool
-) -> Transcript:
-    records = []
+) -> TranscriptWithCompanions:
+    transcripts = {}
     for startup in (False, True):
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -147,7 +166,11 @@ def aliased_connection(
                 console_sql_connection(native)
                 """)
             if startup:
-                configure(workspace, "python", source)
+                config = configure(workspace, "python", source)
+                configuration = captured_configuration(config)
+            else:
+                configuration = {"config": {}}
+            configuration["overrides"] = ["python=<running Python>"]
             environment = os.environ if with_r else no_r_environment(workspace)
             with McpClient(
                 installed_console(binary),
@@ -169,18 +192,22 @@ def aliased_connection(
                         assert native.native.execute("SELECT count(*) FROM selected").fetchone() == (0,)
                         """),
                 )
-                client.finish()
-                records.append(
-                    {"startup": startup, "aliased_connection_preserved": True}
+                name = "startup.yaml" if startup else "cell.yaml"
+                transcripts[name] = McpTranscript(
+                    [configuration]
+                    + client.finish()
+                    + [{"startup": startup, "aliased_connection_preserved": True}]
                 )
-    return records
+    return TranscriptWithCompanions(
+        transcripts.pop("startup.yaml").transcript, transcripts
+    )
 
 
 @requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_python_startup_publishes_plots_before_sql(
     binary: Path, execution: Execution
-) -> Transcript:
+) -> TranscriptWithCompanions:
     return startup_plots(binary, execution, with_r=True)
 
 
@@ -188,7 +215,7 @@ def test_python_startup_publishes_plots_before_sql(
 @executions(DIRECT, SANDBOXED)
 def test_python_startup_publishes_plots_without_r(
     binary: Path, execution: Execution
-) -> Transcript:
+) -> TranscriptWithCompanions:
     return startup_plots(binary, execution, with_r=False)
 
 
@@ -227,8 +254,10 @@ def startup_sql_result(client: McpClient) -> ToolResult:
     return result
 
 
-def startup_plots(binary: Path, execution: Execution, *, with_r: bool) -> Transcript:
-    records = []
+def startup_plots(
+    binary: Path, execution: Execution, *, with_r: bool
+) -> TranscriptWithCompanions:
+    transcripts = {}
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         python, _ = isolated_python(root)
@@ -270,6 +299,7 @@ def startup_plots(binary: Path, execution: Execution, *, with_r: bool) -> Transc
             settings = json.loads(config.read_text())
             settings["python"] = str(python)
             config.write_text(json.dumps(settings))
+            configuration = captured_configuration(config, python=python)
             with McpClient(binary, execution.serve(), environment, workspace) as client:
                 client.initialize_and_list_tools()
                 result = startup_sql_result(client)
@@ -306,10 +336,13 @@ def startup_plots(binary: Path, execution: Execution, *, with_r: bool) -> Transc
                         item["type"] == "text"
                         for item in client.transcript[-1]["result"]["content"]
                     )
-                client.finish()
-                records.append({"failed_startup": failed})
-                records.extend(client.transcript[3:])
-    return records
+                name = "failure.yaml" if failed else "success.yaml"
+                transcripts[name] = McpTranscript(
+                    [configuration, {"failed_startup": failed}] + client.finish()
+                )
+    return TranscriptWithCompanions(
+        transcripts.pop("success.yaml").transcript, transcripts
+    )
 
 
 @requires(R, SQL)
@@ -356,6 +389,11 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
         )
         assert len(payload.encode("utf-8")) == 32 * 1024
         config = configure(workspace, "r", source)
+        configuration = captured_configuration(config)
+        configuration["overrides"] = [
+            "startup.language=python",
+            "sandbox.inherit_environment=false",
+        ]
         with McpClient(
             binary,
             execution.serve(
@@ -403,29 +441,29 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
                 python="assert native.execute('SELECT count(*) FROM selected').fetchone() == (0,)"
             )
             # Restart uses launch-captured source, not the changed configuration file.
-            config.write_text(
-                json.dumps(
-                    {
-                        "startup": {
-                            "language": "python",
-                            "code": "raise RuntimeError('changed')",
-                        }
-                    }
-                )
-            )
+            changed_settings = {
+                "startup": {
+                    "language": "python",
+                    "code": "raise RuntimeError('changed')",
+                }
+            }
+            config.write_text(json.dumps(changed_settings))
+            client.transcript.append({"config_after_launch": changed_settings})
             client.send(control="restart")
             client.expect("answer\n------\n42\n", sql="SELECT answer FROM selected")
             client.expect(
                 python="assert_startup_transport_consumed(); assert startup_count == 1 and native.in_transaction"
             )
-            client.finish()
+            transcript = client.finish()
     return [
+        configuration,
+        *transcript,
         {
             "startup": "native Python with R present",
             "once_per_generation": True,
             "identity_and_transactions": True,
             "restart_uses_captured_source": True,
-        }
+        },
     ]
 
 
@@ -458,13 +496,18 @@ def test_python_startup_without_r(binary: Path, execution: Execution) -> Transcr
         settings = json.loads(config.read_text())
         settings["python"] = sys.executable
         config.write_text(json.dumps(settings))
+        configuration = captured_configuration(config, python=sys.executable)
         with sql_client(binary, execution, environment(workspace), workspace) as client:
             client.expect("answer\n------\n42\n", sql="SELECT answer FROM selected")
             client.expect(
                 python="assert_startup_transport_consumed(); assert sql_connection() is native; assert native.execute('SELECT answer FROM selected').fetchone() == (42,)"
             )
-            client.finish()
-    return [{"startup": "native Python without R", "selected_connection": True}]
+            transcript = client.finish()
+    return [
+        configuration,
+        *transcript,
+        {"startup": "native Python without R", "selected_connection": True},
+    ]
 
 
 @requires(R, SQL)
@@ -496,7 +539,8 @@ def test_r_startup_preserves_native_identity_and_transaction(
             invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
             console_sql_connection(native)
             """)
-        configure(workspace, "r", source)
+        config = configure(workspace, "r", source)
+        configuration = captured_configuration(config)
         with McpClient(binary, execution.serve(), os.environ, workspace) as client:
             client.initialize_and_list_tools()
             client.expect(
@@ -520,13 +564,15 @@ def test_r_startup_preserves_native_identity_and_transaction(
             client.expect(
                 r="assert_startup_transport_consumed(); stopifnot(startup_count == 1L, identical(sql_connection(), native))"
             )
-            client.finish()
+            transcript = client.finish()
     return [
+        configuration,
+        *transcript,
         {
             "startup": "native R",
             "once_per_generation": True,
             "identity_and_transactions": True,
-        }
+        },
     ]
 
 
@@ -534,8 +580,16 @@ def test_r_startup_preserves_native_identity_and_transaction(
 @executions(DIRECT, SANDBOXED)
 def test_failed_startup_withholds_sql_and_preserves_partial_effects(
     binary: Path, execution: Execution
-) -> Transcript:
-    records = []
+) -> TranscriptWithCompanions:
+    transcripts = {}
+    failures = (
+        "exception",
+        "syntax-error",
+        "invalid-connection",
+        "closed-connection",
+        "no-selection",
+        "exception-after-selection",
+    )
     for language in ("python", "r"):
         sources = (
             [
@@ -574,10 +628,11 @@ def test_failed_startup_withholds_sql_and_preserves_partial_effects(
                 ),
             ]
         )
-        for source, diagnostic in sources:
+        for name, (source, diagnostic) in zip(failures, sources, strict=True):
             with tempfile.TemporaryDirectory() as temporary:
                 workspace = Path(temporary)
-                configure(workspace, language, source)
+                config = configure(workspace, language, source)
+                configuration = captured_configuration(config)
                 with McpClient(
                     binary, execution.serve(), os.environ, workspace
                 ) as client:
@@ -610,16 +665,21 @@ def test_failed_startup_withholds_sql_and_preserves_partial_effects(
                         )
                         client.send(sql="SELECT 42 AS answer")
                         assert "SQL unavailable" in last_tool_text(client)
-                    client.finish()
-                    records.append(
-                        {
-                            "language": language,
-                            "failure": diagnostic,
-                            "first_sql": first,
-                            "later_sql": second,
-                        }
+                    transcripts[f"{language}-{name}.yaml"] = McpTranscript(
+                        [configuration]
+                        + client.finish()
+                        + [
+                            {
+                                "language": language,
+                                "failure": diagnostic,
+                                "first_sql": first,
+                                "later_sql": second,
+                            }
+                        ]
                     )
-    return records
+    return TranscriptWithCompanions(
+        transcripts.pop("python-exception.yaml").transcript, transcripts
+    )
 
 
 @requires(POSIX, SQL)
@@ -635,6 +695,7 @@ def test_missing_r_startup_withholds_sql(
         settings = json.loads(config.read_text())
         settings["python"] = sys.executable
         config.write_text(json.dumps(settings))
+        configuration = captured_configuration(config, python=sys.executable)
         with sql_client(binary, execution, environment(workspace), workspace) as client:
             client.send(sql="SELECT 42 AS answer")
             output = last_tool_text(client)
@@ -642,8 +703,8 @@ def test_missing_r_startup_withholds_sql(
             client.expect(python="assert 6 * 7 == 42")
             client.send(sql="SELECT 42 AS answer")
             assert "SQL unavailable" in last_tool_text(client)
-            client.finish()
-    return [{"missing_runtime_withholds_sql": output}]
+            transcript = client.finish()
+    return [configuration, *transcript, {"missing_runtime_withholds_sql": output}]
 
 
 @requires(POSIX, R, SQL)
@@ -659,6 +720,7 @@ def test_missing_selected_python_has_no_sql_fallback(
         settings = json.loads(config.read_text())
         settings["python"] = "/mcp-console-startup-missing-python"
         config.write_text(json.dumps(settings))
+        configuration = captured_configuration(config)
         with McpClient(binary, execution.serve(), os.environ, workspace) as client:
             client.initialize_and_list_tools()
             client.send(sql="SELECT 42 AS answer")
@@ -667,16 +729,16 @@ def test_missing_selected_python_has_no_sql_fallback(
             assert "source must not execute" not in output and "42" not in output, (
                 output
             )
-            client.finish()
-    return [{"missing_selected_python": output}]
+            transcript = client.finish()
+    return [configuration, *transcript, {"missing_selected_python": output}]
 
 
 @requires(POSIX, R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_startup_gate_preserves_discovery_ordering_and_interrupt(
     binary: Path, execution: Execution
-) -> Transcript:
-    records = []
+) -> TranscriptWithCompanions:
+    transcripts = {}
     for interrupt in (False, True):
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -690,7 +752,8 @@ def test_startup_gate_preserves_discovery_ordering_and_interrupt(
                 input("Startup gate> ")
                 _ = native.execute("CREATE TABLE selected AS SELECT 42 AS answer")
                 """)
-            configure(workspace, "python", source)
+            config = configure(workspace, "python", source)
+            configuration = captured_configuration(config)
             with McpClient(binary, execution.serve(), os.environ, workspace) as client:
                 # Discovery and ping complete while source cannot pass its input gate.
                 client.initialize_and_list_tools()
@@ -727,13 +790,13 @@ def test_startup_gate_preserves_discovery_ordering_and_interrupt(
                         "answer\n------\n42\n", sql="SELECT answer FROM first_cell"
                     )
                     client.expect(python="assert startup_count == 1")
-                records.append(
-                    {
-                        "interrupted": interrupt,
-                        "calls": normalize_request_ids(client.finish()[3:]),
-                    }
+                name = "interrupt.yaml" if interrupt else "continue.yaml"
+                transcripts[name] = McpTranscript(
+                    [configuration, {"interrupted": interrupt}] + client.finish()
                 )
-    return records
+    return TranscriptWithCompanions(
+        transcripts.pop("continue.yaml").transcript, transcripts
+    )
 
 
 @requires(POSIX, R, SQL)
@@ -757,7 +820,8 @@ def test_crashed_startup_is_not_automatically_replayed(
             native = sqlite3.connect(":memory:")
             console_sql_connection(native)
             """)
-        configure(workspace, "python", source)
+        config = configure(workspace, "python", source)
+        configuration = captured_configuration(config)
         arguments = execution.serve(
             *(("--writable-root", str(workspace)) if execution is SANDBOXED else ())
         )
@@ -773,13 +837,15 @@ def test_crashed_startup_is_not_automatically_replayed(
             client.send(control="restart", sql="SELECT 42 AS answer")
             assert "42" in last_tool_text(client), client.transcript[-1]
             assert (workspace / "attempts").read_text() == "xx"
-            client.finish()
+            transcript = client.finish()
     return [
+        configuration,
+        *transcript,
         {
             "crashed_startup": first,
             "automatic_replay_refused": refusal,
             "explicit_restart_attempts": 2,
-        }
+        },
     ]
 
 
@@ -792,7 +858,8 @@ def test_incomplete_python_setup_never_retries_startup_source(
 
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        configure(workspace, "python", "startup_count = 1")
+        config = configure(workspace, "python", "startup_count = 1")
+        configuration = captured_configuration(config)
         (workspace / "sitecustomize.py").write_text(
             f"exec(compile({json.dumps(python_setup_checkpoint())}, '<SQL setup checkpoint>', 'exec'))"
         )
@@ -811,7 +878,7 @@ def test_incomplete_python_setup_never_retries_startup_source(
             )
             client.send(sql="SELECT 42 AS answer")
             assert "SQL unavailable" in last_tool_text(client)
-            return client.finish()[3:]
+            return [configuration, *client.finish()]
 
 
 @requires(POSIX, R, SQL)
@@ -831,7 +898,8 @@ def test_r_startup_interrupt_preserves_transaction_without_replay(
             invisible(readline("R startup gate> "))
             invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
             """)
-        configure(workspace, "r", source)
+        config = configure(workspace, "r", source)
+        configuration = captured_configuration(config)
         with McpClient(binary, execution.serve(), os.environ, workspace) as client:
             client.initialize_and_list_tools()
             client.expect(
@@ -850,7 +918,7 @@ def test_r_startup_interrupt_preserves_transaction_without_replay(
             )
             client.send(sql="SELECT 42 AS answer")
             assert "SQL unavailable" in last_tool_text(client)
-            return client.finish()[3:]
+            return [configuration, *client.finish()]
 
 
 @requires(PROCESS_EVENTS, R, SQL)
@@ -867,7 +935,8 @@ def test_closure_retires_captured_startup_resources(
 
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        configure(workspace, "python", 'input("Startup close gate> ")')
+        config = configure(workspace, "python", 'input("Startup close gate> ")')
+        configuration = captured_configuration(config)
         with McpClient(binary, execution.serve(), os.environ, workspace) as client:
             client.initialize_and_list_tools()
             client.expect(
@@ -889,4 +958,5 @@ def test_closure_retires_captured_startup_resources(
                 assert client.process.returncode == 0
             finally:
                 kill_processes(descendants)
-    return [{"blocked_captured_startup_retired": True}]
+            transcript = client.transcript
+    return [configuration, *transcript, {"blocked_captured_startup_retired": True}]

@@ -1,4 +1,11 @@
 ---
+config:
+  startup:
+    language: python
+    code: startup_count = 1
+---
+!same-as MCP initialization for this execution mode
+---
 send:
   sql: CREATE TABLE never_run AS SELECT 99 AS answer
 result:

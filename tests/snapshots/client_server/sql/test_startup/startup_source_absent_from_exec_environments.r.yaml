@@ -1,12 +1,10 @@
 ---
 config:
   startup:
-    language: python
+    language: r
     code: |
       # captured-startup-credential-marker
-      import sqlite3
-
-      native = sqlite3.connect(":memory:")
+      native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
       console_sql_connection(native)
 ---
 !same-as MCP initialization for this execution mode
@@ -72,5 +70,5 @@ result:
       text: "[done]"
   isError: false
 ---
-startup: python
+startup: r
 exec_environment_consumed: true
