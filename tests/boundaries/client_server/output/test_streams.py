@@ -855,7 +855,6 @@ def test_drains_background_stderr_while_idle(
         )
         expected = large_output("zod background stderr\n")
         assert len(expected) <= observed <= len(expected) + LARGE_OUTPUT_SIZE, observed
-        assert f"{observed} raw bytes retained" in preview
         assert (
             session_directory(client) / "outputs/session.log"
         ).read_text() == expected + ("y" * (observed - len(expected)))

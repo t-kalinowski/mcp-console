@@ -18,7 +18,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8147
+        text_bytes: 8050
         concat:
           - |
             zod stdin closed
@@ -26,7 +26,7 @@ result:
             count: 3887
           - |
 
-            [output preview: omitted 4186513 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/session.log (Console server recording workspace); 4194321 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 4186513 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/session.log]
           - repeat: y
             count: 3904
           - |-

@@ -19,21 +19,21 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8095
+        text_bytes: 8029
         concat:
           - repeat: x
-            count: 3776
+            count: 3904
           - |
 
-            [output preview: omitted 25162055 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); 25165831 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 41935302 UTF-8 bytes; retained logs on Console host: .agents/console/sessions/<run ID>/outputs/]
 
             [active evaluation stopped by session restart request]
             [worker stopped: in-memory state lost]
             [starting new worker]
 
-            [output preview: omitted 16773503 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); 16777279 raw bytes retained, 0 raw bytes not retained]
+            […]
           - repeat: x
-            count: 3726
+            count: 3854
           - |
 
             preview tail: final diagnostic

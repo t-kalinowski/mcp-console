@@ -41,6 +41,9 @@ This preserves reads without adding resolver write grants for host package locat
 `RENV_PATHS_CACHE`, `RENV_PATHS_SOURCE`, and `RENV_PATHS_BINARY` are redirected explicitly so an inherited override cannot share host artifacts.
 Worker Matplotlib and general XDG caches retain their private temporary storage and read prepared font caches from the captured location.
 Workers link the warmed font cache into their private Matplotlib directory.
+Valid prepared font caches are reused across dependency activation and worker restarts.
+An absent or invalid worker cache can trigger construction; worker imports forward Matplotlib's own delayed diagnostic when construction takes several seconds.
+Replacing a worker-private cache does not update the prepared source.
 Host Matplotlib configuration remains selected independently of this cache.
 Font-cache warmup selects the persistent cache explicitly so a read-only host configuration directory cannot redirect it to temporary storage.
 Explicitly selected Python uses its preinstalled packages and DuckDB extensions.

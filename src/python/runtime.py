@@ -8,7 +8,6 @@ import importlib.metadata as _importlib_metadata
 import importlib.util as _importlib_util
 import io as _io
 import json as _json
-import logging as _logging
 import os as _os
 import re as _re
 import sys as _sys
@@ -452,25 +451,6 @@ if _mcp_console_import_finder is None:
         _McpConsoleModuleLoader,
     )
     _sys.meta_path.append(_mcp_console_import_finder)
-
-
-class _McpConsoleMatplotlibLogFilter(_logging.Filter):
-    _mcp_console_filter = True
-
-    def filter(self, record):
-        return record.getMessage() != (
-            "Matplotlib is building the font cache; this may take a moment."
-        )
-
-
-_mcp_console_logger = _logging.getLogger("matplotlib.font_manager")
-_mcp_console_filter_installed = False
-for _mcp_console_filter in _mcp_console_logger.filters:
-    if _builtins.getattr(_mcp_console_filter, "_mcp_console_filter", False):
-        _mcp_console_filter_installed = True
-        break
-if not _mcp_console_filter_installed:
-    _mcp_console_logger.addFilter(_McpConsoleMatplotlibLogFilter())
 
 
 def _mcp_console_disable_matplotlib_show(

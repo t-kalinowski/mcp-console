@@ -7,13 +7,13 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8152
+        text_bytes: 8055
         concat:
           - repeat: s
             count: 3968
           - |
 
-            [output preview: omitted 8380691 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/session.log (Console server recording workspace); 8388615 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 8380691 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/session.log]
           - repeat: s
             count: 3956
           - |

@@ -281,12 +281,16 @@ Suppressed controls use no rendered-text allowance; retained raw logs keep their
 
 Images have independent limits: 8 MiB encoded data, 64 KiB MIME metadata, and 4,096 images per undrained interval and complete result.
 Whole images are admitted; text limits do not consume their allowance.
-Omitted text/images are reported.
+One notice reports omitted text/images and names available raw logs or image artifacts on the Console host.
+Multiple sources share a directory location; later gaps use `[…]` without repeating retrieval instructions.
+Long locations use exact session/file paths explicitly relative to the Console recording directory, keeping retrieval notices within the text budget.
+If recording is disabled or fails, the notice says when omitted output is unavailable.
+Partially retained logs are identified as prefixes, and images rejected before recording are marked as not retained.
 
 Polling consumes an observed interval, including its omitted middle.
 Reading a raw file does not change that cursor.
 Raw per-cell files retain up to 1 GiB and can be read during evaluation; startup/idle output without a cell log cannot borrow another cell's path.
-Full retrieval requires filesystem access to the controller's recording directory.
+Retrieval requires filesystem access to the Console host's recording directory; only retained output is available there.
 See [recording](RECORDING.md) for loss counts, artifacts, privacy, and report generation.
 
 ## Current limitations
