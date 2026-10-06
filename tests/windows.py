@@ -574,7 +574,9 @@ class WindowsConsole(unittest.TestCase):
         self.assertIsNotNone(uv, "Windows resolver acceptance requires uv")
         r_home = (
             os.environ.get("R_HOME")
-            or subprocess.check_output(["R", "RHOME"], text=True).strip()
+            or subprocess.check_output(
+                [shutil.which("R") or "R", "RHOME"], text=True
+            ).strip()
         )
         system_path = str(Path(os.environ["SystemRoot"]) / "System32")
         for with_python in (False, True):
@@ -641,7 +643,9 @@ class WindowsConsole(unittest.TestCase):
         # Capture R before removing the interpreter launchers from PATH.
         r_home = (
             os.environ.get("R_HOME")
-            or subprocess.check_output(["R", "RHOME"], text=True).strip()
+            or subprocess.check_output(
+                [shutil.which("R") or "R", "RHOME"], text=True
+            ).strip()
         )
         environment = dict(
             os.environ,
