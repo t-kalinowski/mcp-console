@@ -1,0 +1,28 @@
+---
+languages: []
+stderr: >
+  configuration with CLI overrides: languages must contain at least one of
+  r, python, or sql
+---
+languages:
+  - SQL
+stderr: >
+  configuration with CLI overrides: languages[0]: unknown variant `SQL`,
+  expected one of `r`, `python`, `sql`
+---
+languages:
+  - ruby
+stderr: >
+  configuration with CLI overrides: languages[0]: unknown variant `ruby`,
+  expected one of `r`, `python`, `sql`
+---
+languages: sql
+stderr: >
+  configuration with CLI overrides: languages: invalid type: string "sql",
+  expected a sequence
+---
+languages:
+  - 1
+stderr: >
+  configuration with CLI overrides: languages[0]: invalid type: integer
+  `1`, expected string or map

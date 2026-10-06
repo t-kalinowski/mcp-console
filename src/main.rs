@@ -123,6 +123,7 @@ fn run_server(
     let settings::Captured {
         cache,
         python,
+        languages,
         source: _,
         mut policy,
         mut resolver,
@@ -148,7 +149,7 @@ fn run_server(
         .enable_all()
         .build()?;
     let result = runtime.block_on(server::run(
-        worker, relay, no_sandbox, settings, python, resolver,
+        worker, relay, no_sandbox, settings, python, resolver, languages,
     ));
     // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client
