@@ -52,6 +52,7 @@ share/licenses/mcp-console/{LICENSE,NOTICE}
 ```
 
 Windows uses `.exe` suffixes and additionally bundles `mcp-console-sandbox-setup.exe` and `mcp-console-sandbox-runner.exe` under `libexec`; all helpers are verified before launch or setup.
+The pinned `mcp-console-sandbox-windows` package supplies the Console helpers; `codex-windows-sandbox` retains the upstream Codex helpers and identity.
 Windows binaries are not processed by Unix strip tools.
 
 Linux also bundles `libexec/bwrap` and Bubblewrap license, notice, and source metadata.

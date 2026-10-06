@@ -51,14 +51,11 @@ result:
         frames by name. R accesses its SQL connection through `sql_connection()`
         and can select a user-owned connection with
         `console_sql_connection(connection)`. SQL uses its configured provider
-        without a setup cell. Managed DuckDB uses R when available and Python
-        otherwise, independently of visible language fields. Hidden R or Python
-        runtimes can implement SQL. Keep `requirements.r` and
-        `requirements.python` available for provider preparation; a
-        missing-provider diagnostic identifies the required package and restart.
-        Managed dependency preparation requires resolver support on the
-        execution host; bare runtimes require preinstalled packages, and
-        explicitly selected Python uses its preinstalled Python packages.
+        without a setup cell. Provider choice is independent of visible language
+        fields. A missing-provider diagnostic identifies the requirements field,
+        package, and restart needed for preparation. Managed dependency
+        preparation requires resolver support on the execution host; bare
+        runtimes require preinstalled packages.
 
 
         Send one complete `r` or `sql` cell per call. Code-bearing calls must be
@@ -130,10 +127,9 @@ result:
               used by default when its adapter and packages are available and keeps a persistent catalog.
               A result with columns returns a bounded preview. With R-owned managed DuckDB, an unqualified
               relation name can query a data frame in R global state, and a DuckDB table or view with the
-              same name takes precedence. A user-selected R connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
-              them through its connection or cursor protocol. The selected driver supplies its own SQL
+              same name takes precedence. A user-selected R connection receives cells through `DBI::dbSendQuery()`. The selected driver supplies its own SQL
               dialect and type mappings. Use DBI from an R cell for commands that require the statement
-              interface. Without R, managed DuckDB uses Python; it does not scan Python globals.
+              interface.
               Managed DuckDB conveniences and extension requirements apply only to the managed
               backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
               databases outside the sandbox's writable paths; the sandbox blocks DuckDB's
@@ -150,50 +146,63 @@ result:
               successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
               earlier evaluation or attempting an optional following cell; the cell is not run if the
               interrupted evaluation remains active. When `requirements` is available, restart resolves
-              same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
-              and unread-stdin state and sends same-call stdin and code only to the replacement.
+              same-call requirements before replacement. It then discards in-memory, debugger, and
+              unread-stdin state and sends same-call stdin and code only to the replacement.
             type: string
             enum:
               - interrupt
               - restart
           requirements:
-            description: |-
-              Inspect or manage retained R packages, Python packages, and DuckDB extensions.
-              action=get returns a read-only snapshot, including Python constraints and separate runtime
-              infrastructure. It cannot accompany code, stdin, control, or payload fields. The complete
-              manifest is in structuredContent.requirements even when it exceeds the text preview limit.
-              action=add is the default; action=set replaces the whole declaration without injecting defaults;
-              action=reset restores startup defaults. Changed replacements require control="restart" with a
-              live worker. Empty set means no optional requirements; bare {} is invalid.
-              Requirements alone perform standalone preparation. With one cell, they are preconditions of
-              that cell. With `control = "restart"`, they are part of the restart transaction, with or
-              without a cell. Only add can accompany interrupt, and only when a cell follows; Python-only
-              sessions reject requirements with interrupt before signaling or queuing input.
-              Preparation does not import, attach, or load dependencies. On a code-bearing call without
-              control, preparation completes before same-call nonempty stdin is queued. Standalone
-              preparation cannot queue nonempty stdin. With restart, failure leaves the current worker
-              unchanged and sends neither stdin nor code. With add, interrupt, and a following cell, signal
-              delivery and stdin enqueue happen before requirements are validated or prepared and are not
-              rolled back if that later work fails. Ordinary CRAN packages used by the built-in R worker need
-              not be declared here; use `requirements.r` to stage packages ahead of evaluation or provide
-              explicit `ir` references. In the built-in managed Python environment, missing imports normally
-              resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
-              a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
-              and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-              further changes require restart. Resolution uses the execution host's resolver policy and may download
-              packages or extensions or execute installation or build code. Use only trusted requirements.
+            description: >-
+              Inspect or manage retained package and database-extension
+              requirements. action=get returns a read-only snapshot, including
+              runtime constraints and separate infrastructure. It cannot
+              accompany code, stdin, control, or payload fields. The complete
+              manifest is in structuredContent.requirements even when it exceeds
+              the text preview limit. action=add is the default; action=set
+              replaces the whole declaration without injecting defaults;
+              action=reset restores startup defaults. Changed replacements
+              require control="restart" with a live worker. Empty set means no
+              optional requirements; bare {} is invalid.
+
+
+              Requirements alone perform standalone preparation. With one cell,
+              they are preconditions of that cell. With control="restart", they
+              are part of the restart transaction, with or without a cell. Only
+              add can accompany interrupt, and only when a cell follows. When
+              the provider cannot prepare during interrupt, the call is rejected
+              before signaling or queuing input; prepare separately or use
+              restart. Preparation does not import, attach, or load
+              dependencies. On a code-bearing call without control, preparation
+              completes before same-call nonempty stdin is queued. Standalone
+              preparation cannot queue nonempty stdin. With restart, failure
+              leaves the current worker unchanged and sends neither stdin nor
+              code. With add, interrupt, and a following cell, signal delivery
+              and stdin enqueue happen before requirements are validated or
+              prepared and are not rolled back if that later work fails.
+              Ordinary CRAN packages used by the built-in R worker need not be
+              declared here; use requirements.r to stage packages ahead of
+              evaluation or provide explicit ir references. SQL does not trigger
+              package discovery. Provider preparation may require fields whose
+              direct code language is hidden; follow the missing-provider
+              diagnostic. A cell is not run if explicit preparation fails or
+              further changes require restart. Resolution uses the execution
+              host's resolver policy and may download packages or extensions or
+              execute installation or build code. Use only trusted requirements.
             type:
               - object
               - "null"
             properties:
               action:
-                description: |-
-                  get inspects the committed declaration without starting a worker or consuming output.
-                  add (default) accumulates requirements. set replaces all lists and Python constraints;
-                  omitted fields are empty, including when only action is supplied. reset restores startup
-                  defaults. get and reset reject payload fields. Changed set/reset with a live worker require
-                  control="restart"; the complete candidate resolves before the old worker is retired.
-                  add accepts up to 64 entries per language per call; set accepts the complete accumulated manifest.
+                description: >-
+                  get inspects the committed declaration without starting a worker or
+                  consuming output. add (default) accumulates requirements. set replaces
+                  all lists and runtime constraints; omitted fields are empty, including
+                  when only action is supplied. reset restores startup defaults. get and
+                  reset reject payload fields. Changed set/reset with a live worker
+                  require control="restart"; the complete candidate resolves before the
+                  old worker is retired. add accepts up to 64 entries per language per
+                  call; set accepts the complete accumulated manifest.
                 type: string
                 enum:
                   - get
@@ -201,16 +210,18 @@ result:
                   - set
                   - reset
               python_version:
-                description: |-
-                  Python version constraints, preserved by get and replaced as a whole by set. Add appends
-                  constraints; changing constraints with a live worker requires control="restart".
+                description: >-
+                  Host-provider runtime version constraints, preserved by get and replaced
+                  as a whole by set. Add appends constraints; changing constraints with a
+                  live worker requires control="restart".
                 type: array
                 items:
                   type: string
               exclude_newer:
-                description: |-
-                  Python package publication cutoff accepted by uv, for example "2026-01-01". set clears an
-                  omitted or null cutoff; add preserves an omitted cutoff and cannot replace an existing one.
+                description: >-
+                  Registry package publication cutoff accepted by uv, for example
+                  "2026-01-01". set clears an omitted or null cutoff; add preserves an
+                  omitted cutoff and cannot replace an existing one.
                 type:
                   - string
                   - "null"
@@ -241,17 +252,15 @@ result:
                   type: string
                   minLength: 1
               python:
-                description: |-
-                  Named PEP 508 registry requirements for standalone preparation, preparation before a
-                  cell, or a restart transaction, for example `polars>=1`, `scikit-learn`, or
-                  `matplotlib; python_version >= '3.10'`. Use explicit requirements when automatic import
-                  inference needs a different distribution, a version, an extra, or an environment marker, or
-                  when the distribution should be prepared before the cell. Automatic imports infer bare
-                  distribution names only. Paths, file URLs, editable requirements, direct references, local
-                  archives, and local projects are rejected. Preparation does not import the package. An idle
-                  server-managed worker may activate compatible additions without losing state. A nonempty
-                  user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python
-                  requirements.
+                description: >-
+                  Named PEP 508 registry requirements for host-provider preparation, for
+                  example duckdb>=1. Use this field when a provider diagnostic requests
+                  it, for standalone preparation, preparation before a cell, or a restart
+                  transaction. Paths, file URLs, editable requirements, direct references,
+                  local archives, and local projects are rejected. Preparation does not
+                  import the package. A server-managed worker may activate compatible
+                  additions without losing state. A user-selected environment disables
+                  managed registry requirements; a custom worker does not support them.
                 type: array
                 items:
                   type: string
@@ -278,14 +287,13 @@ result:
               background work, then poll with an empty `send`.
 
               Defaults to 60,000 milliseconds. One deadline starts at call entry and includes initial
-              background startup, evaluation observation, and one automatic worker replacement attempt. It does not cancel resolution
-              or startup. Inline control, interrupt grace, restart, and explicit requirement preparation happen
-              before dispatch and may make the complete call take longer. This value does not limit standalone
-              preparation. Automatic R and Python import
-              resolution are part of the running evaluation and count toward this wait. On expiry, the call
-              returns available output and a state marker, such as
-              `[running; poll with an empty send]` or `[worker starting]`. If evaluation remains active, poll
-              with an empty `send` call; do not resubmit the cell.
+              background startup, evaluation observation, and one automatic worker replacement attempt.
+              It does not cancel resolution or startup. Inline control, interrupt grace, restart, and explicit
+              requirement preparation happen before dispatch and may make the complete call take longer.
+              This value does not limit standalone preparation. Automatic dependency resolution is part of
+              the running evaluation and counts toward this wait. On expiry, the call returns available output
+              and a state marker, such as `[running; poll with an empty send]` or `[worker starting]`.
+              If evaluation remains active, poll with an empty `send` call; do not resubmit the cell.
             type: integer
             format: uint64
             minimum: 0

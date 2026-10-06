@@ -2181,6 +2181,14 @@ def test_uses_selected_virtualenv(binary: Path, execution: Execution) -> Transcr
             capture_output=True,
         )
         env = selected_environment(selected.parent)
+        env["MPLCONFIGDIR"] = str(root / "matplotlib")
+        # Prepare this fixture's fonts before interpreting its path-only output.
+        subprocess.run(
+            [selected, "-I", "-c", "import matplotlib.font_manager"],
+            env=dict(os.environ, MPLCONFIGDIR=env["MPLCONFIGDIR"]),
+            check=True,
+            capture_output=True,
+        )
         with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
             client.send(

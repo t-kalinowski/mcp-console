@@ -11,6 +11,8 @@ pub(super) const MANAGED_SQL_SHARING: &str = r#"R-owned managed DuckDB SQL can q
 
 pub(super) const MANAGED_PREPARATION: &str = r#"Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages, and explicitly selected Python uses its preinstalled Python packages."#;
 
+pub(super) const MANAGED_PREPARATION_SELECTED: &str = r#"Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages."#;
+
 pub(super) const SEND_ORDERING: &str = r#" cell per call. Code-bearing calls must be sequential; a control-only interrupt may overlap a pending `send`. Inspect intermediate results before submitting dependent cells. Cells are not transactional; changes made before an error may remain."#;
 
 pub(super) const POLLING: &str = r#"Omit code to poll, supply stdin, control the session, or prepare requirements when available. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` alone to answer an active prompt or debugger. Field descriptions specify preparation, control, and timeout ordering."#;
@@ -18,6 +20,8 @@ pub(super) const POLLING: &str = r#"Omit code to poll, supply stdin, control the
 pub(super) const OUTPUT: &str = r#"Each result has at most 8 KiB of UTF-8 text, including notices; oversized output keeps its beginning and latest tail. Images have separate limits. Retained raw-log paths are relative to the server's launch directory for project recordings and absolute for home recordings. Full retained text requires filesystem access there through existing tools; Console provides no read/search interface."#;
 
 pub(super) const CUSTOM_SCOPE: &str = r#"Persistent custom-worker workbench. Language fields describe the configured interface; supported languages, evaluation, display, SQL, and cross-language sharing depend on the selected worker. Console does not supply built-in runtime packages, automatic import hooks, or a default SQL connection to custom workers. Managed requirements require execution-host resolver support and compatible worker preparation callbacks; Python requirements are unavailable with a custom worker."#;
+
+pub(super) const CUSTOM_SELECTED_SCOPE: &str = r#"Persistent custom-worker workbench. Language fields describe the configured interface; evaluation, display, database connections, and sharing depend on the selected worker. Console does not supply built-in runtime packages, automatic import hooks, or a default database connection to custom workers. Managed requirements require execution-host resolver support and compatible worker preparation callbacks; registry package preparation is unavailable with a custom worker."#;
 
 pub(super) const CUSTOM_SWITCHING: &str =
     r#" Switch languages when useful, using capabilities supplied by the worker."#;
@@ -108,6 +112,10 @@ before querying them."#;
 pub(super) const PYTHON_SQL_CONNECTION: &str = r#" Without R, `sql_connection()` returns the Python-owned connection;
 register frames explicitly with `sql_connection().register(name, frame)`."#;
 
+pub(super) const PYTHON_SQL_CONNECTION_SELECTED: &str = r#" The managed `sql_connection()` helper is available only when Python owns the
+provider; then register frames explicitly with `sql_connection().register(name, frame)`.
+Do not assume the managed provider belongs to Python because its cell field is visible."#;
+
 pub(super) const PYTHON_PLOTS: &str = r#" At cell end,
 including after a Python error, every open `matplotlib.pyplot` figure returns once as a PNG
 image and is closed.
@@ -133,13 +141,20 @@ interrupted evaluation remains active. When `requirements` is available, restart
 same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
 and unread-stdin state and sends same-call stdin and code only to the replacement."#;
 
+pub(super) const CONTROL_END_SELECTED: &str = r#" and preserves in-memory state. After
+successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
+earlier evaluation or attempting an optional following cell; the cell is not run if the
+interrupted evaluation remains active. When `requirements` is available, restart resolves
+same-call requirements before replacement. It then discards in-memory, debugger, and
+unread-stdin state and sends same-call stdin and code only to the replacement."#;
+
 pub(super) const MANAGED_SQL_R: &str = r#"With R-owned managed DuckDB active, SQL can query R data frames by name. R accesses its SQL connection through `sql_connection()` and can select a user-owned connection with `console_sql_connection(connection)`. "#;
 
-pub(super) const MANAGED_SQL_PYTHON: &str = r#"With R-owned managed DuckDB, bind Python data frames to R names through `r.name` before querying them. Without R, Python-owned DuckDB requires explicit frame registration with `sql_connection().register(name, frame)`. Python can select a user-owned connection with `console_sql_connection(connection)`. "#;
+pub(super) const MANAGED_SQL_PYTHON_SELECTED: &str = r#"Python can select a user-owned DB-API connection with `console_sql_connection(connection)`. Managed frame registration through `sql_connection().register(name, frame)` is available only when Python owns the provider. "#;
 
-pub(super) const SQL_PROVIDER: &str = r#"SQL uses its configured provider without a setup cell. Managed DuckDB uses R when available and Python otherwise, independently of visible language fields. Hidden R or Python runtimes can implement SQL. Keep `requirements.r` and `requirements.python` available for provider preparation; a missing-provider diagnostic identifies the required package and restart. "#;
+pub(super) const SQL_PROVIDER_SELECTED: &str = r#"SQL uses its configured provider without a setup cell. Provider choice is independent of visible language fields. A missing-provider diagnostic identifies the requirements field, package, and restart needed for preparation. "#;
 
-pub(super) const WINDOWS_PREPARATION: &str = r#" Managed R and Python requirements are prepared by ir and uv on the host. Explicit Python selections use preinstalled packages. SQL is not yet supported."#;
+pub(super) const WINDOWS_SELECTED_PREPARATION: &str = r#" Enabled runtimes initialize in the background. Managed requirements are prepared on the host."#;
 
 pub(super) const SQL_RUNTIME: &str = r#"One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
 used by default when its adapter and packages are available and keeps a persistent catalog.
@@ -153,14 +168,36 @@ pub(super) const SQL_DRIVERS: &str = r#" A user-selected R connection receives c
 them through its connection or cursor protocol. The selected driver supplies its own SQL
 dialect and type mappings."#;
 
+pub(super) const SQL_R_DRIVER: &str =
+    r#" A user-selected R connection receives cells through `DBI::dbSendQuery()`."#;
+
+pub(super) const SQL_PYTHON_DRIVER: &str =
+    r#" A Python DB-API connection executes cells through its connection or cursor protocol."#;
+
+pub(super) const SQL_DIALECT: &str = r#" The selected driver supplies its own SQL
+dialect and type mappings."#;
+
 pub(super) const SQL_R_STATEMENTS: &str = r#" Use DBI from an R cell for commands that require the statement
 interface."#;
 
 pub(super) const SQL_PYTHON_FRAMES: &str = r#" Without R, managed DuckDB uses Python and requires explicit frame registration
 through `sql_connection().register(name, frame)`; it does not scan Python globals."#;
 
-pub(super) const SQL_HIDDEN_PYTHON: &str =
-    r#" Without R, managed DuckDB uses Python; it does not scan Python globals."#;
+pub(super) const SQL_PYTHON_FRAMES_SELECTED: &str = r#" Only when Python owns managed DuckDB, register frames explicitly through
+`sql_connection().register(name, frame)`; the provider does not scan Python globals."#;
+
+pub(super) const TIMEOUT_SELECTED: &str = r#"Omit for normal calls and polls. This limits how long the tool waits; it returns immediately
+when execution completes. Reaching the timeout does not cancel execution. Use `0` to start
+background work, then poll with an empty `send`.
+
+Defaults to 60,000 milliseconds. One deadline starts at call entry and includes initial
+background startup, evaluation observation, and one automatic worker replacement attempt.
+It does not cancel resolution or startup. Inline control, interrupt grace, restart, and explicit
+requirement preparation happen before dispatch and may make the complete call take longer.
+This value does not limit standalone preparation. Automatic dependency resolution is part of
+the running evaluation and counts toward this wait. On expiry, the call returns available output
+and a state marker, such as `[running; poll with an empty send]` or `[worker starting]`.
+If evaluation remains active, poll with an empty `send` call; do not resubmit the cell."#;
 
 pub(super) const SQL_OPERATIONS: &str = r#"
 Managed DuckDB conveniences and extension requirements apply only to the managed
