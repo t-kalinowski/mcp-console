@@ -4,7 +4,7 @@
 send:
   r: |
     invisible(Sys.setlocale("LC_CTYPE", ".UTF-8"))
-    sub(R.home(), "<R_HOME>", normalizePath(commandArgs()[1L], winslash = "/"), fixed = TRUE)
+    sub(normalizePath(R.home(), winslash = "/"), "<R_HOME>", normalizePath(commandArgs()[1L], winslash = "/"), fixed = TRUE)
     identical(normalizePath(commandArgs()[1L], winslash = "/"), normalizePath(file.path(R.home(), "bin", "R.exe"), winslash = "/"))
     interactive()
 result:

@@ -48,6 +48,10 @@ def native_r_launchers(source: str) -> str:
         "script",
     )
     # The stock Windows launcher can shorten R_HOME to its 8.3 spelling.
+    source = source.replace(
+        "sub(R.home(),",
+        'sub(normalizePath(R.home(), winslash = "/"),',
+    )
     for paths in (
         "child$arguments[[1L]]",
         "reference$arguments[[1L]]",
