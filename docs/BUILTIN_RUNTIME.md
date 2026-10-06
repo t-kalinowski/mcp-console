@@ -107,9 +107,10 @@ R's native bootstrap and event APIs are component-local to Unix and Windows.
 Both use the same console callbacks, parser, REPL, graphics scopes, and environment integration on the coordinator's interpreter thread.
 Bootstrap restores the captured R installation immediately before startup; argument strings and Windows startup paths live until worker exit.
 Bootstrap defers default packages when needed to attach runtime services and the R/Python adapter first.
-Windows installs an interrupt-delivery callback; its idle command wait does not service R event handlers.
+Windows installs an interrupt-delivery callback and wakes its idle command wait for R's window messages.
+Event dispatch runs inside R's top-level error boundary, after releasing the command reader and within the ordinary graphics/input scope.
 
-On macOS and Linux, R event handlers, including `later` callbacks, run while idle.
+On macOS, Linux, and Windows, R event handlers, including `later` callbacks, run while idle.
 They may change state and produce output returned by a later poll, Python cell, or SQL cell.
 When needed, `[output produced while idle]` separates that region from new-cell output.
 The initial display width is 200 columns and remains user-configurable.
@@ -155,6 +156,10 @@ Explicit Python environments and bare workers require installed packages.
 ## R and Python interoperability
 
 Reticulate supplies the on-demand bridge: Python uses `r.name` for R globals and functions; R uses `py$name` for Python globals.
+Accessing attributes through `py` or `reticulate::py` initializes the bridge on demand, including after restart.
+When Python is already running, the bridge attaches to that same interpreter and preserves its existing objects; no preceding `py_eval()` or `py_available(initialize = TRUE)` call is needed.
+Loading reticulate or reading its `py` module proxy alone does not initialize Python or attach the bridge.
+During a `reticulate.python.beforeInitialized` callback, `py` retains reticulate's `NULL` behavior until attachment publishes its configuration, so reading it does not reenter initialization.
 An actual `r` access can initialize R when shared bootstrap has not completed it.
 Conversion follows reticulate's rules; objects/proxies do not survive worker replacement.
 
@@ -263,8 +268,28 @@ Discovery failures require a new server; other startup retries follow [server re
 Each complete response, including generated notices, has at most **8 KiB UTF-8 text**.
 Large output retains its beginning and latest tail.
 Consecutive progress redraws from one producer are compacted within a response interval: carriage return replaces the frame, backspace removes a Unicode scalar, and CRLF remains a newline.
-Other controls stay literal.
 Raw streams use incremental decoding; invalid UTF-8 is replaced for display, not in retained raw logs.
+
+Previews project the following [ANSI controls](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) to plain text:
+
+| Control                                                                 | Preview behavior                                                                                                                                      |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SGR (`CSI ... m`), including semicolon/colon color parameters           | Remove styling and preserve text.                                                                                                                     |
+| Erase line (`CSI K` or `CSI 0 K`)                                       | Erase the current frame after CR; otherwise leave it unchanged.                                                                                       |
+| Erase whole line (`CSI 2 K`)                                            | Erase the current frame, including any omitted middle. Finished lines remain.                                                                         |
+| OSC title, clipboard, and hyperlink commands; DCS, SOS, PM, APC strings | Suppress payloads through the string terminator (`ESC \` or decoded U+009C); OSC also accepts BEL. Hyperlink labels outside the commands remain text. |
+| Other complete CSI/ESC controls and decoded C1 controls                 | Suppress the control without screen or cursor emulation.                                                                                              |
+
+Parsing is incremental within one contiguous producer/response interval.
+Each native launcher or preparation diagnostic reader is a separate producer from worker stderr and other native readers.
+Producer switches, response cuts, images, notices, completion, and retirement discard incomplete controls.
+An unterminated control string suppresses the rest of that interval; its payload is never buffered.
+CSI syntax is inspected up to 128 bytes; longer sequences are suppressed through their final character.
+ESC intermediate syntax is consumed without buffering.
+Outside strings, a new ESC restarts parsing, CR/LF/backspace cancel incomplete controls and retain their ordinary behavior, and an invalid scalar resumes plain text at that scalar.
+Decoded C1 introducers follow the same projection rules; isolated invalid raw C1 bytes still use UTF-8 replacement.
+These rules retain CR frame replacement and Unicode-scalar backspace, without terminal cell-width or multiline fidelity.
+Suppressed controls use no rendered-text allowance; retained raw logs keep their exact original bytes.
 
 Images have independent limits: 8 MiB encoded data, 64 KiB MIME metadata, and 4,096 images per undrained interval and complete result.
 Whole images are admitted; text limits do not consume their allowance.

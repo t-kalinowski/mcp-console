@@ -244,6 +244,11 @@ fn discover_rscript(
         }
         return Ok(rscript);
     }
+    #[cfg(windows)]
+    let selected = super::find_r_path_entry().unwrap_or_else(|| PathBuf::from("R"));
+    #[cfg(windows)]
+    let program = selected.as_path();
+    #[cfg(not(windows))]
     let program = Path::new("R");
     let mut command = resolver_command(program);
     command

@@ -37,8 +37,9 @@ R = Requirement(
     or (
         "PATH" in os.environ
         and any(
-            os.path.lexists(Path(directory) / ("R.exe" if os.name == "nt" else "R"))
+            os.path.lexists(Path(directory) / name)
             for directory in os.environ["PATH"].split(os.pathsep)
+            for name in (("R.exe", "R.bat", "R.cmd") if os.name == "nt" else ("R",))
         )
     ),
     "requires R_HOME or R on PATH",
@@ -107,8 +108,8 @@ SQL = Requirement(
 )
 R_EVENT_LOOP = Requirement(
     "R event loop",
-    POSIX.available,
-    "Windows idle R callback integration is deferred",
+    WORKER.available,
+    "requires a supported built-in worker host",
 )
 SYSTEM_PYTHON = Path("/usr/bin/python3")
 FRAMEWORK_PYTHON = Path(

@@ -271,7 +271,6 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     let init = unsafe { *library.get::<ReplInit>(b"R_ReplDLLinit\0")? };
     let do_one = unsafe { *library.get::<ReplDoOne>(b"R_ReplDLLdo1\0")? };
     let top_level_exec = unsafe { *library.get::<TopLevelExec>(b"R_ToplevelExec\0")? };
-    #[cfg(unix)]
     let events = native::Events::load(&library, top_level_exec)?;
     let check_interrupt = unsafe { *library.get::<CheckUserInterrupt>(b"R_CheckUserInterrupt\0")? };
     unsafe {
@@ -287,7 +286,6 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
             nil: libr::R_NilValue,
         });
     }
-    #[cfg(unix)]
     events.install()?;
     R_CHECK_USER_INTERRUPT
         .set(check_interrupt)
@@ -306,7 +304,6 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
 
 fn run_ready_handlers(graphics: &crate::r_graphics::Bridge) -> Result<(), String> {
     defer_interrupts(|| graphics.begin(), check_interrupts)?;
-    #[cfg(unix)]
     native::run_ready_handlers();
     finish_console_stdin_operation()?;
     defer_interrupts(|| graphics.finish(), check_interrupts)?;

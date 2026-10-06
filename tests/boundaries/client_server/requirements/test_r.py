@@ -304,6 +304,7 @@ def test_prepares_r_requirements_after_worker_startup(
 
 @requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
+@platform_snapshots("win32")
 def test_stops_live_preparation_for_idle_callback_input(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -355,10 +356,15 @@ def test_stops_live_preparation_for_idle_callback_input(
         requirements={"python": ["py-yaml12>=0"]},
     )
     assert result["isError"] is True, result
+    retirement = (
+        "[worker exited with status 1]"
+        if sys.platform == "win32"
+        else "[worker terminated by signal 9]"
+    )
     assert result["content"][0]["text"] == (
         '[idle R callback requested input "later> " during requirement '
         "preparation; collect callback input with send before preparing "
-        "requirements]\n[worker terminated by signal 9]\n"
+        f"requirements]\n{retirement}\n"
         "[worker stopped: in-memory state lost]"
     ), result
     return client.finish()
