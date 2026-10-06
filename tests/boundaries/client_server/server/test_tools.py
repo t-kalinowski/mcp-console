@@ -124,6 +124,9 @@ def test_initializes_and_lists_tools(
         )
     companions = {
         "custom.yaml": _initializes_and_lists_tools(binary, execution, custom=True),
+        "custom-sql.yaml": _initializes_and_lists_tools(
+            binary, execution, custom=True, languages=("sql",)
+        ),
         "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True),
         "python-only.yaml": _initializes_and_lists_tools(
             binary, execution, python_only=True
@@ -132,7 +135,14 @@ def test_initializes_and_lists_tools(
             binary, execution, python_only=True, python_managed=True
         ),
         "r-sql.yaml": _initializes_and_lists_tools(
-            binary, execution, languages="r,sql"
+            binary, execution, bootstrap_languages="r,sql"
+        ),
+        "sql.yaml": _initializes_and_lists_tools(binary, execution, languages=("sql",)),
+        "sql-python.yaml": _initializes_and_lists_tools(
+            binary, execution, languages=("sql", "python")
+        ),
+        "configured-r-sql.yaml": _initializes_and_lists_tools(
+            binary, execution, languages=("r", "sql")
         ),
     }
     if execution == SANDBOXED:
@@ -161,12 +171,13 @@ def _initializes_and_lists_tools(
     python_managed: bool = False,
     proxy: bool = False,
     workspace_profile: bool = False,
-    languages: str | None = None,
+    bootstrap_languages: str | None = None,
+    languages: tuple[str, ...] | None = None,
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("MCP_CONSOLE_LANGUAGES", None)
-    if languages is not None:
-        environment["MCP_CONSOLE_LANGUAGES"] = languages
+    if bootstrap_languages is not None:
+        environment["MCP_CONSOLE_LANGUAGES"] = bootstrap_languages
     with tempfile.TemporaryDirectory() as library:
         if bare:
             environment = bare_runtime_environment(environment, Path(library))
@@ -205,9 +216,15 @@ def _initializes_and_lists_tools(
         with McpClient(
             binary,
             execution.serve(
-                *("--worker", str(Path(__file__).resolve().parents[3] / "fixtures/zod"))
+                *(
+                    "--worker",
+                    str(Path(__file__).resolve().parents[3] / "fixtures/zod"),
+                )
                 if custom
-                else ()
+                else (),
+                *("-c", "languages=" + json.dumps(languages))
+                if languages is not None
+                else (),
             ),
             environment,
             workspace,
@@ -217,6 +234,14 @@ def _initializes_and_lists_tools(
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
             send = listed_tools[0]
+            if languages is not None:
+                assert set(send["inputSchema"]["properties"]) == {
+                    *languages,
+                    "control",
+                    "requirements",
+                    "stdin",
+                    "timeout_ms",
+                }, send
             description = send["description"]
             if custom:
                 assert "custom-worker" in description
@@ -234,7 +259,10 @@ def _initializes_and_lists_tools(
                 )
                 assert "attach the database read-only" in description
                 assert "managed defaults include SQLite when" in description
-                assert "Use R for vectorized data and string operations" in description
+                if "r" in send["inputSchema"]["properties"]:
+                    assert (
+                        "Use R for vectorized data and string operations" in description
+                    )
                 assert 'requirements={"action":"add","duckdb":["fts"]}' in description
             if proxy:
                 assert (
