@@ -992,7 +992,9 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
                 assert "execute:\n  eval: false\n" in pending_quarto, pending_quarto
                 assert "environment: unknown" in pending_quarto, pending_quarto
                 client.expect(
-                    "[worker starting]", requirements={"action": "get"}, timeout_ms=0
+                    "\n[phase: startup]\n[worker starting]",
+                    requirements={"action": "get"},
+                    timeout_ms=0,
                 )
                 release.release()
                 client.send(requirements={"action": "get"})
@@ -1055,7 +1057,9 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
                 reached.wait("discovery awaiting release")
                 assert os.read(alive, 1) == b"1"
                 client.expect(
-                    "[worker starting]", requirements={"action": "get"}, timeout_ms=0
+                    "\n[phase: startup]\n[worker starting]",
+                    requirements={"action": "get"},
+                    timeout_ms=0,
                 )
                 sessions = root / ".agents/console/sessions"
                 assert not list(sessions.glob("*/artifacts/*"))
@@ -1116,7 +1120,7 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
                 reached.wait("discovery awaiting failure release")
                 assert os.read(alive, 1) == b"1"
                 client.expect(
-                    "[worker starting]",
+                    "\n[phase: startup]\n[worker starting]",
                     requirements={"action": "get"},
                     timeout_ms=0,
                 )

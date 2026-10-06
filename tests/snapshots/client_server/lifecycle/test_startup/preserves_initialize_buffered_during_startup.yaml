@@ -10,7 +10,10 @@ send:
 result:
   content:
     - type: text
-      text: "[worker starting]"
+      text: |-
+
+        [phase: dependency preparation]
+        [worker starting]
   isError: false
 ---
 send:

@@ -170,7 +170,9 @@ def test_preserves_initialize_buffered_during_startup(
         client.initialize_and_list_tools()
         client.request("ping")
         client.send(timeout_ms=0)
-        assert last_tool_text(client) == "[worker starting]"
+        assert last_tool_text(client) == (
+            "\n[phase: dependency preparation]\n[worker starting]"
+        )
         client.send(r="must not run", requirements={"r": [""]})
         assert client.transcript[-1]["result"]["isError"] is True
         assert fixture.invocations() == invocations, (

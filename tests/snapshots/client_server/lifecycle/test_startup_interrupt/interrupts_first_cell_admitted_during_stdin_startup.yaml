@@ -8,7 +8,10 @@ send:
 result:
   content:
     - type: text
-      text: "[worker starting]"
+      text: |-
+
+        [phase: startup]
+        [worker starting]
   isError: false
 ---
 send:
@@ -19,7 +22,7 @@ result:
     - type: text
       text: |-
 
-        [elapsed: <elapsed>s since admission; no new output]
+        [elapsed: <elapsed>s since admission; no new output; phase: startup]
         [running; poll with an empty send]
   isError: false
 ---
@@ -31,7 +34,7 @@ result:
     - type: text
       text: |-
 
-        [elapsed: <elapsed>s since admission; no new output]
+        [elapsed: <elapsed>s since admission; no new output; phase: startup]
         [running; poll with an empty send]
   isError: false
 ---

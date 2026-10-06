@@ -190,7 +190,7 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         root,
     ):
         client.send(stdin="old input\n", timeout_ms=0)
-        assert last_tool_text(client) == "[worker starting]"
+        assert last_tool_text(client) == "\n[phase: startup]\n[worker starting]"
         started.wait("stdin startup has not spawned its first resolver")
         assert not (root / "resolver.jsonl").exists()
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
