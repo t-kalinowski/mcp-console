@@ -202,7 +202,13 @@ pub(crate) fn writable_roots(settings: &SandboxSettings) -> Result<Vec<PathBuf>,
         // tools::R_user_dir appends R/<package> even to R_USER_CACHE_DIR.
         r_cache.join("R/reticulate"),
         duckdb_extension_directory(settings)?.expect("absolute resolver HOME"),
-        env("MPLCONFIGDIR").unwrap_or_else(|| xdg_cache.join("matplotlib")),
+        env("MPLCONFIGDIR").unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                home.join(".matplotlib")
+            } else {
+                xdg_cache.join("matplotlib")
+            }
+        }),
         env("RENV_PATHS_ROOT").unwrap_or_else(|| r_cache.join("R/renv")),
         r_cache.join("R/pkgcache"),
     ];
