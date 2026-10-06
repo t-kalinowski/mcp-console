@@ -943,6 +943,142 @@ def test_sql_only_uses_hidden_python_provider(
     return [{"sql_only_hidden_python": True, "restart_selection": True}]
 
 
+def python_setup_checkpoint() -> str:
+    # Module defaults run after SQL installation. Keep the second callback
+    # observable so native SQL must complete setup and R SQL must bypass it.
+    # fmt: python
+    return code("""
+        import __main__
+        import numpy as np
+
+        __main__.runtime_identity = object()
+        __main__.runtime_identity_id = id(__main__.runtime_identity)
+        original_get_printoptions = np.get_printoptions
+
+        def resume_configuration():
+            np.get_printoptions = original_get_printoptions
+            assert id(__main__.runtime_identity) == __main__.runtime_identity_id
+            print("Python setup resumed with same objects")
+            return original_get_printoptions()
+
+        def configuration_checkpoint():
+            np.get_printoptions = resume_configuration
+            input("Python SQL setup> ")
+            return original_get_printoptions()
+
+        np.get_printoptions = configuration_checkpoint
+        """)
+
+
+@requires(POSIX, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_sql_only_retries_interrupted_python_setup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        modules = Path(temporary)
+        (modules / "sitecustomize.py").write_text(
+            f"exec(compile({json.dumps(python_setup_checkpoint())}, '<SQL setup checkpoint>', 'exec'))"
+        )
+        environment = dict(
+            os.environ,
+            MCP_CONSOLE_LANGUAGES="sql",
+            RETICULATE_PYTHONPATH=str(modules),
+        )
+        with McpClient(
+            binary,
+            execution.serve("-c", "sql.provider=python", "-c", "sql.options.threads=2"),
+            environment,
+        ) as client:
+            client.initialize_and_list_tools()
+            properties = client.transcript[-1]["result"]["tools"][0]["inputSchema"][
+                "properties"
+            ]
+            assert (
+                "sql" in properties
+                and "python" not in properties
+                and "r" not in properties
+            )
+            handshake_length = len(client.transcript)
+            client.expect(
+                '[input requested: "Python SQL setup> "]\n[waiting for stdin]',
+                sql="CREATE TABLE skipped AS SELECT 99 AS answer",
+            )
+            client.send(control="interrupt", timeout_ms=0)
+            assert "KeyboardInterrupt" in last_tool_text(client), client.transcript[-1]
+            client.expect(
+                "Python setup resumed with same objects\nthreads\n-------\n2\n",
+                sql="SELECT current_setting('threads') AS threads",
+            )
+            client.expect(
+                "skipped_tables\n--------------\n0\n",
+                sql="SELECT count(*) AS skipped_tables FROM information_schema.tables WHERE table_name = 'skipped'",
+            )
+            client.expect(
+                "Count\n-----\n1\n", sql="CREATE TABLE retained AS SELECT 42 AS answer"
+            )
+            client.expect("answer\n------\n42\n", sql="SELECT answer FROM retained")
+            return [
+                {"sql_only_tool_surface": True},
+                *client.finish()[handshake_length:],
+            ]
+
+
+@requires(POSIX, SQL, R)
+@executions(DIRECT, SANDBOXED)
+def test_selected_r_bypasses_incomplete_python_setup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from boundaries.client_server.python.test_setup import deferred_selection_client
+
+    with tempfile.TemporaryDirectory() as temporary:
+        modules = Path(temporary)
+        (modules / "sitecustomize.py").write_text(
+            f"exec(compile({json.dumps(python_setup_checkpoint())}, '<SQL setup checkpoint>', 'exec'))"
+        )
+        with deferred_selection_client(
+            binary, execution.serve("-c", "sql.provider=python")
+        ) as client:
+            client.expect(
+                r=f"Sys.setenv(RETICULATE_PYTHONPATH = {json.dumps(str(modules))})"
+            )
+            client.expect(
+                # fmt: r
+                r=code("""
+                    retained_pid <- Sys.getpid()
+                    native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+                    invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
+                    DBI::dbBegin(native)
+                    console_sql_connection(native)
+                    """),
+            )
+            client.expect(
+                '[input requested: "Python SQL setup> "]\n[waiting for stdin]',
+                python="never_run = True",
+            )
+            client.send(control="interrupt", timeout_ms=0)
+            assert "KeyboardInterrupt" in last_tool_text(client), client.transcript[-1]
+            client.expect(
+                "# A tibble: 1 × 1\n   answer\n  <int32>\n1      43\n",
+                sql="UPDATE selected SET answer = 43 RETURNING answer",
+            )
+            client.expect(
+                # fmt: r
+                r=code("""
+                    stopifnot(Sys.getpid() == retained_pid, identical(sql_connection(), native))
+                    DBI::dbRollback(native)
+                    stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
+                    """),
+            )
+            client.expect(
+                "Python setup resumed with same objects\n",
+                python='assert "never_run" not in globals()',
+            )
+            return json.loads(
+                json.dumps(client.finish()).replace(str(modules), "<startup modules>")
+            )
+
+
 @requires(SQL, R)
 @executions(DIRECT, SANDBOXED)
 def test_invalid_engine_option_does_not_fall_back(

@@ -140,6 +140,7 @@ The working-directory import entry follows `os.chdir()`.
 NumPy/pandas display defaults use width 200 without overwriting nondefault startup settings or later user changes.
 Bridge attachment preserves the running interpreter, objects, selected connection, and user stream redirections.
 Interrupted setup can retry completed-safe steps; incompatible identity or unsafe partial initialization requires replacement.
+Python-owned SQL cells also finish incomplete Python setup before execution, including when Python is hidden in a SQL-only session.
 See [current limitations](#current-limitations).
 
 Main-thread text uses Console channels.
@@ -195,6 +196,7 @@ console_sql_connection(None)  # Restore the existing managed catalog.
 
 The latest selection controls SQL cells.
 An R connection selected before Python initializes can execute SQL without starting the configured Python managed provider; later Python initialization preserves that selection.
+SQL on a selected R connection can continue while Python setup is incomplete without resuming that setup.
 Interrupting selection replay leaves Python setup incomplete; a later Python cell retries setup while preserving the R connection, its transaction, and live worker state.
 User connections remain user-owned; restoring managed DuckDB does not close them.
 Never disconnect Console's managed connection.

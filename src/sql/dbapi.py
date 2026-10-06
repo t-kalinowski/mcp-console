@@ -380,3 +380,7 @@ def sql_connection():
     if _connection is None:
         _connection = _ensure_managed_connection()
     return _connection
+
+
+def uses_r() -> bool:
+    return _r_selected
