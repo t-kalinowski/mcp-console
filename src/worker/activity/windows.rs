@@ -1,4 +1,4 @@
-use super::super::r_integration::Integration;
+use super::super::r_integration::{Integration, initialized};
 use super::super::{core, interrupt};
 use crate::worker_protocol::ServerMessage;
 
@@ -26,7 +26,7 @@ fn receive_idle_command() -> Result<Option<ServerMessage>, String> {
     // Even buffered bytes can be an incomplete frame. The Windows idle read
     // must retain its interrupt wakeup until the whole command is available.
     core::worker_reader()?
-        .receive_or_wake(interrupt::windows_wakeup())
+        .receive_or_wake(interrupt::windows_wakeup(), initialized())
         .map_err(|error| format!("worker sideband read failed: {error}"))
 }
 
