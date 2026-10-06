@@ -18,17 +18,17 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8050
+        text_bytes: 8162
         concat:
           - |
             zod stdin closed
           - repeat: x
-            count: 3887
+            count: 3951
           - |
 
-            [output omitted: 4186513 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/session.log]
+            [output omitted: 4186385 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/session.log]
           - repeat: y
-            count: 3904
+            count: 3968
           - |-
 
             [active evaluation stopped by session restart request]

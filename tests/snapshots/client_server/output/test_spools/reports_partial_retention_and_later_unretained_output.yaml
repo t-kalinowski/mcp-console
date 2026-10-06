@@ -18,13 +18,13 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8077
+        text_bytes: 8061
         concat:
           - repeat: x
             count: 3840
           - |
 
-            [output omitted: 25158151 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000001.log; logs contain prefixes; later raw text unavailable]
+            [output omitted: 25158151 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000001.log; logs contain prefixes; later raw text unavailable]
           - repeat: x
             count: 3840
           - |-
@@ -40,13 +40,13 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8110
+        text_bytes: 8094
         concat:
           - repeat: y
             count: 3968
           - |
 
-            [output omitted: 8380679 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000001.log; logs contain prefixes; later raw text unavailable]
+            [output omitted: 8380679 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000001.log; logs contain prefixes; later raw text unavailable]
           - repeat: y
             count: 3968
   isError: false

@@ -19,13 +19,13 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8029
+        text_bytes: 8013
         concat:
           - repeat: x
             count: 3904
           - |
 
-            [output omitted: 41935302 UTF-8 bytes; retained logs on Console host: .agents/console/sessions/<run ID>/outputs/]
+            [output omitted: 41935302 UTF-8 bytes; retained logs: .agents/console/sessions/<run ID>/outputs/]
 
             [active evaluation stopped by session restart request]
             [worker stopped: in-memory state lost]
