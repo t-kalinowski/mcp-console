@@ -459,9 +459,7 @@ def resolve_public_python_version(
     # fmt: r
     r = code(rf"""
         reticulate::py_require(
-          python_version = {
-            constraints_r
-          },
+          python_version = {constraints_r},
           action = "set"
         )
         result <- tryCatch(
