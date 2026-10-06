@@ -5,6 +5,7 @@ base::local(
     selected <- NULL
     inspected <- NULL
     selection_callback <- NULL
+    initializing <- FALSE
     incomplete_attachment <- FALSE
 
     same_python_selection <- function(requested, running) {
@@ -113,6 +114,9 @@ base::local(
         # which has already invoked this callback.
         callback <- getOption("reticulate.python.beforeInitialized")
         if (is.function(callback)) {
+          was_initializing <- initializing
+          initializing <<- TRUE
+          on.exit(initializing <<- was_initializing, add = TRUE)
           callback()
           selection_callback <<- callback
         }
@@ -313,6 +317,9 @@ base::local(
             call. = FALSE
           )
         }
+        was_initializing <- initializing
+        initializing <<- TRUE
+        on.exit(initializing <<- was_initializing, add = TRUE)
         completed <- FALSE
         on.exit(
           {
@@ -345,6 +352,7 @@ base::local(
         invisible(result)
       })
       original_py <- activeBindingFunction("py", namespace)
+      lazy_main <- NULL
       was_locked <- bindingIsLocked("py", namespace)
       if (was_locked) {
         unlockBinding("py", namespace)
@@ -352,10 +360,20 @@ base::local(
       makeActiveBinding(
         "py",
         function() {
-          # Reticulate's getter otherwise returns NULL until its own attachment,
-          # even when Console already owns a live Python interpreter.
-          namespace$ensure_python_initialized()
-          original_py()
+          if (!is.null(globals$py_config)) {
+            namespace$ensure_python_initialized()
+            return(original_py())
+          }
+          # Initialization hooks retain reticulate's previous NULL behavior.
+          if (initializing) {
+            return(NULL)
+          }
+          # Package conflict checks read active bindings. A delayed module
+          # attaches only on attribute access, through reticulate's own proxy.
+          if (is.null(lazy_main)) {
+            lazy_main <<- namespace$import_main(delay_load = TRUE)
+          }
+          lazy_main
         },
         namespace
       )
