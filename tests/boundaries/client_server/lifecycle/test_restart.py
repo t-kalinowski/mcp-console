@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.previews import (
     compact_previews,
@@ -65,7 +66,10 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
         )
         client.initialize_and_list_tools()
         client.send(r="wait for stdin close", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         wait_for_marker(
             temporary_path,
             "zod-waiting-for-stdin-close",
@@ -294,7 +298,10 @@ def test_restart_force_stops_stalled_worker(
         try:
             client.initialize_and_list_tools()
             client.send(r="stall", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             pid_marker = wait_for_marker(
                 temporary_path,
                 "zod-worker-pid",

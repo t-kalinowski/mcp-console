@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import elapsed_progress, without_elapsed
 from support.allocations import AllocationProfile
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
@@ -328,7 +329,10 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
             try:
                 profile.pause_results(False)
                 client.send(r="preview recovery intervals", timeout_ms=0)
-                assert last_tool_text(client) == "\n[running; poll with an empty send]"
+                assert (
+                    without_elapsed(last_tool_text(client))
+                    == "\n[running; poll with an empty send]"
+                )
                 profile.pause_results(True)
                 emitted = []
                 for index in range(3):
@@ -343,7 +347,9 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
                         pending = client.start_send(timeout_ms=0)
                         cancel_result(client, pending, reached, release)
                 profile.pause_results(False)
-                result = client.send(timeout_ms=0)
+                # The interrupt grace advances cell age before recovery. Replay
+                # must still match the original journaled progress text exactly.
+                result = client.send(control="interrupt", timeout_ms=0)
                 assert not result["isError"], result
                 recorded = next(
                     event["result"]
@@ -356,16 +362,20 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
                 assert result["content"] == recorded["content"]
                 assert result["isError"] == recorded["isError"]
                 text = result["content"][0]["text"]
+                assert elapsed_progress(text)[1] is False
                 state = "\n[running; poll with an empty send]"
                 assert text.endswith(state)
-                assert_preview(text.removesuffix(state), emitted[0])
+                assert_preview(without_elapsed(text).removesuffix(state), emitted[0])
                 assert "internal/events.jsonl" not in text
                 assert "outputs/call-000002.log" in text
                 assert cell_text(client, 2) == "".join(emitted)
                 client.send(timeout_ms=0)
                 later = last_tool_text(client)
+                assert elapsed_progress(later)[1] is False
                 assert later.endswith(state)
-                assert_preview(later.removesuffix(state), "".join(emitted[1:]))
+                assert_preview(
+                    without_elapsed(later).removesuffix(state), "".join(emitted[1:])
+                )
                 assert "outputs/call-000002.log" in later
                 worker_release.release()
                 client.send()

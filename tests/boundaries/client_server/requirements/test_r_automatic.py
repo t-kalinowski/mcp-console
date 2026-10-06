@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.requirements import POSIX, PROCESS_EVENTS, SQL, command, requires
 from support.assertions import (
     entry_result_text,
@@ -951,7 +952,8 @@ def test_restart_discards_unactivated_r_candidate(
             restart = client.start_send(control="restart")
             client.receive_many([evaluation, restart])
             assert (
-                entry_result_text(evaluation) == "\n[running; poll with an empty send]"
+                without_elapsed(entry_result_text(evaluation))
+                == "\n[running; poll with an empty send]"
             )
             assert entry_result_text(restart) == (
                 "[active evaluation stopped by session restart request]\n"
@@ -1010,7 +1012,8 @@ def test_rejects_preparation_while_automatic_r_resolver_is_running(
             started.wait("automatic R resolver")
             client.receive(evaluation)
             assert (
-                entry_result_text(evaluation) == "\n[running; poll with an empty send]"
+                without_elapsed(entry_result_text(evaluation))
+                == "\n[running; poll with an empty send]"
             )
             preparation = client.start_send(
                 requirements={"r": ["english"]},

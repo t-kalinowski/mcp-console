@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed, without_elapsed_result
 from support.requirements import POSIX, PROCESS_EVENTS, R, requires
 from support.assertions import entry_result_text, last_result_text
 from support.checkpoints import FifoCheckpoint
@@ -205,7 +206,8 @@ def test_times_out_and_polls_automatic_python_resolution(
             started.wait("automatic Python resolver")
             client.receive(evaluation)
             assert (
-                entry_result_text(evaluation) == "\n[running; poll with an empty send]"
+                without_elapsed(entry_result_text(evaluation))
+                == "\n[running; poll with an empty send]"
             )
 
             release.release()
@@ -299,7 +301,10 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
                 automatic_interrupt_cell_ran = True
                 """)
             client.send(python=python, timeout_ms=0)
-            assert last_result_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_result_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             started.wait("automatic Python resolver")
             resolver = [
                 child
@@ -435,7 +440,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             activation_ready.wait("automatic managed Python activation")
             client.receive(evaluation)
             evaluation_result = evaluation["result"]
-            assert evaluation_result == {
+            assert without_elapsed_result(evaluation_result) == {
                 "content": [
                     {
                         "type": "text",

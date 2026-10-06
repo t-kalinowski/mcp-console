@@ -51,6 +51,16 @@ fn interrupted_cell_not_run_response(wait: EvaluationWait) -> Response {
 }
 
 impl Client {
+    /// Keep signaling responsive without draining another call's output interval.
+    fn unobserved_running_response(&self) -> Result<Response, String> {
+        let response = self
+            .current_evaluation()?
+            .map_or_else(Response::default, |active| {
+                active.evaluation.unobserved_progress()
+            });
+        Ok(output::render_response(SendResponse::Running(response)))
+    }
+
     pub(super) async fn send_controlled(
         &self,
         control: SendControl,
@@ -140,9 +150,9 @@ impl Client {
                     Ok(control) => control,
                     Err(_) => {
                         // The interrupted control retains output recovery ownership.
-                        return Ok(ControlledEvaluation::Returned(output::render_response(
-                            SendResponse::Running(Response::default()),
-                        )));
+                        return Ok(ControlledEvaluation::Returned(
+                            self.unobserved_running_response()?,
+                        ));
                     }
                 };
                 let generation = control.generation();
@@ -209,7 +219,7 @@ impl Client {
                 cell_not_run,
             },
             Ok(None) => ControlledEvaluation::Returned(output::render_response(
-                SendResponse::Running(Response::default()),
+                SendResponse::Running(evaluation.unobserved_progress()),
             )),
             Err(error) => {
                 let mut response = Response::default();
@@ -269,9 +279,9 @@ impl Client {
                 Ok(operation) => operation,
                 Err(_) => {
                     // The preparation retains output recovery ownership.
-                    return Ok(ControlledEvaluation::Returned(output::render_response(
-                        SendResponse::Running(Response::default()),
-                    )));
+                    return Ok(ControlledEvaluation::Returned(
+                        self.unobserved_running_response()?,
+                    ));
                 }
             }
         } else {

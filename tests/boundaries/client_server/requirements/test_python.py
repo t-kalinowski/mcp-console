@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed_result
 from support.requirements import POSIX, PROCESS_EVENTS, R_EVENT_LOOP, requires
 from support.assertions import (
     last_tool_text,
@@ -565,7 +566,7 @@ def restart_discards_pre_marker_activation(
             activation_ready.wait("managed Python activation")
             client.receive(evaluation)
             evaluation_result = evaluation["result"]
-            assert evaluation_result == {
+            assert without_elapsed_result(evaluation_result) == {
                 "content": [
                     {
                         "type": "text",

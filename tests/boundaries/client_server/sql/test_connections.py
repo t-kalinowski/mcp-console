@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.requirements import NATIVE_FIXTURES, R, SQL, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
@@ -691,7 +692,7 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
             )
             started.wait("Python DB-API callback entered R")
             client.receive(evaluation)
-            assert evaluation["result"]["content"][0]["text"] == (
+            assert without_elapsed(evaluation["result"]["content"][0]["text"]) == (
                 "\n[running; poll with an empty send]"
             )
 
@@ -807,11 +808,17 @@ def test_interrupts_selected_python_dbapi_connection(
             checkpoints.extend((started, release))
 
             client.send(sql="WAIT", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             started.wait("SQL execution entered native interrupt checkpoint")
 
             client.send(control="interrupt", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             release.release()
             release = None
             client.send()
@@ -958,12 +965,15 @@ def test_interrupts_python_dbapi_provider_probe(
             evaluation = client.start_send(sql="ANSWER", timeout_ms=0)
             started.wait("Python DB-API provider probe started")
             client.receive(evaluation)
-            assert evaluation["result"]["content"][0]["text"] == (
+            assert without_elapsed(evaluation["result"]["content"][0]["text"]) == (
                 "\n[running; poll with an empty send]"
             )
 
             client.send(control="interrupt", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             release.release()
             release = None
             client.send(timeout_ms=30_000)

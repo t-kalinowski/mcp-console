@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import last_tool_text
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -62,7 +63,10 @@ def test_interrupts_running_worker_with_sigint(
                 timeout_ms=0,
             )
             assert client.transcript[-1]["id"] == target_id
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             control.connect(client)
             control.wait_for(target_id, "worker_operation_started")
 
@@ -140,7 +144,7 @@ def test_supervises_stopped_and_continued_workers(
             )
             assert readable, "relay supervision did not answer the interrupt request"
             client.receive(interrupt)
-            assert interrupt["result"] == {
+            assert without_elapsed_result(interrupt["result"]) == {
                 "content": [
                     {
                         "type": "text",

@@ -1,7 +1,9 @@
 ---
+!same-as custom MCP initialization for this execution mode
+---
 send:
-  python: never_run = True
-  timeout_ms: 0
+  r: stall
+  timeout_ms: 250
 result:
   content:
     - type: text
@@ -11,46 +13,39 @@ result:
         [running; poll with an empty send]
   isError: false
 ---
-send: {}
+send:
+  control: restart
+  r: stall
+  timeout_ms: 0
 result:
   content:
     - type: text
       text: |-
-        [worker sideband read failed: worker sideband closed]
-        [worker exited with status 47]
+        [active evaluation stopped by session restart request]
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+
+        [elapsed: <elapsed>s since admission; no new output]
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [active evaluation stopped by session restart request]
         [worker stopped: in-memory state lost]
         [starting new worker]
         [idle]
-  isError: true
----
-send:
-  python: assert 'never_run' not in globals(); counter = 1; counter
-  stdin: |
-    replacement
-  timeout_ms: 0
-result:
-  content:
-    - type: text
-      text: |-
-
-        [elapsed: <elapsed>s since admission; no new output]
-        [running; poll with an empty send]
   isError: false
 ---
-send: {}
+send:
+  r: echo after restart
 result:
   content:
     - type: text
       text: |
-        [input requested: "startup> "]
-        1
-  isError: false
----
-send:
-  python: counter
-result:
-  content:
-    - type: text
-      text: |
-        1
+        zod: after restart
   isError: false

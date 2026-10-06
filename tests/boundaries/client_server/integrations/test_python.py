@@ -20,6 +20,7 @@ from support.r import r_test_environment
 from support.normalization import code
 from support.records import Transcript
 from support.previews import assert_preview
+from support.progress import elapsed_progress, normalize_elapsed, without_elapsed
 from support.evidence import compact_text
 from support.requirements import POSIX, SQL, WORKER, command, requires
 from support.resolvers import (
@@ -390,7 +391,9 @@ def test_callable_preserves_mixed_language_state(
     def collected(chunks):
         # Completion without new output is represented by the server's done notice.
         return "".join(
-            chunk.removesuffix(running) for chunk in chunks if chunk != "[done]"
+            without_elapsed(chunk).removesuffix(running)
+            for chunk in chunks
+            if chunk != "[done]"
         )
 
     async def exercise():
@@ -575,7 +578,12 @@ def test_native_openai_agents_waits_for_console_output(
         ) as server:
             # The fixture stays blocked beyond the SDK's five-second default.
             result = await server.call_tool("send", {"r": "stall", "timeout_ms": 6_000})
-            return [result.model_dump(mode="json", by_alias=True, exclude_none=True)]
+            recorded = result.model_dump(mode="json", by_alias=True, exclude_none=True)
+            text = recorded["content"][0]["text"]
+            age, silent = elapsed_progress(text)
+            assert age >= 5.9 and silent
+            recorded["content"][0]["text"] = normalize_elapsed(text)
+            return [recorded]
 
     return asyncio.run(exercise())
 

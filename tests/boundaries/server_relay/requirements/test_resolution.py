@@ -31,6 +31,7 @@ from boundaries.server_relay._harness import (
     _receive_checkpointed,
     _tool_error,
 )
+from support.progress import without_elapsed
 from support.assertions import tool_text as _tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import stop_client
@@ -154,7 +155,7 @@ def test_send_timeout_includes_blocked_requirements_resolver(
                 evaluation,
                 "the evaluation after requirement resolution",
             )
-            assert _tool_text(evaluation["result"]) == (
+            assert without_elapsed(_tool_text(evaluation["result"])) == (
                 "\n[running; poll with an empty send]"
             )
             evaluation_release.release()
@@ -703,7 +704,7 @@ def test_idle_runtime_r_resolution_owns_environment_until_activation(
             _tool_error(preparation, "idle runtime R callback owns environment changes")
 
             assert (
-                _tool_text(client.send(r="42", timeout_ms=0))
+                without_elapsed(_tool_text(client.send(r="42", timeout_ms=0)))
                 == "\n[running; poll with an empty send]"
             )
             resolver_release.release()
