@@ -124,6 +124,9 @@ Cancellation targets retain matching labels on the request and notification; IDs
 
 ### Canonical handshake
 
+Client/server transcripts should generally retain the complete `initialize`, `notifications/initialized`, and `tools/list` exchange before ordinary calls, including each session in a multi-session case.
+Launch-rejection or protocol-failure cases may have no handshake or an incomplete exchange; record what occurred.
+
 `client_server/server/test_tools::initializes_and_lists_tools` owns full handshake snapshots and their configured/direct/bare/runtime variants.
 Update it before other affected cases.
 The runner compares the complete exchange before replacing an exact match with `!same-as`; the tag records that comparison and does not load a file.

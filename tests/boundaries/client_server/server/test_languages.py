@@ -53,20 +53,6 @@ def _tool(client: McpClient) -> dict:
     return tool
 
 
-def _surface(tool: dict) -> dict:
-    properties = tool["inputSchema"]["properties"]
-    return {
-        "description": tool["description"],
-        "sources": {
-            name: properties[name]
-            for name in ("r", "python", "sql")
-            if name in properties
-        },
-        "session_fields": sorted(set(properties) - {"r", "python", "sql"}),
-        "requirements_fields": sorted(properties["requirements"]["properties"]),
-    }
-
-
 @requires(SQL)
 def test_configures_captured_tool_surface(binary: Path) -> Transcript:
     transcript = []
@@ -114,8 +100,8 @@ def test_configures_captured_tool_surface(binary: Path) -> Transcript:
                 } == set(languages)
                 config.write_text("languages: [r]\n", encoding="utf-8")
                 assert _tool(client) == tool
-                client.finish()
-                transcript.append({"languages": languages, "tool": _surface(tool)})
+                transcript.append({"languages": languages})
+                transcript.extend(client.finish()[:3])
     return transcript
 
 
@@ -161,8 +147,8 @@ def test_builtin_guidance_matches_visible_languages(binary: Path) -> Transcript:
                 assert {"r", "python", "duckdb"} <= set(
                     properties["requirements"]["properties"]
                 )
-                client.finish()
-                transcript.append({"languages": languages, "tool": _surface(tool)})
+                transcript.append({"languages": languages})
+                transcript.extend(client.finish()[:3])
     return transcript
 
 
@@ -222,13 +208,11 @@ def test_sql_provider_guidance_is_independent_of_visibility(
                         {
                             "languages": languages,
                             "provider": "Python" if without_r else "R",
-                            "calls": [
-                                entry
-                                for entry in client.finish()[3:]
-                                if "send" in entry
-                            ],
                         }
                     )
+                    session = client.finish()
+                    transcript.extend(session[:3])
+                    transcript.extend(entry for entry in session[3:] if "send" in entry)
     return transcript
 
 
@@ -261,7 +245,10 @@ def test_rejects_hidden_source_before_custom_worker_effects(binary: Path) -> Tra
             result = client.send(sql="SELECT 1", wait_ms=0)
             assert "`r`" not in result["content"][0]["text"]
             assert "`python`" not in result["content"][0]["text"]
-            return [entry for entry in client.finish()[3:] if "send" in entry]
+            transcript = client.finish()
+            return transcript[:3] + [
+                entry for entry in transcript[3:] if "send" in entry
+            ]
 
 
 @requires(SQL)
@@ -370,10 +357,11 @@ def _sql_profile(
             assert "retained" not in last_tool_text(client)
             assert _tool(client) == tool
             # The provider-specific default inventory belongs to requirements tests.
-            # Assert inspection above; retain only this profile's SQL/control behavior.
-            return [
+            # Assert inspection above; retain the handshake and SQL/control behavior.
+            transcript = client.finish()
+            return transcript[:3] + [
                 entry
-                for entry in client.finish()[3:]
+                for entry in transcript[3:]
                 if "send" in entry
                 and entry["send"] != {"requirements": {"action": "get"}}
             ]
@@ -441,4 +429,7 @@ def test_missing_provider_recovers_without_setup_cell(
             client.send(sql="SELECT 42 AS recovered")
             assert "42" in last_tool_text(client)
             assert _tool(client) == tool
-            return [entry for entry in client.finish()[3:] if "send" in entry]
+            transcript = client.finish()
+            return transcript[:3] + [
+                entry for entry in transcript[3:] if "send" in entry
+            ]
