@@ -48,7 +48,7 @@ impl Selection {
     pub(crate) fn r_is_present() -> bool {
         // An explicit but invalid R_HOME, or a broken discovered installation,
         // must stay on the R path and report its own failure.
-        std::env::var_os("R_HOME").is_some() || crate::resolver::find_path_entry("R").is_some()
+        std::env::var_os("R_HOME").is_some() || crate::resolver::find_r_path_entry().is_some()
     }
 
     #[cfg(any(unix, windows))]

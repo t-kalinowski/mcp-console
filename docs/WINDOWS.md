@@ -13,6 +13,9 @@ The release workflow does not publish Windows wheels; Windows source checkouts c
 
 Install Rust's MSVC toolchain, Visual Studio's C++ build tools and Windows SDK, Python 3.11 or newer, and uv.
 For R execution, install current x64 R and set `R_HOME` to its installation directory (or place R on `PATH`).
+PATH discovery supports `R.exe`, `R.bat`, and `R.cmd`, including rig's batch launcher.
+It searches directories in PATH order, preferring `.exe`, then `.bat`, then `.cmd` within each directory.
+An explicit `R_HOME` takes precedence; a broken selected installation or launcher reports an error.
 R is not required to build or run Python-only sessions.
 Windows builds stage the pinned native sandbox executable and both Windows helpers.
 Installed wheels expose an environment-bound Python launcher so `uv tool install` can copy the command onto PATH while the native executable and verified helpers remain together under the tool environment's `libexec` directory.
@@ -130,7 +133,6 @@ The `.cmd` launchers work in PowerShell and Command Prompt; `python scripts/COMM
 Python 3.11 or newer is required; CI uses Python 3.13.
 
 Configure `R_HOME` before running the complete suite, and use the C locale to match CI.
-If `R` on PATH is a `.bat` or `.cmd` launcher, preflight can probe it successfully while Console's native `R.exe` discovery still treats R as absent.
 An explicit `R_HOME` selects the installation for runtime and resolver tests and enables R sandbox acceptance.
 Replace the example path below with the installed R directory.
 
