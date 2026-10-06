@@ -50,6 +50,8 @@ result:
           "packages": [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
             "scikit-learn"
           ]
         }

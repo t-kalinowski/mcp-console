@@ -20,6 +20,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb"
             ],
             "duckdb": [
@@ -40,6 +42,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
       duckdb:
         - sqlite
@@ -93,6 +97,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb"
             ],
             "duckdb": [
@@ -113,6 +119,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
       duckdb:
         - sqlite

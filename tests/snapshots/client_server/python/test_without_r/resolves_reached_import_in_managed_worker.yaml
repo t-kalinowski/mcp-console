@@ -54,6 +54,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb",
               "py-yaml12"
             ],
@@ -75,6 +77,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
         - py-yaml12
       duckdb:
@@ -126,6 +130,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb",
               "py-yaml12",
               "pydash"
@@ -148,6 +154,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
         - py-yaml12
         - pydash

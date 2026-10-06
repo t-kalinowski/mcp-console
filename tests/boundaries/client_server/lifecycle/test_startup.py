@@ -245,11 +245,15 @@ def test_first_cell_prepares_defaults_after_running_response(
               "duckdb",
               "arrow",
               "nanoarrow",
-              "yyjsonr"
+              "yyjsonr",
+              "ggplot2"
             )
             managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(all(defaults %in% list.files(.libPaths()[[managed_index]])))
-            stopifnot(identical(reticulate::py_require()$packages, c("numpy", "pandas")))
+            stopifnot(identical(
+              reticulate::py_require()$packages,
+              c("numpy", "pandas", "matplotlib", "plotnine")
+            ))
             cat("scientific defaults ready\n")
             """)
         client.send(r=r, timeout_ms=0)
@@ -276,6 +280,7 @@ def test_first_cell_prepares_defaults_after_running_response(
             "arrow",
             "nanoarrow",
             "yyjsonr",
+            "ggplot2",
             "jsonlite",
             "pillar",
             "tibble",

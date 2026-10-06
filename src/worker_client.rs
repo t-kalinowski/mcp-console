@@ -43,6 +43,7 @@ pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "arrow",
     "nanoarrow",
     "yyjsonr",
+    "ggplot2",
 ];
 
 #[cfg(not(windows))]

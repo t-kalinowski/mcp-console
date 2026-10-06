@@ -20,6 +20,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb"
             ],
             "duckdb": [
@@ -40,6 +42,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
       duckdb:
         - sqlite
@@ -70,6 +74,8 @@ result:
           "packages": [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
             "duckdb",
             "py-yaml12"
           ]
@@ -95,6 +101,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb"
             ],
             "duckdb": [
@@ -115,6 +123,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
       duckdb:
         - sqlite
@@ -145,6 +155,8 @@ result:
           "packages": [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
             "duckdb",
             "py-yaml12"
           ]
@@ -170,6 +182,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb"
             ],
             "duckdb": [
@@ -190,6 +204,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
       duckdb:
         - sqlite
@@ -224,6 +240,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb"
             ],
             "duckdb": [
@@ -244,6 +262,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
       duckdb:
         - sqlite

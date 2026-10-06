@@ -622,7 +622,12 @@ def test_prints_requirements_with_host_uv_cache(
                 "--no-config",
                 "--python",
             ], diagnostic
-            assert diagnostic["arguments"][11:] == ["numpy", "pandas"], diagnostic
+            assert diagnostic["arguments"][11:] == [
+                "numpy",
+                "pandas",
+                "matplotlib",
+                "plotnine",
+            ], diagnostic
             assert diagnostic["environment"] == {
                 "UV_CACHE_DIR": str(worker_cache),
                 "UV_DEFAULT_INDEX": "file:///worker-selected-index",
