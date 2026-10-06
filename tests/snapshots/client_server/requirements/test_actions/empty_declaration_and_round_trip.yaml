@@ -15,6 +15,7 @@ result:
               "DBI",
               "arrow",
               "duckdb",
+              "ggplot2",
               "nanoarrow",
               "reticulate",
               "tidyverse",
@@ -22,7 +23,9 @@ result:
             ],
             "python": [
               "numpy",
-              "pandas"
+              "pandas",
+              "matplotlib",
+              "plotnine"
             ],
             "duckdb": [
               "icu",
@@ -54,6 +57,7 @@ result:
         - DBI
         - arrow
         - duckdb
+        - ggplot2
         - nanoarrow
         - reticulate
         - tidyverse
@@ -61,6 +65,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
       duckdb:
         - icu
         - json
@@ -88,6 +94,7 @@ send:
       - DBI
       - arrow
       - duckdb
+      - ggplot2
       - nanoarrow
       - reticulate
       - tidyverse
@@ -95,6 +102,8 @@ send:
     python:
       - numpy
       - pandas
+      - matplotlib
+      - plotnine
     duckdb:
       - icu
       - json
@@ -122,6 +131,7 @@ result:
               "DBI",
               "arrow",
               "duckdb",
+              "ggplot2",
               "nanoarrow",
               "reticulate",
               "tidyverse",
@@ -129,7 +139,9 @@ result:
             ],
             "python": [
               "numpy",
-              "pandas"
+              "pandas",
+              "matplotlib",
+              "plotnine"
             ],
             "duckdb": [
               "icu",
@@ -161,6 +173,7 @@ result:
         - DBI
         - arrow
         - duckdb
+        - ggplot2
         - nanoarrow
         - reticulate
         - tidyverse
@@ -168,6 +181,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
       duckdb:
         - icu
         - json
@@ -212,6 +227,7 @@ result:
               "DBI",
               "arrow",
               "duckdb",
+              "ggplot2",
               "nanoarrow",
               "reticulate",
               "tidyverse",
@@ -219,7 +235,9 @@ result:
             ],
             "python": [
               "numpy",
-              "pandas"
+              "pandas",
+              "matplotlib",
+              "plotnine"
             ],
             "duckdb": [
               "icu",
@@ -251,6 +269,7 @@ result:
         - DBI
         - arrow
         - duckdb
+        - ggplot2
         - nanoarrow
         - reticulate
         - tidyverse
@@ -258,6 +277,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
       duckdb:
         - icu
         - json
@@ -350,7 +371,7 @@ send:
     import os
     import sys
 
-    assert not {"numpy", "pandas"} & {
+    assert not {"numpy", "pandas", "matplotlib", "plotnine"} & {
         d.metadata["Name"] for d in importlib.metadata.distributions()
     }
     marker = 42
@@ -359,12 +380,14 @@ send:
         json.loads("42"),
         importlib.util.find_spec("numpy"),
         importlib.util.find_spec("pandas"),
+        importlib.util.find_spec("matplotlib"),
+        importlib.util.find_spec("plotnine"),
     )
 result:
   content:
     - type: text
       text: |
-        (42, None, None)
+        (42, None, None, None, None)
   isError: false
 ---
 send:
@@ -514,7 +537,7 @@ send:
     import os
     import sys
 
-    assert not {"numpy", "pandas"} & {
+    assert not {"numpy", "pandas", "matplotlib", "plotnine"} & {
         d.metadata["Name"] for d in importlib.metadata.distributions()
     }
     marker = 42
@@ -523,12 +546,14 @@ send:
         json.loads("42"),
         importlib.util.find_spec("numpy"),
         importlib.util.find_spec("pandas"),
+        importlib.util.find_spec("matplotlib"),
+        importlib.util.find_spec("plotnine"),
     )
 result:
   content:
     - type: text
       text: |
-        (42, None, None)
+        (42, None, None, None, None)
   isError: false
 ---
 send:
@@ -751,6 +776,19 @@ result:
         - tibble
         - utf8
       python: []
+  isError: false
+---
+send:
+  python: |
+    import importlib.metadata
+
+    assert not {"numpy", "pandas", "matplotlib", "plotnine"} & {
+        d.metadata["Name"] for d in importlib.metadata.distributions()
+    }
+result:
+  content:
+    - type: text
+      text: "[done]"
   isError: false
 ---
 send:
@@ -1239,6 +1277,7 @@ result:
               "DBI",
               "arrow",
               "duckdb",
+              "ggplot2",
               "nanoarrow",
               "reticulate",
               "tidyverse",
@@ -1246,7 +1285,9 @@ result:
             ],
             "python": [
               "numpy",
-              "pandas"
+              "pandas",
+              "matplotlib",
+              "plotnine"
             ],
             "duckdb": [
               "icu",
@@ -1278,6 +1319,7 @@ result:
         - DBI
         - arrow
         - duckdb
+        - ggplot2
         - nanoarrow
         - reticulate
         - tidyverse
@@ -1285,6 +1327,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
       duckdb:
         - icu
         - json
@@ -1304,4 +1348,25 @@ result:
         - tibble
         - utf8
       python: []
+  isError: false
+---
+send:
+  python: |
+    import importlib.metadata
+
+    for package in ("numpy", "pandas", "matplotlib", "plotnine"):
+        assert importlib.metadata.version(package)
+    import matplotlib, plotnine
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: stopifnot(requireNamespace("ggplot2", quietly = TRUE))
+result:
+  content:
+    - type: text
+      text: "[done]"
   isError: false

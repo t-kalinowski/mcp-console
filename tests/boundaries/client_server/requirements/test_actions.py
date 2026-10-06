@@ -105,9 +105,24 @@ def test_empty_declaration_and_round_trip(
     client.initialize_and_list_tools()
     startup = inspect(client)
     assert startup["prepared"] is True
-    assert startup["requirements"]["python"] == ["numpy", "pandas"]
-    assert "tidyverse" in startup["requirements"]["r"]
-    assert "yyjsonr" in startup["requirements"]["r"]
+    assert startup["requirements"]["python"] == [
+        "numpy",
+        "pandas",
+        "matplotlib",
+        "plotnine",
+    ], startup
+    assert startup["requirements"]["r"] == sorted(
+        [
+            "tidyverse",
+            "reticulate",
+            "DBI",
+            "duckdb",
+            "arrow",
+            "nanoarrow",
+            "yyjsonr",
+            "ggplot2",
+        ]
+    ), startup
     assert startup["runtime_requirements"]["python"] == []
     client.send(requirements=dict(startup["requirements"], action="set"))
     assert inspect(client) == startup
@@ -133,7 +148,7 @@ def test_empty_declaration_and_round_trip(
         import os
         import sys
 
-        assert not {"numpy", "pandas"} & {
+        assert not {"numpy", "pandas", "matplotlib", "plotnine"} & {
             d.metadata["Name"] for d in importlib.metadata.distributions()
         }
         marker = 42
@@ -142,17 +157,19 @@ def test_empty_declaration_and_round_trip(
             json.loads("42"),
             importlib.util.find_spec("numpy"),
             importlib.util.find_spec("pandas"),
+            importlib.util.find_spec("matplotlib"),
+            importlib.util.find_spec("plotnine"),
         )
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "(42, None, None)\n"
+    assert last_tool_text(client) == "(42, None, None, None, None)\n"
     assert inspect(client) == empty
     client.send(r="stopifnot(identical(2L + 2L, 4L))")
     client.send(sql="SELECT 42 AS answer")
     assert inspect(client) == empty
     client.send(control="restart")
     client.send(python=python)
-    assert last_tool_text(client) == "(42, None, None)\n"
+    assert last_tool_text(client) == "(42, None, None, None, None)\n"
     assert inspect(client) == empty
 
     edited = dict(
@@ -178,6 +195,16 @@ def test_empty_declaration_and_round_trip(
     selected = inspect(client)
     assert selected["requirements"] == dict(
         edited, python_version=sorted(edited["python_version"])
+    )
+    client.expect(
+        # fmt: python
+        python=code("""
+            import importlib.metadata
+
+            assert not {"numpy", "pandas", "matplotlib", "plotnine"} & {
+                d.metadata["Name"] for d in importlib.metadata.distributions()
+            }
+            """),
     )
     client.send(requirements=dict(selected["requirements"], action="set"))
     assert last_tool_text(client) == "[prepared]"
@@ -211,6 +238,17 @@ def test_empty_declaration_and_round_trip(
     )
     client.send(control="restart", requirements={"action": "reset"})
     assert inspect(client)["requirements"] == startup["requirements"]
+    client.expect(
+        # fmt: python
+        python=code("""
+            import importlib.metadata
+
+            for package in ("numpy", "pandas", "matplotlib", "plotnine"):
+                assert importlib.metadata.version(package)
+            import matplotlib, plotnine
+            """),
+    )
+    client.expect(r='stopifnot(requireNamespace("ggplot2", quietly = TRUE))')
     return client.finish()
 
 
@@ -548,6 +586,8 @@ def test_records_requirement_boundaries(
         assert boundaries[2]["snapshot"]["requirements"]["python"] == [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
         ]
         quarto = (session / "transcript.qmd").read_text()
         assert "execute:\n  eval: false" in quarto
