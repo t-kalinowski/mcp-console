@@ -307,6 +307,7 @@ class WindowsWorkflow(unittest.TestCase):
             "windows_resolver.py",
             "windows_sandbox.py",
             "support/__init__.py",
+            "support/installation.py",
             "support/relay_commands.py",
             "support/relay_lifecycle.py",
         ):
