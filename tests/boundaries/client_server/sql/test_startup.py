@@ -16,6 +16,7 @@ from support.checkpoints import wait_for_worker_file
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.installation import installed_console
 from support.normalization import code
+from support.progress import without_elapsed_result
 from support.records import ToolResult, Transcript
 from support.requirements import POSIX, PROCESS_EVENTS, R, SQL, requires
 from support.resolvers import matplotlib_test_environment
@@ -142,7 +143,7 @@ def startup_sql_result(client: McpClient) -> ToolResult:
     running = "\n[running; poll with an empty send]"
     while True:
         assert result.get("isError") is not True, result
-        chunk = result["content"]
+        chunk = without_elapsed_result(result)["content"]
         last = chunk[-1]
         pending = last["type"] == "text" and last["text"].endswith(running)
         for item in chunk:
