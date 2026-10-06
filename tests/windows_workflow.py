@@ -589,7 +589,12 @@ class WindowsWorkflow(unittest.TestCase):
                 state = Path(arguments[arguments.index('--state-dir') + 1])
                 if '--status' in arguments:
                     configured = (state / 'ready').is_file()
-                    print(json.dumps({'configured': configured, 'helpers_available': True}))
+                    print(json.dumps({
+                        'configured': configured,
+                        'helpers_available': True,
+                        'offline_account': 'FixtureOffline',
+                        'online_account': 'FixtureOnline',
+                    }))
                     sys.exit(0 if configured else 1)
                 state.mkdir(parents=True, exist_ok=True)
                 if not os.environ.get('UNCONFIRMED_SETUP'):
@@ -606,7 +611,103 @@ class WindowsWorkflow(unittest.TestCase):
             "--github-env",
             str(exported),
         )
+        self.environment["READ_ACCESS_LOG"] = str(self.root / "read-access.jsonl")
+        self.stub(
+            "icacls",
+            dedent("""
+                import json
+                import os
+                from pathlib import Path
+                import sys
+
+                with Path(os.environ['READ_ACCESS_LOG']).open('a') as log:
+                    log.write(json.dumps(sys.argv[1:]) + '\\n')
+                if os.environ.get('FAIL_READ_ACCESS'):
+                    print('fixture read-access failure', file=sys.stderr)
+                    sys.exit(7)
+                """),
+        )
         return r_home, state, exported, arguments
+
+    def test_prepares_read_access_to_selected_runtime_assets(self):
+        r_home, _, exported, arguments = self.windows_preparation_fixture()
+        library = self.root / "R user library"
+        library.mkdir()
+        cache = self.root / "resolver cache"
+        cache.mkdir()
+        bundle = self.root / "libexec"
+        bundle.mkdir()
+        result = self.run_command(
+            "prepare-windows-tests",
+            *arguments,
+            *[
+                argument
+                for path in (
+                    self.commands,
+                    bundle,
+                    r_home,
+                    library,
+                    cache,
+                    Path(sys.prefix),
+                    Path(sys.base_prefix),
+                    self.commands,
+                )
+                for argument in ("--read-root", str(path))
+            ],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(exported.is_file())
+        grants = [
+            json.loads(line)
+            for line in (self.root / "read-access.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual(len(grants), len({grant[0] for grant in grants}))
+        self.assertTrue(
+            {
+                self.commands.resolve(),
+                bundle.resolve(),
+                r_home.resolve(),
+                library.resolve(),
+                cache.resolve(),
+                Path(sys.prefix).resolve(),
+                Path(sys.base_prefix).resolve(),
+            }.issubset({Path(grant[0]) for grant in grants}),
+            grants,
+        )
+        for grant in grants:
+            self.assertEqual(
+                grant[1:],
+                [
+                    "/grant",
+                    "FixtureOffline:(OI)(CI)RX",
+                    "FixtureOnline:(OI)(CI)RX",
+                ],
+            )
+
+    def test_failed_runtime_read_access_does_not_enable_tests(self):
+        _, _, exported, arguments = self.windows_preparation_fixture()
+        result = self.run_command(
+            "prepare-windows-tests",
+            *arguments,
+            "--read-root",
+            str(self.commands),
+            environment=self.environment | {"FAIL_READ_ACCESS": "1"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fixture read-access failure", result.stderr)
+        self.assertFalse(exported.exists())
+
+    def test_invalid_read_root_does_not_provision_or_enable_tests(self):
+        _, _, exported, arguments = self.windows_preparation_fixture()
+        for path in ("relative", str(self.root / "missing")):
+            with self.subTest(path=path):
+                result = self.run_command(
+                    "prepare-windows-tests", *arguments, "--read-root", path
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("existing absolute directory", result.stderr)
+        self.assertFalse(exported.exists())
+        self.assertFalse((self.root / "setup.jsonl").exists())
 
     def test_prepares_provisioned_windows_tests_and_reuses_ready_state(self):
         r_home, state, exported, arguments = self.windows_preparation_fixture()
@@ -641,6 +742,21 @@ class WindowsWorkflow(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Windows sandbox setup is not ready", result.stderr)
         self.assertFalse(exported.exists())
+
+    def test_unconfigured_required_state_does_not_provision(self):
+        _, _, exported, arguments = self.windows_preparation_fixture()
+        result = self.run_command(
+            "prepare-windows-tests", *arguments, "--require-configured"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Windows sandbox setup is not ready", result.stderr)
+        self.assertFalse(exported.exists())
+        commands = [
+            json.loads(line)
+            for line in (self.root / "setup.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual(len(commands), 1)
+        self.assertIn("--status", commands[0])
 
 
 if __name__ == "__main__":
