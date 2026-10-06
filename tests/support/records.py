@@ -9,6 +9,11 @@ YamlStream = list[Any]
 
 
 @dataclass(frozen=True)
+class McpTranscript:
+    transcript: Transcript
+
+
+@dataclass(frozen=True)
 class TranscriptWithCompanions:
     transcript: Transcript
-    companions: dict[str, YamlStream | str]
+    companions: dict[str, McpTranscript | YamlStream | str]

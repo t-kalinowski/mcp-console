@@ -1,0 +1,19 @@
+---
+languages:
+  - r
+  - sql
+provider: R
+---
+!same-as configured-r-sql MCP initialization for this execution mode
+---
+send:
+  sql: SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+           answer
+          <int32>
+        1      42
+  isError: false

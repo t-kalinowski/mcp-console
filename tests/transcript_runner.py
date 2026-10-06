@@ -1155,6 +1155,104 @@ runner: different
         self.assertIn("result: sandbox", differing.stderr)
         self.assertIn("::selected[direct] differs", differing.stderr)
 
+    def test_mcp_companions_preserve_each_invocation_and_execution(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.execution import Execution, executions
+                from support.records import McpTranscript, TranscriptWithCompanions
+
+
+                def handshake(tool):
+                    return [
+                        {
+                            "id": 1,
+                            "input": {"method": "initialize"},
+                            "result": {"protocolVersion": "test"},
+                        },
+                        {"notification": {"method": "notifications/initialized"}},
+                        {"id": 2, "input": {"method": "tools/list"}, "result": {"tools": [tool]}},
+                    ]
+
+
+                def test_initializes_and_lists_tools(binary):
+                    return TranscriptWithCompanions(
+                        handshake("sandbox"),
+                        {
+                            "direct.yaml": handshake("direct"),
+                            "sql-python.yaml": handshake("sql-python sandbox"),
+                            "sql-python.direct.yaml": handshake("sql-python direct"),
+                        },
+                    )
+
+
+                @executions(Execution("sandbox"), Execution("direct"))
+                def test_selected(binary, execution):
+                    primary = handshake(execution.name)
+                    companion = handshake("sql-python " + execution.name)
+                    send = [
+                        {
+                            "id": 4,
+                            "send": {"python": "print(42)"},
+                            "result": {"content": [{"type": "text", "text": "42"}]},
+                        }
+                    ]
+                    return TranscriptWithCompanions(
+                        [{"configuration": "default"}] + primary + send,
+                        {
+                            "sql-python.yaml": McpTranscript(
+                                [{"configuration": "sql-python"}] + companion + send
+                            ),
+                            "changed.yaml": McpTranscript(handshake("different") + send),
+                            "partial.yaml": McpTranscript(primary[:2]),
+                            "wire.yaml": handshake("direct") + send,
+                        },
+                    )
+                """),
+            encoding="utf-8",
+        )
+        updated = self.run_runner("--full", "--update", "--jobs", "1")
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        for suffix, reference in (
+            ("", "MCP initialization for this execution mode"),
+            (".sql-python", "sql-python MCP initialization for this execution mode"),
+        ):
+            snapshot = (self.snapshots / f"selected{suffix}.yaml").read_text()
+            self.assertEqual(snapshot.count("!same-as"), 1, snapshot)
+            self.assertIn(reference, snapshot)
+            self.assertLess(
+                snapshot.index("configuration:"), snapshot.index("!same-as")
+            )
+            self.assertLess(snapshot.index("!same-as"), snapshot.index("send:"))
+            self.assertNotIn("id:", snapshot)
+        for suffix in ("changed", "partial"):
+            snapshot = (self.snapshots / f"selected.{suffix}.yaml").read_text()
+            self.assertNotIn("!same-as", snapshot)
+            self.assertEqual(snapshot.count("method: initialize"), 1, snapshot)
+            self.assertNotIn("id:", snapshot)
+        changed = (self.snapshots / "selected.changed.yaml").read_text()
+        self.assertIn("different", changed)
+        wire = (self.snapshots / "selected.wire.yaml").read_text()
+        self.assertNotIn("!same-as", wire)
+        self.assertIn("id: 2", wire)
+        self.assertIn("id: 4", wire)
+        strict = self.run_runner("--full", "--jobs", "1")
+        self.assertEqual(strict.returncode, 0, strict.stderr)
+
+        # A second execution must compare its companions, including during updates.
+        self.suite.write_text(
+            self.suite.read_text().replace(
+                'handshake("sql-python " + execution.name)',
+                'handshake("sql-python sandbox")',
+            )
+        )
+        for arguments in (("--full",), ("--full", "--update")):
+            differing = self.run_runner(*arguments, "--jobs", "1")
+            self.assertNotEqual(differing.returncode, 0)
+            self.assertIn("selected.sql-python.yaml", differing.stderr)
+            self.assertIn("::selected[direct] differs", differing.stderr)
+
     def test_project_proxy_sessions_use_a_canonical_reference(self) -> None:
         references = ROOT / "tests/snapshots/client_server/server/test_tools"
         for reference in references.glob("initializes_and_lists_tools*.yaml"):
