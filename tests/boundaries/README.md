@@ -97,6 +97,8 @@ Remove fixture-owned directories only after processes exit.
 A `test_` function returns a `Transcript`.
 Its YAML 1.2 snapshot lives at `tests/snapshots/BOUNDARY/SUITE/CASE.yaml`.
 `TranscriptWithCompanions` adds named siblings: YAML companions compare as values; Markdown and Quarto compare as exact UTF-8 text.
+Wrap additional MCP transcripts in `McpTranscript` from `support.records` to normalize request IDs and apply the primary's exact canonical-handshake comparison.
+Ordinary YAML companions retain protocol IDs.
 Suite paths with an underscore-prefixed component are not discovered.
 
 Never edit snapshots by hand.
@@ -124,7 +126,10 @@ Cancellation targets retain matching labels on the request and notification; IDs
 
 ### Canonical handshake
 
-Client/server transcripts should generally retain the complete `initialize`, `notifications/initialized`, and `tools/list` exchange before ordinary calls, including each session in a multi-session case.
+Generally keep one `mcp-console` invocation per YAML transcript.
+Include initialization once near the top, normally via a matching canonical `!same-as` reference; use separate transcript files for additional invocations.
+Client/server transcripts should generally retain the complete `initialize`, `notifications/initialized`, and `tools/list` exchange before ordinary calls.
+A worker restart within the same Console invocation stays in that transcript.
 Launch-rejection or protocol-failure cases may have no handshake or an incomplete exchange; record what occurred.
 
 `client_server/server/test_tools::initializes_and_lists_tools` owns full handshake snapshots and their configured/direct/bare/runtime variants.
