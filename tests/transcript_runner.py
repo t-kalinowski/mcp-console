@@ -2106,9 +2106,15 @@ class WindowsTranscriptTests(TranscriptDiscoveryTests):
         with patch.dict(os.environ, {"MCP_CONSOLE_TEST_TIMINGS": str(timing)}):
             result = self.run_runner("--full", "--jobs", "2")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        records = [json.loads(line) for line in timing.read_text().splitlines()]
+        self.assertEqual(len(records), 3, records)
         self.assertEqual(
-            {json.loads(line)["status"] for line in timing.read_text().splitlines()},
+            {record["status"] for record in records},
             {"passed"},
+        )
+        self.assertEqual(
+            {record["selector"].rsplit("::", 1)[1] for record in records},
+            {"initializes_and_lists_tools", "selected", "unselected"},
         )
         self.suite.write_text(
             PUBLIC_SUITE
@@ -2117,6 +2123,27 @@ class WindowsTranscriptTests(TranscriptDiscoveryTests):
         result = self.run_runner("client_server/server/test_tools::unselected")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("unselected: skipped; POSIX:", result.stdout)
+
+    def test_failed_shared_case_preserves_its_timing(self) -> None:
+        timing = self.root / "timings.jsonl"
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("timing fixture failure")
+                """)
+        )
+        with patch.dict(os.environ, {"MCP_CONSOLE_TEST_TIMINGS": str(timing)}):
+            result = self.run_runner("client_server/server/test_tools::selected")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("timing fixture failure", result.stderr)
+        records = [json.loads(line) for line in timing.read_text().splitlines()]
+        self.assertEqual(len(records), 1, records)
+        self.assertEqual(records[0]["status"], "failed")
+        self.assertEqual(
+            records[0]["selector"], "client_server/server/test_tools::selected"
+        )
 
     def test_deadline_runs_finally_blocks_before_reporting_timeout(self) -> None:
         # fmt: python

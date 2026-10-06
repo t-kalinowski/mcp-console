@@ -12,6 +12,7 @@ from threading import Event, Lock, Thread
 from typing import BinaryIO
 
 CASE_CLEANUP_SECONDS = 15
+_timings_lock = Lock()
 
 
 class CaseCancelled(Exception):
@@ -227,6 +228,8 @@ def run_windows_case(suite_path, case_name, timeout, events, index, *, update):
         workspace = Path(directory) / "workspace"
         workspace.mkdir()
         result = Path(directory) / "result.pickle"
+        timing_path = os.environ.get("MCP_CONSOLE_TEST_TIMINGS")
+        case_timings = Path(directory) / "timings.jsonl"
         command = [
             sys.executable,
             str(runner),
@@ -249,7 +252,12 @@ def run_windows_case(suite_path, case_name, timeout, events, index, *, update):
                 | {
                     "MCP_CONSOLE_HOME": str(Path(directory) / "console"),
                     "MCP_CONSOLE_TEST_CASE_DEADLINE": str(started + timeout),
-                },
+                }
+                | (
+                    {"MCP_CONSOLE_TEST_TIMINGS": str(case_timings)}
+                    if timing_path
+                    else {}
+                ),
             ) as process,
         ):
             case = CaseProcess(process, None)
@@ -274,6 +282,12 @@ def run_windows_case(suite_path, case_name, timeout, events, index, *, update):
                         f"{selector} did not exit after termination"
                     )
             reaper.join()
+            # Windows CRT append seeks before writing, so concurrent case
+            # processes can overwrite records. Merge their private logs from
+            # the supervising runner, including records from failed cases.
+            if timing_path and case_timings.is_file():
+                with _timings_lock, open(timing_path, "ab", buffering=0) as timings:
+                    timings.write(case_timings.read_bytes())
             with (Path(directory) / "output").open("rb") as captured:
                 diagnostics = captured.read(os.fstat(output.fileno()).st_size).decode(
                     "utf-8", errors="replace"
