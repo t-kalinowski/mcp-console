@@ -47,6 +47,7 @@ PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
     "AAAAASUVORK5CYII="
 )
+AnsiFixture = dict[str, str | list[dict[str, str]]]
 
 from boundaries.client_server._harness import (
     ResponseGateObserver,
@@ -57,11 +58,15 @@ from boundaries.client_server._harness import (
 
 
 @contextmanager
-def ansi_client(binary: Path, execution: Execution) -> Iterator[McpClient]:
+def ansi_client(
+    binary: Path, execution: Execution, inputs: dict[str, AnsiFixture]
+) -> Iterator[McpClient]:
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
-    with (
-        tempfile.TemporaryDirectory() as temporary,
-        McpClient(
+    with tempfile.TemporaryDirectory() as temporary:
+        # Fixture transport stays separate from the named command in send.r.
+        input_path = Path(temporary) / "ansi-inputs.json"
+        input_path.write_text(json.dumps(inputs), encoding="utf-8")
+        with McpClient(
             binary,
             execution.serve(
                 "--worker",
@@ -72,11 +77,11 @@ def ansi_client(binary: Path, execution: Execution) -> Iterator[McpClient]:
             {
                 **os.environ,
                 "TMPDIR": temporary,
+                "MCP_CONSOLE_TEST_ANSI_INPUTS": str(input_path),
                 "MCP_CONSOLE_TEST_RELAY_SCENARIO": "ansi_projection",
             },
-        ) as client,
-    ):
-        yield client
+        ) as client:
+            yield client
 
 
 @requires(POSIX)
@@ -121,12 +126,20 @@ def test_projects_ansi_across_every_byte_split(
         ("old\x1b[" + "0;" * 80 + "2Ksafe\n", "oldsafe\n"),
         ("old\x1b" + "(" * 140 + "Bsafe\n", "oldsafe\n"),
     )
-    with ansi_client(binary, execution) as client:
+    inputs = {
+        f"project_ansi_sample_{call_id:02}": {"sample": sample}
+        for call_id, (sample, _) in enumerate(samples, 1)
+    }
+    with ansi_client(binary, execution, inputs) as client:
         client.initialize_and_list_tools()
         for call_id, (sample, projected) in enumerate(samples, 1):
             # One unsplit run, every two-chunk split, and byte-wise fragmentation.
             repetitions = len(sample.encode()) + 3
-            result = client.send(r=json.dumps(sample))
+            operation = f"project_ansi_sample_{call_id:02}"
+            client.transcript.append(
+                {"fixture": {"operation": operation, **inputs[operation]}}
+            )
+            result = client.send(r=operation)
             assert result == {
                 "content": [{"type": "text", "text": projected * repetitions}],
                 "isError": False,
@@ -136,6 +149,14 @@ def test_projects_ansi_across_every_byte_split(
                 session_directory(client) / f"outputs/call-{call_id:06}.log"
             ).read_bytes() == sample.encode() * repetitions
         compact_previews(client, *(projected for _, projected in samples))
+        assert [
+            entry["fixture"]["sample"]
+            for entry in client.transcript
+            if "fixture" in entry
+        ] == [sample for sample, _ in samples]
+        assert [
+            entry["send"]["r"] for entry in client.transcript if "send" in entry
+        ] == list(inputs)
         return client.finish()
 
 
@@ -158,9 +179,29 @@ def test_finishes_ansi_at_producer_image_and_cell_boundaries(
         {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"},
         {"kind": "console_output", "data": "after \x1b[32mimage\x1b[m\n"},
     ]
-    with ansi_client(binary, execution) as client:
+    cell_samples = (
+        ("visible\x1b[31", "visible"),
+        ("mnext\n", "mnext\n"),
+        ("visible\x1b]hidden", "visible"),
+        ("next\n", "next\n"),
+        ("visible\x1b[2K", "[done]"),
+    )
+    inputs = {
+        "emit_ansi_boundary_events": {"events": events},
+        **{
+            f"emit_ansi_cell_{call_id:02}": {
+                "events": [{"kind": "console_output", "data": sample}]
+            }
+            for call_id, (sample, _) in enumerate(cell_samples, 2)
+        },
+    }
+    with ansi_client(binary, execution, inputs) as client:
         client.initialize_and_list_tools()
-        result = client.send(r=json.dumps(events))
+        operation = "emit_ansi_boundary_events"
+        client.transcript.append(
+            {"fixture": {"operation": operation, **inputs[operation]}}
+        )
+        result = client.send(r=operation)
         assert [block["type"] for block in result["content"]] == [
             "text",
             "image",
@@ -179,23 +220,30 @@ def test_finishes_ansi_at_producer_image_and_cell_boundaries(
                 if event["kind"] != "image" and "data" in event
             )
         )
-        for call_id, (sample, expected) in enumerate(
-            (
-                ("visible\x1b[31", "visible"),
-                ("mnext\n", "mnext\n"),
-                ("visible\x1b]hidden", "visible"),
-                ("next\n", "next\n"),
-                ("visible\x1b[2K", "[done]"),
-            ),
-            2,
-        ):
-            result = client.send(
-                r=json.dumps([{"kind": "console_output", "data": sample}])
+        for call_id, (sample, expected) in enumerate(cell_samples, 2):
+            operation = f"emit_ansi_cell_{call_id:02}"
+            client.transcript.append(
+                {"fixture": {"operation": operation, **inputs[operation]}}
             )
+            result = client.send(r=operation)
             assert last_tool_text(client) == expected, result
             assert (
                 session_directory(client) / f"outputs/call-{call_id:06}.log"
             ).read_bytes() == sample.encode()
+        assert [
+            entry["fixture"]["events"]
+            for entry in client.transcript
+            if "fixture" in entry
+        ] == [
+            events,
+            *(
+                [{"kind": "console_output", "data": sample}]
+                for sample, _ in cell_samples
+            ),
+        ]
+        assert [
+            entry["send"]["r"] for entry in client.transcript if "send" in entry
+        ] == list(inputs)
         return client.finish()
 
 
@@ -217,9 +265,19 @@ def test_separates_native_diagnostics_from_worker_stderr(
         ("native_stderr", b"native diagnostic\n"),
         ("stderr_bytes", b"\x1b\\worker after\n"),
     )
+    inputs = {
+        "emit_ansi_diagnostics": {
+            "events": [
+                {"kind": kind, "data": base64.b64encode(data).decode()}
+                for kind, data in chunks
+            ]
+        }
+    }
     fixtures = Path(__file__).resolve().parents[3] / "fixtures"
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
+        input_path = directory / "ansi-inputs.json"
+        input_path.write_text(json.dumps(inputs), encoding="utf-8")
         roots = ("--writable-root", temporary) if execution == SANDBOXED else ()
         with (
             closing(FifoCheckpoint.create(directory / "diagnostic-release")) as release,
@@ -235,6 +293,7 @@ def test_separates_native_diagnostics_from_worker_stderr(
                 {
                     **os.environ,
                     "TMPDIR": temporary,
+                    "MCP_CONSOLE_TEST_ANSI_INPUTS": str(input_path),
                     "MCP_CONSOLE_TEST_PREVIEW_DIRECTORY": temporary,
                     "MCP_CONSOLE_TEST_RELAY_SCENARIO": "ansi_diagnostics",
                 },
@@ -243,13 +302,12 @@ def test_separates_native_diagnostics_from_worker_stderr(
         ):
             try:
                 client.initialize_and_list_tools()
+                operation = "emit_ansi_diagnostics"
+                client.transcript.append(
+                    {"fixture": {"operation": operation, **inputs[operation]}}
+                )
                 request = client.start_send(
-                    r=json.dumps(
-                        [
-                            {"kind": kind, "data": base64.b64encode(data).decode()}
-                            for kind, data in chunks
-                        ]
-                    ),
+                    r=operation,
                     timeout_ms=600_000,
                 )
                 raw = b""
@@ -286,6 +344,17 @@ def test_separates_native_diagnostics_from_worker_stderr(
                     "native before worker diagnostic\nnative after\n"
                     "worker before native diagnostic\nworker after\n"
                 ), request
+                assert [
+                    entry["fixture"]["events"]
+                    for entry in client.transcript
+                    if "fixture" in entry
+                ] == [
+                    [
+                        {"kind": kind, "data": base64.b64encode(data).decode()}
+                        for kind, data in chunks
+                    ]
+                ]
+                assert request["send"]["r"] == "emit_ansi_diagnostics"
                 return client.finish()
             finally:
                 for _ in range(len(chunks) + 1):

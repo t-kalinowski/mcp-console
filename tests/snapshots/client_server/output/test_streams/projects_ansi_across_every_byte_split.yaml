@@ -1,8 +1,12 @@
 ---
 !same-as custom MCP initialization for this execution mode
 ---
+fixture:
+  operation: project_ansi_sample_01
+  sample: "plain \e[1;31mred\e[0m €🙂\n"
+---
 send:
-  r: '"plain \u001b[1;31mred\u001b[0m \u20ac\ud83d\ude42\n"'
+  r: project_ansi_sample_01
 result:
   content:
     - type: text
@@ -14,8 +18,12 @@ result:
             count: 32
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_02
+  sample: "old\r\e[32mnew\e[0m\n"
+---
 send:
-  r: '"old\r\u001b[32mnew\u001b[0m\n"'
+  r: project_ansi_sample_02
 result:
   content:
     - type: text
@@ -27,16 +35,24 @@ result:
             count: 20
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_03
+  sample: "keep\r\e[0m\n"
+---
 send:
-  r: '"keep\r\u001b[0m\n"'
+  r: project_ansi_sample_03
 result:
   content:
     - type: text
       text: "keep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\nkeep\r\n"
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_04
+  sample: "erase\e[2K\n"
+---
 send:
-  r: '"erase\u001b[2K\n"'
+  r: project_ansi_sample_04
 result:
   content:
     - type: text
@@ -56,24 +72,36 @@ result:
 
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_05
+  sample: "erase\r\e[2K\n"
+---
 send:
-  r: '"erase\r\u001b[2K\n"'
+  r: project_ansi_sample_05
 result:
   content:
     - type: text
       text: "\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n"
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_06
+  sample: "erase\r\e[K\n"
+---
 send:
-  r: '"erase\r\u001b[K\n"'
+  r: project_ansi_sample_06
 result:
   content:
     - type: text
       text: "\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n\r\n"
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_07
+  sample: "old\r\e[Knew\n"
+---
 send:
-  r: '"old\r\u001b[Knew\n"'
+  r: project_ansi_sample_07
 result:
   content:
     - type: text
@@ -94,8 +122,12 @@ result:
         new
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_08
+  sample: "old\r\e[0Knew\n"
+---
 send:
-  r: '"old\r\u001b[0Knew\n"'
+  r: project_ansi_sample_08
 result:
   content:
     - type: text
@@ -117,8 +149,12 @@ result:
         new
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_09
+  sample: "keep\e[K plus\n"
+---
 send:
-  r: '"keep\u001b[K plus\n"'
+  r: project_ansi_sample_09
 result:
   content:
     - type: text
@@ -130,8 +166,12 @@ result:
             count: 16
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_10
+  sample: "old\e[1Knew\n"
+---
 send:
-  r: '"old\u001b[1Knew\n"'
+  r: project_ansi_sample_10
 result:
   content:
     - type: text
@@ -152,8 +192,12 @@ result:
         oldnew
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_11
+  sample: "before\e[2A\e[2Jafter\n"
+---
 send:
-  r: '"before\u001b[2A\u001b[2Jafter\n"'
+  r: project_ansi_sample_11
 result:
   content:
     - type: text
@@ -165,8 +209,12 @@ result:
             count: 23
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_12
+  sample: "charset\e(Btext\n"
+---
 send:
-  r: '"charset\u001b(Btext\n"'
+  r: project_ansi_sample_12
 result:
   content:
     - type: text
@@ -178,8 +226,12 @@ result:
             count: 18
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_13
+  sample: "€🙂\b\e[38:2::10:20:30m!\e[m\n"
+---
 send:
-  r: '"\u20ac\ud83d\ude42\b\u001b[38:2::10:20:30m!\u001b[m\n"'
+  r: project_ansi_sample_13
 result:
   content:
     - type: text
@@ -191,8 +243,12 @@ result:
             count: 33
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_14
+  sample: "before\e]0;title\aafter\n"
+---
 send:
-  r: '"before\u001b]0;title\u0007after\n"'
+  r: project_ansi_sample_14
 result:
   content:
     - type: text
@@ -204,8 +260,12 @@ result:
             count: 25
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_15
+  sample: "\e]52;c;clipboard\e\\safe\n"
+---
 send:
-  r: '"\u001b]52;c;clipboard\u001b\\safe\n"'
+  r: project_ansi_sample_15
 result:
   content:
     - type: text
@@ -217,8 +277,12 @@ result:
             count: 26
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_16
+  sample: "\e]8;;https://example.invalid\e\\label\e]8;;\e\\\n"
+---
 send:
-  r: '"\u001b]8;;https://example.invalid\u001b\\label\u001b]8;;\u001b\\\n"'
+  r: project_ansi_sample_16
 result:
   content:
     - type: text
@@ -230,8 +294,12 @@ result:
             count: 46
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_17
+  sample: "before\ePprivate\apayload\e\\after\n"
+---
 send:
-  r: '"before\u001bPprivate\u0007payload\u001b\\after\n"'
+  r: project_ansi_sample_17
 result:
   content:
     - type: text
@@ -243,8 +311,12 @@ result:
             count: 34
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_18
+  sample: "a\eXhidden\e\\b\e^hidden\e\\c\e_hidden\e\\d\n"
+---
 send:
-  r: '"a\u001bXhidden\u001b\\b\u001b^hidden\u001b\\c\u001b_hidden\u001b\\d\n"'
+  r: project_ansi_sample_18
 result:
   content:
     - type: text
@@ -256,8 +328,12 @@ result:
             count: 38
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_19
+  sample: "\x9B31mC1\x9B0m\x9D0;title\x9Csafe\n"
+---
 send:
-  r: '"\u009b31mC1\u009b0m\u009d0;title\u009csafe\n"'
+  r: project_ansi_sample_19
 result:
   content:
     - type: text
@@ -269,8 +345,12 @@ result:
             count: 30
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_20
+  sample: "a\x90hidden\x9Cb\x98hidden\x9Cc\x9Ehidden\x9Cd\x9Fhidden\x9Ce\n"
+---
 send:
-  r: '"a\u0090hidden\u009cb\u0098hidden\u009cc\u009ehidden\u009cd\u009fhidden\u009ce\n"'
+  r: project_ansi_sample_20
 result:
   content:
     - type: text
@@ -282,8 +362,12 @@ result:
             count: 49
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_21
+  sample: "a\e]hidden\n\r\e[2Kpayload\e\\b\n"
+---
 send:
-  r: '"a\u001b]hidden\n\r\u001b[2Kpayload\u001b\\b\n"'
+  r: project_ansi_sample_21
 result:
   content:
     - type: text
@@ -295,8 +379,12 @@ result:
             count: 29
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_22
+  sample: "old\e[31\e[2Knew\n"
+---
 send:
-  r: '"old\u001b[31\u001b[2Knew\n"'
+  r: project_ansi_sample_22
 result:
   content:
     - type: text
@@ -308,8 +396,12 @@ result:
             count: 18
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_23
+  sample: "a\e[31🙂b\n"
+---
 send:
-  r: '"a\u001b[31\ud83d\ude42b\n"'
+  r: project_ansi_sample_23
 result:
   content:
     - type: text
@@ -330,8 +422,12 @@ result:
         a🙂b
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_24
+  sample: "old\e[31\rnew\n"
+---
 send:
-  r: '"old\u001b[31\rnew\n"'
+  r: project_ansi_sample_24
 result:
   content:
     - type: text
@@ -353,8 +449,12 @@ result:
         new
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_25
+  sample: "a\e[31\nb\n"
+---
 send:
-  r: '"a\u001b[31\nb\n"'
+  r: project_ansi_sample_25
 result:
   content:
     - type: text
@@ -383,8 +483,12 @@ result:
         b
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_26
+  sample: "a\e(🙂b\n"
+---
 send:
-  r: '"a\u001b(\ud83d\ude42b\n"'
+  r: project_ansi_sample_26
 result:
   content:
     - type: text
@@ -403,8 +507,12 @@ result:
         a🙂b
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_27
+  sample: "old\r\b\e[0mnew\n"
+---
 send:
-  r: '"old\r\b\u001b[0mnew\n"'
+  r: project_ansi_sample_27
 result:
   content:
     - type: text
@@ -416,8 +524,12 @@ result:
             count: 16
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_28
+  sample: "old\e[0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;2Ksafe\n"
+---
 send:
-  r: '"old\u001b[0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;0;2Ksafe\n"'
+  r: project_ansi_sample_28
 result:
   content:
     - type: text
@@ -429,8 +541,12 @@ result:
             count: 175
   isError: false
 ---
+fixture:
+  operation: project_ansi_sample_29
+  sample: "old\e((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((Bsafe\n"
+---
 send:
-  r: '"old\u001b((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((Bsafe\n"'
+  r: project_ansi_sample_29
 result:
   content:
     - type: text

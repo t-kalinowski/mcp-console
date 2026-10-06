@@ -1319,6 +1319,9 @@ def run_partial_utf8_polls(relay: ScriptedRelay) -> None:
 
 
 def run_ansi_projection(relay: ScriptedRelay) -> None:
+    inputs = json.loads(
+        Path(os.environ["MCP_CONSOLE_TEST_ANSI_INPUTS"]).read_text(encoding="utf-8")
+    )
     relay.ready()
     while True:
         command = relay.receive()
@@ -1326,9 +1329,9 @@ def run_ansi_projection(relay: ScriptedRelay) -> None:
             relay.retire(command)
             return
         assert command["kind"] == "evaluate", command
-        script = json.loads(command["source"])
-        if isinstance(script, str):
-            raw = script.encode()
+        fixture = inputs[command["source"]]
+        if "sample" in fixture:
+            raw = fixture["sample"].encode()
             fragmentations = [
                 [raw],
                 *([raw[:split], raw[split:]] for split in range(len(raw) + 1)),
@@ -1343,16 +1346,19 @@ def run_ansi_projection(relay: ScriptedRelay) -> None:
                         }
                     )
         else:
-            relay.send_batch(script)
+            relay.send_batch(fixture["events"])
         relay.complete()
 
 
 def run_ansi_diagnostics(relay: ScriptedRelay) -> None:
     directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
+    inputs = json.loads(
+        Path(os.environ["MCP_CONSOLE_TEST_ANSI_INPUTS"]).read_text(encoding="utf-8")
+    )
     relay.ready()
     command = relay.receive()
     assert command["kind"] == "evaluate", command
-    for message in json.loads(command["source"]):
+    for message in inputs[command["source"]]["events"]:
         with (directory / "diagnostic-release").open("rb", buffering=0) as checkpoint:
             assert checkpoint.read(1) == b"1"
         if message["kind"] == "native_stderr":

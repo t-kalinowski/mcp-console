@@ -1,19 +1,37 @@
 ---
 !same-as custom MCP initialization for this execution mode
 ---
+fixture:
+  operation: emit_ansi_boundary_events
+  events:
+    - kind: console_output
+      data: "out\e["
+    - kind: console_diagnostic
+      data: |
+        31mdiag
+    - kind: stdout_bytes
+      data: mzMxbXJhdwo=
+    - kind: stdout
+      data: "raw\e]0;discard"
+    - kind: stderr
+      data: |
+        error
+    - kind: stderr
+      data: "stderr \e[3"
+    - kind: stdout_closed
+    - kind: stderr
+      data: "1mred\e[0m\n"
+    - kind: stderr_closed
+    - kind: console_output
+      data: "before image\e]unterminated"
+    - kind: image
+      data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=
+      mime_type: image/png
+    - kind: console_output
+      data: "after \e[32mimage\e[m\n"
+---
 send:
-  r: >-
-    [{"kind": "console_output", "data": "out\u001b["}, {"kind":
-    "console_diagnostic", "data": "31mdiag\n"}, {"kind": "stdout_bytes",
-    "data": "mzMxbXJhdwo="}, {"kind": "stdout", "data":
-    "raw\u001b]0;discard"}, {"kind": "stderr", "data": "error\n"}, {"kind":
-    "stderr", "data": "stderr \u001b[3"}, {"kind": "stdout_closed"},
-    {"kind": "stderr", "data": "1mred\u001b[0m\n"}, {"kind":
-    "stderr_closed"}, {"kind": "console_output", "data": "before
-    image\u001b]unterminated"}, {"kind": "image", "data":
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-    "mime_type": "image/png"}, {"kind": "console_output", "data": "after
-    \u001b[32mimage\u001b[m\n"}]
+  r: emit_ansi_boundary_events
 result:
   content:
     - type: text
@@ -31,16 +49,29 @@ result:
         after image
   isError: false
 ---
+fixture:
+  operation: emit_ansi_cell_02
+  events:
+    - kind: console_output
+      data: "visible\e[31"
+---
 send:
-  r: '[{"kind": "console_output", "data": "visible\u001b[31"}]'
+  r: emit_ansi_cell_02
 result:
   content:
     - type: text
       text: visible
   isError: false
 ---
+fixture:
+  operation: emit_ansi_cell_03
+  events:
+    - kind: console_output
+      data: |
+        mnext
+---
 send:
-  r: '[{"kind": "console_output", "data": "mnext\n"}]'
+  r: emit_ansi_cell_03
 result:
   content:
     - type: text
@@ -48,16 +79,29 @@ result:
         mnext
   isError: false
 ---
+fixture:
+  operation: emit_ansi_cell_04
+  events:
+    - kind: console_output
+      data: "visible\e]hidden"
+---
 send:
-  r: '[{"kind": "console_output", "data": "visible\u001b]hidden"}]'
+  r: emit_ansi_cell_04
 result:
   content:
     - type: text
       text: visible
   isError: false
 ---
+fixture:
+  operation: emit_ansi_cell_05
+  events:
+    - kind: console_output
+      data: |
+        next
+---
 send:
-  r: '[{"kind": "console_output", "data": "next\n"}]'
+  r: emit_ansi_cell_05
 result:
   content:
     - type: text
@@ -65,8 +109,14 @@ result:
         next
   isError: false
 ---
+fixture:
+  operation: emit_ansi_cell_06
+  events:
+    - kind: console_output
+      data: "visible\e[2K"
+---
 send:
-  r: '[{"kind": "console_output", "data": "visible\u001b[2K"}]'
+  r: emit_ansi_cell_06
 result:
   content:
     - type: text
