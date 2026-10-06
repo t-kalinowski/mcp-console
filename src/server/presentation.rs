@@ -1,4 +1,5 @@
 //! Tool prose derived only from captured launch configuration.
+mod requirements;
 mod sections;
 
 use std::sync::Arc;
@@ -78,6 +79,11 @@ impl ConsoleServer {
 }
 
 impl Profile {
+    fn restricted_guidance(&self) -> bool {
+        self.configured_visibility
+            && !(self.languages.r && self.languages.python && self.languages.sql)
+    }
+
     fn multiple_languages(&self) -> bool {
         [self.languages.r, self.languages.python, self.languages.sql]
             .into_iter()
@@ -95,12 +101,17 @@ impl Profile {
             Languages::all()
         };
         let mut description = if !self.builtin {
-            let mut scope = sections::CUSTOM_SCOPE.to_string();
+            let mut scope = if self.restricted_guidance() {
+                sections::CUSTOM_SELECTED_SCOPE
+            } else {
+                sections::CUSTOM_SCOPE
+            }
+            .to_string();
             if self.multiple_languages() {
                 scope.push_str(sections::CUSTOM_SWITCHING);
             }
             scope
-        } else if cfg!(windows) && described_languages.r && described_languages.python {
+        } else if cfg!(windows) && !self.configured_visibility {
             sections::WINDOWS_SCOPE.to_string()
         } else {
             let mut scope = if described_languages.r
@@ -121,12 +132,17 @@ impl Profile {
                     })
                     .collect::<Vec<_>>()
                     .join(" and ");
+                let location = if cfg!(windows) {
+                    " for local execution on Windows"
+                } else {
+                    ""
+                };
                 format!(
-                    "Persistent {names} workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls."
+                    "Persistent {names} workbench{location} for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls."
                 )
             };
             if cfg!(windows) {
-                scope.push_str(sections::WINDOWS_PREPARATION);
+                scope.push_str(sections::WINDOWS_SELECTED_PREPARATION);
             }
             scope.push_str("\n\n");
             scope.push_str(&self.language_guidance());
@@ -143,12 +159,16 @@ impl Profile {
                         scope.push_str(sections::MANAGED_SQL_R);
                     }
                     if described_languages.python {
-                        scope.push_str(sections::MANAGED_SQL_PYTHON);
+                        scope.push_str(sections::MANAGED_SQL_PYTHON_SELECTED);
                     }
-                    scope.push_str(sections::SQL_PROVIDER);
+                    scope.push_str(sections::SQL_PROVIDER_SELECTED);
                 }
             }
-            scope.push_str(sections::MANAGED_PREPARATION);
+            scope.push_str(if self.restricted_guidance() && !self.languages.python {
+                sections::MANAGED_PREPARATION_SELECTED
+            } else {
+                sections::MANAGED_PREPARATION
+            });
             scope
         };
         description.push_str("\n\nSend one complete ");
@@ -217,11 +237,12 @@ impl Profile {
                 }
             }
         }
-        if self.configured_visibility
-            && self.languages.fields().len() < Languages::all().fields().len()
-        {
+        if self.restricted_guidance() {
             properties["stdin"]["description"] =
                 format!("{}{}", sections::STDIN_SELECTED, sections::STDIN_ORDERING).into();
+            properties["control"]["description"] = control_description_for(false).into();
+            properties["timeout_ms"]["description"] = sections::TIMEOUT_SELECTED.into();
+            requirements::configure(properties, self.languages, self.builtin);
         }
     }
 }
@@ -250,14 +271,17 @@ pub(super) fn python_description() -> String {
 
 fn python_description_for(languages: Languages) -> String {
     let mut description = sections::PYTHON_RUNTIME.to_string();
-    // SQL may use hidden R; its Python bridge remains usable from a Python cell.
-    if languages.r || languages.sql {
+    if languages.r {
         description.push_str(sections::PYTHON_BRIDGE);
     }
     if languages.sql {
         description.push_str(sections::PYTHON_SQL);
-        description.push_str(sections::PYTHON_SQL_R);
-        description.push_str(sections::PYTHON_SQL_CONNECTION);
+        if languages.r {
+            description.push_str(sections::PYTHON_SQL_R);
+            description.push_str(sections::PYTHON_SQL_CONNECTION);
+        } else {
+            description.push_str(sections::PYTHON_SQL_CONNECTION_SELECTED);
+        }
     }
     description.push_str(sections::PYTHON_PLOTS);
     if languages.r {
@@ -273,22 +297,39 @@ pub(super) fn sql_description() -> String {
 
 fn sql_description_for(languages: Languages) -> String {
     let mut description = sections::SQL_RUNTIME.to_string();
-    // Provider contingencies follow runtime capability, not visible code fields.
-    description.push_str(sections::SQL_R_FRAMES);
-    description.push_str(sections::SQL_DRIVERS);
+    if languages.r {
+        description.push_str(sections::SQL_R_FRAMES);
+    }
+    if languages.r && languages.python {
+        description.push_str(sections::SQL_DRIVERS);
+    } else {
+        if languages.r {
+            description.push_str(sections::SQL_R_DRIVER);
+        }
+        if languages.python {
+            description.push_str(sections::SQL_PYTHON_DRIVER);
+        }
+        description.push_str(sections::SQL_DIALECT);
+    }
     if languages.r {
         description.push_str(sections::SQL_R_STATEMENTS);
     }
     if languages.python {
-        description.push_str(sections::SQL_PYTHON_FRAMES);
-    } else {
-        description.push_str(sections::SQL_HIDDEN_PYTHON);
+        description.push_str(if languages.r {
+            sections::SQL_PYTHON_FRAMES
+        } else {
+            sections::SQL_PYTHON_FRAMES_SELECTED
+        });
     }
     description.push_str(sections::SQL_OPERATIONS);
     description
 }
 
 pub(super) fn control_description() -> String {
+    control_description_for(true)
+}
+
+fn control_description_for(full: bool) -> String {
     let interrupt = if cfg!(windows) {
         sections::WINDOWS_INTERRUPT
     } else {
@@ -297,7 +338,11 @@ pub(super) fn control_description() -> String {
     format!(
         "{}{interrupt}{}",
         sections::CONTROL_START,
-        sections::CONTROL_END
+        if full {
+            sections::CONTROL_END
+        } else {
+            sections::CONTROL_END_SELECTED
+        }
     )
 }
 
