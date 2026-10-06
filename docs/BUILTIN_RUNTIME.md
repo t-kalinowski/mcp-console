@@ -22,6 +22,12 @@ Interrupting warmup withholds an early waiting cell and retains the worker.
 Early calls use [shared startup](SEND_OPERATIONS.md#server-readiness), not an independent worker per call.
 Custom workers retain lazy launch.
 
+The captured [`languages` setting](CONFIGURATION.md#model-visible-languages) controls model-facing code fields independently of this runtime initialization.
+SQL-only and SQL+Python interfaces can use an installed but hidden R provider; without R, SQL can use hidden Python.
+No setup cell is needed for the managed connection.
+Hidden-provider package requirements, ordinary polling, input, interruption, and restart remain available.
+An explicit public selection does not change the internal `MCP_CONSOLE_LANGUAGES` bootstrap configuration.
+
 The server, resolver, relay, and worker run on the same host.
 For remote work, run the MCP client and Console together on the remote host.
 

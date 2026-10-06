@@ -61,7 +61,10 @@ One connection-owned background task discovers capabilities, prepares defaults, 
 The worker then initializes enabled R and Python on its serialized interpreter thread, after input, resolver, and output services are connected.
 MCP initialization, tool discovery, and pings do not wait for it.
 Custom workers remain lazy.
+The captured public `languages` selection governs presentation and source-argument admission only; it is not forwarded into worker runtime configuration.
+Hidden source keys are rejected before same-call control, preparation, or stdin effects.
 Configured language fields stay visible even when a runtime is unavailable; execution validates discovered capabilities.
+SQL provider routing uses actual R capability independently of public visibility, so hidden interpreters can implement SQL.
 
 Early cells reserve the ordinary evaluation slot while startup finishes.
 There is no cell queue.
