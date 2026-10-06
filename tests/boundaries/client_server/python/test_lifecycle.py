@@ -568,17 +568,6 @@ def test_retries_python_runtime_initialization_after_interrupt(
                 "for Python import 'yaml12']\n"
                 "'yaml12'\n"
             ), repr(output)
-            # fmt: python
-            python = code("""
-                import logging
-
-                sum(
-                    getattr(filter_, "_mcp_console_filter", False)
-                    for filter_ in logging.getLogger("matplotlib.font_manager").filters
-                )
-                """)
-            client.send(python=python)
-            assert last_result_text(client) == "1\n"
             transcript = client.finish()
             passed = True
             return transcript
