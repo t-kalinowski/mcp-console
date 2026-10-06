@@ -4,7 +4,11 @@ Run with `uv run --no-project tests/windows.py` after `cargo build`.
 """
 
 import ctypes
+import base64
+import csv
 from contextlib import ExitStack
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -17,8 +21,10 @@ import time
 from threading import Thread
 from textwrap import dedent
 import unittest
+import zipfile
 
 from windows_gate import Gate
+from support.installation import native_console
 
 from windows_cargo import WindowsCargo  # noqa: F401 -- include build acceptance
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
@@ -33,6 +39,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
     os.environ.get("MCP_CONSOLE_TEST_BINARY", ROOT / "target/debug/mcp-console.exe")
 )
+NATIVE_BINARY = native_console(BINARY)
 
 
 class Session:
@@ -316,12 +323,54 @@ class WindowsPackaging(unittest.TestCase):
             second.stdin.flush()
             self.assertEqual(second.wait(timeout=10), 0, second.stderr.read())
             self.assertEqual(second_lines.get(timeout=10), "fixture.whl")
+            with zipfile.ZipFile(root / "fixture.whl") as wheel:
+                self.assertNotIn(
+                    "fixture-1.data/scripts/mcp-console.exe", wheel.namelist()
+                )
+                self.assertEqual(
+                    wheel.read("fixture-1.data/data/libexec/mcp-console.exe"),
+                    b"native fixture",
+                )
+                self.assertIn(
+                    b"mcp-console = mcp_console._launcher:main",
+                    wheel.read("fixture-1.dist-info/entry_points.txt"),
+                )
+                entry_points = wheel.read("fixture-1.dist-info/entry_points.txt")
+                self.assertIn(b"OtherTool = other.module:main", entry_points)
+                records = list(
+                    csv.reader(
+                        io.StringIO(wheel.read("fixture-1.dist-info/RECORD").decode())
+                    )
+                )
+                self.assertEqual({row[0] for row in records}, set(wheel.namelist()))
+                for name, digest, size in records:
+                    if name.endswith("/RECORD"):
+                        self.assertEqual((digest, size), ("", ""))
+                    else:
+                        content = wheel.read(name)
+                        expected = (
+                            base64.urlsafe_b64encode(hashlib.sha256(content).digest())
+                            .rstrip(b"=")
+                            .decode()
+                        )
+                        self.assertEqual(digest, "sha256=" + expected)
+                        self.assertEqual(int(size), len(content))
             archive, archive_lines = start("build_sdist")
             self.assertEqual(archive_lines.get(timeout=10), "building")
             archive.stdin.write("finish\n")
             archive.stdin.flush()
             self.assertEqual(archive.wait(timeout=10), 0, archive.stderr.read())
             self.assertEqual(archive_lines.get(timeout=10), "fixture.whl")
+            metadata, metadata_lines = start("prepare_metadata_for_build_wheel")
+            self.assertEqual(metadata_lines.get(timeout=10), "building")
+            metadata.stdin.write("finish\n")
+            metadata.stdin.flush()
+            self.assertEqual(metadata.wait(timeout=10), 0, metadata.stderr.read())
+            self.assertEqual(metadata_lines.get(timeout=10), "fixture-1.dist-info")
+            self.assertEqual(
+                (root / "fixture-1.dist-info/entry_points.txt").read_bytes(),
+                entry_points,
+            )
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
@@ -899,7 +948,7 @@ class WindowsConsole(unittest.TestCase):
             dict(
                 os.environ,
                 TEST_RELAY_SCENARIO=scenario,
-                TEST_CONSOLE_BINARY=str(BINARY),
+                TEST_CONSOLE_BINARY=str(NATIVE_BINARY),
             ),
             relay=executable,
         )
