@@ -90,11 +90,15 @@ The ordinary smoke mode retains its comparison with the Cargo executable.
 `build.rs` verifies and copies prepared files beside native Cargo output; it does not build the runner or mutate wheel staging.
 On Windows, Cargo keeps each complete companion bundle in a content-addressed directory under `libexec` and binds the executable to it.
 Older bundles remain available to active sandboxes; rebuilding never replaces their running helpers.
-Installed wheels retain the flat layout above and the same digest verification.
+Installed wheels retain the same digest verification.
+Windows wheels keep the native Console executable under `libexec` alongside its helpers and expose `mcp-console` through an installer-generated Python entry point.
+The entry point resolves the native executable through the installed distribution's file manifest and waits for its exit, preserving stdio and all 32 exit-status bits.
+This keeps the native installation prefix intact when `uv tool install` copies the public command onto PATH.
+The backend updates wheel records and prepared metadata consistently; editable builds use the same launcher.
 `target/sandbox-runner-build.json` describes staged files under `wheel-data/data`.
 Obsolete generated files are reconciled on staging.
 
-Move the complete bundle when relocating it; a symlink to the main executable works.
+Move the complete native bundle when relocating it; a symlink to the native executable works.
 Native builds require Cargo's shared build/target layout: move it with `CARGO_TARGET_DIR` / `--target-dir`, not a separate `CARGO_BUILD_BUILD_DIR`.
 Sandbox launch verifies the runner/licenses without downloading or extracting anything.
 A trusted host bwrap may take precedence; when the bundled helper is selected, it is verified and executed through the same descriptor.
