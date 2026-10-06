@@ -119,7 +119,7 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     public_output = (
         f".agents/console/sessions{os.sep}{session.name}{os.sep}outputs/call-000001.log"
     )
-    assert f"raw log on Console host: {public_output}" in output, output[len(prefix) :]
+    assert f"raw log: {public_output}" in output, output[len(prefix) :]
     assert (session / relative_output).read_text(encoding="utf-8") == (
         prefix + "'yaml12'\n"
     )
@@ -163,7 +163,7 @@ def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
         )
         assert (session / "outputs/call-000001.log").read_text() == head + tail
         public_output = f".agents/console/sessions{os.sep}{session.name}{os.sep}outputs/call-000001.log"
-        assert f"raw log on Console host: {public_output}" in output
+        assert f"raw log: {public_output}" in output
         client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
             public_output, public_output.replace(os.sep, "/")
         ).replace(session.name, "<run ID>")

@@ -48,7 +48,7 @@ def test_names_readable_logs_once_with_long_unicode_paths(
                 path = session / "outputs/call-000002.log"
                 assert path.read_text() == "a€🙂b" * 4000
                 (marker,) = OMISSION.finditer(text)
-                _, advertised_path = marker[0].split("; raw log on Console host: ", 1)
+                _, advertised_path = marker[0].split("; raw log: ", 1)
                 advertised_path = advertised_path.removesuffix("]\n")
                 if compact:
                     suffix = " (relative to Console recording directory)"

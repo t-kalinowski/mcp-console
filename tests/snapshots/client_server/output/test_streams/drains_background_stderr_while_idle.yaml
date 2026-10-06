@@ -15,7 +15,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8075
+        text_bytes: 8059
         concat:
           - |
             zod background stderr
@@ -23,7 +23,7 @@ result:
             count: 3946
           - |
 
-            [output omitted: <omitted byte count> UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/session.log]
+            [output omitted: <omitted byte count> UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/session.log]
           - repeat: y
             count: 3968
           - |-

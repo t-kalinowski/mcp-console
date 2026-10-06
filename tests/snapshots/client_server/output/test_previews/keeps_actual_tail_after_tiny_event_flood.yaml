@@ -7,7 +7,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8039
+        text_bytes: 8023
         concat:
           - |
             preview head
@@ -15,7 +15,7 @@ result:
             count: 1977
           - |
             a
-            [output omitted: 16127 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000001.log]
+            [output omitted: 16127 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000001.log]
           - repeat: ab
             count: 1959
           - |
