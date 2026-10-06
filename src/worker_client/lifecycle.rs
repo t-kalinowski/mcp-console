@@ -1207,7 +1207,11 @@ impl Client {
                                 handle.write_startup_stdin(input)?;
                             }
                         }
-                        self.0.startup.send_modify(|_| {});
+                        self.0
+                            .startup
+                            .lock()
+                            .expect("startup result lock")
+                            .send_modify(|_| {});
                         return Ok(());
                     }
                 }

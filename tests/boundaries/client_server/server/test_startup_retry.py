@@ -1,0 +1,302 @@
+"""Explicit restart retries failed initial setup without replaying rejected cells."""
+
+import json
+import os
+import shlex
+import sys
+import tempfile
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from boundaries.client_server.python.test_startup import (
+    isolated_python,
+    selected_python,
+)
+from boundaries.client_server.server.test_startup import (
+    discovery_environment,
+    wait_for_send_admission,
+)
+from support.checkpoints import FifoCheckpoint
+from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.normalization import code
+from support.r import r_test_environment
+from support.records import Transcript
+from support.requirements import POSIX, R, requires
+from support.suites import run_this_suite
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_restart_repairs_missing_selected_python(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        python = root / "selected-python"
+        environment = selected_python(root, python)
+        environment["PATH"] = str(root)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            tools = client.transcript[2]["result"]
+            failure = client.send(python="rejected_cell = True")
+            assert failure.get("isError"), failure
+            python.symlink_to(sys.executable)
+            assert client.send(python="rejected_cell = True") == failure
+            repaired = client.send(
+                control="restart",
+                python="assert 'rejected_cell' not in globals(); answer = 42; answer",
+            )
+            assert not repaired.get("isError"), repaired
+            assert repaired["content"] == [
+                {"type": "text", "text": "[runtime discovery retried]\n42\n[done]"}
+            ], repaired
+            assert client.send(python="answer + 1")["content"] == [
+                {"type": "text", "text": "43\n"}
+            ]
+            assert client.request("tools/list")["result"] == tools
+            client.transcript[-1] = {"tools_schema_unchanged": True}
+            client.send(
+                # fmt: python
+                python=code("""
+                    import os
+
+                    os.environ["RETICULATE_PYTHON"] = "/unavailable/python"
+                    os.environ["PATH"] = "/unavailable/tools"
+                    """),
+            )
+            restarted = client.send(
+                control="restart", python="assert 'answer' not in globals(); 42"
+            )
+            assert not restarted.get("isError"), restarted
+            assert restarted["content"][0]["text"].endswith("42\n[done]"), restarted
+            return json.loads(
+                json.dumps(client.finish()).replace(str(root), "<workspace>")
+            )
+
+
+@requires(POSIX, R)
+def test_restart_repairs_failed_r_discovery(binary: Path) -> Transcript:
+    r_environment, _ = r_test_environment()
+    with discovery_environment() as (environment, reached, release, alive):
+        with McpClient(binary, DIRECT.serve(), environment) as client:
+            reached.wait("initial R discovery is blocked")
+            assert os.read(alive, 1) == b"1"
+            client.initialize_and_list_tools()
+            release.release()
+            failure = client.send(r="stop('rejected cell must not run')")
+            assert failure.get("isError"), failure
+            probe = reached.path.parent / "R"
+            probe.write_text(
+                "#!/bin/sh\nprintf '%s\\n' "
+                + shlex.quote(r_environment["R_HOME"])
+                + "\n"
+            )
+            assert client.send(r="stop('ordinary send must not retry')") == failure
+            repaired = client.send(control="restart", r="answer <- 42; answer")
+            assert not repaired.get("isError"), repaired
+            assert repaired["content"] == [
+                {"type": "text", "text": "[runtime discovery retried]\n[1] 42\n[done]"}
+            ], repaired
+            return client.finish()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_restart_refreshes_failed_inspection_evidence(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        python = root / "selected-python"
+        attempts = root / "attempts"
+        environment = selected_python(root, python)
+        environment["PATH"] = str(root)
+        environment["UV_TOOL_DIR"] = str(root)
+
+        def break_inspection(evidence: str) -> None:
+            python.write_text(
+                "#!/bin/sh\nprintf 'probe\\n' >> " + shlex.quote(str(attempts)) + "\n"
+                "printf '%s\\n' " + shlex.quote(evidence) + " >&2\nexit 17\n"
+            )
+            python.chmod(0o755)
+
+        break_inspection("initial setup is broken")
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment, root
+        ) as client:
+            client.initialize_and_list_tools()
+            failure = client.send(python="raise AssertionError('must not run')")
+            assert "initial setup is broken" in str(failure), failure
+            break_inspection("repair is still incomplete")
+            assert client.send() == failure
+            refreshed = client.send(control="restart")
+            assert refreshed.get("isError"), refreshed
+            assert "repair is still incomplete" in str(refreshed), refreshed
+            assert "initial setup is broken" not in str(refreshed), refreshed
+            assert attempts.read_text().splitlines() == ["probe", "probe"]
+            assert client.send() == refreshed
+            transcript, stderr = client.finish_with_standard_error(
+                expected_exit_status=1
+            )
+            assert "repair is still incomplete" in stderr, stderr
+            return transcript + [{"stderr": stderr, "inspection_attempts": 2}]
+
+
+@contextmanager
+def retry_inspection(
+    binary: Path, execution: Execution, *, interruptible: bool = False
+) -> Iterator[tuple[McpClient, FifoCheckpoint, FifoCheckpoint, Path]]:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        python, site = isolated_python(root)
+        python.unlink()
+        attempts = root / "attempts"
+        mode = root / "inspection-mode"
+        mode.write_text("interrupt" if interruptible else "block")
+        environment = selected_python(root, python)
+        environment["PATH"] = str(root)
+        environment["UV_TOOL_DIR"] = str(root)
+        with (
+            closing(FifoCheckpoint.create(root / "reached")) as reached,
+            closing(FifoCheckpoint.create(root / "release")) as release,
+            McpClient(
+                binary, execution.serve("-c", "cache=host"), environment, root
+            ) as client,
+        ):
+            client.initialize_and_list_tools()
+            assert client.send().get("isError")
+            (site / "sitecustomize.py").write_text(
+                # fmt: python
+                code(f"""
+                    import os
+                    import signal
+                    import sys
+                    from pathlib import Path
+
+                    if sys.argv[0] == "-c":
+                        with Path({str(attempts)!r}).open("a") as attempts:
+                            attempts.write("probe\\n")
+                        mode = Path({str(mode)!r}).read_text()
+                        if mode == "interrupt":
+                            signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGINT}})
+                        if mode != "ready":
+                            with Path({str(reached.path)!r}).open("wb", buffering=0) as reached:
+                                assert reached.write(b"1") == 1
+                            if mode == "interrupt":
+                                assert signal.sigwait({{signal.SIGINT}}) == signal.SIGINT
+                                os._exit(130)
+                            with Path({str(release.path)!r}).open("rb", buffering=0) as release:
+                                assert release.read(1) == b"1"
+                    """)
+            )
+            python.symlink_to(sys.executable)
+            yield client, reached, release, attempts
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_cancelled_restart_shares_retry_and_preserves_next_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with retry_inspection(binary, execution) as (client, reached, release, attempts):
+        pending = client.start_send(control="restart")
+        reached.wait("explicit restart owns Python inspection")
+        # Completed public observations prove the callers have joined the
+        # blocked attempt before cancellation and repair are released.
+        for _ in range(2):
+            result = client.send(control="restart", timeout_ms=0)
+            assert result["content"] == [
+                {"type": "text", "text": "[worker starting]"}
+            ], result
+        timed_out = client.send(
+            control="restart", python="timed_out_cell = True", timeout_ms=0
+        )
+        assert timed_out == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "[worker starting]\nstartup is pending; control was not applied and cell was not run",
+                }
+            ],
+            "isError": True,
+        }, timed_out
+        client.notify("notifications/cancelled", requestId=pending["id"])
+        client.request("ping")
+        next_cell = client.start_send(
+            python="assert 'timed_out_cell' not in globals(); answer = 42; answer"
+        )
+        wait_for_send_admission(client)
+        release.release()
+        client.receive(next_cell)
+        assert next_cell["result"]["content"] == [{"type": "text", "text": "42\n"}], (
+            next_cell
+        )
+        assert attempts.read_text().splitlines() == ["probe"]
+        assert client.send(python="answer + 1")["content"] == [
+            {"type": "text", "text": "43\n"}
+        ]
+        return json.loads(
+            json.dumps(client.finish()).replace(str(attempts.parent), "<workspace>")
+        )
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_interrupted_retry_can_be_restarted(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with retry_inspection(binary, execution, interruptible=True) as (
+        client,
+        reached,
+        _,
+        attempts,
+    ):
+        pending = client.start_send(control="restart", python="rejected_cell = True")
+        reached.wait("retried Python inspection can receive interrupt")
+        interrupt = client.start_send(control="interrupt")
+        client.receive_many([pending, interrupt])
+        failure = pending["result"]
+        assert failure == {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "selected Python inspection failed (exit status: 130): ",
+                }
+            ],
+            "isError": True,
+        }, failure
+        assert client.send() == failure
+        (attempts.parent / "inspection-mode").write_text("ready")
+        repaired = client.send(
+            control="restart", python="assert 'rejected_cell' not in globals(); 42"
+        )
+        assert repaired["content"] == [
+            {"type": "text", "text": "[runtime discovery retried]\n42\n[done]"}
+        ], repaired
+        assert attempts.read_text().splitlines() == ["probe", "probe"]
+        return json.loads(
+            json.dumps(client.finish()).replace(str(attempts.parent), "<workspace>")
+        )
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_connection_closure_cancels_retried_inspection(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with retry_inspection(binary, execution) as (client, reached, _, attempts):
+        client.start_send(control="restart")
+        reached.wait("retry owns inspection before connection closure")
+        client.stdin.close()
+        assert client.process.wait(timeout=client.shutdown_timeout) == 0
+        assert client.stderr.read() == ""
+        assert attempts.read_text().splitlines() == ["probe"]
+        return [{"connection_closure_retired_retried_inspection": True}]
+
+
+if __name__ == "__main__":
+    run_this_suite(__file__)

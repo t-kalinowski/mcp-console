@@ -65,6 +65,7 @@ impl Client {
         &self,
         control: SendControl,
         request: SendRequest,
+        initial_restart: bool,
     ) -> Result<Response, String> {
         let deadline = request.deadline;
         let direct_restart_error = matches!(control, SendControl::Restart)
@@ -72,7 +73,7 @@ impl Client {
             && request.cell.is_none();
         let client = self.clone();
         let admission = tokio::task::spawn_blocking(move || {
-            client.control_and_start_evaluation(control, request)
+            client.control_and_start_evaluation(control, request, initial_restart)
         })
         .await;
         let admission = match admission {
@@ -125,6 +126,7 @@ impl Client {
         &self,
         requested: SendControl,
         request: SendRequest,
+        initial_restart: bool,
     ) -> Result<ControlledEvaluation, String> {
         let SendRequest {
             cell,
@@ -183,6 +185,7 @@ impl Client {
                 requirements,
                 transcript,
                 call_id,
+                initial_restart,
             ),
         }
     }
@@ -378,6 +381,7 @@ impl Client {
         Ok(ControlledEvaluation::Started(evaluation, wait_claim))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn restart_and_start_evaluation(
         &self,
         control: &ControlledSendAdmission,
@@ -386,16 +390,49 @@ impl Client {
         requirements: Option<Requirements>,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
+        initial_restart: bool,
     ) -> Result<ControlledEvaluation, String> {
-        let requirements = requirements.unwrap_or_default();
         let stdin_follows = stdin.as_ref().is_some_and(|stdin| !stdin.is_empty());
-        let restart = self.restart_blocking(
-            requirements,
-            WORKER_SHUTDOWN_GRACE,
-            cell.is_some() || stdin_follows,
-            Some(control),
-        )?;
-        let _operation = self.admit_controlled_operation();
+        let operation = initial_restart.then(|| self.admit_controlled_operation());
+        let restart = if initial_restart {
+            let generation = control.generation();
+            if let Some(requirements) = requirements {
+                let preparation = self.admit_preparation()?;
+                match self.prepare_admitted(
+                    requirements,
+                    &generation,
+                    &preparation,
+                    PreparationIntent::BeforeEvaluation,
+                )? {
+                    PrepareResult::Prepared => {}
+                    PrepareResult::RestartRequired => {
+                        return Err("requirements require session restart; cell was not run".into());
+                    }
+                    PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response) => {
+                        return Ok(self.return_controlled_response(response));
+                    }
+                }
+            }
+            // Cell admission owns its idle output cut. Do not consume output
+            // from an evaluation accepted by another caller during readiness.
+            let mut response = Response::default();
+            response.push_notice("runtime discovery retried");
+            if cell.is_none() && !stdin_follows {
+                response = output::project_replacement_ready(response);
+            }
+            super::lifecycle::RestartAttempt {
+                response,
+                generation: Some(generation),
+            }
+        } else {
+            self.restart_blocking(
+                requirements.unwrap_or_default(),
+                WORKER_SHUTDOWN_GRACE,
+                cell.is_some() || stdin_follows,
+                Some(control),
+            )?
+        };
+        let _operation = operation.unwrap_or_else(|| self.admit_controlled_operation());
         let Some(generation) = restart.generation else {
             let mut response = restart.response;
             if cell.is_some() {
@@ -403,8 +440,10 @@ impl Client {
             }
             return Ok(self.return_controlled_response(response));
         };
-        self.0.startup_failed.store(false, Ordering::Release);
-        self.finish_startup(Ok(()));
+        if !initial_restart {
+            self.0.startup_failed.store(false, Ordering::Release);
+            self.finish_startup(Ok(()));
+        }
         self.ensure_controlled_generation(control, &generation)?;
         let Some(cell) = cell else {
             let response = restart.response;

@@ -72,7 +72,7 @@ pub(crate) struct SendRequest {
 }
 
 impl SendRequest {
-    fn validate(&self, requirements_available: bool) -> Result<(), String> {
+    pub(crate) fn validate(&self, requirements_available: bool) -> Result<(), String> {
         let Some(requirements) = &self.requirements else {
             return Ok(());
         };
@@ -118,7 +118,7 @@ pub(crate) struct Client(Arc<ClientInner>);
 
 struct ClientInner {
     configuration: OnceLock<ClientConfiguration>,
-    startup: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    startup: Mutex<tokio::sync::watch::Sender<Option<Result<(), String>>>>,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
     /// Settles operations admitted before inline control reserves its optional new cell.
@@ -297,7 +297,7 @@ impl Client {
         let (startup, _) = tokio::sync::watch::channel(None);
         Self(Arc::new(ClientInner {
             configuration: OnceLock::new(),
-            startup,
+            startup: Mutex::new(startup),
             evaluation: Mutex::new(None),
             admission: tokio::sync::RwLock::new(()),
             preparation: tokio::sync::RwLock::new(()),
@@ -323,13 +323,17 @@ impl Client {
     }
 
     pub(crate) fn finish_startup(&self, result: Result<(), String>) {
-        self.0.startup.send_if_modified(|outcome| {
-            if outcome.is_some() {
-                return false;
-            }
-            *outcome = Some(result);
-            true
-        });
+        self.0
+            .startup
+            .lock()
+            .expect("startup result lock")
+            .send_if_modified(|outcome| {
+                if outcome.is_some() {
+                    return false;
+                }
+                *outcome = Some(result);
+                true
+            });
     }
 
     fn take_startup_failure(&self, generation: &WorkerGeneration) -> Result<bool, String> {
@@ -343,7 +347,20 @@ impl Client {
     }
 
     pub(crate) async fn ready(&self) -> Result<(), String> {
-        let mut result = self.0.startup.subscribe();
+        Self::wait_for_startup(self.startup_result()).await
+    }
+
+    fn startup_result(&self) -> tokio::sync::watch::Receiver<Option<Result<(), String>>> {
+        self.0
+            .startup
+            .lock()
+            .expect("startup result lock")
+            .subscribe()
+    }
+
+    async fn wait_for_startup(
+        mut result: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
+    ) -> Result<(), String> {
         let ready = result
             .wait_for(Option::is_some)
             .await
@@ -356,7 +373,29 @@ impl Client {
     }
 
     pub(crate) fn startup_finished(&self) -> bool {
-        self.0.startup.borrow().is_some()
+        self.0
+            .startup
+            .lock()
+            .expect("startup result lock")
+            .borrow()
+            .is_some()
+    }
+
+    pub(crate) fn retry_failed_startup(&self) -> bool {
+        assert!(!self.is_configured());
+        let mut startup = self.0.startup.lock().expect("startup result lock");
+        if !matches!(*startup.borrow(), Some(Err(_))) {
+            return false;
+        }
+        // Existing observers keep the failed attempt. A rejected cell must
+        // never become runnable when a new attempt is installed.
+        *startup = tokio::sync::watch::channel(None).0;
+        self.0
+            .startup_stdin
+            .lock()
+            .expect("startup stdin lock")
+            .clear();
+        true
     }
 
     /// Launch the default process through the ordinary readiness/retirement path.

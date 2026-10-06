@@ -76,12 +76,20 @@ impl Client {
             initial_requirements: Arc::new(Mutex::new(initial_requirements)),
         });
         let initial_requirements = active.as_ref().unwrap().initial_requirements.clone();
+        let readiness = self.startup_result();
         drop(active);
 
         let client = self.clone();
         let evaluator = evaluation.clone();
         let evaluation_task = tokio::task::spawn_blocking(move || {
-            client.evaluate_blocking(cell, evaluator, generation, startup, initial_requirements);
+            client.evaluate_blocking(
+                cell,
+                evaluator,
+                generation,
+                startup,
+                initial_requirements,
+                readiness,
+            );
         });
         let failed = evaluation.clone();
         let _completion_task = tokio::spawn(async move {
@@ -193,9 +201,11 @@ impl Client {
         generation: WorkerGeneration,
         startup: Option<Arc<lifecycle::WorkerStartupAdmission>>,
         initial_requirements: Arc<Mutex<Option<Requirements>>>,
+        readiness: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
     ) {
         let result = (|| {
-            let readiness = tokio::runtime::Handle::current().block_on(self.ready());
+            let readiness =
+                tokio::runtime::Handle::current().block_on(Self::wait_for_startup(readiness));
             self.ensure_generation(&generation)
                 .map_err(SendFailure::from)?;
             if !evaluation.is_interruptible()? {
