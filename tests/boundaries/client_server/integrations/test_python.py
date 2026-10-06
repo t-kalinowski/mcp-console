@@ -20,7 +20,7 @@ from support.r import r_test_environment
 from support.normalization import code
 from support.records import Transcript
 from support.previews import assert_preview
-from support.progress import elapsed_progress, normalize_elapsed
+from support.progress import elapsed_progress, normalize_elapsed, without_elapsed
 from support.evidence import compact_text
 from support.requirements import POSIX, SQL, WORKER, command, requires
 from support.resolvers import (
@@ -391,7 +391,9 @@ def test_callable_preserves_mixed_language_state(
     def collected(chunks):
         # Completion without new output is represented by the server's done notice.
         return "".join(
-            chunk.removesuffix(running) for chunk in chunks if chunk != "[done]"
+            without_elapsed(chunk).removesuffix(running)
+            for chunk in chunks
+            if chunk != "[done]"
         )
 
     async def exercise():
