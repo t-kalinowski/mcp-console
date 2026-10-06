@@ -27,6 +27,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.previews import assert_preview, compact_previews
+from support.progress import without_elapsed
 from support.processes import (
     capture_process_identity,
     child_process_identities,
@@ -536,6 +537,40 @@ def retry_inspection(
             )
             python.symlink_to(sys.executable)
             yield client, reached, release, attempts
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_retry_stdin_reaches_early_input_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with retry_inspection(binary, execution) as (client, reached, release, attempts):
+        pending = client.start_send(
+            control="restart", stdin="repaired input\n", timeout_ms=10_000
+        )
+        reached.wait("stdin-bearing restart owns the shared retry")
+        client.send(python="answer = input('retry> '); print(answer)", timeout_ms=0)
+        assert without_elapsed(last_tool_text(client)) == (
+            "\n[running; poll with an empty send]"
+        )
+        release.release()
+        client.response_timeout = 15
+        try:
+            client.receive(pending)
+        except TimeoutError:
+            # Release the blocked evaluation before reporting the regression.
+            interrupt = client.start_send(control="interrupt")
+            client.receive_many([pending, interrupt])
+            raise
+        assert pending["result"]["content"] == [
+            {"type": "text", "text": '[input requested: "retry> "]\nrepaired input\n'}
+        ], pending
+        assert not pending["result"].get("isError"), pending
+        assert attempts.read_text().splitlines() == ["probe"]
+        client.expect("'repaired input'\n", python="answer")
+        return json.loads(
+            json.dumps(client.finish()).replace(str(attempts.parent), "<workspace>")
+        )
 
 
 @requires(POSIX)

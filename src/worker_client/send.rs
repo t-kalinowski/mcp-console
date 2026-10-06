@@ -144,18 +144,14 @@ impl Client {
             return Ok(response);
         }
         if let Some(control) = request.control {
-            if initial_restart
-                && request.cell.is_none()
-                && request.requirements.is_none()
-                && request.stdin.is_none()
-            {
+            if initial_restart && request.cell.is_none() && request.requirements.is_none() {
                 // Joining a retry is observation, not another generation change.
-                // Use ordinary polling ownership if a cell was accepted meanwhile.
+                // Ordinary ownership routes stdin through any accepted evaluation.
                 return Ok(
                     match self
                         .send_inner(
                             None,
-                            None,
+                            request.stdin,
                             None,
                             request.deadline,
                             request.transcript,
