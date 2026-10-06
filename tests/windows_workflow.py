@@ -306,14 +306,17 @@ class WindowsWorkflow(unittest.TestCase):
             "windows_cargo.py",
             "windows_resolver.py",
             "windows_sandbox.py",
-            "support/__init__.py",
-            "support/installation.py",
-            "support/relay_commands.py",
-            "support/relay_lifecycle.py",
         ):
             path = self.root / "tests" / name
             path.parent.mkdir(exist_ok=True)
             shutil.copy2(ROOT / "tests" / name, path)
+        # Native discovery imports shared helpers and their dependencies. Keep
+        # the package intact instead of maintaining a second import inventory.
+        shutil.copytree(
+            ROOT / "tests/support",
+            self.root / "tests/support",
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
         result = self.run_command("test", "--list")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("WindowsConsole.test_python_without_r", result.stdout)
