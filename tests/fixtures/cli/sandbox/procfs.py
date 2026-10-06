@@ -182,7 +182,7 @@ def target() -> None:
         )
     # Changing transport-looking variables after launch cannot change policy.
     os.environ["PROCFS_TEST_CONFIG"] = (
-        '{"version":2,"filesystem":{"kind":"unrestricted"},"network":"enabled"}'
+        '{"filesystem":{"kind":"unrestricted"},"network":"enabled"}'
     )
     attempt("policy_replacement_write", lambda: write(data["sentinel"]))
     print(json.dumps(results), flush=True)
@@ -221,7 +221,6 @@ def main(binary: str, interface: str, expected_proc: str) -> None:
                     )
                 for network in ("restricted", "enabled"):
                     config = {
-                        "version": 2,
                         "filesystem": {"kind": "restricted", "entries": entries},
                         "network": network,
                         "lifecycle": {"private_tmp": {"environment": ["TMPDIR"]}},

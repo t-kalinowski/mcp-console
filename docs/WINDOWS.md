@@ -66,11 +66,12 @@ The default elevated backend enforces restricted networking and filesystem write
 Private storage is exported through `TMPDIR`, `TEMP`, and `TMP`.
 Standalone execution uses the same bundle: `mcp-console sandbox -- python script.py`.
 
-For explicitly network-enabled workloads, the restricted-token backend avoids account provisioning:
+For explicitly network-enabled workloads, the unelevated backend avoids account provisioning.
+Use `unelevated` in place of `restricted-token` in existing configuration:
 
 ```yaml
 sandbox:
-  windows_sandbox_level: restricted-token
+  windows_sandbox_level: unelevated
   network: enabled
 ```
 
@@ -193,7 +194,7 @@ Their readiness and release operations have bounded deadlines; cancellation join
 The host pins process identities before release or cancellation.
 These are host-plumbing tests, not sandbox-enforcement evidence.
 `WindowsSandbox.test_network_enabled_allows_loopback_exchange` explicitly tests positive loopback communication with networking enabled.
-The provisioned backend's loopback restriction still needs separate acceptance against its established policy contract; restricted-token tests do not imply loopback denial.
+The provisioned backend's loopback restriction still needs separate acceptance against its established policy contract; unelevated tests do not imply loopback denial.
 
 Shared discovery reports unavailable capabilities per case and execution mode; a skip is not validation.
 Windows full checks exercise portable R/Python execution, startup, bridge attachment, input, plots, managed activation, process creation, recording, CLI configuration, and protocol behavior in addition to native acceptance.

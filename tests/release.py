@@ -2044,7 +2044,6 @@ class ReleaseScriptTests(ReleaseFixture):
                 "repository": "t-kalinowski/codex",
                 "release": "rust-v0.150.1",
                 "commit": "a" * 40,
-                "protocol_version": 2,
             }
             (root / "sandbox-runner.json").write_text(json.dumps(pin))
             checkout = directory / "source"
@@ -2211,7 +2210,7 @@ class ReleaseScriptTests(ReleaseFixture):
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(placeholder.read_text(), "/*\n!/.gitignore\n")
-                    packages = [("codex-mcp-console-sandbox", "mcp-console-sandbox")]
+                    packages = [("mcp-console-sandbox", "mcp-console-sandbox")]
                     if "linux" in target:
                         packages.insert(0, ("codex-bwrap", "bwrap"))
                     self.assertEqual(

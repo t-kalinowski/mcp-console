@@ -43,7 +43,6 @@ class StagingTests(unittest.TestCase):
         self.pin = {
             "repository": "fixture/runner",
             "commit": self.revision(),
-            "protocol_version": 2,
         }
         self.roots = [self.directory / name for name in ("first", "second")]
         for root in self.roots:
