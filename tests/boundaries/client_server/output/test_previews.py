@@ -81,12 +81,12 @@ after final image
             )
         else:
             assert "omitted" in text
-            assert "rendered UTF-8 bytes" in text
+            assert "UTF-8 bytes" in text
             assert (
                 f".agents/console/sessions/{session.name}/outputs/call-000001.log"
                 in text
             )
-            assert "Console server" in text
+            assert "Console host" in text
         for block in result["content"]:
             if block["type"] == "text":
                 block["text"] = block["text"].replace(session.name, "<run ID>")
@@ -355,7 +355,6 @@ def test_reports_raw_and_rendered_counts_for_invalid_utf8(
         text = last_tool_text(client)
         raw = b"raw head\n" + "€".encode() + b"\xff" * 20000 + "€ raw tail\n".encode()
         assert_preview(text, raw.decode("utf-8", errors="replace"))
-        assert f"{len(raw)} raw bytes retained, 0 raw bytes not retained" in text
         assert client.temporary_directory is not None
         session = next(
             (
@@ -394,9 +393,7 @@ def test_keeps_tail_when_recording_is_disabled(
             assert len(text.encode()) <= TEXT_BUDGET
             assert text.startswith("preview head\n")
             assert text.endswith("preview tail: final diagnostic\nafter final image\n")
-            assert (
-                "no retained cell log" in text and "omitted text is unavailable" in text
-            )
+            assert "no retained log" in text and "omitted text unavailable" in text
             assert "outputs/call-" not in text
             compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
             transcript, stderr = client.finish_with_standard_error()
@@ -457,7 +454,7 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
         assert [block["type"] for block in content] == ["text", "image", "text"]
         assert content[0]["text"] == (
             "before oversized image\n\n"
-            "[image limit: omitted 1 images (8388612 encoded bytes); 0 already recorded, 1 not retained]\n"
+            "[output omitted: 1 image (8388612 encoded bytes); 1 image not retained]\n"
             "before accepted image\n"
         )
         assert content[-1]["text"] == "after accepted image\n"
@@ -537,7 +534,11 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
         ) in text
         assert "preview tail: final diagnostic\n" in text
         assert text.endswith("after final image\n[done]")
-        assert "outputs/call-000001.log" in text and "outputs/call-000002.log" in text
+        assert text.count("[output omitted:") == 1
+        assert (
+            f"retained logs on Console host: .agents/console/sessions/{session_directory(client).name}/outputs"
+            in text
+        )
         assert not result.get("isError", False), result
         normalize_preview_paths(client)
         client.send()
@@ -574,23 +575,25 @@ def test_keeps_partial_idle_utf8_out_of_cell_omission_counts(
         text = last_tool_text(client)
         idle = (b"idle head\n" + b"s" * 20000 + b"\xe2").decode(errors="replace")
         cell = "cell head\n" + "x" * 32768 + "\ncell tail\n"
-        markers = list(OMISSION.finditer(text))
-        assert len(markers) == 2, text
-        head, tail = text[: markers[0].start()], text[markers[1].end() :]
+        (marker,) = OMISSION.finditer(text)
+        head = text[: marker.start()]
+        boundary, tail = text[marker.end() :].split("\n[…]\n")
+        assert boundary == ""
         assert idle.startswith(head) and cell.endswith(tail)
-        assert len(head.encode()) + int(markers[0][1]) == len(idle.encode())
-        assert int(markers[1][1]) + len(tail.encode()) == len(cell.encode())
-        assert "outputs/session.log" in markers[0][0]
-        assert "outputs/call-000001.log" in markers[1][0]
+        idle_omitted = len(idle.encode()) - len(head.encode())
+        cell_omitted = len(cell.encode()) - len(tail.encode())
+        assert int(marker[1]) == idle_omitted + cell_omitted
+        assert "retained logs on Console host:" in marker[0]
         session = session_directory(client)
+        assert f".agents/console/sessions/{session.name}/outputs/" in marker[0]
         assert (session / "outputs/session.log").read_text(errors="replace") == idle
         assert (session / "outputs/call-000001.log").read_text() == cell
-        summaries = [
+        events = [
             json.loads(line)
             for line in (session / "internal/events.jsonl").read_text().splitlines()
-            if json.loads(line)["event"] == "cell_output"
         ]
-        assert summaries[-1]["inline_omitted_bytes"] == int(markers[1][1])
+        cell_summaries = [event for event in events if event["event"] == "cell_output"]
+        assert cell_summaries[-1]["inline_omitted_bytes"] == cell_omitted
         normalize_preview_paths(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()

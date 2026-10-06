@@ -53,17 +53,17 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8059
+        text_bytes: 8092
         concat:
           - |
             interval 0 head
           - repeat: x
-            count: 3888
+            count: 3952
           - |
 
-            [output preview: omitted 24993 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); 32801 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 24865 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000002.log]
           - repeat: x
-            count: 3887
+            count: 3951
           - |-
 
             interval 0 tail
@@ -77,17 +77,17 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8059
+        text_bytes: 8092
         concat:
           - |
             interval 1 head
           - repeat: x
-            count: 3888
+            count: 3952
           - |
 
-            [output preview: omitted 57794 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); 98403 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 57666 UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000002.log]
           - repeat: x
-            count: 3887
+            count: 3951
           - |-
 
             interval 2 tail

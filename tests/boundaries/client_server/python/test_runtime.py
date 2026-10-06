@@ -15,6 +15,7 @@ from support.assertions import (
     assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
+    wait_for_idle_output,
     wait_for_worker_ready,
 )
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
@@ -611,6 +612,82 @@ def test_runs_async_python_explicitly(binary: Path, execution: Execution) -> Tra
     client.send(python="asyncio.run(answer())")
     assert last_result_text(client) == "42\n"
     return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_runs_python_thread_while_idle(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        environment = os.environ.copy()
+        environment["TMPDIR"] = temporary_directory
+        release = Path(temporary_directory) / "python-thread-release"
+        environment["MCP_CONSOLE_TEST_THREAD_RELEASE"] = str(release)
+        with McpClient(binary, execution.serve(), environment) as client:
+            try:
+                client.initialize_and_list_tools()
+                # fmt: python
+                python = code("""
+                    import os
+                    import threading
+                    import time
+                    from pathlib import Path
+
+                    temporary = Path(os.environ["TMPDIR"])
+                    started = temporary / "python-thread-started"
+                    release = Path(os.environ["MCP_CONSOLE_TEST_THREAD_RELEASE"])
+                    finished = temporary / "python-thread-finished"
+                    background_value = "waiting"
+
+
+                    def run_in_background():
+                        global background_value
+                        started.touch()
+                        while not release.exists():
+                            time.sleep(0.01)
+                        background_value = "finished while idle"
+                        print("hello from background thread", flush=True)
+                        finished.touch()
+
+
+                    background_thread = threading.Thread(target=run_in_background)
+                    background_thread.start()
+                    background_thread.is_alive()
+                    """)
+                client.send(python=python)
+                assert last_result_text(client) == "True\n"
+
+                wait_for_worker_file(
+                    Path(temporary_directory),
+                    "python-thread-started",
+                    client,
+                )
+                client.send(timeout_ms=0)
+                assert last_result_text(client) == "\n[idle]"
+
+                release.touch()
+                wait_for_worker_file(
+                    Path(temporary_directory),
+                    "python-thread-finished",
+                    client,
+                )
+                wait_for_idle_output(
+                    client,
+                    "hello from background thread\n\n[idle]",
+                    "idle Python thread output",
+                    timeout_ms=0,
+                )
+
+                client.send(
+                    python=(
+                        "background_thread.join(); "
+                        "(background_thread.is_alive(), background_value)"
+                    )
+                )
+                assert last_result_text(client) == "(False, 'finished while idle')\n"
+                return client.finish()
+            finally:
+                release.touch(exist_ok=True)
 
 
 @executions(DIRECT, SANDBOXED)

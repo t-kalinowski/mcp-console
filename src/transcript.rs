@@ -75,6 +75,7 @@ pub(crate) struct Artifact {
     id: u64,
     path: String,
     mime_type: String,
+    pub(crate) public_path: String,
 }
 
 impl Transcript {
@@ -661,6 +662,11 @@ impl ActiveTranscript {
         self.next_artifact_id = artifact_id;
         Ok(Artifact {
             id: artifact_id,
+            public_path: self
+                .public_directory
+                .join(&relative_path)
+                .display()
+                .to_string(),
             path: relative_path,
             mime_type: mime_type.to_string(),
         })

@@ -53,11 +53,7 @@ def test_bounds_pending_output_and_resets_after_completion(
             f".agents/console/sessions/{session.name}/{relative_output.as_posix()}"
         )
         omitted = assert_preview(output, "x" * (PENDING_TEXT_BUDGET + 7))
-        assert f"raw cell log: {public_output}" in output
-        assert (
-            f"{PENDING_TEXT_BUDGET + 7} raw bytes retained, 0 raw bytes not retained"
-            in output
-        )
+        assert f"raw log on Console host: {public_output}" in output
 
         output_path = session / relative_output
         assert output_path.read_text(encoding="utf-8") == "x" * (

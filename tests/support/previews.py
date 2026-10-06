@@ -7,9 +7,7 @@ from support.client import McpClient
 from support.evidence import compact_text
 
 TEXT_BUDGET = 8 * 1024
-OMISSION = re.compile(
-    r"\n\[output preview: omitted (\d+) rendered UTF-8 bytes; [^\n]*\]\n"
-)
+OMISSION = re.compile(r"\n\[output omitted: (\d+) UTF-8 bytes; [^\n]*\]\n")
 
 CONTROL_OMISSION = re.compile(
     r"\[… omitted (\d+) rendered UTF-8 bytes; not retained …\]"
@@ -68,7 +66,7 @@ def normalize_pipe_counts(client: McpClient) -> None:
             if block["type"] == "text":
                 text = block["text"]
                 text = re.sub(
-                    r"(omitted )\d+( rendered UTF-8 bytes)",
+                    r"(output omitted: )\d+( UTF-8 bytes)",
                     r"\1<omitted byte count>\2",
                     text,
                 )

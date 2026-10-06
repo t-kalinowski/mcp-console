@@ -48,11 +48,11 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 7257
+        text_bytes: 7239
         concat:
           - |
 
-            [image limit: omitted 1024 images (4096 encoded bytes); 0 already recorded, 1024 not retained]
+            [output omitted: 1024 images (4096 encoded bytes); 1024 images not retained]
           - repeat: |-
 
               [done]
