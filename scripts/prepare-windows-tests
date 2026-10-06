@@ -18,11 +18,27 @@ parser.add_argument(
 )
 parser.add_argument("--state-dir", type=Path, required=True)
 parser.add_argument("--github-env", type=Path, required=True)
+parser.add_argument(
+    "--require-configured",
+    action="store_true",
+    help="require existing sandbox setup instead of provisioning accounts",
+)
+parser.add_argument(
+    "--read-root",
+    type=Path,
+    action="append",
+    default=[],
+    help="grant the provisioned sandbox accounts read/execute access to a test asset directory",
+)
 options = parser.parse_args()
 if os.name != "nt":
     parser.error("Windows sandbox preparation requires Windows")
 if not options.state_dir.is_absolute():
     parser.error("--state-dir must be absolute")
+for path in options.read_root:
+    if not path.is_absolute() or not path.is_dir():
+        parser.error(f"--read-root must select an existing absolute directory: {path}")
+read_roots = tuple(dict.fromkeys(path.resolve() for path in options.read_root))
 
 r_home = Path(
     os.environ.get("R_HOME")
@@ -51,10 +67,24 @@ def readiness():
 
 status = readiness()
 if not status["configured"]:
+    if options.require_configured:
+        raise SystemExit("Windows sandbox setup is not ready")
     subprocess.run(command, check=True, timeout=300)
     status = readiness()
 if not status["configured"] or not status["helpers_available"]:
     raise SystemExit("Windows sandbox setup is not ready")
+
+for path in read_roots:
+    subprocess.run(
+        [
+            shutil.which("icacls") or "icacls",
+            str(path),
+            "/grant",
+            f"{status['offline_account']}:(OI)(CI)RX",
+            f"{status['online_account']}:(OI)(CI)RX",
+        ],
+        check=True,
+    )
 
 with options.github_env.open("a", encoding="utf-8", newline="\n") as exported:
     exported.write(f"R_HOME={r_home}\n")
