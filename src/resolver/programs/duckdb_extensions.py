@@ -35,7 +35,7 @@ try:
         name
         for (name,) in connection.execute(
             "SELECT unnest(aliases || [extension_name]) FROM duckdb_extensions() "
-            "WHERE install_mode = 'STATICALLY_LINKED'"
+            "WHERE install_path = '(BUILT-IN)'"
         ).fetchall()
     }
     for extension in extensions:
