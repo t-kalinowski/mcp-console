@@ -7,17 +7,17 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8056
+        text_bytes: 8129
         concat:
           - |
             preview head
           - repeat: x
-            count: 3955
+            count: 4019
           - |
 
-            [output preview: omitted 16769343 rendered UTF-8 bytes; no retained cell log (16777279 raw bytes observed); omitted text is unavailable]
+            [output omitted: 16769215 UTF-8 bytes; no retained log; omitted text unavailable]
           - repeat: x
-            count: 3918
+            count: 3982
           - |
 
             preview tail: final diagnostic

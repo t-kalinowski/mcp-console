@@ -21,6 +21,7 @@ Otherwise it uses `~/.agents/console/sessions/<run-id>/`, without creating a pro
 | `artifacts/`              | Retained image files                                                                            |
 
 Returned raw-log paths are launch-directory-relative for project recordings and absolute for fallback recordings.
+When a preview's location exceeds 512 UTF-8 bytes, it instead gives the exact `sessions/<run-id>/...` path, labelled relative to the Console recording directory selected above.
 Retrieving omitted text requires filesystem access there; Console has no log read/search tool.
 
 The journal schema is unversioned, with nullable runtime metadata before discovery.

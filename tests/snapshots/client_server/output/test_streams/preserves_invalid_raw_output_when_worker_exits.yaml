@@ -7,16 +7,16 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8081
+        text_bytes: 8103
         concat:
           - "zod invalid stdout: � trailing: �"
           - repeat: x
-            count: 3803
+            count: 3867
           - |
 
-            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace); <raw byte count> raw bytes retained, 0 raw bytes not retained]
+            [output omitted: <omitted byte count> UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000001.log]
           - repeat: z
-            count: 3798
+            count: 3862
           - |-
             od expected stdout crash tail: <pipe tail bytes>
             [worker sideband read failed: worker sideband closed]
@@ -32,16 +32,16 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8081
+        text_bytes: 8103
         concat:
           - "zod invalid stderr: � trailing: �"
           - repeat: x
-            count: 3803
+            count: 3867
           - |
 
-            [output preview: omitted <omitted byte count> rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace); <raw byte count> raw bytes retained, 0 raw bytes not retained]
+            [output omitted: <omitted byte count> UTF-8 bytes; raw log on Console host: .agents/console/sessions/<run ID>/outputs/call-000002.log]
           - repeat: z
-            count: 3798
+            count: 3862
           - |-
             od expected stderr crash tail: <pipe tail bytes>
             [worker sideband read failed: worker sideband closed]

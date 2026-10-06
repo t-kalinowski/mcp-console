@@ -76,15 +76,13 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
         output = last_tool_text(client)
         raw = cell_text(client, 1)
         assert raw == "", "output after the restart cut does not belong to the cell log"
-        marker = re.search(
-            r"outputs/session.log[^\n]*; (\d+) raw bytes retained", output
-        )
-        assert marker is not None, output
+        assert "outputs/session.log" in output, output
+        recorded = (session_directory(client) / "outputs/session.log").read_text()
         prefix = "zod stdin closed\n" + "x" * LARGE_OUTPUT_SIZE
-        observed = int(marker[1])
+        observed = len(recorded)
         assert observed > len(prefix), observed
         raw = prefix + "y" * (observed - len(prefix))
-        assert (session_directory(client) / "outputs/session.log").read_text() == raw
+        assert recorded == raw
         suffix = "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         suffix = "[active evaluation stopped by session restart request]\n" + suffix
         assert output.endswith(suffix), "lifecycle notices followed old-worker output"

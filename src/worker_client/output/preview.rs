@@ -12,7 +12,7 @@ const IMAGE_EVENTS: usize = 4096;
 
 mod source;
 pub(super) use source::Source;
-use source::Summary;
+use source::{Location, Summary};
 
 #[derive(Clone)]
 pub(super) enum Part {
@@ -42,6 +42,7 @@ pub(super) struct Preview {
     omitted_images: u64,
     omitted_image_bytes: u64,
     recorded_omitted_images: u64,
+    omitted_artifacts: Location,
     omitted_controls: u64,
     omitted_control_bytes: u64,
 }
@@ -172,6 +173,9 @@ impl Preview {
         };
         if !self.admits_image(data, mime_type) {
             self.recorded_omitted_images += u64::from(artifact.is_some());
+            if let Some(artifact) = artifact {
+                self.omitted_artifacts.add(&artifact.public_path, false);
+            }
             self.omit_image(data.len());
             return;
         }
@@ -214,6 +218,8 @@ impl Preview {
                     self.omitted_images += other.omitted_images;
                     self.omitted_image_bytes += other.omitted_image_bytes;
                     self.recorded_omitted_images += other.recorded_omitted_images;
+                    self.omitted_artifacts
+                        .extend(other.omitted_artifacts.clone());
                 }
                 Part::Image(image) => self.image(image),
                 Part::Source(source) => self.source(source),
@@ -426,6 +432,41 @@ impl Preview {
                     self.omitted_controls, self.omitted_control_bytes,
                 ));
         }
+        // Recompute after each trim. Sizing and delivery use exactly the same
+        // combined notice, without retaining a list of omitted source paths.
+        let mut summary = Summary::default();
+        let mut gap = Gap::default();
+        for part in &self.parts {
+            match part {
+                Part::Gap(omitted) => {
+                    gap.bytes += omitted.bytes;
+                    gap.notices += omitted.notices;
+                }
+                Part::Source(source) => {
+                    if gap.bytes != 0 {
+                        summary.gap.bytes += gap.bytes;
+                        summary.gap.notices += gap.notices;
+                        summary.source(source);
+                    }
+                    gap = Gap::default();
+                }
+                Part::Summary(omitted) => summary.extend(omitted.clone()),
+                _ => {}
+            }
+        }
+        if gap.bytes != 0 {
+            summary.gap.bytes += gap.bytes;
+            summary.gap.notices += gap.notices;
+            summary.source(&Source::default());
+        }
+        let mut marker = (summary.gap.bytes != 0 || self.omitted_images != 0).then(|| {
+            summary.notice(
+                self.omitted_images,
+                self.omitted_image_bytes,
+                self.recorded_omitted_images,
+                &self.omitted_artifacts,
+            )
+        });
         let mut image_marker = true;
         let mut start = 0;
         for end in 0..=self.parts.len() {
@@ -445,24 +486,20 @@ impl Preview {
                     }
                 })
                 .sum();
-            let notices: u64 = parts
-                .iter()
-                .map(|part| match part {
-                    Part::Gap(gap) => gap.notices,
-                    _ => 0,
-                })
-                .sum();
-            let mut marker = (omitted != 0).then(|| source.notice(omitted, notices));
+            let mut text_marker = true;
             for part in parts {
                 match part {
                     Part::Text(text) | Part::Information(text) => projection.text(text),
                     Part::Notice(control) => projection.text(&control.render()),
                     Part::Gap(_) => {
-                        if let Some(marker) = marker.take() {
-                            projection.text(&marker);
+                        if text_marker {
+                            projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
+                            text_marker = false;
                         }
                     }
-                    Part::Summary(summary) => projection.text(&summary.notice()),
+                    Part::Summary(_) => {
+                        projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()))
+                    }
                     Part::Image(image) => {
                         if let Some(content) = &mut projection.content {
                             content.push(image.clone());
@@ -470,13 +507,7 @@ impl Preview {
                     }
                     Part::ImageGap => {
                         if image_marker {
-                            projection.text(&format!(
-                                    "\n[image limit: omitted {} images ({} encoded bytes); {} already recorded, {} not retained]\n",
-                                    self.omitted_images,
-                                    self.omitted_image_bytes,
-                                    self.recorded_omitted_images,
-                                    self.omitted_images - self.recorded_omitted_images
-                                ));
+                            projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
                             image_marker = false;
                         }
                     }

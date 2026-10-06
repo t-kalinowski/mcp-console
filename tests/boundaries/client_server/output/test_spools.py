@@ -141,16 +141,8 @@ def test_reports_partial_retention_and_later_unretained_output(
             assert (workspace / path).read_bytes() == b"x" * file_limit
             assert f"stopped after {file_limit} retained bytes" in first_text
             assert "later text is not retained in this file" in first_text
-            assert (
-                f"{file_limit} raw bytes retained, 4 raw bytes not retained"
-                in first_text
-            )
-            assert (
-                f"{file_limit} raw bytes retained, {PENDING_TEXT_BUDGET + 11} raw bytes not retained"
-                in second_text
-            )
-            assert "file contains only a prefix" in first_text
-            assert "omitted text beyond it is unavailable" in second_text
+            assert "logs contain prefixes" in first_text
+            assert "later raw text unavailable" in second_text
             assert first_text.endswith("\n[running; poll with an empty send]")
             # File-failure notices are separate from the emitted byte stream.
             failure_start = first_text.index("[cell output file ")
@@ -250,8 +242,7 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
             assert retained.read(1) == b""
         assert len(output.encode()) <= TEXT_BUDGET
         assert "tail\n" in output, output[-1500:]
-        assert f"{limit} raw bytes retained, 5 raw bytes not retained" in output
-        assert "file contains only a prefix" in output
+        assert "logs contain prefixes; later raw text unavailable" in output
         assert f"cell output retention limit reached at {limit} bytes" in output
         omitted = sum(int(match[1]) for match in OMISSION.finditer(output))
         events = [
