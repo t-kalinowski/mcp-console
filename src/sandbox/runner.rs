@@ -46,7 +46,6 @@ pub(super) fn run(
     }
     if config_env.is_none() {
         // This is also the serve path: an ambient value never selects policy.
-        settings.insert("version".into(), installation::PROTOCOL_VERSION.into());
         let mut lifecycle = json!({"private_tmp": {"environment": ["TMPDIR"]}});
         #[cfg(windows)]
         {

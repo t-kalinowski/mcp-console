@@ -10,7 +10,6 @@ runner_configuration:
             kind: root
         access: read
   network: restricted
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -42,7 +41,6 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -74,7 +72,6 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -108,7 +105,6 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -142,7 +138,6 @@ runner_configuration:
           path: <host directory>/future output
         access: write
   network: restricted
-  version: 2
   lifecycle:
     private_tmp:
       environment:

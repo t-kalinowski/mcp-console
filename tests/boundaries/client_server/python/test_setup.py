@@ -248,9 +248,7 @@ def test_cancels_native_inspection_and_retries(
                     r=code(f"""
                         retained_value <- 41L
                         retained_pid <- Sys.getpid()
-                        Sys.setenv(RETICULATE_PYTHON = {
-                          json.dumps(str(selected))
-                        })
+                        Sys.setenv(RETICULATE_PYTHON = {json.dumps(str(selected))})
                         """)
                 )
                 operation = client.start_send(

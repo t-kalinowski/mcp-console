@@ -1,7 +1,6 @@
 args <- commandArgs(trailingOnly = TRUE)
 console <- if (length(args)) args[[1L]] else "mcp-console"
 config <- list(
-  version = 2L,
   filesystem = list(
     kind = "restricted",
     entries = list(list(

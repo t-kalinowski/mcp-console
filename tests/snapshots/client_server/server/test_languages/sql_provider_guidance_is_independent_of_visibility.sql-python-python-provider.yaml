@@ -2,7 +2,7 @@
 languages:
   - sql
   - python
-provider: R
+provider: Python
 ---
 !same-as sql-python MCP initialization for this execution mode
 ---
@@ -18,7 +18,7 @@ result:
   isError: false
 ---
 send:
-  python: r.visible_frame = frame
+  python: _ = sql_connection().register("visible_frame", frame)
 result:
   content:
     - type: text
@@ -31,8 +31,7 @@ result:
   content:
     - type: text
       text: |
-        # A tibble: 1 × 1
-            answer
-          <double>
-        1     42.0
+        answer
+        ------
+        42
   isError: false
