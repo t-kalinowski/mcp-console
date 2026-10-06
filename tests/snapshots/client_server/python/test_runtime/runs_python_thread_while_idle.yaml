@@ -10,7 +10,7 @@ send:
 
     temporary = Path(os.environ["TMPDIR"])
     started = temporary / "python-thread-started"
-    release = temporary / "python-thread-release"
+    release = Path(os.environ["MCP_CONSOLE_TEST_THREAD_RELEASE"])
     finished = temporary / "python-thread-finished"
     background_value = "waiting"
 

@@ -620,61 +620,66 @@ def test_runs_python_thread_while_idle(
     with tempfile.TemporaryDirectory() as temporary_directory:
         environment = os.environ.copy()
         environment["TMPDIR"] = temporary_directory
+        release = Path(temporary_directory) / "python-thread-release"
+        environment["MCP_CONSOLE_TEST_THREAD_RELEASE"] = str(release)
         with McpClient(binary, execution.serve(), environment) as client:
-            client.initialize_and_list_tools()
-            # fmt: python
-            python = code("""
-                import os
-                import threading
-                import time
-                from pathlib import Path
+            try:
+                client.initialize_and_list_tools()
+                # fmt: python
+                python = code("""
+                    import os
+                    import threading
+                    import time
+                    from pathlib import Path
 
-                temporary = Path(os.environ["TMPDIR"])
-                started = temporary / "python-thread-started"
-                release = temporary / "python-thread-release"
-                finished = temporary / "python-thread-finished"
-                background_value = "waiting"
-
-
-                def run_in_background():
-                    global background_value
-                    started.touch()
-                    while not release.exists():
-                        time.sleep(0.01)
-                    background_value = "finished while idle"
-                    finished.touch()
+                    temporary = Path(os.environ["TMPDIR"])
+                    started = temporary / "python-thread-started"
+                    release = Path(os.environ["MCP_CONSOLE_TEST_THREAD_RELEASE"])
+                    finished = temporary / "python-thread-finished"
+                    background_value = "waiting"
 
 
-                background_thread = threading.Thread(target=run_in_background)
-                background_thread.start()
-                background_thread.is_alive()
-                """)
-            client.send(python=python)
-            assert last_result_text(client) == "True\n"
+                    def run_in_background():
+                        global background_value
+                        started.touch()
+                        while not release.exists():
+                            time.sleep(0.01)
+                        background_value = "finished while idle"
+                        finished.touch()
 
-            started = wait_for_worker_file(
-                Path(temporary_directory),
-                "python-thread-started",
-                client,
-            )
-            client.send(timeout_ms=0)
-            assert last_result_text(client) == "\n[idle]"
 
-            (started.parent / "python-thread-release").touch()
-            wait_for_worker_file(
-                Path(temporary_directory),
-                "python-thread-finished",
-                client,
-            )
+                    background_thread = threading.Thread(target=run_in_background)
+                    background_thread.start()
+                    background_thread.is_alive()
+                    """)
+                client.send(python=python)
+                assert last_result_text(client) == "True\n"
 
-            client.send(
-                python=(
-                    "background_thread.join(); "
-                    "(background_thread.is_alive(), background_value)"
+                wait_for_worker_file(
+                    Path(temporary_directory),
+                    "python-thread-started",
+                    client,
                 )
-            )
-            assert last_result_text(client) == "(False, 'finished while idle')\n"
-            return client.finish()
+                client.send(timeout_ms=0)
+                assert last_result_text(client) == "\n[idle]"
+
+                release.touch()
+                wait_for_worker_file(
+                    Path(temporary_directory),
+                    "python-thread-finished",
+                    client,
+                )
+
+                client.send(
+                    python=(
+                        "background_thread.join(); "
+                        "(background_thread.is_alive(), background_value)"
+                    )
+                )
+                assert last_result_text(client) == "(False, 'finished while idle')\n"
+                return client.finish()
+            finally:
+                release.touch(exist_ok=True)
 
 
 @executions(DIRECT, SANDBOXED)
