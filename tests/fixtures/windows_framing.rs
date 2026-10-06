@@ -93,8 +93,8 @@ pub(super) fn run(
     write: *mut c_void,
     mut control: Gate,
 ) -> io::Result<()> {
-    if scenario == "framing_interrupt" {
-        return builtin(read, write, control);
+    if matches!(scenario, "framing_interrupt" | "framing_later") {
+        return builtin(read, write, control, scenario == "framing_interrupt");
     }
     send(write, "{\"kind\":\"ready\"}\n")?;
     let frame = command(read)?;
@@ -135,7 +135,12 @@ pub(super) fn run(
     Ok(())
 }
 
-fn builtin(read: *mut c_void, write: *mut c_void, mut control: Gate) -> io::Result<()> {
+fn builtin(
+    read: *mut c_void,
+    write: *mut c_void,
+    mut control: Gate,
+    interrupt_wait: bool,
+) -> io::Result<()> {
     let name: Vec<u16> = format!(r"\\.\pipe\console-framing-{}", std::process::id())
         .encode_utf16()
         .chain(Some(0))
@@ -202,11 +207,13 @@ fn builtin(read: *mut c_void, write: *mut c_void, mut control: Gate) -> io::Resu
         + 1;
     send_bytes(output.as_raw_handle(), &frame[..split])?;
     flush(output.as_raw_handle())?;
-    assert_ne!(unsafe { SetEvent(interrupt.as_raw_handle()) }, 0);
+    if interrupt_wait {
+        assert_ne!(unsafe { SetEvent(interrupt.as_raw_handle()) }, 0);
+    }
     writeln!(control, "prefix consumed")?;
     let mut byte = [0];
     control.read_exact(&mut byte)?;
-    // The test releases only after real R idle interrupt output is observed.
+    // The test releases only after real R idle interrupt/callback output.
     send_bytes(output.as_raw_handle(), &frame[split..])?;
     loop {
         let frame = command(read)?;

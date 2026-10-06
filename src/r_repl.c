@@ -22,6 +22,7 @@ typedef InputHandler *(*add_input_handler_fn)(
     InputHandler *, int, void (*)(void *), int
 );
 typedef int (*remove_input_handler_fn)(InputHandler **, InputHandler *);
+typedef void (*process_events_fn)(void);
 
 struct event_handlers {
     check_activity_fn check_activity;
@@ -171,6 +172,21 @@ void mcp_r_run_ready_handlers(
     /* Contain handler long jumps without promoting them to worker failures. */
     (void) top_level_exec(run_ready_handlers, &handlers);
 }
+
+#ifdef _WIN32
+static void run_windows_events(void *data) {
+    process_events_fn *process_events = data;
+    (*process_events)();
+}
+
+void mcp_r_run_windows_events(
+    top_level_exec_fn top_level_exec, process_events_fn process_events
+) {
+    /* R dispatches window timers (including later) at top level. Keep all
+     * handler/error/interrupt jumps inside C, never across a live Rust frame. */
+    (void) top_level_exec(run_windows_events, &process_events);
+}
+#endif
 
 #ifndef _WIN32
 int mcp_r_wait_for_activity(

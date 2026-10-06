@@ -107,9 +107,10 @@ R's native bootstrap and event APIs are component-local to Unix and Windows.
 Both use the same console callbacks, parser, REPL, graphics scopes, and environment integration on the coordinator's interpreter thread.
 Bootstrap restores the captured R installation immediately before startup; argument strings and Windows startup paths live until worker exit.
 Bootstrap defers default packages when needed to attach runtime services and the R/Python adapter first.
-Windows installs an interrupt-delivery callback; its idle command wait does not service R event handlers.
+Windows installs an interrupt-delivery callback and wakes its idle command wait for R's window messages.
+Event dispatch runs inside R's top-level error boundary, after releasing the command reader and within the ordinary graphics/input scope.
 
-On macOS and Linux, R event handlers, including `later` callbacks, run while idle.
+On macOS, Linux, and Windows, R event handlers, including `later` callbacks, run while idle.
 They may change state and produce output returned by a later poll, Python cell, or SQL cell.
 When needed, `[output produced while idle]` separates that region from new-cell output.
 The initial display width is 200 columns and remains user-configurable.

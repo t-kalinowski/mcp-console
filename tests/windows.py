@@ -24,7 +24,9 @@ import unittest
 import zipfile
 
 from windows_gate import Gate
+from support.checkpoints import wait_for_path
 from support.installation import native_console
+from support.normalization import code
 
 from windows_cargo import WindowsCargo  # noqa: F401 -- include build acceptance
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
@@ -249,6 +251,81 @@ def exercise_input_and_interrupt(session: Session) -> None:
     assert "running;" not in json.dumps(result), result
     result = session.send(r="saved")
     assert "42" in json.dumps(result), result
+
+
+def exercise_later_callbacks(session: Session) -> None:
+    """Observe idle timer input, graphics, interruption, and R/Python state."""
+    result = session.send(requirements={"r": ["later"]})
+    assert not result.get("isError"), result
+    # fmt: r
+    r = code(r"""
+        callback_answer <- tempfile("later-answer-")
+        callback_complete <- tempfile("later-complete-")
+        run_callback <- function() {
+          if (!file.exists("later-gate")) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          idle_answer <<- readline("later> ")
+          plot(1:3)
+          tryCatch(
+            {
+              stopifnot(file.create(callback_answer))
+              repeat {
+                Sys.sleep(1)
+              }
+            },
+            interrupt = function(condition) cat("idle callback interrupted\n")
+          )
+          stopifnot(file.create(callback_complete))
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_answer, callback_complete, sep = "\n")
+        """)
+    result = session.send(r=r)
+    assert not result.get("isError"), result
+    paths = result["content"][0]["text"].splitlines()
+    assert len(paths) == 2, result
+    answer_path, complete_path = map(Path, paths)
+    root = Path(session.directory.name)
+    (root / "later-gate").touch()
+    deadline = time.monotonic() + 10
+    while True:
+        result = session.send(timeout_ms=10)
+        assert not result.get("isError"), result
+        if "waiting for stdin" in json.dumps(result):
+            assert "later> " in json.dumps(result), result
+            break
+        assert time.monotonic() < deadline, result
+        time.sleep(0.01)
+    answer = session.send(stdin="Windows callback\n")
+    try:
+        wait_for_path(answer_path, "idle callback received input")
+    except TimeoutError as error:
+        raise AssertionError(
+            [
+                item["text"]
+                for result in (answer, session.send(timeout_ms=10))
+                for item in result.get("content", [])
+                if item["type"] == "text"
+            ]
+        ) from error
+    result = session.send(control="interrupt")
+    wait_for_path(complete_path, "idle callback caught interrupt")
+    content = result["content"][:]
+    deadline = time.monotonic() + 10
+    while not (
+        "idle callback interrupted" in json.dumps(content)
+        and any(item["type"] == "image" for item in content)
+    ):
+        assert not result.get("isError"), result
+        assert time.monotonic() < deadline, content
+        result = session.send(timeout_ms=10)
+        content.extend(result["content"])
+        time.sleep(0.01)
+    result = session.send(python="print(r.idle_answer)")
+    assert not result.get("isError"), result
+    assert "Windows callback" in json.dumps(result), result
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows packaging")
@@ -1432,6 +1509,50 @@ class WindowsConsole(unittest.TestCase):
 
     def test_input_and_interrupt(self):
         exercise_input_and_interrupt(self.session())
+
+    def test_idle_later_callbacks(self):
+        exercise_later_callbacks(self.session())
+
+    def test_idle_later_callback_error_preserves_worker(self):
+        session = self.session()
+        self.assertFalse(session.send(requirements={"r": ["later"]})["isError"])
+        # fmt: r
+        r = code(r"""
+            retained <- 41L
+            run_callback <- function() {
+              if (!file.exists("later-gate")) {
+                later::later(run_callback, delay = 0.01)
+                return(invisible(NULL))
+              }
+              later::later(
+                function() {
+                  retained <<- retained + 1L
+                  cat("callback recovered\n")
+                  stopifnot(file.create("later-recovered"))
+                },
+                delay = 0.01
+              )
+              stop("idle callback failure")
+            }
+            later::later(run_callback, delay = 0.01)
+            """)
+        self.assertFalse(session.send(r=r)["isError"])
+        root = Path(session.directory.name)
+        (root / "later-gate").touch()
+        wait_for_path(root / "later-recovered", "callback after an R error")
+        output = ""
+        deadline = time.monotonic() + 10
+        while "callback recovered" not in output:
+            result = session.send(timeout_ms=10)
+            self.assertFalse(result["isError"], result)
+            output += "".join(
+                item.get("text", "") for item in result.get("content", [])
+            )
+            self.assertLess(time.monotonic(), deadline, output)
+            time.sleep(0.01)
+        self.assertIn("idle callback failure", output)
+        result = session.send(r="retained")
+        self.assertEqual(result["content"], [{"type": "text", "text": "[1] 42\n"}])
 
 
 if __name__ == "__main__":

@@ -63,6 +63,10 @@ impl Reader {
     }
 
     pub(crate) fn receive<T: DeserializeOwned>(&mut self) -> io::Result<T> {
+        self.receive_with_messages(false)
+    }
+
+    fn receive_with_messages<T: DeserializeOwned>(&mut self, messages: bool) -> io::Result<T> {
         loop {
             if let Some(message) = self
                 .buffer
@@ -74,7 +78,12 @@ impl Reader {
             // Cancellation leaves the accumulated prefix in the shared buffer
             // for the next receive or the bounded retirement drain.
             let mut chunk = [0; READ_CHUNK_SIZE];
-            match self.input.read(&mut chunk) {
+            let read = if messages {
+                self.input.read_or_message(&mut chunk)
+            } else {
+                self.input.read(&mut chunk)
+            };
+            match read {
                 Ok(0) if self.buffer.has_buffered_data() => {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -97,11 +106,12 @@ impl Reader {
     pub(crate) fn receive_or_wake<T: DeserializeOwned>(
         &mut self,
         wakeup: Event,
+        messages: bool,
     ) -> io::Result<Option<T>> {
         // Reuse the overlapped read's cancellation wait. A wakeup preserves
         // the partial frame, and receive resumes it after idle processing.
         self.input.set_cancel(wakeup);
-        let result = self.receive();
+        let result = self.receive_with_messages(messages);
         self.input.clear_cancel();
         match result {
             Err(error) if error.kind() == io::ErrorKind::ConnectionAborted => Ok(None),
