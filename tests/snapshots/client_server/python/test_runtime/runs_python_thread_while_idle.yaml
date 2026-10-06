@@ -21,6 +21,7 @@ send:
         while not release.exists():
             time.sleep(0.01)
         background_value = "finished while idle"
+        print("hello from background thread", flush=True)
         finished.touch()
 
 
@@ -40,6 +41,17 @@ result:
   content:
     - type: text
       text: |-
+
+        [idle]
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+        hello from background thread
 
         [idle]
   isError: false

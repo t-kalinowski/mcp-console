@@ -15,6 +15,7 @@ from support.assertions import (
     assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
+    wait_for_idle_output,
     wait_for_worker_ready,
 )
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
@@ -645,6 +646,7 @@ def test_runs_python_thread_while_idle(
                         while not release.exists():
                             time.sleep(0.01)
                         background_value = "finished while idle"
+                        print("hello from background thread", flush=True)
                         finished.touch()
 
 
@@ -668,6 +670,12 @@ def test_runs_python_thread_while_idle(
                     Path(temporary_directory),
                     "python-thread-finished",
                     client,
+                )
+                wait_for_idle_output(
+                    client,
+                    "hello from background thread\n\n[idle]",
+                    "idle Python thread output",
+                    timeout_ms=0,
                 )
 
                 client.send(
