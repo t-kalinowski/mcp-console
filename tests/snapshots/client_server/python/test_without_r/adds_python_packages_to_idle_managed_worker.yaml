@@ -119,6 +119,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb",
               "more-itertools",
               "py-yaml12",
@@ -142,6 +144,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
         - more-itertools
         - py-yaml12

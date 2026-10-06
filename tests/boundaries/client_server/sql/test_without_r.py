@@ -539,7 +539,13 @@ def test_extension_actions_replace_and_reset_declarations(
             client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
             assert "Error:" not in last_tool_text(client)
             client.send(control="restart", requirements={"action": "reset"})
-            assert declaration()["python"] == ["numpy", "pandas", "duckdb"]
+            assert declaration()["python"] == [
+                "numpy",
+                "pandas",
+                "matplotlib",
+                "plotnine",
+                "duckdb",
+            ]
             assert declaration()["duckdb"] == ["sqlite"]
             return client.finish()[3:]
 
@@ -1008,7 +1014,13 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
                 assert not result.get("isError"), result
                 return result["structuredContent"]["requirements"]["python"]
 
-            assert declaration() == ["numpy", "pandas", "duckdb"]
+            assert declaration() == [
+                "numpy",
+                "pandas",
+                "matplotlib",
+                "plotnine",
+                "duckdb",
+            ]
             client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
             client.send(python="identity = object(); identity_id = id(identity)")
             failed = client.send(
@@ -1021,7 +1033,13 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
             failed["content"][0]["text"] = normalize_python_resolution_error(
                 failed["content"][0]["text"], "fixture Python resolution failed"
             )
-            assert declaration() == ["numpy", "pandas", "duckdb"]
+            assert declaration() == [
+                "numpy",
+                "pandas",
+                "matplotlib",
+                "plotnine",
+                "duckdb",
+            ]
             client.send(sql="SELECT value FROM retained")
             assert "42" in last_tool_text(client)
             client.send(python="assert id(identity) == identity_id; print('retained')")
@@ -1054,7 +1072,13 @@ exec "$MCP_CONSOLE_TEST_REAL_UV" "$@"
             assert "DuckDB is unavailable" in last_tool_text(client)
             assert declaration() == []
             client.send(control="restart", requirements={"action": "reset"})
-            assert declaration() == ["numpy", "pandas", "duckdb"]
+            assert declaration() == [
+                "numpy",
+                "pandas",
+                "matplotlib",
+                "plotnine",
+                "duckdb",
+            ]
             client.send(sql="SELECT 9 AS restored")
             assert "9" in last_tool_text(client)
             return client.finish()[3:]
@@ -1288,6 +1312,8 @@ def test_records_managed_sql_cells(
             """  python-packages:
     - numpy
     - pandas
+    - matplotlib
+    - plotnine
     - duckdb
 """
             in quarto

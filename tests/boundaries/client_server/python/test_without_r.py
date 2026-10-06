@@ -252,7 +252,8 @@ def test_inspects_and_replaces_managed_requirements(
     with preparation_directory() as directory:
         root = Path(directory)
         expose_uv(root)
-        with McpClient(binary, execution.serve(), environment(root)) as client:
+        env = dict(environment(root), MCP_CONSOLE_LANGUAGES="python")
+        with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
 
             def declaration(extensions: tuple[str, ...] = ()) -> list[str]:
@@ -264,7 +265,8 @@ def test_inspects_and_replaces_managed_requirements(
                 assert snapshot["runtime_requirements"] == {"r": [], "python": []}
                 return snapshot["requirements"]["python"]
 
-            assert declaration(("sqlite",)) == ["numpy", "pandas", "duckdb"]
+            defaults = ["numpy", "pandas", "matplotlib", "plotnine", "duckdb"]
+            assert declaration(("sqlite",)) == defaults
             client.send(requirements={"action": "set", "python": ["six"]})
             assert declaration() == ["six"]
             client.expect("42\n", python="import six; retained = 42; retained")
@@ -274,15 +276,35 @@ def test_inspects_and_replaces_managed_requirements(
             client.send(
                 control="restart",
                 requirements={"action": "set"},
-                python="import importlib.util; importlib.util.find_spec('numpy') is None",
+                # fmt: python
+                python=code("""
+                    import importlib.util
+
+                    all(
+                        importlib.util.find_spec(package) is None
+                        for package in ("numpy", "pandas", "matplotlib", "plotnine")
+                    )
+                    """),
             )
             assert last_result_text(client).endswith("True\n[done]"), client.transcript[
                 -1
             ]
             assert declaration() == []
             client.send(control="restart", requirements={"action": "reset"})
-            assert declaration(("sqlite",)) == ["numpy", "pandas", "duckdb"]
-            client.expect("42\n", python="import numpy, pandas; 42")
+            assert declaration(("sqlite",)) == defaults
+            client.expect(
+                "42\n",
+                # fmt: python
+                python=code("""
+                    import importlib.metadata
+
+                    for package in ("numpy", "pandas", "matplotlib", "plotnine", "duckdb"):
+                        assert importlib.metadata.version(package)
+                    import numpy, pandas, matplotlib, plotnine
+
+                    42
+                    """),
+            )
             return client.finish()[3:]
 
 
@@ -749,7 +771,14 @@ def test_prepares_managed_python_at_startup_and_restart(
         assert "execute:\n  eval: false" not in quarto
         assert "\nknitr:" in quarto and "\nir:" in quarto
         assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
-        packages = ["numpy", "pandas", "py-yaml12", "more-itertools"]
+        packages = [
+            "numpy",
+            "pandas",
+            "matplotlib",
+            "plotnine",
+            "py-yaml12",
+            "more-itertools",
+        ]
         if SQL.available:
             packages.append("duckdb")
         for package in packages:
@@ -3007,7 +3036,7 @@ def test_records_managed_python_defaults(
             records = client.finish()
         (session,) = (workspace / ".agents/console/sessions").iterdir()
         quarto = (session / "transcript.qmd").read_text()
-        defaults = ["numpy", "pandas"]
+        defaults = ["numpy", "pandas", "matplotlib", "plotnine"]
         if SQL.available:
             defaults.append("duckdb")
         assert (

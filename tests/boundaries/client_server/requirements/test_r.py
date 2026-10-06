@@ -518,6 +518,7 @@ def test_evaluates_with_default_managed_r(
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
         environment, record = recording_ir_environment(workspace)
+        environment["MCP_CONSOLE_LANGUAGES"] = "r"
         ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
         environment["R_LIBS"] = os.pathsep.join(
@@ -541,11 +542,13 @@ def test_evaluates_with_default_managed_r(
               "duckdb",
               "arrow",
               "nanoarrow",
-              "yyjsonr"
+              "yyjsonr",
+              "ggplot2"
             )
             # Loaded namespaces report canonical cache paths; ir libraries can
             # contain symlinks to those same package directories.
             stopifnot(
+              !reticulate::py_available(initialize = FALSE),
               vapply(
                 managed_packages,
                 function(package) {
@@ -582,6 +585,7 @@ def test_evaluates_with_default_managed_r(
             "arrow",
             "nanoarrow",
             "yyjsonr",
+            "ggplot2",
             "jsonlite",
             "pillar",
             "tibble",
@@ -592,7 +596,7 @@ def test_evaluates_with_default_managed_r(
         )
         assert last_result_text(client) == "[prepared]", client.transcript[-1]
         assert ir_run_records(record) == runs
-        return client.finish()
+        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)

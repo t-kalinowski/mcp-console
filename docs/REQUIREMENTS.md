@@ -23,11 +23,11 @@ A plain restart reuses accepted requirements, including successful automatic add
 
 The default optional declarations are:
 
-| Environment | Defaults                                                                    |
-| ----------- | --------------------------------------------------------------------------- |
-| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr` |
-| Python      | `numpy`, `pandas`; also `duckdb` without R                                  |
-| DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                          |
+| Environment | Defaults                                                                               |
+| ----------- | -------------------------------------------------------------------------------------- |
+| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
+| Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                   |
+| DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                                     |
 
 Mixed-runtime R infrastructure is separate: reticulate, jsonlite, DBI, DuckDB, Arrow/nanoarrow, pillar, tibble, and utf8 support the bridge and SQL.
 Clearing optional requirements does not remove that infrastructure, ambient libraries, preinstalled packages, or caches.

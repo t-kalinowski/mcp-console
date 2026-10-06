@@ -15,9 +15,12 @@ ir:
     - arrow
     - nanoarrow
     - yyjsonr
+    - ggplot2
   python-packages:
     - numpy
     - pandas
+    - matplotlib
+    - plotnine
 ---
 
 ```{r}

@@ -238,6 +238,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb",
               "py-yaml12",
               "six"
@@ -261,6 +263,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
         - py-yaml12
         - six
