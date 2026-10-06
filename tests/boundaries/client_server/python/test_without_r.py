@@ -2320,7 +2320,9 @@ def test_cleans_temporary_storage_after_startup_failure(
             import os
             from pathlib import Path
 
-            if "MCP_CONSOLE_LOCAL_RUNTIME" in os.environ:
+            # Only the first worker fails; eager replacement must not overwrite
+            # the failed worker's recorded directory or fail a second time.
+            if "MCP_CONSOLE_LOCAL_RUNTIME" in os.environ and not Path("startup-temporary").exists():
                 Path("startup-temporary").write_text(os.environ["TMPDIR"])
                 Path(os.environ["TMPDIR"], "owned-before-failure").touch()
                 os._exit(47)
@@ -2340,14 +2342,11 @@ def test_cleans_temporary_storage_after_startup_failure(
             )
             assert result["isError"] and "status 47" in last_result_text(client), result
             temporary = Path((root / "startup-temporary").read_text())
-            assert not temporary.exists(), "failed worker storage remains"
+            assert not temporary.exists(), f"failed worker storage remains: {temporary}"
             assert selected.exists(), "startup failure deleted the environment"
-            # Python now starts on cell demand after worker readiness. The
-            # replacement is idle and has not entered the failing hook again.
-            (site / "sitecustomize.py").unlink()
             client.expect(
-                "replacement initializes on demand\n",
-                python="print('replacement initializes on demand')",
+                "replacement initializes successfully\n",
+                python="print('replacement initializes successfully')",
             )
             return client.finish()
 
