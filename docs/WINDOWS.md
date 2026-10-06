@@ -174,6 +174,12 @@ The same scenario runs directly and with an explicitly network-enabled restricte
 To run it against an already-provisioned elevated, network-restricted backend, set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to its absolute state directory and run `WindowsSandbox.test_provisioned_network_restricted_input_and_interrupt`.
 The test never provisions accounts or chooses another backend.
 Without that opt-in directory, it reports unavailable coverage; a skip does not establish network-restricted compatibility.
+Windows CI builds the staged Console and runs `python scripts/prepare-windows-tests` before the full gate.
+GitHub-hosted Windows runners [run as administrators with UAC disabled](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges), so setup can provision their sandbox without an interactive elevation prompt.
+Preparation provisions the runner's sandbox state when needed, verifies setup readiness, and exports both `R_HOME` and `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to subsequent steps.
+The full gate therefore includes the provisioned elevated test in both checkout and installed-wheel acceptance.
+Local validation uses the same test: inspect `mcp-console sandbox-setup --status`, then set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to its reported state directory before running `scripts/check.cmd` or `scripts/check.cmd --full`.
+Provision an unconfigured local machine explicitly with `mcp-console sandbox-setup`; the acceptance tests themselves do not provision it.
 
 Inspection, resolver, raw relay, and inherited-writer fixture checkpoints use unique local named pipes with ordinary host ACLs and non-inheritable handles.
 Their readiness and release operations have bounded deadlines; cancellation joins pending native I/O before releasing its storage.
