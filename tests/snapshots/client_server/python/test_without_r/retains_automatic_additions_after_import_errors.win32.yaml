@@ -50,6 +50,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb",
               "mcp_console_test_empty_pkg",
               "mcp_console_test_raises_pkg"
@@ -70,6 +72,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
         - mcp_console_test_empty_pkg
         - mcp_console_test_raises_pkg

@@ -23,6 +23,7 @@ from boundaries.server_relay._harness import (
     _ordered_input_barrier,
     _wait_for_recorded_tool_result,
 )
+from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import tool_text as _tool_text
 from support.assertions import wait_for_worker_ready
 from support.checkpoints import FifoCheckpoint
@@ -40,7 +41,7 @@ def test_interrupts_and_reports_result(
     binary: Path, execution: Execution
 ) -> Transcript:
     client = ServerRelayClient(binary, "interrupt", execution=execution)
-    assert _tool_text(client.send(r="42", timeout_ms=0)) == (
+    assert without_elapsed(_tool_text(client.send(r="42", timeout_ms=0))) == (
         "\n[running; poll with an empty send]"
     )
     client._wait_for(EVALUATING_NAME)
@@ -129,7 +130,7 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
             )
             _ordered_input_barrier(client.client)
             recorded = _wait_for_recorded_tool_result(client.client, interrupt)
-            assert recorded == {
+            assert without_elapsed_result(recorded) == {
                 "content": [
                     {
                         "type": "text",
@@ -251,7 +252,7 @@ def test_controlled_interrupt_orders_stdin_before_new_evaluation(
         binary, "controlled_interrupt_stdin_evaluate", execution=execution
     )
     client.send(r="old evaluation", timeout_ms=0)
-    assert _tool_text(client.client.transcript[-1]["result"]) == (
+    assert without_elapsed(_tool_text(client.client.transcript[-1]["result"])) == (
         "\n[running; poll with an empty send]"
     )
     client._wait_for(EVALUATING_NAME)
@@ -312,7 +313,7 @@ def test_controlled_interrupt_orders_stdin_preparation_and_new_evaluation(
             r="old evaluation before successful requirements",
             timeout_ms=0,
         )
-        assert _tool_text(client.client.transcript[-1]["result"]) == (
+        assert without_elapsed(_tool_text(client.client.transcript[-1]["result"])) == (
             "\n[running; poll with an empty send]"
         )
         client._wait_for(EVALUATING_NAME)
@@ -379,7 +380,7 @@ def test_controlled_interrupt_stdin_precedes_failing_requirements_without_new_ce
             r="old evaluation before failing requirements",
             timeout_ms=0,
         )
-        assert _tool_text(client.client.transcript[-1]["result"]) == (
+        assert without_elapsed(_tool_text(client.client.transcript[-1]["result"])) == (
             "\n[running; poll with an empty send]"
         )
         client._wait_for(EVALUATING_NAME)
@@ -434,7 +435,7 @@ def test_controlled_interrupt_stdin_precedes_invalid_requirements_without_new_ce
         r="old evaluation before invalid requirements",
         timeout_ms=0,
     )
-    assert _tool_text(client.client.transcript[-1]["result"]) == (
+    assert without_elapsed(_tool_text(client.client.transcript[-1]["result"])) == (
         "\n[running; poll with an empty send]"
     )
     client._wait_for(EVALUATING_NAME)
@@ -480,7 +481,7 @@ def test_controlled_interrupt_does_not_run_cell_while_evaluation_remains_active(
         binary, "controlled_interrupt_still_active", execution=execution
     )
     client.send(r="old evaluation", timeout_ms=0)
-    assert _tool_text(client.client.transcript[-1]["result"]) == (
+    assert without_elapsed(_tool_text(client.client.transcript[-1]["result"])) == (
         "\n[running; poll with an empty send]"
     )
     client._wait_for(EVALUATING_NAME)
@@ -540,7 +541,7 @@ def test_control_only_interrupt_timeout_zero_returns_after_grace_then_poll_colle
         binary, "controlled_interrupt_still_active", execution=execution
     )
     client.send(r="old evaluation", timeout_ms=0)
-    assert _tool_text(client.client.transcript[-1]["result"]) == (
+    assert without_elapsed(_tool_text(client.client.transcript[-1]["result"])) == (
         "\n[running; poll with an empty send]"
     )
     client._wait_for(EVALUATING_NAME)
@@ -549,7 +550,7 @@ def test_control_only_interrupt_timeout_zero_returns_after_grace_then_poll_colle
     released = False
     try:
         result = client.send(control="interrupt", timeout_ms=0)
-        assert _tool_text(result) == (
+        assert without_elapsed(_tool_text(result)) == (
             "old evaluation remains active\n\n[running; poll with an empty send]"
         ), result
 
@@ -590,7 +591,7 @@ def test_control_only_interrupt_honors_timeout_after_attachment(
         binary, "controlled_interrupt_still_active", execution=execution
     )
     client.send(r="old evaluation", timeout_ms=0)
-    assert _tool_text(client.client.transcript[-1]["result"]) == (
+    assert without_elapsed(_tool_text(client.client.transcript[-1]["result"])) == (
         "\n[running; poll with an empty send]"
     )
     client._wait_for(EVALUATING_NAME)
@@ -645,7 +646,7 @@ def test_controlled_interrupt_does_not_wait_for_an_existing_poll(
         binary, "controlled_interrupt_with_waiting_poll", execution=execution
     )
     client.send(r="waiter-owned evaluation", timeout_ms=0)
-    assert _tool_text(client.client.transcript[-1]["result"]) == (
+    assert without_elapsed(_tool_text(client.client.transcript[-1]["result"])) == (
         "\n[running; poll with an empty send]"
     )
     client._wait_for(EVALUATING_NAME)
@@ -794,7 +795,7 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
             interrupt_ack_release.release()
             interrupt_ack_released = True
             recorded = _wait_for_recorded_tool_result(client.client, interrupt)
-            assert recorded == {
+            assert without_elapsed_result(recorded) == {
                 "content": [
                     {
                         "type": "text",

@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import elapsed_progress, without_elapsed, without_elapsed_result
 from support.assertions import last_tool_text
 from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
@@ -35,7 +36,10 @@ def test_interrupt_preserves_active_poll_output(
         ) as client:
             client.initialize_and_list_tools()
             client.send(r="shutdown output checkpoints", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             control.connect(client)
             control.wait_for(0, "evaluation_started")
             control.send_control(0, "emit_output")
@@ -55,7 +59,8 @@ def test_interrupt_preserves_active_poll_output(
                     "isError": True,
                 }
                 client.send(control="interrupt", timeout_ms=0)
-                assert client.transcript[-1]["result"] == {
+                assert elapsed_progress(last_tool_text(client))[1] is False
+                assert without_elapsed_result(client.transcript[-1]["result"]) == {
                     "content": [
                         {"type": "text", "text": "\n[running; poll with an empty send]"}
                     ],
@@ -163,7 +168,7 @@ def test_interrupt_preserves_completed_response_delivery(
                     result_release.release()
                     write_release.release()
                 client.receive(interrupt)
-                assert interrupt["result"] == {
+                assert without_elapsed_result(interrupt["result"]) == {
                     "content": [
                         {"type": "text", "text": "\n[running; poll with an empty send]"}
                     ],

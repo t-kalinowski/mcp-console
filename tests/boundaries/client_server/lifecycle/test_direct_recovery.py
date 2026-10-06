@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
@@ -52,7 +53,10 @@ def test_replaces_direct_relay_after_sigkill(binary: Path) -> Transcript:
 
             events.watch_file(temporary)
             client.send(r="stall", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             deadline = time.monotonic() + 10
             while not (temporary / "zod-stalled").exists():
                 remaining = deadline - time.monotonic()

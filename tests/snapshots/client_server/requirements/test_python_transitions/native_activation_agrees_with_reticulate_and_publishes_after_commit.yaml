@@ -44,6 +44,7 @@ result:
               "DBI",
               "arrow",
               "duckdb",
+              "ggplot2",
               "nanoarrow",
               "reticulate",
               "tidyverse",
@@ -52,6 +53,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "py-yaml12"
             ],
             "duckdb": [
@@ -84,6 +87,7 @@ result:
         - DBI
         - arrow
         - duckdb
+        - ggplot2
         - nanoarrow
         - reticulate
         - tidyverse
@@ -91,6 +95,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - py-yaml12
       duckdb:
         - icu

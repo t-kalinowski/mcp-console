@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.allocations import AllocationProfile
 from support.assertions import last_tool_text
 from support.previews import (
@@ -508,7 +509,10 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
     ):
         client.initialize_and_list_tools()
         client.send(r="overflow cell output file", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         release = wait_for_worker_file(
             Path(temporary), "zod-release-spooled-output", client
         )

@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import ELAPSED, RUNNING, without_elapsed, without_elapsed_result
 from support.assertions import (
     collect_running_output,
     last_tool_text,
@@ -54,21 +55,27 @@ def test_routes_idle_and_timed_out_stdin(
         """)
     client.send(r=r, stdin="café\n", timeout_ms=50)
     first_output = last_tool_text(client)
-    assert first_output in {
+    assert without_elapsed(first_output) in {
         "\n[running; poll with an empty send]",
         '[input requested: "bundled> "]\n\n[running; poll with an empty send]',
     }, first_output
-    client.transcript[-1]["result"]["content"][0]["text"] = (
-        "\n[running; poll with an empty send]"
-    )
+    progress = ELAPSED.search(first_output)
+    assert progress is not None, first_output
+    client.transcript[-1]["result"]["content"][0]["text"] = progress[0] + RUNNING
     client.send(timeout_ms=0)
-    assert last_tool_text(client) == "\n[running; poll with an empty send]"
+    assert (
+        without_elapsed(last_tool_text(client))
+        == "\n[running; poll with an empty send]"
+    )
     client.send(stdin="timed out ", timeout_ms=50)
-    assert last_tool_text(client) == "\n[running; poll with an empty send]"
+    assert (
+        without_elapsed(last_tool_text(client))
+        == "\n[running; poll with an empty send]"
+    )
     client.send(stdin="fd 0\n", timeout_ms=3_000)
     final_output = last_tool_text(client)
     expected_result = '[1] "café|timed out fd 0"\n'
-    if first_output == "\n[running; poll with an empty send]":
+    if without_elapsed(first_output) == "\n[running; poll with an empty send]":
         expected_result = '[input requested: "bundled> "]\n' + expected_result
     assert final_output == expected_result, final_output
     client.transcript[-1]["result"]["content"][0]["text"] = (
@@ -223,7 +230,7 @@ def test_preserves_fd0_order_between_readers(
         )
         started.wait("ordered fd 0 readers")
         client.receive(evaluation)
-        assert evaluation["result"]["content"] == [
+        assert without_elapsed_result(evaluation["result"])["content"] == [
             {
                 "type": "text",
                 "text": "\n[running; poll with an empty send]",
@@ -315,7 +322,10 @@ def test_keeps_stdin_open_after_partial_payload(
         value
         """)
     client.send(r=r, stdin="without newline", timeout_ms=0)
-    assert last_tool_text(client) == "\n[running; poll with an empty send]"
+    assert (
+        without_elapsed(last_tool_text(client))
+        == "\n[running; poll with an empty send]"
+    )
 
     cuts = collect_running_output(
         client,

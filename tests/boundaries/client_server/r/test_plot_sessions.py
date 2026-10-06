@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed_result
 from support.assertions import assert_result_content, last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -97,7 +98,7 @@ def test_workers_keep_plot_files_separate(
                 evaluation = client.start_send(r=r, timeout_ms=0)
                 ready.wait("plot device is open")
                 client.receive(evaluation)
-                assert evaluation["result"] == {
+                assert without_elapsed_result(evaluation["result"]) == {
                     "content": [
                         {"type": "text", "text": "\n[running; poll with an empty send]"}
                     ],

@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed_result
 from support.requirements import POSIX, PROCESS_EVENTS, R_EVENT_LOOP, requires
 from support.assertions import (
     last_tool_text,
@@ -118,7 +119,10 @@ def test_prepares_initial_python_requirements(
           identical(seed$requested_from, "mcp-console"),
           identical(seed$action, "set"),
           isFALSE(seed$exclude_newer_supplied),
-          identical(seed$packages, c("numpy", "pandas", "py-yaml12")),
+          identical(
+            seed$packages,
+            c("numpy", "pandas", "matplotlib", "plotnine", "py-yaml12")
+          ),
           length(printed_requirements) > 0L
         )
         """)
@@ -562,7 +566,7 @@ def restart_discards_pre_marker_activation(
             activation_ready.wait("managed Python activation")
             client.receive(evaluation)
             evaluation_result = evaluation["result"]
-            assert evaluation_result == {
+            assert without_elapsed_result(evaluation_result) == {
                 "content": [
                     {
                         "type": "text",

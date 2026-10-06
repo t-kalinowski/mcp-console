@@ -1419,6 +1419,7 @@ mod tests {
             Response::default(),
             Response::default(),
             false,
+            0,
         ));
         evaluation.complete_cell(Ok(()));
         let claim = evaluation.claim().unwrap();
@@ -1469,6 +1470,7 @@ mod tests {
             Response::default(),
             Response::default(),
             false,
+            0,
         ));
         evaluation.complete_cell(Ok(()));
         let claim = evaluation.claim().unwrap();

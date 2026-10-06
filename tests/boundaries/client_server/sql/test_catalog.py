@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.requirements import POSIX, SQL, requires
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
@@ -770,7 +771,10 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
                 SELECT sum(i) AS total FROM range(1000000000000) AS t(i)
                 """)
             client.send(sql=sql, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             # A marker in a preceding statement can race DuckDB's reset of its
             # interrupt flag. Hold this query until its active handler has run.
             started.wait("DuckDB query reached its progress callback")
@@ -1257,7 +1261,7 @@ def test_bounds_query_previews_without_materializing_results(
     assert "a" * 161 not in wide
     assert f'"{"z" * 159}…"' in long_cell
     assert "[cell values truncated to 160 characters]" in long_cell
-    assert large != "\n[running; poll with an empty send]"
+    assert without_elapsed(large) != "\n[running; poll with an empty send]"
     assert len(large.encode("utf-8")) <= 8 * 1024
     assert "[additional rows omitted]" in large
     return transcript

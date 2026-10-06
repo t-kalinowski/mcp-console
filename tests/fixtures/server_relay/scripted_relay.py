@@ -1318,6 +1318,32 @@ def run_partial_utf8_polls(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_progress_polls(relay: ScriptedRelay) -> None:
+    directory = Path(os.environ["MCP_CONSOLE_TEST_PREVIEW_DIRECTORY"])
+    intervals = json.loads(
+        Path(os.environ["MCP_CONSOLE_TEST_PROGRESS_INTERVALS"]).read_text()
+    )
+    relay.ready()
+    relay.expect(EVALUATION)
+    for events in intervals:
+        with (directory / "progress-release").open("rb", buffering=0) as checkpoint:
+            assert checkpoint.read(1) == b"1"
+        for event in events:
+            if event["kind"] == "native_stderr":
+                write_all(2, base64.b64decode(event["data"]))
+            else:
+                relay.send(event)
+        # Ordered callback receipt proves ingestion, including invisible bytes.
+        relay.send(RESOLVE_PYTHON_VERSION)
+        relay.expect(PYTHON_VERSION_RESOLUTION_FAILED)
+        with (directory / "progress-processed").open("wb", buffering=0) as checkpoint:
+            assert checkpoint.write(b"1") == 1
+    with (directory / "progress-release").open("rb", buffering=0) as checkpoint:
+        assert checkpoint.read(1) == b"1"
+    relay.complete()
+    relay.retire()
+
+
 def run_ansi_projection(relay: ScriptedRelay) -> None:
     inputs = json.loads(
         Path(os.environ["MCP_CONSOLE_TEST_ANSI_INPUTS"]).read_text(encoding="utf-8")
@@ -1416,6 +1442,7 @@ def main() -> None:
         "preview_direct_allocations": run_preview_direct_allocations,
         "partial_utf8_polls": run_partial_utf8_polls,
         "ansi_projection": run_ansi_projection,
+        "progress_polls": run_progress_polls,
         "ansi_diagnostics": run_ansi_diagnostics,
         "ansi_polls": run_ansi_polls,
         "preview_raw_prelude": run_preview_raw_prelude,

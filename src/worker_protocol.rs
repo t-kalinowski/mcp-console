@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::cell::Language;
 
-pub(crate) const DEFAULT_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas"];
-pub(crate) const DEFAULT_NATIVE_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas", "duckdb"];
+pub(crate) const DEFAULT_PYTHON_PACKAGES: &[&str] = &["numpy", "pandas", "matplotlib", "plotnine"];
+pub(crate) const DEFAULT_NATIVE_PYTHON_PACKAGES: &[&str] =
+    &["numpy", "pandas", "matplotlib", "plotnine", "duckdb"];
 
 pub(crate) fn deserialize_payload_free<'de, D>(deserializer: D) -> Result<(), D::Error>
 where
@@ -353,7 +354,7 @@ mod tests {
                     distribution: "py-yaml12".to_string(),
                 }),
             },
-            r#"{"requirements":{"packages":["numpy","pandas","py-yaml12"]},"retained_requirements":{"packages":["numpy","pandas","py-yaml12"]},"import_resolution":{"module":"yaml12","distribution":"py-yaml12"}}"#,
+            r#"{"requirements":{"packages":["numpy","pandas","matplotlib","plotnine","py-yaml12"]},"retained_requirements":{"packages":["numpy","pandas","matplotlib","plotnine","py-yaml12"]},"import_resolution":{"module":"yaml12","distribution":"py-yaml12"}}"#,
         );
     }
 }

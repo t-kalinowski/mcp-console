@@ -37,6 +37,7 @@ result:
       text: |-
         zod background sideband
 
+        [elapsed: <elapsed>s since admission; no new output]
         [running; poll with an empty send]
   isError: false
 ---
@@ -48,6 +49,7 @@ result:
       text: |-
         zod cell output before completion
 
+        [elapsed: <elapsed>s since admission]
         [running; poll with an empty send]
   isError: false
 ---

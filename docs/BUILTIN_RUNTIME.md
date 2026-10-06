@@ -58,6 +58,10 @@ Sources are not fragments accumulated across calls.
 Submit a coherent cell, inspect its result, then submit the next.
 Leave the main result last for ordinary display.
 A timeout does not cancel execution: after `[running; poll with an empty send]`, poll with no code or stdin rather than resubmitting.
+An adjacent `[elapsed: 1.2s since admission]` notice reports the cell's age across polls, including startup and preparation before execution.
+It adds `; no new output` when the observed interval received no worker text or images, even if server notices appeared.
+Worker output counts before preview compaction or omission.
+An interrupt response that cannot claim another call's output reports only elapsed time; recovered responses retain their original elapsed notice.
 New code is rejected while a cell or its uncollected result is active.
 Completion returns text/images, or `[done]` when there is no content; an idle poll returns pending output and `[idle]`.
 

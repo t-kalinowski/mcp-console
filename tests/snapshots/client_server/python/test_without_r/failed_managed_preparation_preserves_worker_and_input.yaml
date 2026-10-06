@@ -33,6 +33,8 @@ result:
           "packages": [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
             "duckdb",
             "py-yaml12"
           ]
@@ -100,6 +102,8 @@ result:
           "packages": [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
             "duckdb",
             "py-yaml12"
           ]

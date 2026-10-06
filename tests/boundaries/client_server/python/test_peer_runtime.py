@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.client_server.python.test_setup import deferred_selection_client
 
+from support.progress import without_elapsed
 from support.requirements import NATIVE_FIXTURES, POSIX, R, SQL, command, requires
 from support.assertions import (
     assert_result_content,
@@ -1573,7 +1574,7 @@ def r_startup_with_python(
                 try:
                     ready.wait("R startup package", timeout=client.response_timeout)
                     client.receive(startup)
-                    assert last_result_text(client) == (
+                    assert without_elapsed(last_result_text(client)) == (
                         "\n[running; poll with an empty send]"
                     ), client.transcript[-1]
                 finally:

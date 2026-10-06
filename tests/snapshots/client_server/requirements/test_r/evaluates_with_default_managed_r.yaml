@@ -1,6 +1,4 @@
 ---
-!same-as MCP initialization for this execution mode
----
 send:
   r: |
     managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
@@ -11,11 +9,13 @@ send:
       "duckdb",
       "arrow",
       "nanoarrow",
-      "yyjsonr"
+      "yyjsonr",
+      "ggplot2"
     )
     # Loaded namespaces report canonical cache paths; ir libraries can
     # contain symlinks to those same package directories.
     stopifnot(
+      !reticulate::py_available(initialize = FALSE),
       vapply(
         managed_packages,
         function(package) {
