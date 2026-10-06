@@ -27,7 +27,7 @@ class WindowsCargo(unittest.TestCase):
                 "LICENSE": "fixture license\n",
                 "NOTICE": "fixture notice\n",
                 "codex-rs/Cargo.toml": """[workspace]
-members = ["mcp-console-sandbox", "windows-sandbox"]
+members = ["mcp-console-sandbox", "mcp-console-sandbox-windows"]
 resolver = "3"
 """,
                 "codex-rs/mcp-console-sandbox/Cargo.toml": """[package]
@@ -38,8 +38,8 @@ edition = "2024"
 name = "mcp-console-sandbox"
 path = "main.rs"
 """,
-                "codex-rs/windows-sandbox/Cargo.toml": """[package]
-name = "codex-windows-sandbox"
+                "codex-rs/mcp-console-sandbox-windows/Cargo.toml": """[package]
+name = "mcp-console-sandbox-windows"
 version = "0.0.0"
 edition = "2024"
 [[bin]]
@@ -50,7 +50,7 @@ name = "mcp-console-sandbox-runner"
 path = "main.rs"
 """,
                 "codex-rs/mcp-console-sandbox/main.rs": "fn main() {}\n",
-                "codex-rs/windows-sandbox/main.rs": "fn main() {}\n",
+                "codex-rs/mcp-console-sandbox-windows/main.rs": "fn main() {}\n",
             }
             channel = subprocess.check_output(
                 ["rustup", "show", "active-toolchain"], text=True
