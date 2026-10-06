@@ -22,7 +22,8 @@ Ubuntu builds need a C toolchain, `pkg-config`, libcap and OpenSSL development f
 Packages may need additional system libraries.
 Runtime Linux installations need the helper's system dependencies, including dynamically linked libcap when selected.
 
-`sandbox-runner.json` pins source, release, commit, and protocol.
+`sandbox-runner.json` pins source, release, and commit.
+The private runner protocol is unversioned and changes with the pinned revision.
 The packaging backend stages the companion before Maturin builds, including editable installs:
 
 ```sh

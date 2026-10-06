@@ -416,7 +416,6 @@ def test_complete_policy_selector_bypasses_project_and_console_adjustments(
         configure(host, "invalid: [")
         (host / ".claude").mkdir()
         policy = {
-            "version": 2,
             "extends": ":workspace",
             "workspace_options": {
                 "exclude_tmpdir_env_var": True,

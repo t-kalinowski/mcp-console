@@ -143,6 +143,7 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
         })
         .transpose()?;
     // These fields belong to Console's launch protocol and worker lifetime.
+    // Keep the obsolete version field reserved to reject it before startup.
     // All other sandbox fields and values are interpreted by the native runner.
     for field in ["version", "lifecycle", "extends", "workspace"] {
         if project.sandbox.contains_key(field) {

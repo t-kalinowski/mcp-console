@@ -99,7 +99,7 @@ class WindowsSandbox(unittest.TestCase):
                 python=python,
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
                     f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
@@ -132,7 +132,7 @@ class WindowsSandbox(unittest.TestCase):
             session = Session(
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
                     f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
@@ -151,7 +151,7 @@ class WindowsSandbox(unittest.TestCase):
             session = Session(
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
                     f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
@@ -264,7 +264,7 @@ class WindowsSandbox(unittest.TestCase):
             session = Session(
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
                     f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
@@ -310,7 +310,7 @@ class WindowsSandbox(unittest.TestCase):
             session = Session(
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
                     f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
@@ -351,7 +351,6 @@ class WindowsSandbox(unittest.TestCase):
     def test_unconfigured_elevated_sandbox_requires_explicit_setup(self):
         with workspace() as root:
             policy = {
-                "version": 2,
                 "extends": ":read-only",
                 "windows_state_dir": str(root / "state"),
             }
@@ -415,7 +414,7 @@ class WindowsSandbox(unittest.TestCase):
             session = Session(
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
                     f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
@@ -490,7 +489,7 @@ class WindowsSandbox(unittest.TestCase):
                     str(BINARY),
                     "sandbox",
                     "-c",
-                    'sandbox.windows_sandbox_level="restricted-token"',
+                    'sandbox.windows_sandbox_level="unelevated"',
                     "-c",
                     f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                     "--",
@@ -516,7 +515,6 @@ class WindowsSandbox(unittest.TestCase):
             work.mkdir()
             (work / "input.txt").write_text("readable", encoding="utf-8")
             config = {
-                "version": 2,
                 "filesystem": {
                     "kind": "restricted",
                     "entries": [
@@ -531,7 +529,7 @@ class WindowsSandbox(unittest.TestCase):
                     ],
                 },
                 "network": "enabled",
-                "windows_sandbox_level": "restricted-token",
+                "windows_sandbox_level": "unelevated",
                 "windows_state_dir": str(root / "state"),
             }
             result = subprocess.run(
