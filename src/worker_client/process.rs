@@ -249,12 +249,7 @@ impl WorkerRuntime {
         if !no_sandbox {
             let mut settings = sandbox_settings.clone();
             if let Some(transport) = &startup_transport {
-                settings = crate::sandbox::materialize_settings(
-                    settings,
-                    vec![transport.directory().to_owned()],
-                    &std::env::current_dir()
-                        .map_err(|error| format!("cannot find launch workspace: {error}"))?,
-                )?;
+                transport.preserve_access(&mut settings)?;
             }
             crate::settings::preserve_environment(&mut settings, command.get_envs())?;
             command.env(

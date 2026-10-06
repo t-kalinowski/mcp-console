@@ -21,8 +21,27 @@ pub(crate) struct Transport {
 }
 
 impl Transport {
-    pub fn directory(&self) -> &std::path::Path {
-        self.directory.path()
+    /// Preserve access to private handoff storage in the captured native policy.
+    pub fn preserve_access(&self, policy: &mut super::SandboxSettings) -> Result<(), String> {
+        let directory = std::path::absolute(self.directory.path())
+            .map_err(|error| format!("cannot resolve startup transport directory: {error}"))?;
+        let directory = directory
+            .to_str()
+            .ok_or("startup transport directory must be UTF-8")?;
+        // Leave malformed native policy values intact for launcher validation.
+        if let serde_json::Value::Object(filesystem) = policy
+            .entry("filesystem")
+            .or_insert_with(|| serde_json::json!({"kind": "restricted"}))
+            && let serde_json::Value::Array(entries) = filesystem
+                .entry("entries")
+                .or_insert_with(|| serde_json::json!([]))
+        {
+            entries.push(serde_json::json!({
+                "path": {"type": "path", "path": directory},
+                "access": "write",
+            }));
+        }
+        Ok(())
     }
 }
 
