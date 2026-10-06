@@ -144,7 +144,7 @@ binary = Path(
         / "target"
         / ("debug/mcp-console.exe" if os.name == "nt" else "release/mcp-console"),
     )
-).absolute()
+).resolve()
 boundaries = {"client_server", "server_relay", "relay_worker", "cli"}
 suite_paths = sorted(
     path
