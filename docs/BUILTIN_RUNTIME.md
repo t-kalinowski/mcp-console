@@ -251,8 +251,28 @@ Discovery failures require a new server; other startup retries follow [server re
 Each complete response, including generated notices, has at most **8 KiB UTF-8 text**.
 Large output retains its beginning and latest tail.
 Consecutive progress redraws from one producer are compacted within a response interval: carriage return replaces the frame, backspace removes a Unicode scalar, and CRLF remains a newline.
-Other controls stay literal.
 Raw streams use incremental decoding; invalid UTF-8 is replaced for display, not in retained raw logs.
+
+Previews project the following [ANSI controls](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) to plain text:
+
+| Control                                                                 | Preview behavior                                                                                                                                      |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SGR (`CSI ... m`), including semicolon/colon color parameters           | Remove styling and preserve text.                                                                                                                     |
+| Erase line (`CSI K` or `CSI 0 K`)                                       | Erase the current frame after CR; otherwise leave it unchanged.                                                                                       |
+| Erase whole line (`CSI 2 K`)                                            | Erase the current frame, including any omitted middle. Finished lines remain.                                                                         |
+| OSC title, clipboard, and hyperlink commands; DCS, SOS, PM, APC strings | Suppress payloads through the string terminator (`ESC \` or decoded U+009C); OSC also accepts BEL. Hyperlink labels outside the commands remain text. |
+| Other complete CSI/ESC controls and decoded C1 controls                 | Suppress the control without screen or cursor emulation.                                                                                              |
+
+Parsing is incremental within one contiguous producer/response interval.
+Each native launcher or preparation diagnostic reader is a separate producer from worker stderr and other native readers.
+Producer switches, response cuts, images, notices, completion, and retirement discard incomplete controls.
+An unterminated control string suppresses the rest of that interval; its payload is never buffered.
+CSI syntax is inspected up to 128 bytes; longer sequences are suppressed through their final character.
+ESC intermediate syntax is consumed without buffering.
+Outside strings, a new ESC restarts parsing, CR/LF/backspace cancel incomplete controls and retain their ordinary behavior, and an invalid scalar resumes plain text at that scalar.
+Decoded C1 introducers follow the same projection rules; isolated invalid raw C1 bytes still use UTF-8 replacement.
+These rules retain CR frame replacement and Unicode-scalar backspace, without terminal cell-width or multiline fidelity.
+Suppressed controls use no rendered-text allowance; retained raw logs keep their exact original bytes.
 
 Images have independent limits: 8 MiB encoded data, 64 KiB MIME metadata, and 4,096 images per undrained interval and complete result.
 Whole images are admitted; text limits do not consume their allowance.

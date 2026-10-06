@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from ctypes import wintypes
 from pathlib import Path
 from textwrap import dedent
+from support.installation import native_console
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
@@ -292,9 +293,10 @@ class WindowsSandbox(unittest.TestCase):
 
     def test_modified_helper_is_rejected_before_setup(self):
         with workspace() as root:
-            source = BINARY.resolve().parent.parent
+            native = native_console(BINARY)
+            source = native.resolve().parent.parent
             (root / "bin").mkdir()
-            shutil.copy2(BINARY, root / "bin/mcp-console.exe")
+            shutil.copy2(native, root / "bin/mcp-console.exe")
             for directory in ("libexec", "share"):
                 if (source / directory).exists():
                     shutil.copytree(source / directory, root / directory)
@@ -472,6 +474,30 @@ class WindowsSandbox(unittest.TestCase):
             self.assertIn(b"readable", result.stdout)
             self.assertEqual((work / "allowed.txt").read_text().strip(), "allowed")
             self.assertFalse((root / "denied.txt").exists())
+            # Preserve the high bit through the installed launcher as well as
+            # the native runner/frontend's full-width Windows exit status.
+            result = subprocess.run(
+                [
+                    str(BINARY),
+                    "sandbox",
+                    "--config-env",
+                    "TEST_POLICY",
+                    "--",
+                    str(Path(os.environ["SystemRoot"]) / "System32/cmd.exe"),
+                    "/d",
+                    "/c",
+                    "exit /b -1073741819",
+                ],
+                cwd=work,
+                env=dict(
+                    os.environ,
+                    TEST_POLICY=json.dumps(config),
+                    MCP_CONSOLE_HOME=str(root / "home"),
+                ),
+                capture_output=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0xC0000005, result.stderr)
 
 
 if __name__ == "__main__":

@@ -30,11 +30,38 @@ if __name__ == "__main__":
         venv = directory / "venv"
         run("uv", "build", "--wheel", "--out-dir", wheels)
         (wheel,) = wheels.glob("*.whl")
+        # uv copies Windows commands onto PATH. Exercise that public entry
+        # point rather than only the executable inside a virtualenv.
+        tool_environment = os.environ | {
+            "UV_TOOL_DIR": str(directory / "tools"),
+            "UV_TOOL_BIN_DIR": str(directory / "commands"),
+            "MCP_CONSOLE_HOME": str(directory / "console-home"),
+        }
+        run(
+            "uv",
+            "tool",
+            "install",
+            "--python",
+            sys.executable,
+            wheel,
+            environment=tool_environment,
+        )
+        run(
+            sys.executable,
+            ROOT / "tests/windows.py",
+            "-v",
+            "WindowsSandbox.test_setup_status_is_read_only",
+            "WindowsSandbox.test_python_state_and_restart_with_private_temporary_storage",
+            "WindowsSandbox.test_stdio_write_policy_and_exit_status",
+            environment=tool_environment
+            | {"MCP_CONSOLE_TEST_BINARY": str(directory / "commands/mcp-console.exe")},
+        )
         run("uv", "venv", "--python", sys.executable, venv)
         python = venv / "Scripts/python.exe"
         run("uv", "pip", "install", "--python", python, wheel)
         environment = os.environ | {
-            "MCP_CONSOLE_TEST_BINARY": str(venv / "Scripts/mcp-console.exe")
+            "MCP_CONSOLE_TEST_BINARY": str(venv / "Scripts/mcp-console.exe"),
+            "MCP_CONSOLE_TEST_NATIVE_BINARY": str(venv / "libexec/mcp-console.exe"),
         }
         run(sys.executable, ROOT / "tests/windows.py", "-v", environment=environment)
         run("uv", "pip", "install", "--reinstall", "--python", python, ROOT)

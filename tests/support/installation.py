@@ -7,6 +7,16 @@ from functools import cache
 from pathlib import Path
 
 
+def native_console(binary: Path) -> Path:
+    selected = os.environ.get("MCP_CONSOLE_TEST_NATIVE_BINARY")
+    if selected is not None:
+        return Path(selected)
+    # Installed Windows commands are Python launchers. Fixtures that bind to
+    # native PIDs or relocate/tamper with a bundle need its actual executable.
+    native = binary.parent.parent / "libexec/mcp-console.exe"
+    return native if os.name == "nt" and native.is_file() else binary
+
+
 @cache
 def _installed_console(binary: Path) -> tuple[tempfile.TemporaryDirectory, Path]:
     temporary = tempfile.TemporaryDirectory(prefix="mcp-console-test-installation-")

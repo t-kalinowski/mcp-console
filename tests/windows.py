@@ -4,7 +4,11 @@ Run with `uv run --no-project tests/windows.py` after `cargo build`.
 """
 
 import ctypes
+import base64
+import csv
 from contextlib import ExitStack
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -17,8 +21,10 @@ import time
 from threading import Thread
 from textwrap import dedent
 import unittest
+import zipfile
 
 from windows_gate import Gate
+from support.installation import native_console
 
 from windows_cargo import WindowsCargo  # noqa: F401 -- include build acceptance
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
@@ -33,6 +39,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
     os.environ.get("MCP_CONSOLE_TEST_BINARY", ROOT / "target/debug/mcp-console.exe")
 )
+NATIVE_BINARY = native_console(BINARY)
 
 
 class Session:
@@ -316,12 +323,54 @@ class WindowsPackaging(unittest.TestCase):
             second.stdin.flush()
             self.assertEqual(second.wait(timeout=10), 0, second.stderr.read())
             self.assertEqual(second_lines.get(timeout=10), "fixture.whl")
+            with zipfile.ZipFile(root / "fixture.whl") as wheel:
+                self.assertNotIn(
+                    "fixture-1.data/scripts/mcp-console.exe", wheel.namelist()
+                )
+                self.assertEqual(
+                    wheel.read("fixture-1.data/data/libexec/mcp-console.exe"),
+                    b"native fixture",
+                )
+                self.assertIn(
+                    b"mcp-console = mcp_console._launcher:main",
+                    wheel.read("fixture-1.dist-info/entry_points.txt"),
+                )
+                entry_points = wheel.read("fixture-1.dist-info/entry_points.txt")
+                self.assertIn(b"OtherTool = other.module:main", entry_points)
+                records = list(
+                    csv.reader(
+                        io.StringIO(wheel.read("fixture-1.dist-info/RECORD").decode())
+                    )
+                )
+                self.assertEqual({row[0] for row in records}, set(wheel.namelist()))
+                for name, digest, size in records:
+                    if name.endswith("/RECORD"):
+                        self.assertEqual((digest, size), ("", ""))
+                    else:
+                        content = wheel.read(name)
+                        expected = (
+                            base64.urlsafe_b64encode(hashlib.sha256(content).digest())
+                            .rstrip(b"=")
+                            .decode()
+                        )
+                        self.assertEqual(digest, "sha256=" + expected)
+                        self.assertEqual(int(size), len(content))
             archive, archive_lines = start("build_sdist")
             self.assertEqual(archive_lines.get(timeout=10), "building")
             archive.stdin.write("finish\n")
             archive.stdin.flush()
             self.assertEqual(archive.wait(timeout=10), 0, archive.stderr.read())
             self.assertEqual(archive_lines.get(timeout=10), "fixture.whl")
+            metadata, metadata_lines = start("prepare_metadata_for_build_wheel")
+            self.assertEqual(metadata_lines.get(timeout=10), "building")
+            metadata.stdin.write("finish\n")
+            metadata.stdin.flush()
+            self.assertEqual(metadata.wait(timeout=10), 0, metadata.stderr.read())
+            self.assertEqual(metadata_lines.get(timeout=10), "fixture-1.dist-info")
+            self.assertEqual(
+                (root / "fixture-1.dist-info/entry_points.txt").read_bytes(),
+                entry_points,
+            )
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
@@ -531,6 +580,75 @@ class WindowsConsole(unittest.TestCase):
         self.assertIn(
             "FALSE", json.dumps(session.send(control="restart", r="exists('answer')"))
         )
+
+    def test_discovers_r_from_batch_launcher(self):
+        r_home = Path(
+            os.environ.get("R_HOME")
+            or subprocess.check_output(
+                [shutil.which("R") or "R", "RHOME"], text=True
+            ).strip()
+        )
+        for extension in ("bat", "cmd"):
+            with (
+                self.subTest(extension=extension),
+                tempfile.TemporaryDirectory(prefix="console R launcher ") as directory,
+            ):
+                root = Path(directory)
+                launcher = root / f"R.{extension}"
+                launcher.write_text(f'@"{r_home / "bin/R.exe"}" %*\n')
+                later = root / "later"
+                later.mkdir()
+                # An earlier batch launcher takes precedence over a later exe.
+                (later / "R.exe").write_text("broken later installation")
+                environment = dict(
+                    os.environ,
+                    PATH=os.pathsep.join(
+                        (
+                            str(root),
+                            str(later),
+                            str(Path(os.environ["SystemRoot"]) / "System32"),
+                        )
+                    ),
+                    RETICULATE_PYTHON=sys.executable,
+                )
+                environment.pop("R_HOME", None)
+                session = Session(environment, bare_r=True)
+                try:
+                    session.initialize()
+                    result = session.send(r="answer <- 42L; answer")
+                    self.assertFalse(result.get("isError"), result)
+                    self.assertIn("42", json.dumps(result))
+                    # The selected installation survives changes to the launcher.
+                    launcher.write_text("@exit /b 91\n")
+                    result = session.send(control="restart", r="exists('answer')")
+                    self.assertFalse(result.get("isError"), result)
+                    self.assertIn("FALSE", json.dumps(result))
+                finally:
+                    session.close()
+
+    def test_reports_broken_r_batch_launcher(self):
+        with tempfile.TemporaryDirectory(prefix="console broken R ") as directory:
+            root = Path(directory)
+            (root / "R.bat").write_text(
+                "@echo deliberate R discovery failure 1>&2\n@exit /b 91\n"
+            )
+            environment = dict(
+                os.environ,
+                PATH=os.pathsep.join(
+                    (str(root), str(Path(os.environ["SystemRoot"]) / "System32"))
+                ),
+                RETICULATE_PYTHON=sys.executable,
+            )
+            environment.pop("R_HOME", None)
+            session = Session(environment)
+            try:
+                session.initialize()
+                result = session.send(r="42L")
+                self.assertTrue(result.get("isError"), result)
+                self.assertIn("worker R home discovery failed", json.dumps(result))
+                self.assertIn("deliberate R discovery failure", json.dumps(result))
+            finally:
+                session.close()
 
     def test_python_sleep_interrupt(self):
         session = self.session(defer_bootstrap=True)
@@ -899,7 +1017,7 @@ class WindowsConsole(unittest.TestCase):
             dict(
                 os.environ,
                 TEST_RELAY_SCENARIO=scenario,
-                TEST_CONSOLE_BINARY=str(BINARY),
+                TEST_CONSOLE_BINARY=str(NATIVE_BINARY),
             ),
             relay=executable,
         )

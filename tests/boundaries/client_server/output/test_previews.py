@@ -283,6 +283,52 @@ def test_compacts_redraws_before_preview_limits(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+def test_compacts_ansi_redraws_and_discards_oversized_controls(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with McpClient(binary, execution.serve("--worker", str(worker))) as client:
+        client.initialize_and_list_tools()
+        result = client.send(r="preview ansi redraw")
+        assert [block["type"] for block in result["content"]] == [
+            "text",
+            "image",
+            "text",
+        ]
+        assert result["content"][0]["text"] == (
+            "preview head\nprogress final\npreview tail: final diagnostic\n"
+        ), result
+        assert result["content"][-1]["text"] == "after final image\n", result
+        assert (
+            sum(
+                len(block["text"].encode())
+                for block in result["content"]
+                if block["type"] == "text"
+            )
+            <= TEXT_BUDGET
+        )
+        raw = (
+            "preview head\n"
+            + "x" * 32768
+            + "\x1b[2K"
+            + "\x1b["
+            + "0;" * 100000
+            + "2K"
+            + "\x1b]52;c;"
+            + "hidden\n" * 100000
+            + "\x1b\\"
+            + ("\r\x1b[2K\x1b[32m" + "x" * 2048 + "\x1b[0m") * 5000
+            + "\r\x1b[K\x1b[32mprogress final\x1b[0m\npreview tail: final diagnostic\n"
+            + "\x1b]unterminated before imageafter final image\n"
+        ).encode()
+        assert (
+            session_directory(client) / "outputs/call-000001.log"
+        ).read_bytes() == raw
+        return client.finish()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
 def test_reports_raw_and_rendered_counts_for_invalid_utf8(
     binary: Path, execution: Execution
 ) -> Transcript:

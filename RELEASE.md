@@ -1,7 +1,7 @@
 # Releasing MCP Console
 
 Tag-driven releases publish exactly four binary-only PyPI wheels: Apple Silicon and Intel macOS, ARM64 and x86-64 Linux.
-Linux builds use Ubuntu 24.04 and require glibc 2.39+.
+Linux builds use native Ubuntu 22.04 runners and target glibc 2.35+.
 The release workflow publishes no source distribution, Windows wheel, or GitHub release archive.
 `Cargo.toml` owns the version; keep the root `mcp-console` entry in `Cargo.lock` synchronized.
 
@@ -18,7 +18,7 @@ The platform-specific staging instructions below cover macOS and Linux.
 Windows direct build commands use `scripts/with-checkout.cmd` and share ownership with packaging; `scripts/check.cmd --full` exercises local wheel and source installation.
 
 On macOS, install Xcode Command Line Tools.
-Ubuntu builds need a C toolchain, `pkg-config`, libcap development files, libcurl development files for R resolver bootstrap, and binutils (`readelf` / `strip`).
+Ubuntu builds need a C toolchain, `pkg-config`, libcap and OpenSSL development files, libcurl development files for R resolver bootstrap, and binutils (`readelf` / `strip`).
 Packages may need additional system libraries.
 Runtime Linux installations need the helper's system dependencies, including dynamically linked libcap when selected.
 
@@ -62,15 +62,43 @@ Dynamic libcap is not bundled; static libcap requires a nonempty `MCP_CONSOLE_LI
 The build does not certify that supplied license text.
 Wheel smoke verifies notices, source identity, helper digest, and actual linkage.
 
+`scripts/release.py inspect-wheel WHEEL --target TARGET --report abi.json` checks every ELF member, including private helpers and additional native libraries.
+It checks architecture, loader, declared system libraries, loader paths, and symbol requirements against every advertised wheel tag; filename and WHEEL metadata must agree.
+Loader paths and bundled dependencies resolve within the installed Unix prefix: wheel scripts go under `bin`, data under the prefix, and Python libraries under `lib/pythonX.Y/site-packages`.
+`DT_NEEDED` dependencies must be library names without `/`; filename dependencies bypass loader search paths and are unsupported by the audit.
+In particular, relative filenames depend on the launch directory even when a matching library exists under RPATH/RUNPATH.
+`$ORIGIN` paths may traverse between these installed directories but must stay within the prefix; reports retain archive-member keys and use prefix-relative search paths.
+Bundled dependencies inherit `DT_RPATH` along their loading chain, with each ancestor's paths resolved against its own installed `$ORIGIN`.
+`DT_RUNPATH` applies only to direct dependencies and suppresses RPATH lookup for that object's direct dependencies.
+The audit loads dependencies breadth-first in `DT_NEEDED` order, reusing already loaded libraries before searching paths again.
+Independent executables do not share loaded libraries or loader paths.
+Numeric GLIBCXX/CXXABI ceilings follow the advertised [manylinux policies](https://github.com/pypa/auditwheel/blob/7cec8ec5b1436336bc03e560b785cc63d9c4190f/src/auditwheel/policy/manylinux-policy.json), including architecture differences and legacy aliases; multiple tags use the strictest ceiling.
+Named CXXABI versions must be permitted by every advertised policy: `TM_1` from manylinux 2.17 on both architectures, and `FLOAT128` from 2.24 on x86_64 only.
+Named GLIBC requirements follow the same rule: `ABI_DT_RELR` from 2.36 on both architectures, and `ABI_DT_X86_64_PLT` / `ABI_GNU2_TLS` from 2.42 on x86_64 only.
+These GLIBC requirements remain incompatible with the 2.35 release floor; unknown names, including `GLIBC_PRIVATE`, are rejected.
+GCC requirements from libgcc use each tag's exact architecture-specific permitted versions; sparse version sets cannot be validated with a numeric ceiling.
+An unrecognized policy is rejected rather than inferred from the build host.
+`--release` additionally enforces the glibc 2.35 floor and Ubuntu 22.04's libstdc++ symbol ceilings (GLIBCXX 3.4.30 / CXXABI 1.3.13).
+The report records the wheel digest and each member's loader, dependencies, paths, and version requirements.
+The release workflow also installs the built wheel in clean native floor runtimes; an ABI report alone is not a runtime pass.
+
+Use `smoke-wheel WHEEL --installed-only --sandbox-pin PIN_FILE` in a runtime environment without a source checkout or Cargo outputs.
+It reads package identity from the wheel, installs that artifact, and reuses the bundled-helper, startup, language, and bounded shutdown probes.
+The ordinary smoke mode retains its comparison with the Cargo executable.
+
 `scripts/build_backend.py` owns staging through wheel creation.
 `build.rs` verifies and copies prepared files beside native Cargo output; it does not build the runner or mutate wheel staging.
 On Windows, Cargo keeps each complete companion bundle in a content-addressed directory under `libexec` and binds the executable to it.
 Older bundles remain available to active sandboxes; rebuilding never replaces their running helpers.
-Installed wheels retain the flat layout above and the same digest verification.
+Installed wheels retain the same digest verification.
+Windows wheels keep the native Console executable under `libexec` alongside its helpers and expose `mcp-console` through an installer-generated Python entry point.
+The entry point resolves the native executable through the installed distribution's file manifest and waits for its exit, preserving stdio and all 32 exit-status bits.
+This keeps the native installation prefix intact when `uv tool install` copies the public command onto PATH.
+The backend updates wheel records and prepared metadata consistently; editable builds use the same launcher.
 `target/sandbox-runner-build.json` describes staged files under `wheel-data/data`.
 Obsolete generated files are reconciled on staging.
 
-Move the complete bundle when relocating it; a symlink to the main executable works.
+Move the complete native bundle when relocating it; a symlink to the native executable works.
 Native builds require Cargo's shared build/target layout: move it with `CARGO_TARGET_DIR` / `--target-dir`, not a separate `CARGO_BUILD_BUILD_DIR`.
 Sandbox launch verifies the runner/licenses without downloading or extracting anything.
 A trusted host bwrap may take precedence; when the bundled helper is selected, it is verified and executed through the same descriptor.
@@ -92,6 +120,54 @@ Ubuntu AppArmor user- namespace restrictions can permit `/usr/bin/bwrap` but rej
 Do not weaken a user's host policy merely to pass a test.
 Use an approved disposable build environment; [Linux compatibility](docs/LINUX_COMPATIBILITY.md) explains runtime requirements and diagnosis.
 Installation tests need the checkout and `TMPDIR` on the same writable filesystem for renames.
+
+### Linux floor validation
+
+The native bundle needs glibc's architecture loader, libc/libm, libgcc_s, and dynamically linked libcap for the current companion build.
+On Ubuntu these come from `libc6`, `libgcc-s1`, and `libcap2`.
+OpenSSL development files are needed during compilation, but the inspected wheel binaries do not depend on OpenSSL at runtime.
+Default Python packages additionally need `libstdc++6`; R and its packages have their own runtime libraries and preparation requirements.
+R-present validation uses current R from the signed CRAN Jammy repository because stock Ubuntu 22.04 R 4.1 cannot install current Arrow/DuckDB, which require R 4.2+.
+The [runtime fixture](scripts/linux-wheel/Dockerfile) lists these language prerequisites separately from the native bundle.
+
+Run on a matching native Docker host with the evidence directory shared with the daemon:
+
+```sh
+scripts/check-linux-wheel dist/*.whl \
+    --target x86_64-unknown-linux-gnu --evidence linux-compatibility
+```
+
+Use `aarch64-unknown-linux-gnu` on ARM64; emulation is rejected.
+`--docker-context` selects a daemon explicitly, for example `colima` on an ARM64 Mac.
+Only the wheel and minimal release/installation harness enter the runtime containers.
+The no-R image contains standalone Python 3.13 and uv, while the R image additionally retains separately prepared language libraries and resolver metadata.
+Each validation run refreshes R package preparation before copying its cache into the runtime, because IR's latest-package resolution markers expire after 24 hours while Docker layers do not.
+Earlier system and preparation-tool layers remain cached; repeated runs pay the R package preparation cost so source builds finish while compilers are available.
+Preparation uses serial make and `CXX17FLAGS=-O0 -g0` to bound DuckDB build memory; these settings do not affect the distributed wheel.
+Compilers, development packages, build directories, and cached CMake are excluded from the final runtime.
+Normal sandboxed startup keeps the documented Console cache policy.
+The Linux builder prepares the same default R environment before installed-wheel smoke, so cold source compilation completes separately from the startup observation budget.
+This preparation uses the same language-only compiler flags and runtime prerequisites as the floor fixture; it does not change the shipped binaries or smoke assertions.
+Clean floor validation runs in separate native jobs that download the smoke-tested wheel artifacts, giving language preparation its own bounded job budget.
+Both wheel-building and floor-validation jobs must pass before publication.
+Rerunning a failed floor job reuses the built wheel rather than rebuilding it.
+
+The probes require native namespace support and run in disposable containers with `SYS_ADMIN`, unconfined seccomp, and unconfined AppArmor.
+They do not change host sysctls.
+Startup, Python/R evaluation, bounded shutdown, installed loader resolution, and existing sandbox installation acceptance must pass.
+Installed loader checks run `ldd` from each dynamic ELF executable, including additional wheel entry points, so bundled libraries resolve in their executable's inherited RPATH context.
+Shared libraries are not required to load independently; `inspect-wheel` still audits every ELF member and its dependency chains.
+The empty-PATH probe establishes bundled-helper execution; host-helper precedence and integrity checks remain covered by installed acceptance.
+A namespace denial is separate from a loader/ABI failure, and a skipped native probe does not pass the gate.
+
+The release workflow uploads per-architecture `linux-compatibility-*` builder ABI reports and `linux-runtime-*` floor validation evidence.
+Together these contain the wheel SHA-256, complete ELF/tag report, image digests/platforms, exact probe command, OS/kernel/library/language versions, and results.
+Keep ARM64 and x86_64 reports separate.
+Both independent controlled-Jammy builds at source `d26f9771` used Rust 1.95.0, GCC 11, Maturin 1.15.0, and the unchanged companion pin.
+All three shipped ELF executables required at most GLIBC 2.34, with matching `manylinux_2_34` filename/WHEEL tags, no GLIBCXX/CXXABI requirements, and no RPATH/RUNPATH or extra ELF members.
+Clean runtime tests used Ubuntu 22.04 with glibc 2.35, libgcc/libstdc++ 12.3, libcap 2.44, Python 3.13.16, uv 0.12.22, and R 4.6.1 for R-present coverage.
+Both native architectures passed no-R and R-present startup, language, bounded shutdown, loader resolution, and installed acceptance.
+The native older-runner rehearsal remains required before release.
 
 ## One-time PyPI setup
 

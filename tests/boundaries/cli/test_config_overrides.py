@@ -9,7 +9,6 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from support.snapshots import platform_snapshots
 from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
@@ -478,7 +477,6 @@ def test_python_home_expansion_requires_absolute_home(binary: Path) -> Transcrip
     return records
 
 
-@platform_snapshots("win32")
 def test_validates_effective_configuration(binary: Path) -> Transcript:
     cases = (
         ("extends=true", "boolean"),

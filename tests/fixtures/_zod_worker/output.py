@@ -183,6 +183,23 @@ def emit_stdout(context: WorkerContext, source: str) -> None:
     send(context.writer, {"kind": "completed"})
 
 
+def preview_ansi_redraw(context: WorkerContext, source: str) -> None:
+    send_output(context.writer, "preview head\n" + "x" * 32768)
+    send_output(context.writer, "\x1b[2K")
+    send_output(context.writer, "\x1b[" + "0;" * 100000 + "2K")
+    send_output(context.writer, "\x1b]52;c;" + "hidden\n" * 100000 + "\x1b\\")
+    for _ in range(5000):
+        send_output(context.writer, "\r\x1b[2K\x1b[32m" + "x" * 2048 + "\x1b[0m")
+    send_output(
+        context.writer,
+        "\r\x1b[K\x1b[32mprogress final\x1b[0m\npreview tail: final diagnostic\n"
+        "\x1b]unterminated before image",
+    )
+    send(context.writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
+    send_output(context.writer, "after final image\n")
+    send(context.writer, {"kind": "completed"})
+
+
 def redraw_across_polls(context: WorkerContext, source: str) -> None:
     send_output(context.writer, "output 10%\r")
     wait_for_server_to_process_sideband(context.reader, context.writer)

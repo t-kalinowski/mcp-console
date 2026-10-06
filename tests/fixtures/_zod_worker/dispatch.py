@@ -23,6 +23,7 @@ EXACT_HANDLERS: dict[str, Callable[[WorkerContext, str], LoopAction | None]] = {
     "preview tiny events": output.preview_large_output,
     "preview many tiny events": output.preview_large_output,
     "preview redraw": output.preview_large_output,
+    "preview ansi redraw": output.preview_ansi_redraw,
     "emit stdout": output.emit_stdout,
     "redraw across polls": output.redraw_across_polls,
     "stress redraws": output.stress_redraws,

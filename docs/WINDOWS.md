@@ -13,8 +13,12 @@ The release workflow does not publish Windows wheels; Windows source checkouts c
 
 Install Rust's MSVC toolchain, Visual Studio's C++ build tools and Windows SDK, Python 3.11 or newer, and uv.
 For R execution, install current x64 R and set `R_HOME` to its installation directory (or place R on `PATH`).
+PATH discovery supports `R.exe`, `R.bat`, and `R.cmd`, including rig's batch launcher.
+It searches directories in PATH order, preferring `.exe`, then `.bat`, then `.cmd` within each directory.
+An explicit `R_HOME` takes precedence; a broken selected installation or launcher reports an error.
 R is not required to build or run Python-only sessions.
 Windows builds stage the pinned native sandbox executable and both Windows helpers.
+Installed wheels expose an environment-bound Python launcher so `uv tool install` can copy the command onto PATH while the native executable and verified helpers remain together under the tool environment's `libexec` directory.
 Install CMake for the companion build.
 Cargo-only builds first need `python scripts/stage-sandbox-runner`.
 
@@ -124,11 +128,11 @@ It also includes `tests/windows_resolver.py`, covering the resolver protocol, ir
 Run native commands exclusively in a checkout.
 The default workflow runs native Windows acceptance.
 The full workflow also discovers and runs the shared boundary cases whose declared capabilities are available.
+Installation checks additionally exercise the copied public command from an isolated `uv tool install`, including sandbox setup inspection, worker state/restart, stdio, and full-width exit status.
 The `.cmd` launchers work in PowerShell and Command Prompt; `python scripts/COMMAND` is an equivalent entry point using an explicitly selected Python.
 Python 3.11 or newer is required; CI uses Python 3.13.
 
 Configure `R_HOME` before running the complete suite, and use the C locale to match CI.
-If `R` on PATH is a `.bat` or `.cmd` launcher, preflight can probe it successfully while Console's native `R.exe` discovery still treats R as absent.
 An explicit `R_HOME` selects the installation for runtime and resolver tests and enables R sandbox acceptance.
 Replace the example path below with the installed R directory.
 
@@ -209,6 +213,7 @@ The acceptance interpreter needs `packaging` and `matplotlib`; R needs `reticula
 Resolver acceptance also needs uv and package repository access.
 Full checks include shared plotting and R resolver cases that require `ir` 0.4.0 or later on PATH; install it with `uv tool install r-lib-ir`, as CI does.
 For installed-wheel acceptance, set `MCP_CONSOLE_TEST_BINARY` to the installed `mcp-console.exe` and run the same tests.
+When selecting a copied tool command outside its environment, also set `MCP_CONSOLE_TEST_NATIVE_BINARY` to that environment's `libexec/mcp-console.exe` for fixtures that require the native PID or relocate its bundle.
 Tests use `rustc` to build small process fixtures.
 R source validation finds `Rscript.exe` under `R_HOME` (including `bin/x64`) or on `PATH`, and uses `LC_ALL=C` for the syntax checker.
 
