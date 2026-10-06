@@ -122,6 +122,8 @@ struct ClientInner {
     startup: tokio::sync::watch::Sender<Option<Result<(), String>>>,
     /// Identity of connection startup, including the interval before admission.
     startup_generation: WorkerGeneration,
+    /// Disposable presentation fact; admission still uses the startup outcome.
+    startup_observation_complete: AtomicBool,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
     /// Settles operations admitted before inline control reserves its optional new cell.
@@ -304,6 +306,7 @@ impl Client {
             configuration: OnceLock::new(),
             startup,
             startup_generation,
+            startup_observation_complete: AtomicBool::new(false),
             evaluation: Mutex::new(None),
             admission: tokio::sync::RwLock::new(()),
             preparation: tokio::sync::RwLock::new(()),
@@ -334,6 +337,9 @@ impl Client {
                 return false;
             }
             *outcome = Some(result);
+            self.0
+                .startup_observation_complete
+                .store(true, Ordering::Release);
             true
         });
     }

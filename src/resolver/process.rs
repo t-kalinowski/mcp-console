@@ -42,7 +42,7 @@ pub(crate) trait ResolverControl: Send + Sync {
     fn interrupt(&self) -> Result<bool, String>;
     fn control_outcome(&self) -> Option<super::ResolverControlOutcome>;
     fn cleanup_confirmed(&self) -> bool;
-    /// Presentation only; signaling is not completion of the owned operation.
+    /// Nonblocking presentation only; signaling is not operation completion.
     fn phase(&self) -> Option<&'static str> {
         (!self.cleanup_confirmed()).then_some("dependency preparation")
     }

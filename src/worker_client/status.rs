@@ -1,6 +1,7 @@
 //! Disposable response observations of the existing operation owners.
 
 use std::sync::Weak;
+use std::sync::atomic::Ordering;
 
 use super::lifecycle::{LifecycleState, WorkerGeneration, WorkerStartupAdmission};
 use super::{Client, ClientInner};
@@ -26,7 +27,9 @@ impl Source {
             Owner::Evaluation(evaluation) => evaluation.upgrade()?.replacement_observation()?,
             _ => false,
         };
-        let lifecycle = client.lifecycle.lock().ok()?;
+        // Status is disposable: contention must not extend a response deadline
+        // or keep a cancelled request waiting for the operation owner.
+        let lifecycle = client.lifecycle.try_lock().ok()?;
         if !lifecycle.generation.is(&self.generation)
             || matches!(lifecycle.state, LifecycleState::ShuttingDown { .. })
         {
@@ -36,7 +39,7 @@ impl Source {
             Owner::Resolver(resolver) => resolver.phase(),
             Owner::Startup(startup) if startup.strong_count() != 0 => Some("startup"),
             Owner::ConnectionStartup
-                if client.startup.borrow().is_none()
+                if !client.startup_observation_complete.load(Ordering::Acquire)
                     && self.generation.is(&client.startup_generation) =>
             {
                 Some("startup")
@@ -47,7 +50,7 @@ impl Source {
             Owner::Evaluation(_) => {
                 if replacing {
                     Some("replacement")
-                } else if client.startup.borrow().is_none()
+                } else if !client.startup_observation_complete.load(Ordering::Acquire)
                     && self.generation.is(&client.startup_generation)
                 {
                     Some("startup")
@@ -71,7 +74,7 @@ impl Source {
 
 impl Client {
     pub(super) fn status_generation(&self) -> Option<WorkerGeneration> {
-        Some(self.0.lifecycle.lock().ok()?.generation.clone())
+        Some(self.0.lifecycle.try_lock().ok()?.generation.clone())
     }
 
     pub(super) fn status_source(&self, generation: Option<WorkerGeneration>) -> Option<Source> {
@@ -79,12 +82,12 @@ impl Client {
         let evaluation = self
             .0
             .evaluation
-            .lock()
+            .try_lock()
             .ok()?
             .as_ref()
             .filter(|active| active.generation.is(&generation))
             .map(|active| std::sync::Arc::downgrade(&active.evaluation));
-        let lifecycle = self.0.lifecycle.lock().ok()?;
+        let lifecycle = self.0.lifecycle.try_lock().ok()?;
         if !lifecycle.generation.is(&generation) {
             return None;
         }
@@ -94,7 +97,9 @@ impl Client {
             Owner::Resolver(resolver.phase_observation())
         } else if let Some(startup) = lifecycle.startup_observation() {
             Owner::Startup(startup)
-        } else if self.0.startup.borrow().is_none() && generation.is(&self.0.startup_generation) {
+        } else if !self.0.startup_observation_complete.load(Ordering::Acquire)
+            && generation.is(&self.0.startup_generation)
+        {
             Owner::ConnectionStartup
         } else if matches!(lifecycle.state, LifecycleState::Restarting { .. }) {
             Owner::Replacement

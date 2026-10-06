@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import sys
 import tempfile
 from contextlib import ExitStack, closing
@@ -13,6 +14,7 @@ from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
+from support.native import LOADER_VARIABLE, build_interposer
 from support.progress import elapsed_progress, phase_progress, without_elapsed
 from support.previews import (
     TEXT_BUDGET,
@@ -22,9 +24,90 @@ from support.previews import (
     normalize_preview_paths,
 )
 from support.records import Transcript
-from support.requirements import POSIX, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.resolvers import checkpoint_uv_environment
 from support.suites import run_this_suite
+
+
+@requires(NATIVE_FIXTURES, POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_phase_observation_does_not_wait_for_failed_worker_retirement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    # Keep the retirement owner inside its signal call, beyond any observation
+    # deadline. The timed response must not wait for that owner.
+    # fmt: python
+    server = code(r"""
+        import os
+        import sys
+
+        os.environ["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_PID"] = str(os.getpid())
+        os.environ[os.environ.pop("MCP_CONSOLE_TEST_LOADER")] = os.environ.pop(
+            "MCP_CONSOLE_TEST_RETIREMENT_LIBRARY"
+        )
+        os.execv(sys.argv[1], sys.argv[1:])
+        """)
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
+        root = Path(temporary)
+        checkpoints = [
+            resources.enter_context(closing(FifoCheckpoint.create(root / name)))
+            for name in ("blocked", "release", "returned")
+        ]
+        blocked, release, returned = checkpoints
+        environment = {
+            **os.environ,
+            "MCP_CONSOLE_TEST_LOADER": LOADER_VARIABLE,
+            "MCP_CONSOLE_TEST_RETIREMENT_LIBRARY": str(
+                build_interposer(root, "launcher_retirement_interposer")
+            ),
+            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_BLOCKED": str(blocked.path),
+            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE": str(release.path),
+            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURNED": str(returned.path),
+            "MCP_CONSOLE_TEST_PHASE_FAILURE": str(root / "failed"),
+        }
+        relay = (
+            Path(__file__).resolve().parents[3]
+            / "fixtures/server_relay/phase_retirement.py"
+        )
+        writable_root = ("--writable-root", str(root)) if execution == SANDBOXED else ()
+        client = resources.enter_context(
+            McpClient(
+                Path(sys.executable),
+                (
+                    "-c",
+                    server,
+                    str(binary),
+                    *execution.serve(
+                        "--worker", str(binary), "--relay", str(relay), *writable_root
+                    ),
+                ),
+                environment,
+            )
+        )
+        resources.callback(release.release)
+        client.initialize_and_list_tools()
+        client.send(r="42")
+        assert last_result_text(client) == "[done]"
+        failed = client.start_send(r="42", timeout_ms=500)
+        blocked.wait("failed-worker retirement owns the lifecycle lock")
+        client.response_timeout = 2
+        client.receive(failed)
+        assert without_elapsed(last_result_text(client)).endswith(
+            "\n[running; poll with an empty send]"
+        ), failed
+        assert "phase:" not in last_result_text(client)
+        assert client.request("ping")["result"] == {}
+        release.release()
+        returned.wait("retirement signal completed")
+        client.response_timeout = 600
+        client.send()
+        assert "scripted phase failure" in (
+            failed["result"]["content"][0]["text"] + last_result_text(client)
+        ), client.transcript
+        assert "phase:" not in last_result_text(client)
+        client.send(r="42")
+        assert last_result_text(client) == "[done]"
+        return client.finish()
 
 
 @requires(POSIX)
