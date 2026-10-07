@@ -49,6 +49,7 @@ Closing MCP input cancels startup and follows normal retirement; outstanding res
 
 Discovery or initial preparation failure is retained by ordinary sends; tool discovery remains usable with the same schema.
 Closing the connection preserves completed setup failures in the server's exit status and stderr, including failures before a resolver is registered.
+Connection closure that refuses pending startup admission exits quietly; that refusal is separate from a completed setup error.
 After correcting setup, an explicit `control="restart"` retries that failed readiness attempt using the server's captured configuration and current filesystem/tool availability.
 Concurrent restart callers share an in-flight retry; request cancellation and timeout leave it running, while connection closure cancels and retires it.
 Cancelling a restart before its bundled cell is admitted leaves that cell unaccepted.

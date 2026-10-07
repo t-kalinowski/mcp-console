@@ -14,8 +14,62 @@ from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, POSIX, requires
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PTHREAD_RUNTIME_PARKING,
+    requires,
+)
 from support.suites import run_this_suite
+
+
+@requires(POSIX, NATIVE_FIXTURES, PTHREAD_RUNTIME_PARKING)
+def test_eof_before_retry_admission_exits_cleanly(binary: Path) -> Transcript:
+    with TemporaryDirectory(dir="/tmp") as directory, ExitStack() as resources:
+        root = Path(directory)
+        reached = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "admission-reached"))
+        )
+        release = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "admission-release"))
+        )
+        shutdown = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "shutdown"))
+        )
+        environment = dict(
+            os.environ,
+            **{
+                LOADER_VARIABLE: str(
+                    build_interposer(root, "startup_admission_checkpoint")
+                ),
+                "MCP_CONSOLE_TEST_ADMISSION_REACHED": str(reached.path),
+                "MCP_CONSOLE_TEST_ADMISSION_RELEASE": str(release.path),
+                "MCP_CONSOLE_TEST_ADMISSION_SHUTDOWN": str(shutdown.path),
+            },
+        )
+        with McpClient(
+            binary,
+            ("serve", "-c", "cache=host", "-c", "resolver.inherit_environment=false"),
+            environment,
+            root,
+        ) as client:
+            try:
+                client.initialize_and_list_tools()
+                failure = client.send()
+                assert failure["isError"] is True, failure
+                assert "resolver sandbox requires HOME" in str(failure), failure
+                restart = client.start_send(control="restart", timeout_ms=0)
+                reached.wait("retry started before worker/resolver admission")
+                client.receive(restart)
+                assert not restart["result"].get("isError"), restart
+                client.stdin.close()
+                shutdown.wait("EOF dispatched; shutdown awaits pending admission")
+                release.release()
+                transcript, stderr = client.finish_with_standard_error()
+                assert stderr == "", stderr
+                return transcript + [{"exit_status": 0, "stderr": stderr}]
+            finally:
+                release.release()
 
 
 @requires(POSIX)

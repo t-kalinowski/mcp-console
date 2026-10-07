@@ -38,6 +38,7 @@ type Initializer = dyn Fn(
 #[derive(Default)]
 struct Cancellation {
     closed: bool,
+    admission_cancelled: bool,
     registration_closed: bool,
     resolver: Option<crate::resolver::ResolverStopHandle>,
     retrying: bool,
@@ -82,8 +83,18 @@ impl Startup {
         tokio::spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
                 observe_input(input_closed, || {
-                    let generation = initialize_worker.admit()?;
-                    let startup = initialize_worker.reserve_worker_startup(&generation)?;
+                    let (generation, startup) = {
+                        let mut control = control.lock().expect("startup cancellation lock");
+                        // Admission and connection closure share this owner. A refused
+                        // attempt has no resolver to carry cancellation evidence.
+                        if control.closed {
+                            control.admission_cancelled = true;
+                            return Err(REGISTRATION_CLOSED.into());
+                        }
+                        let generation = initialize_worker.admit()?;
+                        let startup = initialize_worker.reserve_worker_startup(&generation)?;
+                        (generation, startup)
+                    };
                     let prepared = initialize(
                         &|resolver| {
                             let mut control = control.lock().expect("startup cancellation lock");
@@ -146,6 +157,7 @@ impl Startup {
             return Ok(false);
         }
         control.resolver = None;
+        control.admission_cancelled = false;
         control.registration_closed = false;
         control.retrying = true;
         self.start();
@@ -177,12 +189,13 @@ impl Startup {
 
     pub fn finish_failed_preparation(&self, error: String) -> Result<(), String> {
         // A failed initializer has no installed configuration to own shutdown. Suppress only
-        // connection cancellation with confirmed cleanup; without a resolver handle,
-        // no preparation was cancelled and the initializer's failure must survive.
+        // connection refusal before admission or resolver cancellation with confirmed
+        // cleanup. Completed setup errors must survive even without a resolver handle.
         let control = self.cancellation.lock().expect("startup cancellation lock");
         if control.closed
-            && control.resolver.as_ref().is_some_and(|resolver| {
-                resolver.cleanup_confirmed()
+            && ((control.admission_cancelled && error == REGISTRATION_CLOSED)
+                || control.resolver.as_ref().is_some_and(|resolver| {
+                    resolver.cleanup_confirmed()
                     && resolver.retirement_confirmed()
                     // A close/retirement failure appended by the initializer is
                     // independent of the registration refusal and must survive.
@@ -193,7 +206,7 @@ impl Startup {
                             == Some(crate::resolver::ResolverControlOutcome::Cancelled)
                             && resolver.failure_is_controlled()
                     }
-            })
+                }))
         {
             Ok(())
         } else {
