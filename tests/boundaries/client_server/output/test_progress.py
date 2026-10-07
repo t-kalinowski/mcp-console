@@ -246,6 +246,9 @@ def test_restart_starts_a_new_admission_clock(
         ) as client,
     ):
         client.initialize_and_list_tools()
+        # Measure cell admission after the lazy worker reaches readiness.
+        client.send(r="complete silently")
+        assert last_tool_text(client) == "[done]"
         client.send(r="stall", timeout_ms=250)
         old_age, silent = elapsed_progress(last_tool_text(client))
         assert old_age >= 0.2 and silent
