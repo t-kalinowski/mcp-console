@@ -137,9 +137,20 @@ class McpClient:
         shutdown_timeout: float = SERVER_SHUTDOWN_SECONDS,
         record_in_project: bool = True,
         use_home_configuration: bool = False,
+        use_r_startup_files: bool = False,
     ) -> None:
         self.response_timeout = response_timeout
         self.shutdown_timeout = shutdown_timeout
+        if not use_r_startup_files:
+            # Runtime cases preserve HOME and tool caches while excluding the
+            # developer's native startup files. Startup cases supply an isolated home.
+            environment = {
+                **(os.environ if environment is None else environment),
+                **dict.fromkeys(
+                    ("R_ENVIRON", "R_ENVIRON_USER", "R_PROFILE", "R_PROFILE_USER"),
+                    os.devnull,
+                ),
+            }
         if os.name == "nt" and environment is not None and "TMPDIR" in environment:
             environment = environment | {
                 "TEMP": environment["TMPDIR"],

@@ -10,7 +10,7 @@ from contextlib import ExitStack
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.progress import phase_progress, without_elapsed
+from support.progress import without_elapsed
 from support.snapshots import execution_snapshots
 from support.assertions import last_result_text
 from support.client import McpClient
@@ -833,7 +833,9 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
             MCP_CONSOLE_TEST_SPAWN_STARTED=str(launching.path),
             MCP_CONSOLE_TEST_SPAWN_RELEASE=str(launch.path),
         )
-        # Keep the admitted cell in startup until its first response is delivered.
+        # Hold launch before transport readiness until the observation expires.
+        # The checkpoint must be reached before that deadline; a zero deadline
+        # can instead project progress before the launch owner becomes busy.
         # fmt: python
         server = code(f"""
             import os
@@ -885,7 +887,7 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
                 )
                 armed.touch()
                 evaluation = client.start_send(
-                    python="print('initialized')", timeout_ms=0
+                    python="print('initialized')", timeout_ms=30_000
                 )
                 launching.wait(
                     "prepared candidate launch is held before transport ready"
@@ -894,7 +896,8 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
                 assert without_elapsed(last_result_text(client)) == (
                     "\n[running; poll with an empty send]"
                 )
-                assert phase_progress(last_result_text(client)) == "startup"
+                # Launch holds the lifecycle owner. Disposable phase observations
+                # may be unavailable there; the gate proves startup is unfinished.
                 launch.release()
                 ready.wait("prepared environment startup probe")
                 child_pid = host_process_id(

@@ -24,6 +24,7 @@ static NATIVE_INPUT_WATCH: OnceLock<OwnedFd> = OnceLock::new();
 
 #[cfg(unix)]
 unsafe extern "C" fn record_interrupt() {
+    super::r_integration::record_initialization_interrupt();
     if let Some(state) = R_STATE.get() {
         unsafe { (state.signal)() };
     } else {
@@ -483,6 +484,7 @@ pub(super) fn initialize_native() -> io::Result<()> {
                         .lock()
                         .expect("interrupt publication lock");
                     NATIVE_PENDING.store(true, Ordering::SeqCst);
+                    super::r_integration::record_initialization_interrupt();
                     pending.set();
                 }
                 // CPython's signal API is safe without the GIL, including while R

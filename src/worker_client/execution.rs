@@ -449,22 +449,23 @@ impl Client {
                 dynamic_resolution: self.0.dynamic_resolution,
                 callbacks: WorkerCallbacks {
                     client: self.clone(),
-                    generation,
+                    generation: generation.clone(),
                 },
             };
-            if replacing && announce_replacement {
-                self.0
-                    .output
-                    .push_notice_line(output::WORKER_STARTING_NOTICE);
-            }
             // A launched initializer may already have produced external effects.
             // Only explicit restart grants another attempt after confirmed retirement.
-            if self.0.startup_source.is_some()
-                && !self.0.startup_permitted.swap(false, Ordering::AcqRel)
+            if (self.0.startup_source.is_some()
+                && !self.0.startup_permitted.swap(false, Ordering::AcqRel))
+                || !generation.r_startup_permitted()
             {
                 return Err("startup may have executed; explicit restart required"
                     .to_string()
                     .into());
+            }
+            if replacing && announce_replacement {
+                self.0
+                    .output
+                    .push_notice_line(output::WORKER_STARTING_NOTICE);
             }
             let running = self
                 .0

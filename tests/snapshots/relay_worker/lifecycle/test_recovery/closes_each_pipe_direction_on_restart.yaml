@@ -8,6 +8,14 @@ relay:
   source: invisible(NULL)
 ---
 worker:
+  kind: r_initialization
+  complete: false
+---
+worker:
+  kind: r_initialization
+  complete: true
+---
+worker:
   kind: completed
 ---
 relay:
@@ -23,6 +31,14 @@ relay:
   kind: evaluate
   language: r
   source: cat('replacement ready\n')
+---
+worker:
+  kind: r_initialization
+  complete: false
+---
+worker:
+  kind: r_initialization
+  complete: true
 ---
 worker:
   kind: console_output

@@ -92,6 +92,7 @@ impl ClientConfiguration {
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
+        r_settings: crate::settings::R,
         resolver_settings: crate::settings::SandboxSettings,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
@@ -140,7 +141,7 @@ impl ClientConfiguration {
                 )?;
                 Ok((selection, managed, extensions))
             });
-            let (selection, managed, extensions) = match selected {
+            let (mut selection, managed, extensions) = match selected {
                 Ok(selection) => selection,
                 Err(error) => {
                     preparation
@@ -149,6 +150,7 @@ impl ClientConfiguration {
                     return Err(error);
                 }
             };
+            selection.r_settings = r_settings;
             local_runtime = Some(selection);
             resolver_preparation = Some(preparation);
             let python = Some(match managed {
@@ -175,6 +177,7 @@ impl ClientConfiguration {
             );
             local_runtime = Some(crate::local_runtime::Selection {
                 r_home: Some(home),
+                r_settings,
                 python: None,
             });
             resolver_preparation = Some(preparation.clone());

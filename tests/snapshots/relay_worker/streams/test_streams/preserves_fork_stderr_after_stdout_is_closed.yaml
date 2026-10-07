@@ -12,6 +12,14 @@ relay:
     suppressWarnings(invisible(reticulate::py_run_string("fork_ready = True")))
 ---
 worker:
+  kind: r_initialization
+  complete: false
+---
+worker:
+  kind: r_initialization
+  complete: true
+---
+worker:
   kind: completed
 ---
 relay:

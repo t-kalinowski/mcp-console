@@ -23,6 +23,8 @@ pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other t
 #[serde(deny_unknown_fields)]
 pub(crate) struct Selection {
     pub(crate) r_home: Option<PathBuf>,
+    #[serde(default)]
+    pub(crate) r_settings: crate::settings::R,
     // In managed sessions, None leaves R declarations and selection hints lazy.
     pub(crate) python: Option<Python>,
 }
@@ -41,6 +43,8 @@ pub(crate) struct Python {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkerSelection {
     pub(crate) r: bool,
+    #[serde(default)]
+    pub(crate) r_settings: crate::settings::R,
     pub(crate) python: Option<Python>,
 }
 
@@ -112,6 +116,7 @@ impl Selection {
         let duckdb_extension_directory = managed.as_ref().and(extension_directory);
         let selection = Self {
             r_home: None,
+            r_settings: Default::default(),
             python: Some(Python {
                 selected: Box::new(selected),
                 explicit,
@@ -169,6 +174,7 @@ impl Selection {
             ENVIRONMENT,
             serde_json::to_string(&WorkerSelection {
                 r: self.r_home.is_some(),
+                r_settings: self.r_settings,
                 python: self.python.clone(),
             })
             .map_err(|error| format!("cannot encode runtime selections: {error}"))?,

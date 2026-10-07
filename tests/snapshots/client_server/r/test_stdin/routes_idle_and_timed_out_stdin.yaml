@@ -42,6 +42,7 @@ result:
   content:
     - type: text
       text: |-
+        [input requested: "bundled> "]
 
         [elapsed: <elapsed>s since admission; no new output]
         [running; poll with an empty send]
@@ -78,6 +79,5 @@ result:
   content:
     - type: text
       text: |
-        [input requested: "bundled> "]
         [1] "café|timed out fd 0"
   isError: false

@@ -1065,10 +1065,10 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
         directory = Path(temporary)
         environment, record = recording_ir_environment(directory)
         started = FifoCheckpoint.create(directory / "ir-started")
-        release = FifoCheckpoint.create(directory / "ir-release")
+        interrupted = FifoCheckpoint.create(directory / "ir-interrupted")
         environment["MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT"] = package
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(started.path)
-        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(release.path)
+        environment["MCP_CONSOLE_TEST_IR_INTERRUPTED"] = str(interrupted.path)
         client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         try:
@@ -1104,7 +1104,7 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
                 completion_timeout_seconds=client.response_timeout,
                 control="interrupt",
             )
-            # Keep the FIFO blocked until interruption has reaped this resolver.
+            interrupted.wait("automatic R resolver received SIGINT")
             assert live_processes(resolver) == [], (
                 "interrupt did not reap the R resolver"
             )
@@ -1122,9 +1122,8 @@ def test_interrupts_automatic_r_resolver_and_preserves_worker(
             passed = True
             return transcript
         finally:
-            release.release()
             started.close()
-            release.close()
+            interrupted.close()
             if not passed:
                 stop_client(client)
 

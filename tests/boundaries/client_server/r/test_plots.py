@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import sys
+import subprocess
 import time
 from pathlib import Path
 
@@ -72,8 +73,9 @@ def test_routes_input_to_idle_later_callback(
 
 
 @executions(RUNTIME)
-def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcript:
-    client = McpClient(binary, execution.serve())
+def test_uses_native_width_default(binary: Path, execution: Execution) -> Transcript:
+    environment, rscript = r_test_environment()
+    client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
@@ -82,11 +84,10 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
         """)
     client.send(r=r)
     output = last_tool_text(client)
-    lines = output.splitlines()
-    assert lines[0] == "width: 200", repr(output)
-    assert len(lines) == 2, repr(output)
-    assert lines[1].startswith(" [1]"), repr(output)
-    assert lines[1].endswith(" 45"), repr(output)
+    reference = subprocess.check_output(
+        [rscript, "--vanilla", "-e", r], env=environment, text=True
+    )
+    assert output == reference, repr(output)
     return client.finish()
 
 

@@ -262,6 +262,7 @@ See [resolver configuration and expanded defaults](RESOLVER.md).
 Use only trusted requirements, resolvers, configuration, and package sources.
 
 R references become separate `ir` arguments with `IR_NO_LOCAL_SOURCES=1`; Python requirements become validated uv arguments, and DuckDB names are data.
+R discovery and preparation suppress startup files; `ir` preparation uses an empty temporary working directory so nested package-resolution subprocesses cannot source a project profile.
 Submitted cells and `send` stdin are not resolver programs.
 These restrictions reduce input syntax; they do not make remote package code safe.
 
