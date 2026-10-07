@@ -273,22 +273,22 @@ def test_socket_allow_all_is_independent_of_limited_methods(binary: Path) -> Tra
                     "-c",
                     # fmt: python
                     code("""
-                    import errno
-                    import socket
-                    import sys
+                        import errno
+                        import socket
+                        import sys
 
-                    allowed = sys.argv[2] == "allowed"
-                    try:
-                        with socket.socket(socket.AF_UNIX) as peer:
-                            peer.connect(sys.argv[1])
-                            peer.sendall(b"arbitrary socket payload")
-                    except OSError as error:
-                        assert not allowed and error.errno in (errno.EPERM, errno.EACCES), error
-                        print("Unix connection denied")
-                    else:
-                        assert allowed
-                        print("Unix payload sent")
-                    """),
+                        allowed = sys.argv[2] == "allowed"
+                        try:
+                            with socket.socket(socket.AF_UNIX) as peer:
+                                peer.connect(sys.argv[1])
+                                peer.sendall(b"arbitrary socket payload")
+                        except OSError as error:
+                            assert not allowed and error.errno in (errno.EPERM, errno.EACCES), error
+                            print("Unix connection denied")
+                        else:
+                            assert allowed
+                            print("Unix payload sent")
+                        """),
                     path,
                     "allowed" if selector else "denied",
                 ],
@@ -351,16 +351,17 @@ def test_limited_local_and_socket_grants_allow_direct_connections(
                 "--",
                 sys.executable,
                 "-c",
+                # fmt: python
                 code("""
-            import socket
-            import sys
+                    import socket
+                    import sys
 
-            with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5):
-                pass
-            with socket.socket(socket.AF_UNIX) as peer:
-                peer.connect(sys.argv[2])
-            print("direct local and Unix connections allowed independently of limited proxy")
-            """),
+                    with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5):
+                        pass
+                    with socket.socket(socket.AF_UNIX) as peer:
+                        peer.connect(sys.argv[2])
+                    print("direct local and Unix connections allowed independently of limited proxy")
+                    """),
                 str(tcp.getsockname()[1]),
                 path,
             ],
