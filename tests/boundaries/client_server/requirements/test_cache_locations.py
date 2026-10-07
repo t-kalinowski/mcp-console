@@ -14,6 +14,7 @@ from boundaries.client_server.python.test_without_r import environment
 from support.assertions import wait_for_worker_ready
 from support.client import McpClient
 from support.normalization import code
+from support.python import write_test_wheel
 from support.records import Transcript
 from support.requirements import R, SANDBOX, command, requires
 from support.r import r_test_environment
@@ -279,14 +280,79 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
 
 
 @requires(SANDBOX)
-def test_resolvers_write_dependency_cache_metadata(binary: Path) -> Transcript:
+def test_resolver_cache_roots_keep_metadata_read_only(binary: Path) -> Transcript:
     for host, source in ((False, "environment"), (True, "config")):
         cache_locations(binary, host=host, sources=(source,), metadata=True)
-    return [{"resolver_cache_metadata_writable": True}]
+    return [{"resolver_cache_root_metadata_read_only": True}]
+
+
+@requires(SANDBOX, command("git"))
+def test_uv_git_cache_works_without_root_metadata_grants(binary: Path) -> Transcript:
+    with TemporaryDirectory(prefix="console-git-cache-", dir=Path.home()) as temporary:
+        root = Path(temporary).resolve()
+        source = root / "repository"
+        source.mkdir()
+        write_test_wheel(source, "console_git_cache_fixture", "answer = 42\n")
+        (source / "pyproject.toml").write_text(
+            '[build-system]\nrequires = []\nbuild-backend = "backend"\nbackend-path = ["."]\n'
+        )
+        # Build the Git dependency inside the selected cache, including metadata.
+        backend = (
+            # fmt: python
+            code("""
+                from pathlib import Path
+                import os
+                import shutil
+
+
+                def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+                    assert (
+                        Path.cwd().resolve().is_relative_to(Path(os.environ["UV_CACHE_DIR"]).resolve())
+                    )
+                    Path(".git/console-cache-probe").write_text("Git checkout metadata is writable")
+                    wheel = next(Path("wheels").glob("*.whl"))
+                    shutil.copyfile(wheel, Path(wheel_directory) / wheel.name)
+                    return wheel.name
+                """)
+        )
+        (source / "backend.py").write_text(backend)
+        for arguments in (
+            ("init", "--quiet"),
+            ("add", "."),
+            (
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "Git dependency fixture",
+            ),
+        ):
+            subprocess.run(
+                ["git", "-C", source, *arguments], check=True, capture_output=True
+            )
+        revision = subprocess.check_output(
+            ["git", "-C", source, "rev-parse", "HEAD"], text=True
+        ).strip()
+        for host, source_kind in ((False, "environment"), (True, "config")):
+            cache_locations(
+                binary,
+                host=host,
+                sources=(source_kind,),
+                git_dependency=f"git+{source.as_uri()}@{revision}",
+            )
+    return [{"console_and_host_caches": True, "uv_git_build_metadata_writable": True}]
 
 
 def cache_locations(
-    binary: Path, *, host: bool, sources: tuple[str, ...], metadata: bool = False
+    binary: Path,
+    *,
+    host: bool,
+    sources: tuple[str, ...],
+    metadata: bool = False,
+    git_dependency: str | None = None,
 ) -> Transcript:
     for source in sources:
         # Host cache mode grants Darwin's user temp. Keep protected companion
@@ -297,6 +363,9 @@ def cache_locations(
             root = Path(directory).resolve()
             tools = root / "bin"
             tools.mkdir()
+            if git_dependency is not None:
+                (tools / "git").symlink_to(shutil.which("git"))
+                (tools / "uv").symlink_to(shutil.which("uv"))
             selected = root / "python"
             subprocess.run(
                 [sys.executable, "-m", "venv", "--without-pip", selected],
@@ -316,6 +385,8 @@ def cache_locations(
                 ).strip()
             )
             env = environment(tools)
+            if git_dependency is not None:
+                env["PATH"] += os.pathsep + os.defpath
             env["RETICULATE_PYTHON"] = str(python)
             env["XDG_CACHE_HOME"] = str(root / "cache-base")
             env["CACHE_TEST_ROOT"] = str(root)
@@ -323,7 +394,7 @@ def cache_locations(
                 env[name] = str(root / "host" / name)
             config = root / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
-            settings = {}
+            settings = {"languages": ["python"]} if git_dependency is not None else {}
             console_base = root / "cache-base/mcp-console"
             if source == "platform":
                 env.pop("XDG_CACHE_HOME")
@@ -381,6 +452,13 @@ def cache_locations(
                 for name in CACHE_VARIABLES
             }
             env["CACHE_TEST_EXPECTED"] = json.dumps(expected)
+            if metadata:
+                metadata_root = Path(env["UV_CACHE_DIR"]) if host else console_root
+                env["CACHE_TEST_METADATA_ROOT"] = str(metadata_root)
+                for name in (".git", ".agents", ".codex", ".aws"):
+                    directory = metadata_root / name
+                    directory.mkdir(parents=True)
+                    (directory / "keep").write_text("protected metadata")
             if source == "isolated":
                 settings["environment"]["CACHE_TEST_EXPECTED"] = env[
                     "CACHE_TEST_EXPECTED"
@@ -393,9 +471,11 @@ def cache_locations(
                 import errno
                 import json
                 import os
+                import subprocess
+                import sys
                 from pathlib import Path
 
-                if "MCP_CONSOLE_LOCAL_RUNTIME" not in os.environ:
+                if "MCP_CONSOLE_LOCAL_RUNTIME" not in os.environ and "GIT_CACHE_PROBE_RUNNING" not in os.environ:
                     expected = json.loads(os.environ["CACHE_TEST_EXPECTED"])
                     for name, value in expected.items():
                         actual = Path(os.environ[name])
@@ -425,10 +505,31 @@ def cache_locations(
                         matplotlib.mkdir(parents=True, exist_ok=True)
                         matplotlib.joinpath("resolver-probe").write_text("prepared")
                     if {metadata!r}:
-                        for name in (".git", ".agents", ".codex"):
-                            directory = cache / name
-                            directory.mkdir(exist_ok=True)
-                            (directory / "resolver-metadata").write_text("prepared")
+                        for name in (".git", ".agents", ".codex", ".aws"):
+                            file = Path(os.environ["CACHE_TEST_METADATA_ROOT"]) / name / "keep"
+                            assert file.read_text() == "protected metadata"
+                            try:
+                                file.write_text("overwritten")
+                            except OSError as error:
+                                assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
+                            else:
+                                raise AssertionError("resolver wrote to cache root metadata")
+                        cache.joinpath("metadata-check-passed").write_text("checked")
+                    if {git_dependency is not None!r}:
+                        result = subprocess.run(
+                            [
+                                "uv", "--no-config", "--cache-dir", str(cache),
+                                "run", "--no-project", "--python", sys.executable,
+                                "--with", {git_dependency!r}, "--", "python", "-c",
+                                "import console_git_cache_fixture; print(console_git_cache_fixture.answer)",
+                            ],
+                            env={{**os.environ, "GIT_CACHE_PROBE_RUNNING": "1", "UV_NO_CACHE": "false"}},
+                            capture_output=True, text=True,
+                        )
+                        cache.joinpath("git-output").write_text(result.stdout + result.stderr)
+                        assert result.returncode == 0, result
+                        assert result.stdout == "42\\n", result
+                        cache.joinpath("git-check-passed").write_text("checked")
                 """)
             (site / "sitecustomize.py").write_text(probe)
             arguments = ["serve"]
@@ -460,14 +561,20 @@ def cache_locations(
                             assert actual == Path(value) if {host!r} else actual.is_relative_to(value), (name, actual, value)
                         assert Path(os.environ["UV_CACHE_DIR"]).joinpath("resolver-probe").read_text() == "prepared"
                         if {metadata!r}:
-                            for name in (".git", ".agents", ".codex"):
-                                file = Path(os.environ["UV_CACHE_DIR"]) / name / "resolver-metadata"
-                                assert file.read_text() == "prepared"
+                            assert Path(os.environ["UV_CACHE_DIR"]).joinpath("metadata-check-passed").read_text() == "checked"
+                        if {git_dependency is not None!r}:
+                            assert Path(os.environ["UV_CACHE_DIR"]).joinpath("git-check-passed").exists(), Path(os.environ["UV_CACHE_DIR"]).joinpath("git-output").read_text()
+                            assert Path(os.environ["UV_CACHE_DIR"]).joinpath("git-check-passed").read_text() == "checked"
                         print("cache selection retained")
                         """)
                     client.expect("cache selection retained\n", python=check)
                 client.finish()
             assert not (root / "host-write").exists()
+            if metadata:
+                for name in (".git", ".agents", ".codex", ".aws"):
+                    assert (
+                        metadata_root / name / "keep"
+                    ).read_text() == "protected metadata"
             if host and source == "platform":
                 assert (
                     Path(env["CACHE_TEST_MATPLOTLIB"])

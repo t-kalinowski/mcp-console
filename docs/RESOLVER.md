@@ -119,7 +119,8 @@ That example grants only the selected uv cache; Python installations, R preparat
 Create custom writable directories before Linux launch; Console creates only its existing default caches.
 Paths resolve against the fixed workspace without `~`, variable expansion, symlink rewriting, or parent grants.
 The Console cache root is created even with an explicit filesystem mapping, but creation does not grant the resolver access to it.
-Default resolver grants include cache metadata directories so dependency checkouts can contain their own metadata.
+Default resolver grants keep the native metadata write protections at each cache root; they do not grant its `.git`, `.agents`, or `.codex` children separately.
+uv's Git repositories and build metadata live in nested cache directories and use the ordinary cache-root grant.
 
 To select a custom uv cache and retain automatic host-cache grants, omit the filesystem:
 

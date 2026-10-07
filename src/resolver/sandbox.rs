@@ -50,13 +50,13 @@ fn materialize(mut settings: SandboxSettings) -> Result<SandboxSettings, String>
             })];
             for path in caches {
                 let path = workspace.join(path);
-                let grants = super::cache::writable_cache_entries(&path)?;
+                let grant = super::cache::writable_cache_entry(&path)?;
                 // Linux cannot bind an absent writable root. Prepare default
                 // cache directories on the host, including on cold starts.
                 std::fs::create_dir_all(&path).map_err(|error| {
                     format!("cannot create resolver cache '{}': {error}", path.display())
                 })?;
-                entries.extend(grants);
+                entries.push(grant);
             }
             filesystem.insert("entries".into(), entries.into());
         }

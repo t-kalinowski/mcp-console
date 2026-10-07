@@ -213,6 +213,19 @@ def test_resolver_defaults_and_replacement(binary: Path) -> TranscriptWithCompan
         }
         environment.pop("R_HOME", None)
         environment.pop("RHOME", None)
+        # Record process defaults independently of CI's tool-cache overrides.
+        for key in list(environment):
+            if key.startswith(("XDG_", "UV_", "IR_", "RENV_")) or key in (
+                "R_USER_CACHE_DIR",
+                "R_USER_DATA_DIR",
+                "R_PKG_CACHE_DIR",
+                "PKG_CACHE_DIR",
+                "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY",
+                "MPLCONFIGDIR",
+                "PYTHONPYCACHEPREFIX",
+                "PYTHONUSERBASE",
+            ):
+                environment.pop(key)
         for name, resolver in variants.items():
             for path in captures.values():
                 path.unlink(missing_ok=True)

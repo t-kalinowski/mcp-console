@@ -22,31 +22,7 @@ filesystem:
       access: write
     - path:
         type: path
-        path: <home>/.cache/uv/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/.cache/uv/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/.cache/uv/.codex
-      access: write
-    - path:
-        type: path
         path: <home>/.local/share/uv/python
-      access: write
-    - path:
-        type: path
-        path: <home>/.local/share/uv/python/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/.local/share/uv/python/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/.local/share/uv/python/.codex
       access: write
     - path:
         type: path
@@ -54,31 +30,7 @@ filesystem:
       access: write
     - path:
         type: path
-        path: <home>/.local/share/uv/tools/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/.local/share/uv/tools/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/.local/share/uv/tools/.codex
-      access: write
-    - path:
-        type: path
         path: <home>/Library/Caches/org.R-project.R/R/ir
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/org.R-project.R/R/ir/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/org.R-project.R/R/ir/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/org.R-project.R/R/ir/.codex
       access: write
     - path:
         type: path
@@ -86,31 +38,7 @@ filesystem:
       access: write
     - path:
         type: path
-        path: <home>/Library/Caches/org.R-project.R/R/reticulate/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/org.R-project.R/R/reticulate/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/org.R-project.R/R/reticulate/.codex
-      access: write
-    - path:
-        type: path
         path: <home>/.duckdb/extensions
-      access: write
-    - path:
-        type: path
-        path: <home>/.duckdb/extensions/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/.duckdb/extensions/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/.duckdb/extensions/.codex
       access: write
     - path:
         type: path
@@ -118,31 +46,7 @@ filesystem:
       access: write
     - path:
         type: path
-        path: <home>/.matplotlib/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/.matplotlib/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/.matplotlib/.codex
-      access: write
-    - path:
-        type: path
         path: <home>/Library/Caches/org.R-project.R/R/renv
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/org.R-project.R/R/renv/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/org.R-project.R/R/renv/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/org.R-project.R/R/renv/.codex
       access: write
     - path:
         type: path
@@ -150,31 +54,7 @@ filesystem:
       access: write
     - path:
         type: path
-        path: <home>/Library/Caches/org.R-project.R/R/pkgcache/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/org.R-project.R/R/pkgcache/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/org.R-project.R/R/pkgcache/.codex
-      access: write
-    - path:
-        type: path
         path: <home>/Library/Caches/uv
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/uv/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/uv/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Caches/uv/.codex
       access: write
     - path:
         type: path
@@ -182,31 +62,7 @@ filesystem:
       access: write
     - path:
         type: path
-        path: <home>/Library/Application Support/uv/.git
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Application Support/uv/.agents
-      access: write
-    - path:
-        type: path
-        path: <home>/Library/Application Support/uv/.codex
-      access: write
-    - path:
-        type: path
         path: <host temporary directory>/
-      access: write
-    - path:
-        type: path
-        path: <host temporary directory>/.git
-      access: write
-    - path:
-        type: path
-        path: <host temporary directory>/.agents
-      access: write
-    - path:
-        type: path
-        path: <host temporary directory>/.codex
       access: write
 macos_seatbelt_profile_extension: |
   ; MCP Console additions to the pinned native macOS sandbox policy.
