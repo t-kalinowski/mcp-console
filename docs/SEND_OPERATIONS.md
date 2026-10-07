@@ -30,6 +30,7 @@ An empty poll or `get` without an accepted cell can instead return `[worker star
 Starting and running responses include the latest Console-owned phase when available.
 An accepted cell can report `[elapsed: 2.3s since admission; phase: dependency preparation]`; startup without a cell instead reports `[phase: startup]` alongside `[worker starting]`, with no cell clock.
 Phases are broad observations of startup, dependency preparation, or replacement owners.
+Worker startup remains observable until transport readiness, including after its process is registered for control.
 An observation is omitted while its owner is busy; it never extends a response deadline or delays cancellation.
 They do not describe interpreter activity or promise initialization completion.
 Completion and generation retirement invalidate the matching observation; sending an interrupt or cancelling a poll does not.

@@ -1,9 +1,9 @@
 //! Disposable response observations of the existing operation owners.
 
 use std::sync::Weak;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::lifecycle::{LifecycleState, WorkerGeneration, WorkerStartupAdmission};
+use super::lifecycle::{LifecycleState, WorkerGeneration};
 use super::{Client, ClientInner};
 
 pub(super) struct Source {
@@ -15,7 +15,7 @@ pub(super) struct Source {
 enum Owner {
     Evaluation(Weak<super::Evaluation>),
     Resolver(crate::resolver::ResolverPhase),
-    Startup(Weak<WorkerStartupAdmission>),
+    Startup(Weak<AtomicBool>),
     ConnectionStartup,
     Replacement,
 }
@@ -37,7 +37,13 @@ impl Source {
         }
         match &self.owner {
             Owner::Resolver(resolver) => resolver.phase(),
-            Owner::Startup(startup) if startup.strong_count() != 0 => Some("startup"),
+            Owner::Startup(startup)
+                if startup
+                    .upgrade()
+                    .is_some_and(|ready| !ready.load(Ordering::Acquire)) =>
+            {
+                Some("startup")
+            }
             Owner::ConnectionStartup
                 if !client.startup_observation_complete.load(Ordering::Acquire)
                     && self.generation.is(&client.startup_generation) =>

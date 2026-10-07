@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from boundaries.client_server.lifecycle.test_startup import startup_fixture
 from boundaries.client_server.server.test_startup import gated_discovery
 from support.assertions import last_result_text
-from support.checkpoints import FifoCheckpoint
+from support.checkpoints import FifoCheckpoint, wait_for_path, wait_for_worker_file
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
@@ -34,6 +34,64 @@ from support.requirements import (
 )
 from support.resolvers import checkpoint_uv_environment
 from support.suites import run_this_suite
+
+
+@requires(POSIX, PROCESS_EVENTS)
+@executions(DIRECT, SANDBOXED)
+def test_lazy_worker_startup_phase_lasts_until_transport_ready(
+    binary: Path, execution: Execution
+) -> Transcript:
+    zod = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
+        root = Path(temporary)
+        control = root / "startup-control"
+        started = root / "startup-started"
+        release = root / "startup-release"
+        control.write_text("block", encoding="utf-8")
+        environment = {
+            **os.environ,
+            "TMPDIR": str(root),
+            "ZOD_STARTUP_CONTROL": str(control),
+            "ZOD_STARTUP_STARTED": str(started),
+            "ZOD_STARTUP_RELEASE": str(release),
+        }
+        writable_root = ("--writable-root", str(root)) if execution == SANDBOXED else ()
+        client = resources.enter_context(
+            McpClient(
+                binary,
+                execution.serve("--worker", str(zod), *writable_root),
+                environment,
+            )
+        )
+        resources.callback(release.touch)
+        client.initialize_and_list_tools()
+        client.send(r="complete after release", timeout_ms=0)
+        # The process is registered, but the worker has not sent ready.
+        wait_for_path(started, "custom worker is waiting before ready", client=client)
+        for _ in range(2):
+            client.send(timeout_ms=0)
+            text = last_result_text(client)
+            assert phase_progress(text) == "startup", text
+            elapsed_progress(text)
+            assert without_elapsed(text) == "\n[running; poll with an empty send]"
+
+        release.touch()
+        evaluation = wait_for_worker_file(root, "zod-evaluation-started", client)
+        # Release cleanup must precede finish, which removes sandbox storage.
+        with ExitStack() as completion:
+            completion.callback(evaluation.with_name("zod-release-evaluation").touch)
+            # Readiness ends startup visibility while the cell remains active.
+            client.send(timeout_ms=0)
+            text = last_result_text(client)
+            assert "phase:" not in text, text
+            elapsed_progress(text)
+            assert without_elapsed(text) == "\n[running; poll with an empty send]"
+            evaluation.with_name("zod-release-evaluation").touch()
+            client.send()
+            assert last_result_text(client) == "zod: complete after release\n"
+            client.send()
+            assert last_result_text(client) == "\n[idle]"
+        return client.finish()
 
 
 @requires(NATIVE_FIXTURES, POSIX)
