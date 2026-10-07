@@ -196,6 +196,8 @@ Worker, relay, and native retirement allowances have different owners; none is a
 
 Connection closure that refuses the next preparation stage is separate from control of a completed operation.
 It permits a quiet exit only after the refused stage's cleanup is confirmed.
+Preparation retains the operation's terminal result, control cause and cleanup confirmation.
+The subprocess owner captures its cause when collection finishes; a later control acknowledgment cannot replace an independent setup failure.
 Errors closing the preparation connection remain visible.
 Cancellation of a preparation operation does not suppress an independent failure of the preparation connection's close handshake.
 

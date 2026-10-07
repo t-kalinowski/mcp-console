@@ -192,16 +192,17 @@ impl Startup {
         if control.closed
             && ((control.admission_cancelled && error == REGISTRATION_CLOSED)
                 || control.resolver.as_ref().is_some_and(|resolver| {
-                    resolver.cleanup_confirmed()
-                    && resolver.retirement_confirmed()
+                    resolver.retirement_confirmed()
                     // A close/retirement failure appended by the initializer is
                     // independent of the registration refusal and must survive.
                     && if control.registration_closed {
                         error == REGISTRATION_CLOSED
                     } else {
-                        resolver.control_outcome()
-                            == Some(crate::resolver::ResolverControlOutcome::Cancelled)
-                            && resolver.failure_is_controlled()
+                        resolver.terminal_report().is_some_and(|report| {
+                            report.confirmed
+                                && report.control == Some(crate::resolver::ResolverControlOutcome::Cancelled)
+                                && report.result == Err(error.clone())
+                        })
                     }
                 }))
         {

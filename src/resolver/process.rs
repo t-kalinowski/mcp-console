@@ -49,11 +49,7 @@ pub(crate) trait ResolverControl: Send + Sync {
     /// Confirm retirement of the owner, including a preparation connection's
     /// protocol closure, child reaping and I/O joins, rather than one operation.
     fn retirement_confirmed(&self) -> bool;
-    /// Setup consumers must retain an independent operation failure even when
-    /// a control and confirmed cleanup accompanied it.
-    fn failure_is_controlled(&self) -> bool {
-        self.control_outcome().is_some()
-    }
+    fn terminal_report(&self) -> Option<super::ResolverTerminalReport>;
 }
 
 impl ResolverStopHandle {
@@ -75,8 +71,8 @@ impl ResolverStopHandle {
     pub(crate) fn retirement_confirmed(&self) -> bool {
         self.0.retirement_confirmed()
     }
-    pub(crate) fn failure_is_controlled(&self) -> bool {
-        self.0.failure_is_controlled()
+    pub(crate) fn terminal_report(&self) -> Option<super::ResolverTerminalReport> {
+        self.0.terminal_report()
     }
     pub(crate) fn phase_observation(&self) -> ResolverPhase {
         ResolverPhase(Arc::downgrade(&self.0))
@@ -88,6 +84,7 @@ struct LocalControl {
     control: Arc<AtomicU8>,
     cleanup: Arc<AtomicBool>,
     waiting: Arc<Mutex<bool>>,
+    terminal: Arc<Mutex<Option<super::ResolverTerminalReport>>>,
 }
 
 const CONTROL_NONE: u8 = 0;
@@ -122,6 +119,7 @@ pub(crate) struct ResolverProcess {
     control: Arc<AtomicU8>,
     cleanup: Arc<AtomicBool>,
     waiting: Arc<Mutex<bool>>,
+    terminal: Arc<Mutex<Option<super::ResolverTerminalReport>>>,
 }
 
 impl ResolverProcess {
@@ -133,6 +131,7 @@ impl ResolverProcess {
             control: Arc::new(AtomicU8::new(CONTROL_NONE)),
             cleanup: Arc::new(AtomicBool::new(false)),
             waiting: Arc::new(Mutex::new(false)),
+            terminal: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -142,6 +141,7 @@ impl ResolverProcess {
             control: self.control.clone(),
             cleanup: self.cleanup.clone(),
             waiting: self.waiting.clone(),
+            terminal: self.terminal.clone(),
         })
     }
 
@@ -258,7 +258,7 @@ impl ResolverProcess {
         };
         let stdout = collect_output(retirement.stdout, "stdout", &mut failure);
         let stderr = collect_output(retirement.stderr, "stderr", &mut failure);
-        if let Some(mut error) = failure.into_message() {
+        let result = if let Some(mut error) = failure.into_message() {
             // A cleanup error must not erase the operation's captured diagnostic.
             let diagnostic = String::from_utf8_lossy(&stderr);
             let ordinary = String::from_utf8_lossy(&stdout);
@@ -271,18 +271,32 @@ impl ResolverProcess {
                 error.push_str(": ");
                 error.push_str(detail);
             }
-            return Err(error);
-        }
-        Ok(ResolverOutput {
-            status: retirement.process.expect("confirmed resolver status"),
-            write_result,
-            stdout,
-            stderr,
-        })
+            Err(error)
+        } else {
+            Ok(ResolverOutput {
+                status: retirement.process.expect("confirmed resolver status"),
+                write_result,
+                stdout,
+                stderr,
+            })
+        };
+        *self.terminal.lock().expect("resolver terminal report lock") =
+            Some(super::ResolverTerminalReport {
+                result: result.as_ref().map(|_| ()).map_err(Clone::clone),
+                control: self.stop_handle().control_outcome(),
+                confirmed: self.cleanup.load(Ordering::SeqCst),
+            });
+        result
     }
 }
 
 impl ResolverControl for LocalControl {
+    fn terminal_report(&self) -> Option<super::ResolverTerminalReport> {
+        self.terminal
+            .lock()
+            .expect("resolver terminal report lock")
+            .clone()
+    }
     fn stop(&self) -> Result<(), String> {
         let marked = self.mark_control(CONTROL_CANCELLED);
         if self.events.send(ResolverEvent::Cancel).is_err() {

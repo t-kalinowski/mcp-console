@@ -243,7 +243,11 @@ fn perform<T>(
     });
     let handles = handles.into_inner().expect("preparation handles lock");
     let confirmed = handles.iter().all(ResolverStopHandle::cleanup_confirmed);
-    let control = handles.iter().find_map(ResolverStopHandle::control_outcome);
+    // A control acknowledged after collection cannot change that invocation's
+    // captured terminal cause, including failure in its result interpretation.
+    let control = handles
+        .iter()
+        .find_map(|handle| handle.terminal_report().and_then(|report| report.control));
     events
         .send(Event::Completed(Output::Completed {
             id,
