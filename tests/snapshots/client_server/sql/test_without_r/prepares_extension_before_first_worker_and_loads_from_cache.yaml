@@ -131,6 +131,8 @@ result:
             ],
             "duckdb": [
               "fts",
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -153,6 +155,8 @@ result:
         - duckdb
       duckdb:
         - fts
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~

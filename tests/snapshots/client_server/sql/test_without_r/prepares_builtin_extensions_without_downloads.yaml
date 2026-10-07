@@ -13,7 +13,7 @@ result:
 send:
   requirements:
     duckdb:
-      - json
+      - parquet
 result:
   content:
     - type: text

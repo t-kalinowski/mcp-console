@@ -1,4 +1,6 @@
 ---
+!same-as MCP initialization for this execution mode
+---
 send:
   requirements:
     action: get
@@ -17,6 +19,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -38,6 +42,8 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -48,7 +54,7 @@ result:
   isError: false
 ---
 send:
-  sql: SET autoinstall_known_extensions = false
+  sql: SET autoinstall_known_extensions = false; SET TimeZone = 'UTC'
 result:
   content:
     - type: text
@@ -70,12 +76,42 @@ result:
   isError: false
 ---
 send:
-  sql: SELECT payload->>'$.answer' AS answer FROM audit.events
+  sql: |
+    SELECT
+      CASE WHEN json_extract_string('{"answer":42}', '$.answer') = '42'
+        THEN 1234567 ELSE 0 END AS json_ok,
+      CASE WHEN CAST(
+        timezone('America/New_York', TIMESTAMP '2020-01-01') AS VARCHAR
+      ) = '2020-01-01 05:00:00+00'
+        THEN 1234567 ELSE 0 END AS timezone_ok,
+      CASE WHEN (SELECT payload->>'$.answer' FROM audit.events) = '42'
+        THEN 1234567 ELSE 0 END AS sqlite_ok
 result:
   content:
     - type: text
       text: |
-        answer
+        json_ok | timezone_ok | sqlite_ok
+        --------+-------------+----------
+        1234567 | 1234567     | 1234567
+  isError: false
+---
+send:
+  sql: INSERT INTO audit.events VALUES ('{}')
+result:
+  content:
+    - type: text
+      text: >
+        Error: Invalid Input Error: Cannot execute statement of type "INSERT" on
+        database "audit" which is attached in read-only mode!
+  isError: false
+---
+send:
+  sql: SELECT count(*) AS events FROM audit.events
+result:
+  content:
+    - type: text
+      text: |
+        events
         ------
-        '42'
+        1
   isError: false

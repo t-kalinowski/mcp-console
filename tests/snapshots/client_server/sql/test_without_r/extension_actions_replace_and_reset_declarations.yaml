@@ -17,6 +17,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -38,6 +40,8 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -76,6 +80,8 @@ result:
             ],
             "duckdb": [
               "fts",
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -98,6 +104,8 @@ result:
         - duckdb
       duckdb:
         - fts
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -110,7 +118,7 @@ result:
 send:
   requirements:
     duckdb:
-      - json
+      - parquet
 result:
   content:
     - type: text
@@ -136,7 +144,9 @@ result:
             ],
             "duckdb": [
               "fts",
+              "icu",
               "json",
+              "parquet",
               "sqlite"
             ],
             "python_version": [],
@@ -159,7 +169,9 @@ result:
         - duckdb
       duckdb:
         - fts
+        - icu
         - json
+        - parquet
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -367,6 +379,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -388,6 +402,8 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -415,6 +431,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -436,6 +454,8 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
