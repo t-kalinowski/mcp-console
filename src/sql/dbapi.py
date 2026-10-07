@@ -378,7 +378,7 @@ def initialize_connection(source: str) -> int:
 
     try:
         exec(compile(source, "<console startup>", "exec"), __main__.__dict__)
-        if _connection is None or _r_selected:
+        if _connection is None or _connection is _managed_connection or _r_selected:
             raise RuntimeError(
                 "startup must select a native connection with console_sql_connection(connection)"
             )

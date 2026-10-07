@@ -1166,6 +1166,14 @@ def test_interrupts_sql_warmup_without_losing_worker(
                 assert "optional SQL disconnect failed" in last_tool_text(client), (
                     result
                 )
+            # The interrupt receipt can precede completion of the early cell's
+            # admission. Observe that completion before submitting another cell.
+            wait_for_evaluation_output(
+                client,
+                None,
+                "interrupted startup cell completes",
+                completion_timeout_seconds=client.response_timeout,
+            )
             if with_r:
                 client.expect(r="stopifnot(startup_sql_pid == Sys.getpid())")
                 if behavior.startswith("setup-interrupt"):

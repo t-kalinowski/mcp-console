@@ -11,7 +11,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
-from support.assertions import assert_result_content, last_tool_text
+from support.assertions import (
+    assert_result_content,
+    last_tool_text,
+    wait_for_evaluation_output,
+)
 from support.checkpoints import wait_for_worker_file
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.installation import installed_console
@@ -574,6 +578,122 @@ def test_r_startup_preserves_native_identity_and_transaction(
             "identity_and_transactions": True,
         },
     ]
+
+
+@requires(R, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_r_startup_rejects_managed_connection(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
+    transcripts = {}
+    sources = {
+        "reset": "console_sql_connection(NULL)",
+        "getter": "invisible(sql_connection())",
+        "alias": "managed <- sql_connection(); console_sql_connection(managed)",
+        # fmt: r
+        "native-then-reset": code("""
+            native <- DBI::dbConnect(duckdb::duckdb())
+            invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
+            DBI::dbBegin(native)
+            console_sql_connection(native)
+            invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
+            console_sql_connection(NULL)
+            """),
+    }
+    for name, selection in sources.items():
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            source = "startup_count <- 1L\n" + selection
+            config = configure(workspace, "r", source)
+            configuration = captured_configuration(config)
+            with McpClient(binary, execution.serve(), os.environ, workspace) as client:
+                client.initialize_and_list_tools()
+                wait_for_evaluation_output(
+                    client,
+                    None,
+                    "managed R startup rejection",
+                    sql="CREATE TABLE never_run AS SELECT 99 AS answer",
+                    completion_timeout_seconds=client.response_timeout,
+                )
+                first = last_tool_text(client)
+                assert "startup must select" in first and "SQL unavailable" in first, (
+                    first
+                )
+                client.expect(
+                    r='stopifnot(startup_count == 1L, !"never_run" %in% DBI::dbListTables(sql_connection()))'
+                )
+                if name == "native-then-reset":
+                    client.expect(
+                        # fmt: r
+                        r=code("""
+                            stopifnot(DBI::dbIsValid(native))
+                            stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 42)
+                            DBI::dbRollback(native)
+                            stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
+                            console_sql_connection(native)
+                            """),
+                    )
+                client.send(sql="SELECT 42 AS answer")
+                later = last_tool_text(client)
+                assert "SQL unavailable" in later and "42" not in later, later
+                transcripts[f"{name}.yaml"] = McpTranscript(
+                    [configuration] + client.finish()
+                )
+    return TranscriptWithCompanions(
+        transcripts.pop("reset.yaml").transcript, transcripts
+    )
+
+
+@requires(POSIX, SQL)
+@executions(DIRECT, SANDBOXED)
+def test_python_startup_rejects_managed_connection_without_r(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
+    from boundaries.client_server.sql.test_without_r import sql_client
+
+    transcripts = {}
+    sources = {
+        "getter": "_ = sql_connection()",
+        "alias": "managed = sql_connection(); console_sql_connection(managed)",
+        "reset": "console_sql_connection(None)",
+    }
+    for name, selection in sources.items():
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            config = configure(workspace, "python", "startup_count = 1\n" + selection)
+            configuration = captured_configuration(config)
+            with sql_client(
+                binary, execution, no_r_environment(workspace), workspace
+            ) as client:
+                wait_for_evaluation_output(
+                    client,
+                    None,
+                    "managed Python startup rejection",
+                    sql="CREATE TABLE never_run AS SELECT 99 AS answer",
+                    completion_timeout_seconds=client.response_timeout,
+                )
+                first = last_tool_text(client)
+                assert "startup must select" in first and "SQL unavailable" in first, (
+                    first
+                )
+                client.expect(
+                    # fmt: python
+                    python=code("""
+                        assert startup_count == 1
+                        assert sql_connection().execute(
+                            "SELECT count(*) FROM information_schema.tables WHERE table_name = 'never_run'"
+                        ).fetchone() == (0,)
+                        """),
+                )
+                client.send(sql="SELECT 42 AS answer")
+                later = last_tool_text(client)
+                assert "SQL unavailable" in later and "42" not in later, later
+                transcripts[f"{name}.yaml"] = McpTranscript(
+                    [configuration] + client.finish()
+                )
+    return TranscriptWithCompanions(
+        transcripts.pop("getter.yaml").transcript, transcripts
+    )
 
 
 @requires(R, SQL)

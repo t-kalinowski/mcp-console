@@ -159,6 +159,7 @@ base::local(
           eval(program, envir = globalenv())
           if (
             is.null(selected_connection) ||
+              identical(selected_connection, managed_connection) ||
               !isTRUE(DBI::dbIsValid(selected_connection))
           ) {
             stop(
