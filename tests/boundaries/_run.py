@@ -81,10 +81,8 @@ parser.add_argument(
     "-j",
     "--jobs",
     type=int,
-    default=min(6, max(1, (os.cpu_count() or 2) - 1))
-    if os.name == "nt"
-    else max(1, (os.cpu_count() or 2) - 1),
-    help="concurrent transcript cases (default: logical CPU count minus one, at least 1; capped at 6 on Windows)",
+    default=max(2, 2 * (os.cpu_count() or 1)),
+    help="concurrent transcript cases (default: %(default)s; twice the logical CPU count, at least 2)",
 )
 parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
