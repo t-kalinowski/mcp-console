@@ -20,6 +20,7 @@ from boundaries.client_server.python.test_startup import (
     selected_python,
 )
 from support.progress import elapsed_progress, phase_progress, without_elapsed
+from support.snapshots import execution_snapshots
 from support.requirements import (
     NATIVE_FIXTURES,
     POSIX,
@@ -456,6 +457,7 @@ def ready_without_send(
                 release.release()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_sans_r_worker_is_ready_without_send(
@@ -464,6 +466,7 @@ def test_sans_r_worker_is_ready_without_send(
     return ready_without_send(binary, execution, sans_r=True)
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_connection_closure_retires_prelaunch_resources(
@@ -472,6 +475,7 @@ def test_connection_closure_retires_prelaunch_resources(
     return ready_without_send(binary, execution, sans_r=True, close=True)
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(R, NATIVE_FIXTURES, command("ir"), command("uv"))
 def test_r_worker_is_ready_without_send(
@@ -512,6 +516,7 @@ def test_early_replacement_requirements_withholds_cell_until_prepared(
         return client.finish()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(R, NATIVE_FIXTURES, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_early_requirements_select_candidate_before_default_preparation(
@@ -520,6 +525,7 @@ def test_early_requirements_select_candidate_before_default_preparation(
     return early_requirements_with_pending_poll(binary, execution, expire=False)
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(R, NATIVE_FIXTURES, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_startup_poll_deadline_preserves_unclaimed_output(

@@ -20,7 +20,7 @@ from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.snapshots import platform_snapshots
+from support.snapshots import execution_snapshots, platform_snapshots
 from support.requirements import (
     OLD_PYTHON,
     OLD_PYTHON_EXECUTABLE,
@@ -57,7 +57,10 @@ def bootstrap_diagnostic(client: McpClient, ending: str) -> str:
 
 @executions(DIRECT, SANDBOXED)
 @requires(R)
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32",
+    reason="Windows rejects an invalid explicit Python before interpreter startup",
+)
 def test_preserves_configured_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -344,6 +347,7 @@ def test_sends_python_cell_with_initial_requirements(
     return client.finish()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_compacts_native_duckdb_progress_bar(

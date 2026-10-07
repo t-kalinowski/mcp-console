@@ -81,6 +81,11 @@ NATIVE_FIXTURES = Requirement(
     sys.platform in {"darwin", "linux"},
     "requires macOS or Linux native fixture compilation and interposition",
 )
+PTHREAD_RUNTIME_PARKING = Requirement(
+    "pthread runtime parking",
+    sys.platform == "darwin",
+    "requires macOS pthread condition-variable runtime parking",
+)
 # XNU's bsd/dev/arm/unix_signal.c reports SEGV_ACCERR for every SIGSEGV,
 # including null access. Keep these real kernel diagnostics in separate cases.
 NULL_FAULT_ACCERR = Requirement(

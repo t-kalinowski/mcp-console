@@ -285,7 +285,10 @@ def test_uses_selected_r_launcher_default_architecture(
             return client.finish()
 
 
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32",
+    reason="Native R executable identity and launcher arguments differ on Windows",
+)
 @executions(DIRECT, SANDBOXED)
 def test_shows_interactive_interpreter_identity(
     binary: Path, execution: Execution
@@ -328,7 +331,13 @@ def test_shows_interactive_interpreter_identity(
                 print("sys.argv:", sys.argv)
                 print("sys.orig_argv == [sys.executable]:", sys.orig_argv == [sys.executable])
                 print("sys.argv[0] == sys.executable:", sys.argv[0] == sys.executable)
-                child = subprocess.run([sys.executable, "identity.py", "two words"], check=True)
+                child = subprocess.run(
+                    [sys.executable, "identity.py", "two words"],
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                sys.stdout.write(child.stdout)
+                child.check_returncode()
                 """),
         )
         assert last_tool_text(client).replace("\r\n", "\n") == (
@@ -342,7 +351,9 @@ def test_shows_interactive_interpreter_identity(
         return client.finish()
 
 
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32", reason="Native R child launchers and argument escaping differ on Windows"
+)
 @executions(DIRECT, SANDBOXED)
 def test_launches_r_children_from_interpreter_identity(
     binary: Path, execution: Execution

@@ -82,6 +82,7 @@ Ordinary runtime cases stay with their subject even when sandboxed.
 
 Available modes run sequentially within one case deadline and compare against one snapshot.
 During updates, the first mode writes and later modes must match, not overwrite differences.
+Use `@execution_snapshots` from `support.snapshots` when captured launch policy makes the advertised definition differ: direct keeps `CASE.yaml`, sandbox uses `CASE.sandbox.yaml`, and both modes update and verify their own records.
 Unavailable modes report a skip, not validation.
 Test-host requirements such as Linux process-observation facilities do not imply the same runtime requirements.
 Windows full checks run shared direct cases in addition to native acceptance.
@@ -105,8 +106,20 @@ Never edit snapshots by hand.
 Regenerate intentional changes with `scripts/test --update SELECTOR`, review them, and rerun without `--update`.
 Only a full unscoped run audits orphan snapshots; a successful full update can remove them.
 Focused updates preserve unselected snapshots, and skipped cases retain their snapshots even during full updates.
-Use `@platform_snapshots("win32")` from `support.snapshots` when Windows exposes a different public schema or OS diagnostic.
-Windows companions use `.win32` before the execution suffix; updates preserve generic references for other platforms and prune only stale platform companions of the updated case.
+Prefer one shared snapshot across platforms.
+First make fixture output deterministic (for example, write explicit LF bytes), use declared capability requirements for separate SQL or native-policy cases, and normalize incidental paths or executable suffixes after checking the actual output.
+Do not duplicate an otherwise portable case because its handshake, unrelated dependency defaults, or text presentation differs.
+Keep assertions on the behavior the case owns; do not weaken them to make snapshots match.
+
+Use `@platform_snapshots("win32", reason="...")` from `support.snapshots` only when the case tests the exact differing platform contract, such as Windows tool presentation, native interpreter identity, or an OS filesystem diagnostic.
+The required reason identifies that contract.
+Preserve complete errors, tracebacks, status codes, and signal distinctions; normalization must not erase a failure.
+Canonical handshakes still compare in full against the applicable platform reference before compaction, so ordinary execution-mode transcripts can share a snapshot.
+
+Windows companions use `.win32` before the execution suffix.
+Successful updates, including focused updates, prune obsolete snapshots and companions only for updated cases.
+Removing a platform declaration retires its variants even when updating on another host; this does not require that platform's runner.
+Updates preserve unselected/skipped cases, unrun declared execution modes (including canonical handshakes), other declared platforms, and shared references owned by cases that still declare a platform variant.
 
 Preserve complete errors, tracebacks, output, and meaningful ordering.
 Normalize only incidental values such as temporary paths.
@@ -115,6 +128,8 @@ The case chooses the representation, not the serializer.
 
 Narrow exceptions require stronger evidence, not weaker assertions:
 
+- When requirements inspection supports a Python lifecycle case, check the complete text against `structuredContent`, assert the owned Python declaration, and record those fields as evidence.
+  Keep complete inventories in requirements/defaults cases, and never project an error this way.
 - Native-runtime fidelity cases may compare complete output and conditions with a live reference, then record the verified comparison.
   Remove only explicitly irrelevant frontend differences, such as Rscript's `Execution halted` footer.
 - Synthetic stress output may use `support.evidence.compact_text()` after full assertions.
@@ -136,7 +151,9 @@ Launch-rejection or protocol-failure cases may have no handshake or an incomplet
 Update it before other affected cases.
 The runner compares the complete exchange before replacing an exact match with `!same-as`; the tag records that comparison and does not load a file.
 Different or incomplete handshakes remain in full.
-The canonical case's mode-specific companions are the exception to shared-mode snapshots.
+The canonical case owns mode-specific companions; fixtures with different captured policies declare separate execution snapshots.
+After response assertions, `McpClient.finish()` normalizes CLI fixture write roots in tool descriptions to `<writable-root>`; it preserves the grant and leaves other output untouched.
+The canonical writable-root companions retain that policy shape for exact handshake comparison.
 
 ## Fixtures
 

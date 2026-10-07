@@ -114,7 +114,7 @@ jobs:
           $ciReadRoots += & (Get-Command Rscript.exe).Source --vanilla -e 'cat(R.home(), .libPaths(), sep="\n")'
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $prepareArguments = @(
-            "--state-dir", "$env:RUNNER_TEMP/console-windows-sandbox",
+            "--state-dir", "$env:LOCALAPPDATA/mcp-console",
             "--github-env", "$env:GITHUB_ENV"
           )
           foreach ($root in $ciReadRoots) {

@@ -79,26 +79,29 @@ impl ConsoleServer {
             runtime,
             prelaunch,
             move |started, diagnostics| {
-                let configuration = if let Some(program) = worker {
+                let configuration = if let Some(program) = worker.clone() {
                     crate::worker_client::ClientConfiguration::new(
                         program,
-                        relay,
+                        relay.clone(),
                         no_sandbox,
-                        sandbox_settings,
+                        sandbox_settings.clone(),
                     )
                     .with_resolver_settings(resolver.clone())?
                 } else {
                     crate::worker_client::ClientConfiguration::builtin(
                         no_sandbox,
-                        sandbox_settings,
-                        python,
+                        sandbox_settings.clone(),
+                        python.clone(),
                         resolver.clone(),
                         diagnostics,
                         started,
                     )?
                 };
                 let transcript = crate::transcript::Transcript::configured(
-                    recording_directory,
+                    recording_directory
+                        .as_ref()
+                        .cloned()
+                        .map_err(|error| std::io::Error::new(error.kind(), error.to_string())),
                     configuration.dynamic_resolution(),
                     configuration.python_preparation(),
                     !configuration.python_only(),
@@ -249,24 +252,30 @@ impl ConsoleServer {
                 }
             },
         );
-        let response = runtime
-            .worker
-            .send(crate::worker_client::SendRequest {
-                cell,
-                stdin,
-                requirements,
-                control: control.map(|control| match control {
-                    SendControl::Interrupt => crate::worker_client::SendControl::Interrupt,
-                    SendControl::Restart => crate::worker_client::SendControl::Restart,
-                }),
-                deadline: started
-                    .checked_add(Duration::from_millis(timeout_ms))
-                    .unwrap_or(started),
-                transcript: runtime.transcript.clone(),
-                call_id: call.id(),
-            })
-            .await
-            .unwrap_or_else(crate::worker_client::Response::tool_error);
+        let request = crate::worker_client::SendRequest {
+            cell,
+            stdin,
+            requirements,
+            control: control.map(|control| match control {
+                SendControl::Interrupt => crate::worker_client::SendControl::Interrupt,
+                SendControl::Restart => crate::worker_client::SendControl::Restart,
+            }),
+            deadline: started
+                .checked_add(Duration::from_millis(timeout_ms))
+                .unwrap_or(started),
+            transcript: runtime.transcript.clone(),
+            call_id: call.id(),
+        };
+        let response = async {
+            request.validate(true)?;
+            let initial_restart = matches!(
+                request.control,
+                Some(crate::worker_client::SendControl::Restart)
+            ) && self.startup.retry_failed()?;
+            runtime.worker.send(request, initial_restart).await
+        }
+        .await
+        .unwrap_or_else(crate::worker_client::Response::tool_error);
         Ok(response_to_tool_result(
             response,
             &call,
@@ -365,7 +374,10 @@ impl ServerHandler for ConsoleServer {
         };
         context.extensions.insert(delivery.clone());
         let runtime = self.startup.runtime();
-        let waiting_for_startup = !runtime.worker.startup_finished();
+        // A restart can reset completed failed readiness later in this call.
+        // Its wait stays cancellable until initial configuration is accepted.
+        let waiting_for_startup =
+            !runtime.worker.startup_finished() || !runtime.worker.is_configured();
         let transcript = runtime.transcript.clone();
         context.extensions.insert(runtime);
         let request_meta = context.meta.clone();
@@ -499,6 +511,8 @@ pub async fn run(
                 let runtime = startup.runtime();
                 if runtime.worker.is_configured() {
                     runtime.worker.shutdown(deadline).await?;
+                } else {
+                    runtime.worker.finish_recording();
                 }
                 startup.finish_failed_preparation(error)
             }

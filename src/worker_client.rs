@@ -73,7 +73,7 @@ pub(crate) struct SendRequest {
 }
 
 impl SendRequest {
-    fn validate(&self, requirements_available: bool) -> Result<(), String> {
+    pub(crate) fn validate(&self, requirements_available: bool) -> Result<(), String> {
         let Some(requirements) = &self.requirements else {
             return Ok(());
         };
@@ -119,7 +119,7 @@ pub(crate) struct Client(Arc<ClientInner>);
 
 struct ClientInner {
     configuration: OnceLock<ClientConfiguration>,
-    startup: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    startup: Mutex<tokio::sync::watch::Sender<Option<Result<(), String>>>>,
     /// Identity of connection startup, including the interval before admission.
     startup_generation: WorkerGeneration,
     /// Disposable presentation fact; admission still uses the startup outcome.
@@ -304,7 +304,7 @@ impl Client {
         let startup_generation = lifecycle.generation.clone();
         Self(Arc::new(ClientInner {
             configuration: OnceLock::new(),
-            startup,
+            startup: Mutex::new(startup),
             startup_generation,
             startup_observation_complete: AtomicBool::new(false),
             evaluation: Mutex::new(None),
@@ -332,16 +332,20 @@ impl Client {
     }
 
     pub(crate) fn finish_startup(&self, result: Result<(), String>) {
-        self.0.startup.send_if_modified(|outcome| {
-            if outcome.is_some() {
-                return false;
-            }
-            *outcome = Some(result);
-            self.0
-                .startup_observation_complete
-                .store(true, Ordering::Release);
-            true
-        });
+        self.0
+            .startup
+            .lock()
+            .expect("startup result lock")
+            .send_if_modified(|outcome| {
+                if outcome.is_some() {
+                    return false;
+                }
+                *outcome = Some(result);
+                self.0
+                    .startup_observation_complete
+                    .store(true, Ordering::Release);
+                true
+            });
     }
 
     fn take_startup_failure(&self, generation: &WorkerGeneration) -> Result<bool, String> {
@@ -355,7 +359,20 @@ impl Client {
     }
 
     pub(crate) async fn ready(&self) -> Result<(), String> {
-        let mut result = self.0.startup.subscribe();
+        Self::wait_for_startup(self.startup_result()).await
+    }
+
+    fn startup_result(&self) -> tokio::sync::watch::Receiver<Option<Result<(), String>>> {
+        self.0
+            .startup
+            .lock()
+            .expect("startup result lock")
+            .subscribe()
+    }
+
+    async fn wait_for_startup(
+        mut result: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
+    ) -> Result<(), String> {
         let ready = result
             .wait_for(Option::is_some)
             .await
@@ -368,7 +385,41 @@ impl Client {
     }
 
     pub(crate) fn startup_finished(&self) -> bool {
-        self.0.startup.borrow().is_some()
+        self.0
+            .startup
+            .lock()
+            .expect("startup result lock")
+            .borrow()
+            .is_some()
+    }
+
+    pub(crate) fn retry_failed_startup(&self) -> bool {
+        assert!(!self.is_configured());
+        let active = self.0.evaluation.lock().expect("worker evaluation lock");
+        let mut startup = self.0.startup.lock().expect("startup result lock");
+        if !matches!(*startup.borrow(), Some(Err(_))) {
+            return false;
+        }
+        // Match early admission's evaluation/startup lock order. Keep the failed
+        // cell pollable, but exclude its declaration from the new attempt.
+        if let Some(active) = active.as_ref() {
+            *active
+                .initial_requirements
+                .lock()
+                .expect("initial requirements lock") = None;
+        }
+        // Existing observers keep the failed attempt. A rejected cell must
+        // never become runnable when a new attempt is installed.
+        *startup = tokio::sync::watch::channel(None).0;
+        self.0
+            .startup_observation_complete
+            .store(false, Ordering::Release);
+        self.0
+            .startup_stdin
+            .lock()
+            .expect("startup stdin lock")
+            .clear();
+        true
     }
 
     /// Launch the default process through the ordinary readiness/retirement path.

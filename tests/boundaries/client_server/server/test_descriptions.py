@@ -19,7 +19,6 @@ from support.normalization import code
 from support.records import Transcript
 from support.requirements import POSIX, R, SQL, requires
 from support.resolvers import expose_uv
-from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 
@@ -47,7 +46,16 @@ def _assert_guidance(tool: dict, languages: set[str], *, custom: bool) -> None:
                 rf"(?<![a-z]){language}(?![a-z])", description, re.I
             ), (language, path, description)
     description = tool["description"]
-    assert "Cells are not transactional" in description
+    script_guidance = not custom and "r" in languages
+    for instruction in (
+        "ir run script.R",
+        "#| packages:",
+        "#| r-version:",
+        "imports, data inputs",
+        "without live Console objects",
+    ):
+        assert (instruction in description) == script_guidance, (languages, description)
+    assert "An error can leave earlier changes in place" in description
     assert "do not resubmit the cell" in description
     assert "use only trusted dependencies" in description
     assert ("Switch languages when useful" in description) == (len(languages) > 1)
@@ -58,12 +66,10 @@ def _assert_guidance(tool: dict, languages: set[str], *, custom: bool) -> None:
     )
     if custom:
         assert "does not supply built-in runtime packages" in description
-        assert "Managed requirements require" in description
+        assert "Managed requirements need" in description
     elif "sql" in languages:
-        if languages != {"r", "python", "sql"}:
-            assert "without a setup cell" in description
         assert "CSV, Parquet, JSON, and JSONL directly" in description
-        assert "provider" in description.lower() or languages == {"r", "python", "sql"}
+        assert "provider" not in description.lower()
         sql = properties["sql"]["description"]
         assert "selected driver supplies its own SQL" in sql
         assert "CLI dot commands are not supported" in sql
@@ -71,27 +77,18 @@ def _assert_guidance(tool: dict, languages: set[str], *, custom: bool) -> None:
             assert "With R-owned managed DuckDB" in sql
             assert "DBI" in sql
         if "python" in languages:
-            assert "register(name, frame)" in sql
             python = properties["python"]["description"]
             assert "console_sql_connection(connection)" in python
             assert "register(name, frame)" in python
             if "r" not in languages:
-                assert "only when" in python and "owns" in python
+                assert "requires Python-owned DuckDB" in python
 
 
-def _matrix(binary: Path, *, custom: bool) -> Transcript:
+def _matrix(binary: Path, *, custom: bool, sql: bool = False) -> Transcript:
     records = []
     subsets = (
-        (
-            ("r", "python", "sql"),
-            ("r",),
-            ("python",),
-            ("sql",),
-            ("r", "python"),
-            ("r", "sql"),
-            ("python", "sql"),
-        )
-        if SQL.available
+        (("r", "python", "sql"), ("sql",), ("r", "sql"), ("python", "sql"))
+        if sql
         else (("r", "python"), ("r",), ("python",))
     )
     for languages in subsets:
@@ -132,14 +129,22 @@ def _matrix(binary: Path, *, custom: bool) -> Transcript:
     return records
 
 
-@platform_snapshots("win32")
 def test_builtin_visible_language_descriptions(binary: Path) -> Transcript:
     return _matrix(binary, custom=False)
 
 
-@platform_snapshots("win32")
 def test_custom_visible_language_descriptions(binary: Path) -> Transcript:
     return _matrix(binary, custom=True)
+
+
+@requires(SQL)
+def test_builtin_visible_sql_descriptions(binary: Path) -> Transcript:
+    return _matrix(binary, custom=False, sql=True)
+
+
+@requires(SQL)
+def test_custom_visible_sql_descriptions(binary: Path) -> Transcript:
+    return _matrix(binary, custom=True, sql=True)
 
 
 @requires(SQL, R, POSIX)
@@ -229,22 +234,19 @@ def test_hidden_sql_provider_guidance(binary: Path, execution: Execution) -> Tra
     return records
 
 
-@platform_snapshots("win32")
 def test_missing_runtimes_keep_configured_descriptions(binary: Path) -> Transcript:
-    records = []
-    subsets = (
-        (
-            ("r",),
-            ("python",),
-            ("sql",),
-            ("r", "python"),
-            ("r", "sql"),
-            ("python", "sql"),
-            ("r", "python", "sql"),
-        )
-        if SQL.available
-        else (("r",), ("python",), ("r", "python"))
+    return _missing_runtimes(binary, (("r",), ("python",), ("r", "python")))
+
+
+@requires(SQL)
+def test_missing_runtimes_keep_configured_sql_descriptions(binary: Path) -> Transcript:
+    return _missing_runtimes(
+        binary, (("sql",), ("r", "sql"), ("python", "sql"), ("r", "python", "sql"))
     )
+
+
+def _missing_runtimes(binary: Path, subsets: tuple[tuple[str, ...], ...]) -> Transcript:
+    records = []
     for languages in subsets:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

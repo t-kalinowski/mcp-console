@@ -26,9 +26,21 @@ send:
     print("sys.argv:", sys.argv)
     print("sys.orig_argv == [sys.executable]:", sys.orig_argv == [sys.executable])
     print("sys.argv[0] == sys.executable:", sys.argv[0] == sys.executable)
-    child = subprocess.run([sys.executable, "identity.py", "two words"], check=True)
+    child = subprocess.run(
+        [sys.executable, "identity.py", "two words"],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    sys.stdout.write(child.stdout)
+    child.check_returncode()
 result:
   content:
     - type: text
-      text: "sys.executable is a file: True\nsys.argv: ['']\nsys.orig_argv == [sys.executable]: True\nsys.argv[0] == sys.executable: False\nscript sys.argv: ['identity.py', 'two words']\r\nscript sys.argv[0] == sys.executable: False\r\n"
+      text: |
+        sys.executable is a file: True
+        sys.argv: ['']
+        sys.orig_argv == [sys.executable]: True
+        sys.argv[0] == sys.executable: False
+        script sys.argv: ['identity.py', 'two words']
+        script sys.argv[0] == sys.executable: False
   isError: false

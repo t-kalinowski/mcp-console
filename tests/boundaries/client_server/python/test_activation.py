@@ -11,6 +11,7 @@ from contextlib import ExitStack
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.progress import phase_progress, without_elapsed
+from support.snapshots import execution_snapshots
 from support.assertions import last_result_text
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
@@ -791,6 +792,7 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
             return client.finish()[3:]
 
 
+@execution_snapshots
 @requires(POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
 def test_retries_interrupted_startup_with_prepared_candidate_without_r(

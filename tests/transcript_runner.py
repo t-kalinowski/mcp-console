@@ -1023,6 +1023,12 @@ runner: different
 
     def test_full_update_preserves_other_platform_companions(self) -> None:
         other_platform = "linux" if sys.platform == "darwin" else "darwin"
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + "\nfrom support.snapshots import platform_snapshots\n"
+            + f"test_selected = platform_snapshots('{other_platform}', reason='fixture OS contract')(test_selected)\n",
+            encoding="utf-8",
+        )
         companion = self.snapshots / f"selected.{other_platform}.yaml"
         companion.write_text("other platform output\n", encoding="utf-8")
         stale = self.snapshots / f"selected.{sys.platform}.yaml"
@@ -1332,6 +1338,7 @@ runner: different
                 "client_server/server/test_tools::initializes_and_lists_tools",
             ),
             ("--update",),
+            ("--full", "--update"),
             (
                 "--update",
                 "client_server/server/test_tools::initializes_and_lists_tools",
@@ -1851,104 +1858,6 @@ runner: orphan
         self.assertIn("fixture failed before snapshot update", retried.stderr)
         self.assertNotIn("orphan snapshot:", retried.stderr)
 
-    def test_default_concurrency_reserves_one_logical_cpu(self) -> None:
-        self.suite.write_text(
-            PUBLIC_SUITE
-            # fmt: python
-            + code("""
-                def concurrent_case(binary: Path) -> list[dict[str, str]]:
-                    root = binary.parents[2]
-                    with (root / "started").open("wb", buffering=0) as started:
-                        assert started.write(b"1") == 1
-                    with (root / "release").open("rb", buffering=0) as release:
-                        assert release.read(1) == b"1"
-                    return [{"runner": "concurrent"}]
-
-
-                test_selected = concurrent_case
-                test_unselected = concurrent_case
-                test_third = concurrent_case
-                test_fourth = concurrent_case
-                """),
-            encoding="utf-8",
-        )
-        for name in ("selected", "unselected", "third", "fourth"):
-            (self.snapshots / f"{name}.yaml").write_text(
-                "---\nrunner: concurrent\n...\n", encoding="utf-8"
-            )
-        launcher = self.root / "five_cpu_host.py"
-        launcher.write_text(
-            # fmt: python
-            code("""
-                import runpy
-                import sys
-                from unittest.mock import patch
-
-                runner = sys.argv.pop(1)
-                with patch("os.cpu_count", return_value=5):
-                    runpy.run_path(runner, run_name="__main__")
-                """),
-            encoding="utf-8",
-        )
-        os.mkfifo(self.root / "started")
-        os.mkfifo(self.root / "release")
-        started = os.open(self.root / "started", os.O_RDWR | os.O_NONBLOCK)
-        release = os.open(self.root / "release", os.O_RDWR)
-        process = subprocess.Popen(
-            [sys.executable, launcher, self.boundaries / "_run.py", "--full"],
-            cwd=self.root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
-        try:
-            acknowledgements = b""
-            while len(acknowledgements) < 4:
-                ready, _, _ = select.select([started], [], [], 10)
-                self.assertTrue(
-                    ready,
-                    f"only {len(acknowledgements)} of four cases started on a five-CPU host",
-                )
-                acknowledgements += os.read(started, 4 - len(acknowledgements))
-            self.assertEqual(os.write(release, b"1111"), 4)
-            stdout, stderr = process.communicate(timeout=10)
-            self.assertEqual(process.returncode, 0, stdout + stderr)
-        finally:
-            os.close(started)
-            os.close(release)
-            if process.poll() is None:
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-            process.communicate()
-
-        self.suite.write_text(
-            PUBLIC_SUITE
-            # fmt: python
-            + code("""
-                def test_selected(binary):
-                    raise RuntimeError("default concurrency fixture failed")
-                """),
-            encoding="utf-8",
-        )
-        result = subprocess.run(
-            [
-                sys.executable,
-                launcher,
-                self.boundaries / "_run.py",
-                "--full",
-                "--update",
-                "--jobs",
-                "4",
-            ],
-            cwd=self.root,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        self.assertNotEqual(result.returncode, 0, result.stderr)
-        self.assertIn("rerun: scripts/test --full --update\n", result.stderr)
-
     def write_failure_collection_suite(self, failures: set[int]) -> list[str]:
         names = ["initializes_and_lists_tools", *[f"case_{i:02}" for i in range(1, 20)]]
         for snapshot in self.snapshots.glob("*.yaml"):
@@ -2087,6 +1996,99 @@ runner: orphan
 
 
 class TranscriptDiscoveryTests(TranscriptRunnerFixture):
+    def test_focused_update_preserves_unavailable_execution_companions(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + "\nfrom support.snapshots import execution_snapshots\n"
+            + "from support.execution import DIRECT, Execution, executions\n"
+            + "from support.requirements import Requirement\n"
+            + "portable_initialization = test_initializes_and_lists_tools\n"
+            + "@executions(DIRECT)\n"
+            + "def test_initializes_and_lists_tools(binary, execution):\n"
+            + "    return portable_initialization(binary)\n"
+            + "portable_selected = test_selected\n"
+            + "@execution_snapshots\n"
+            + "@executions(DIRECT, Execution('sandbox', (Requirement('fixture sandbox', False, 'unavailable fixture mode'),)))\n"
+            + "def test_selected(binary, execution):\n"
+            + "    return portable_selected(binary)\n",
+            encoding="utf-8",
+        )
+        companion = self.snapshots / "selected.sandbox.yaml"
+        companion.write_text("unavailable execution output\n", encoding="utf-8")
+        result = self.run_runner(
+            "--update",
+            "client_server/server/test_tools::initializes_and_lists_tools",
+            "client_server/server/test_tools::selected",
+            "--jobs",
+            "1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(companion.read_text(), "unavailable execution output\n")
+
+    def test_platform_snapshot_requires_contract_reason(self) -> None:
+        for declaration in (
+            "platform_snapshots('win32')",
+            "platform_snapshots('win32', reason=' ')",
+        ):
+            with self.subTest(declaration=declaration):
+                self.suite.write_text(
+                    PUBLIC_SUITE
+                    + "\nfrom support.snapshots import platform_snapshots\n"
+                    + f"test_selected = {declaration}(test_selected)\n",
+                    encoding="utf-8",
+                )
+                result = self.run_runner("--list")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("reason", result.stderr)
+
+    def test_focused_update_retires_local_platform_variant(self) -> None:
+        stale = self.snapshots / f"selected.{sys.platform}.yaml"
+        stale.write_text("obsolete local output\n", encoding="utf-8")
+        other_platform = "linux" if sys.platform == "darwin" else "darwin"
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + "\nfrom support.snapshots import platform_snapshots\n"
+            + f"test_selected = platform_snapshots('{other_platform}', reason='fixture OS contract')(test_selected)\n",
+            encoding="utf-8",
+        )
+        companion = self.snapshots / f"selected.{other_platform}.yaml"
+        companion.write_text("other platform output\n", encoding="utf-8")
+        unselected = self.snapshots / f"unselected.{sys.platform}.yaml"
+        unselected.write_text("unselected output\n", encoding="utf-8")
+        result = self.run_runner(
+            "--update", "client_server/server/test_tools::selected", "--jobs", "1"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(stale.exists(), result.stdout)
+        self.assertEqual(companion.read_text(), "other platform output\n")
+        self.assertEqual(unselected.read_text(), "unselected output\n")
+
+    def test_focused_update_retires_undeclared_other_platform_variant(self) -> None:
+        other_platform = "linux" if sys.platform == "darwin" else "darwin"
+        stale = self.snapshots / f"selected.{other_platform}.yaml"
+        stale.write_text("retired platform output\n", encoding="utf-8")
+        result = self.run_runner(
+            "--update", "client_server/server/test_tools::selected", "--jobs", "1"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(stale.exists(), result.stdout)
+
+    def test_failed_focused_update_preserves_platform_snapshots(self) -> None:
+        stale = self.snapshots / f"selected.{sys.platform}.yaml"
+        stale.write_text("retained platform output\n", encoding="utf-8")
+        self.suite.write_text(
+            PUBLIC_SUITE.replace(
+                'return record(binary, "selected")',
+                'raise RuntimeError("fixture failed")',
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_runner(
+            "--update", "client_server/server/test_tools::selected", "--jobs", "1"
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(stale.read_text(), "retained platform output\n")
+
     def run_runner(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, self.boundaries / "_run.py", *arguments],
@@ -2095,6 +2097,42 @@ class TranscriptDiscoveryTests(TranscriptRunnerFixture):
             text=True,
             timeout=10,
         )
+
+    def test_help_reports_default_concurrency_for_available_cpus(self) -> None:
+        for cpu_count, jobs in ((None, 2), (0, 2), (1, 2), (2, 4), (8, 16), (64, 128)):
+            with self.subTest(cpu_count=cpu_count):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        # fmt: python
+                        code("""
+                            import json
+                            import runpy
+                            import sys
+                            from unittest.mock import patch
+
+                            cpu_count = json.loads(sys.argv.pop(1))
+                            runner = sys.argv.pop(1)
+                            with patch("os.cpu_count", return_value=cpu_count):
+                                runpy.run_path(runner, run_name="__main__")
+                            """),
+                        json.dumps(cpu_count),
+                        self.boundaries / "_run.py",
+                        "--bootstrap",
+                        "--help",
+                    ],
+                    cwd=self.root,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(
+                    f"concurrent transcript cases (default: {jobs}; "
+                    "twice the logical CPU count, at least 2)",
+                    " ".join(result.stdout.split()),
+                )
 
     def test_runner_metadata_does_not_require_a_binary(self) -> None:
         (self.root / "target/release/mcp-console").unlink()
@@ -2162,7 +2200,7 @@ class WindowsTranscriptTests(TranscriptDiscoveryTests):
         shared = (self.snapshots / "selected.yaml").read_bytes()
         self.suite.write_text(
             PUBLIC_SUITE
-            + "\nfrom support.snapshots import platform_snapshots\ntest_selected = platform_snapshots('win32')(test_selected)\n"
+            + "\nfrom support.snapshots import platform_snapshots\ntest_selected = platform_snapshots('win32', reason='fixture Windows contract')(test_selected)\n"
         )
         stale = self.snapshots / "selected.win32.stale.yaml"
         stale.write_text("---\nold: companion\n...\n")

@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.snapshots import execution_snapshots
 from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import (
     LARGE_OUTPUT_SIZE,
@@ -248,6 +249,7 @@ def test_finishes_ansi_at_producer_image_and_cell_boundaries(
         return client.finish()
 
 
+@execution_snapshots
 @requires(POSIX, PROCESS_EVENTS)
 @executions(DIRECT, SANDBOXED)
 def test_separates_native_diagnostics_from_worker_stderr(
@@ -405,6 +407,7 @@ def test_projects_builtin_ansi_and_preserves_raw_bytes(
         return client.finish()
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_finishes_ansi_at_polls_but_preserves_split_utf8(
@@ -474,6 +477,7 @@ def test_finishes_ansi_at_polls_but_preserves_split_utf8(
                     release.release()
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(

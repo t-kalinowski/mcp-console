@@ -1,24 +1,28 @@
 ---
 selector: :unknown
 stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: unsupported built-in profile ":unknown"; expected
-  ":workspace" or ":read-only"
+  .agents/console/config.yaml: extends: unknown field `extends`, expected
+  one of `cache`, `python`, `languages`, `inherit_environment`,
+  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
+  public format
 ---
 selector: workspace
 stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: unsupported built-in profile "workspace"; expected
-  ":workspace" or ":read-only"
+  .agents/console/config.yaml: extends: unknown field `extends`, expected
+  one of `cache`, `python`, `languages`, `inherit_environment`,
+  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
+  public format
 ---
 selector: workspace_write
 stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: unsupported built-in profile "workspace_write";
-  expected ":workspace" or ":read-only"
+  .agents/console/config.yaml: extends: unknown field `extends`, expected
+  one of `cache`, `python`, `languages`, `inherit_environment`,
+  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
+  public format
 ---
 selector: workspace-write
 stderr: >
-  .agents/console/config.yaml: sandbox preflight failed (exit status: 1):
-  mcp-console-sandbox: unsupported built-in profile "workspace-write";
-  expected ":workspace" or ":read-only"
+  .agents/console/config.yaml: extends: unknown field `extends`, expected
+  one of `cache`, `python`, `languages`, `inherit_environment`,
+  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
+  public format

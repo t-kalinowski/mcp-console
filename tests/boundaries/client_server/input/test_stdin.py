@@ -11,6 +11,7 @@ from boundaries.client_server._harness import (
     submit_prompted_stdin,
     wait_for_marker,
 )
+from support.snapshots import execution_snapshots
 from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.client import McpClient
@@ -43,6 +44,7 @@ def test_accepts_idle_stdin(binary: Path, execution: Execution) -> Transcript:
     return client.finish()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_idle_stdin_startup_blocks_preparation(

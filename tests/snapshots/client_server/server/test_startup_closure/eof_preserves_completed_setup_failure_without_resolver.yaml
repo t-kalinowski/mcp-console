@@ -1,0 +1,16 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send:
+  python: raise AssertionError('must not execute')
+result:
+  content:
+    - type: text
+      text: resolver sandbox requires HOME
+  isError: true
+---
+tools_schema_unchanged: true
+---
+exit_status: 1
+stderr: |
+  resolver sandbox requires HOME

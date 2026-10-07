@@ -980,6 +980,11 @@ class WindowsConsole(unittest.TestCase):
         )
 
     def test_configured_language_presentation_matrix(self):
+        script_guidance = (
+            "For a reusable R script, include imports, data inputs, and "
+            "`#| packages:`/`#| r-version:` metadata for `ir run script.R`, "
+            "which starts without live Console objects."
+        )
         for custom in (False, True):
             baseline = None
             for languages in ("r,python", "r", "python"):
@@ -1008,6 +1013,15 @@ class WindowsConsole(unittest.TestCase):
                             properties["control"]["description"],
                         )
                         self.assertNotIn("SIGINT", properties["control"]["description"])
+                        self.assertEqual(
+                            script_guidance in tool["description"],
+                            not custom and "r" in fields,
+                        )
+                        if script_guidance in tool["description"]:
+                            self.assertLess(
+                                tool["description"].index("Send one complete"),
+                                tool["description"].index(script_guidance),
+                            )
                         if baseline is None:
                             baseline = tool
                         else:
@@ -1029,9 +1043,12 @@ class WindowsConsole(unittest.TestCase):
                                 len(fields) > 1,
                             )
                         else:
-                            self.assertEqual(
-                                tool["description"], baseline["description"]
-                            )
+                            expected_description = baseline["description"]
+                            if "r" not in fields:
+                                expected_description = expected_description.replace(
+                                    " " + script_guidance, ""
+                                )
+                            self.assertEqual(tool["description"], expected_description)
                             self.assertIn(
                                 "SQL is not yet supported.", tool["description"]
                             )
@@ -1059,21 +1076,28 @@ class WindowsConsole(unittest.TestCase):
         tool = schema["tools"][0]
         properties = tool["inputSchema"]["properties"]
         self.assertNotIn("sql", properties)
-        self.assertIn("ir and uv", tool["description"])
+        self.assertIn(
+            "Requires host preparation support",
+            properties["requirements"]["description"],
+        )
         self.assertIn("local execution on Windows", tool["description"])
         for language in ("r", "python"):
             with self.subTest(language=language):
                 description = properties[language]["description"].lower()
                 self.assertNotIn("sql", description)
                 self.assertNotIn("duckdb", description)
-                self.assertIn("resolution", description)
+                self.assertIn("managed sessions prepare missing", description)
         self.assertEqual(
             schema["tools"][0]["inputSchema"]["properties"]["requirements"][
                 "properties"
             ]["action"]["enum"],
             ["get", "add", "set", "reset"],
         )
-        self.assertIn("initialize in the background", tool["description"])
+        self.assertNotIn("Language fields describe", tool["description"])
+        self.assertIn(
+            "explicitly selected Python environments",
+            properties["requirements"]["properties"]["python"]["description"],
+        )
         control = properties["control"]["description"]
         self.assertIn("cooperative interrupt", control)
         self.assertNotIn("SIGINT", control)

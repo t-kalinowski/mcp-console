@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use super::environment::{Environment, RequirementDelta};
@@ -205,11 +205,27 @@ pub(super) struct ControlledSendAdmission {
     client: Client,
     token: Arc<()>,
     generation: WorkerGeneration,
+    pub(super) retry_cancelled: Option<Arc<Mutex<bool>>>,
 }
 
 impl ControlledSendAdmission {
     pub(super) fn generation(&self) -> WorkerGeneration {
         self.generation.clone()
+    }
+
+    /// Hold through code/input publication so cancellation cannot overtake admission.
+    pub(super) fn admit_retry_payload(
+        &self,
+        payload: &str,
+    ) -> Result<Option<MutexGuard<'_, bool>>, String> {
+        let cancelled = self
+            .retry_cancelled
+            .as_ref()
+            .map(|cancelled| cancelled.lock().expect("retry admission cancellation lock"));
+        if cancelled.as_ref().is_some_and(|cancelled| **cancelled) {
+            return Err(format!("request cancelled before {payload} admission"));
+        }
+        Ok(cancelled)
     }
 }
 
@@ -969,6 +985,7 @@ impl Client {
             client: self.clone(),
             token,
             generation: lifecycle.generation.clone(),
+            retry_cancelled: None,
         })
     }
 
@@ -1230,7 +1247,11 @@ impl Client {
                                 handle.write_startup_stdin(input)?;
                             }
                         }
-                        self.0.startup.send_modify(|_| {});
+                        self.0
+                            .startup
+                            .lock()
+                            .expect("startup result lock")
+                            .send_modify(|_| {});
                         return Ok(());
                     }
                 }

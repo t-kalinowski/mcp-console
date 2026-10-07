@@ -181,6 +181,7 @@ impl WorkerRuntime {
         let relay_target = relay_command_line(&current_executable, executable, arguments, relay);
         let mut command = if no_sandbox {
             let mut command = Command::new(&relay_target[0]);
+            crate::settings::configure_environment(&mut command, sandbox_settings);
             command
                 .args(&relay_target[1..])
                 .env_remove(crate::settings::ENVIRONMENT);

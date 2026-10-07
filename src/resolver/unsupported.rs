@@ -51,6 +51,9 @@ impl ResolverStopHandle {
     pub(crate) fn cleanup_confirmed(&self) -> bool {
         true
     }
+    pub(crate) fn retirement_confirmed(&self) -> bool {
+        true
+    }
     pub(crate) fn stop(&self) -> Result<(), String> {
         Ok(())
     }
