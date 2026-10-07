@@ -89,7 +89,7 @@ def test_selects_project_or_home_in_both_commands(binary: Path) -> Transcript:
         home = root / "console-home"
         write_config(
             home / "config.yaml",
-            {"cache": "host", "sandbox": {"environment": {LABEL: "home"}}},
+            {"cache": "host", "environment": {LABEL: "home"}},
         )
         environment = os.environ | {"MCP_CONSOLE_HOME": str(home)}
         for name in ("KEEP", "ADDED"):
@@ -98,7 +98,7 @@ def test_selects_project_or_home_in_both_commands(binary: Path) -> Transcript:
             project = workspace / CONFIG
             write_config(
                 project,
-                {"cache": "host", "sandbox": {"environment": {LABEL: "project"}}},
+                {"cache": "host", "environment": {LABEL: "project"}},
             )
             cases = (
                 ("default", (command,), "project"),
@@ -145,7 +145,7 @@ def test_layers_ordered_overrides_on_home_and_defaults(binary: Path) -> Transcri
             if configured:
                 write_config(
                     home / "config.yaml",
-                    {"sandbox": {"environment": {LABEL: "home", "KEEP": "home"}}},
+                    {"environment": {LABEL: "home", "KEEP": "home"}},
                 )
             for command in ("serve", "sandbox"):
                 arguments = (
@@ -153,12 +153,12 @@ def test_layers_ordered_overrides_on_home_and_defaults(binary: Path) -> Transcri
                     "-c",
                     "cache=invalid",
                     "-c",
-                    "sandbox.environment.MCP_CONSOLE_TEST_DISCOVERY=42",
+                    "environment.MCP_CONSOLE_TEST_DISCOVERY=42",
                     command,
                     "-c",
                     "cache=host",
                     "-c",
-                    "sandbox.environment={MCP_CONSOLE_TEST_DISCOVERY: last, ADDED: cli}",
+                    "environment={MCP_CONSOLE_TEST_DISCOVERY: last, ADDED: cli}",
                 )
                 expected = "last|" + ("home" if configured else "unset") + "|cli"
                 observe_environment(binary, workspace, environment, arguments, expected)

@@ -25,27 +25,31 @@ command: serve
 home: invalid
 stderr: >
   <root>/console-home/config.yaml: unknown: unknown field `unknown`,
-  expected one of `cache`, `python`, `languages`, `extends`, `sandbox`,
-  `resolver`
+  expected one of `cache`, `python`, `languages`, `inherit_environment`,
+  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
+  public format
 ---
 command: sandbox
 home: invalid
 stderr: >
   <root>/console-home/config.yaml: unknown: unknown field `unknown`,
-  expected one of `cache`, `python`, `languages`, `extends`, `sandbox`,
-  `resolver`
+  expected one of `cache`, `python`, `languages`, `inherit_environment`,
+  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
+  public format
 ---
 command: serve
 home: invalid override
 stderr: >
   configuration with CLI overrides: cache: unknown variant `invalid`,
-  expected `console` or `host`
+  expected `console` or `host`; see docs/CONFIGURATION.md for the public
+  format
 ---
 command: sandbox
 home: invalid override
 stderr: >
   configuration with CLI overrides: cache: unknown variant `invalid`,
-  expected `console` or `host`
+  expected `console` or `host`; see docs/CONFIGURATION.md for the public
+  format
 ---
 command: serve
 home: relative home

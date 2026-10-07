@@ -1996,6 +1996,35 @@ runner: orphan
 
 
 class TranscriptDiscoveryTests(TranscriptRunnerFixture):
+    def test_focused_update_preserves_unavailable_execution_companions(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + "\nfrom support.snapshots import execution_snapshots\n"
+            + "from support.execution import DIRECT, Execution, executions\n"
+            + "from support.requirements import Requirement\n"
+            + "portable_initialization = test_initializes_and_lists_tools\n"
+            + "@executions(DIRECT)\n"
+            + "def test_initializes_and_lists_tools(binary, execution):\n"
+            + "    return portable_initialization(binary)\n"
+            + "portable_selected = test_selected\n"
+            + "@execution_snapshots\n"
+            + "@executions(DIRECT, Execution('sandbox', (Requirement('fixture sandbox', False, 'unavailable fixture mode'),)))\n"
+            + "def test_selected(binary, execution):\n"
+            + "    return portable_selected(binary)\n",
+            encoding="utf-8",
+        )
+        companion = self.snapshots / "selected.sandbox.yaml"
+        companion.write_text("unavailable execution output\n", encoding="utf-8")
+        result = self.run_runner(
+            "--update",
+            "client_server/server/test_tools::initializes_and_lists_tools",
+            "client_server/server/test_tools::selected",
+            "--jobs",
+            "1",
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(companion.read_text(), "unavailable execution output\n")
+
     def test_platform_snapshot_requires_contract_reason(self) -> None:
         for declaration in (
             "platform_snapshots('win32')",

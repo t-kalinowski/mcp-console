@@ -25,6 +25,7 @@ from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
 from support.python import runtime_source_line, virtualenv_python
 from support.records import Transcript
+from support.snapshots import execution_snapshots
 from support.resolvers import (
     bare_runtime_environment,
     send_and_collect_runtime_python_resolution,
@@ -117,6 +118,7 @@ def deferred_selection_client(binary: Path, serve: tuple[str, ...]):
             yield client
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_preserves_queued_inspection_interrupt(
@@ -178,6 +180,7 @@ def test_preserves_queued_inspection_interrupt(
             return records
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_cancels_native_inspection_and_retries(
@@ -366,6 +369,7 @@ def test_retries_failed_native_inspection(
         return client.finish()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 def test_console_configures_selected_python(
     binary: Path, execution: Execution
@@ -465,6 +469,7 @@ def test_console_configures_selected_python(
     return transcript
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_python_first_initializes_before_reticulate_attaches(
@@ -553,6 +558,7 @@ def test_python_first_initializes_before_reticulate_attaches(
             return client.finish()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_r_first_initializes_before_reticulate_attaches(
@@ -640,6 +646,7 @@ def test_r_first_runs_selection_callback_once(
         return client.finish()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_retries_attachment_without_reinitializing_python(

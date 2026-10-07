@@ -7,6 +7,6 @@ case: omitted
 proxy_omitted: true
 native_cleanup_default: true
 ---
-case: "null"
+case: explicit restricted
 proxy_omitted: true
 native_cleanup_default: true

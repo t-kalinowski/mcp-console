@@ -101,23 +101,11 @@ impl Profile {
             Languages::all()
         };
         let mut description = if !self.builtin {
-            let mut scope = if self.restricted_guidance() {
-                sections::CUSTOM_SELECTED_SCOPE
-            } else {
-                sections::CUSTOM_SCOPE
-            }
-            .to_string();
-            if self.multiple_languages() {
-                scope.push_str(sections::CUSTOM_SWITCHING);
-            }
-            scope
+            sections::CUSTOM_SCOPE.to_string()
         } else if cfg!(windows) && !self.configured_visibility {
             sections::WINDOWS_SCOPE.to_string()
         } else {
-            let mut scope = if described_languages.r
-                && described_languages.python
-                && described_languages.sql
-            {
+            if described_languages.r && described_languages.python && described_languages.sql {
                 sections::BUILTIN_SCOPE.to_string()
             } else {
                 let names = self
@@ -138,40 +126,11 @@ impl Profile {
                     ""
                 };
                 format!(
-                    "Persistent {names} workbench{location} for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls."
+                    "Persistent {names} workbench{location} for calculations, data analysis, and plots."
                 )
-            };
-            if cfg!(windows) {
-                scope.push_str(sections::WINDOWS_SELECTED_PREPARATION);
             }
-            scope.push_str("\n\n");
-            scope.push_str(&self.language_guidance());
-            scope.push_str("\n\n");
-            scope.push_str(sections::INTERFACE);
-            if described_languages.r && described_languages.python {
-                scope.push_str(sections::SHARING);
-            }
-            if described_languages.sql {
-                if described_languages.r && described_languages.python {
-                    scope.push_str(sections::MANAGED_SQL_SHARING);
-                } else {
-                    if described_languages.r {
-                        scope.push_str(sections::MANAGED_SQL_R);
-                    }
-                    if described_languages.python {
-                        scope.push_str(sections::MANAGED_SQL_PYTHON_SELECTED);
-                    }
-                    scope.push_str(sections::SQL_PROVIDER_SELECTED);
-                }
-            }
-            scope.push_str(if self.restricted_guidance() && !self.languages.python {
-                sections::MANAGED_PREPARATION_SELECTED
-            } else {
-                sections::MANAGED_PREPARATION
-            });
-            scope
         };
-        description.push_str("\n\nSend one complete ");
+        description.push_str(" Send one complete ");
         if self.configured_visibility {
             description.push_str(&self.languages.cell_fields());
         } else if cfg!(windows) && self.builtin {
@@ -179,8 +138,27 @@ impl Profile {
         } else {
             description.push_str("`r`, `python`, or `sql`");
         }
-        description.push_str(sections::SEND_ORDERING);
+        description.push_str(sections::SEND_WORKFLOW);
+        if self.builtin {
+            description.push_str(sections::DISPLAY);
+            if !cfg!(windows) || self.configured_visibility {
+                description.push_str("\n\n");
+                description.push_str(&self.language_guidance());
+            }
+        } else {
+            description.push_str("\n\n");
+            description.push_str(if self.restricted_guidance() {
+                sections::CUSTOM_SELECTED_CAPABILITIES
+            } else {
+                sections::CUSTOM_CAPABILITIES
+            });
+            if self.multiple_languages() {
+                description.push_str(sections::CUSTOM_SWITCHING);
+            }
+        }
         description.push_str("\n\n");
+        description.push_str(sections::SEND_ORDERING);
+        description.push(' ');
         description.push_str(sections::POLLING);
         description.push_str("\n\n");
         description.push_str(sections::OUTPUT);
@@ -207,10 +185,7 @@ impl Profile {
         if self.languages.sql {
             guidance.push_str("\n\n");
             guidance.push_str(sections::SQL_FILES);
-            guidance.push_str(sections::SQL_DEFAULTS);
-            guidance.push_str(sections::SQL_SQLITE);
-            guidance.push_str(sections::SQL_EXTENSIONS);
-            guidance.push_str(sections::SQL_RESULTS);
+            guidance.truncate(guidance.trim_end().len());
         }
         guidance
     }
@@ -242,8 +217,16 @@ impl Profile {
                 format!("{}{}", sections::STDIN_SELECTED, sections::STDIN_ORDERING).into();
             properties["control"]["description"] = control_description_for(false).into();
             properties["timeout_ms"]["description"] = sections::TIMEOUT_SELECTED.into();
-            requirements::configure(properties, self.languages, self.builtin);
         }
+        requirements::configure(
+            properties,
+            if self.configured_visibility {
+                self.languages
+            } else {
+                Languages::all()
+            },
+            self.builtin,
+        );
     }
 }
 
@@ -287,7 +270,6 @@ fn python_description_for(languages: Languages) -> String {
     if languages.r {
         description.push_str(sections::PYTHON_R_PLOTS);
     }
-    description.push_str(sections::PYTHON_END);
     description
 }
 
@@ -300,26 +282,8 @@ fn sql_description_for(languages: Languages) -> String {
     if languages.r {
         description.push_str(sections::SQL_R_FRAMES);
     }
-    if languages.r && languages.python {
-        description.push_str(sections::SQL_DRIVERS);
-    } else {
-        if languages.r {
-            description.push_str(sections::SQL_R_DRIVER);
-        }
-        if languages.python {
-            description.push_str(sections::SQL_PYTHON_DRIVER);
-        }
-        description.push_str(sections::SQL_DIALECT);
-    }
     if languages.r {
         description.push_str(sections::SQL_R_STATEMENTS);
-    }
-    if languages.python {
-        description.push_str(if languages.r {
-            sections::SQL_PYTHON_FRAMES
-        } else {
-            sections::SQL_PYTHON_FRAMES_SELECTED
-        });
     }
     description.push_str(sections::SQL_OPERATIONS);
     description
@@ -330,14 +294,10 @@ pub(super) fn control_description() -> String {
 }
 
 fn control_description_for(full: bool) -> String {
-    let interrupt = if cfg!(windows) {
-        sections::WINDOWS_INTERRUPT
-    } else {
-        sections::UNIX_INTERRUPT
-    };
     format!(
-        "{}{interrupt}{}",
+        "{}{}{}",
         sections::CONTROL_START,
+        sections::INTERRUPT,
         if full {
             sections::CONTROL_END
         } else {
@@ -347,56 +307,43 @@ fn control_description_for(full: bool) -> String {
 }
 
 fn description_for_launch(policy: &SandboxSettings, no_sandbox: bool) -> String {
-    let profile = policy.get("extends").and_then(serde_json::Value::as_str);
-    let filesystem = policy
-        .get("filesystem")
-        .and_then(|filesystem| filesystem.get("kind"))
-        .and_then(crate::settings::native_variant_name)
-        .or_else(|| {
-            (!policy.contains_key("filesystem") && profile.is_some()).then_some("restricted")
-        });
-    let network = policy
-        .get("network")
-        .and_then(crate::settings::native_variant_name)
-        .or_else(|| (!policy.contains_key("network") && profile.is_some()).then_some("restricted"));
-    let network_access = match (filesystem, network, policy.get("proxy")) {
-        // The pinned runner enforces managed proxy routing even with network enabled.
-        (_, _, Some(proxy)) if !proxy.is_null() => {
-            "can access the network subject to the launcher's proxy settings"
-        }
-        (Some("restricted" | "unrestricted"), Some("enabled"), _) => {
-            "can directly access the network"
-        }
-        (Some("restricted" | "unrestricted"), Some("restricted"), _) => {
-            "cannot directly access the network"
-        }
-        _ => "has network access governed by the launcher's sandbox settings",
-    };
-    let sandbox_access = match filesystem {
-        Some("restricted") if profile == Some(":workspace") => format!(
-            "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
-        ),
-        Some("restricted") if profile == Some(":read-only") => format!(
-            "uses the native \":read-only\" profile: it can read host files subject to configured read restrictions, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}"
-        ),
-        Some("restricted") => format!(
-            "can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
-        ),
-        Some("unrestricted") => {
-            format!("has unrestricted filesystem access and {network_access}")
-        }
-        _ => format!(
-            "has filesystem access governed by the launcher's sandbox settings and {network_access}"
-        ),
-    };
-
     if no_sandbox {
-        "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.".into()
-    } else {
-        format!(
-            "Evaluated code {sandbox_access}. Dependency resolution, when available, uses a separate native resolver sandbox on macOS and Linux with configurable host reads, cache writes, and proxy destinations. Installation or build code may run there; use only trusted dependencies."
-        )
+        return "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Package preparation may execute installation or build code; use only trusted dependencies.".into();
     }
+    let network_access = if policy.contains_key("proxy") {
+        "can access the network subject to the launcher's proxy settings"
+    } else {
+        match policy.get("network").and_then(serde_json::Value::as_str) {
+            Some("enabled") => "can directly access the network",
+            Some("restricted") => "cannot directly access the network",
+            _ => unreachable!("normalized worker network choice"),
+        }
+    };
+    let mut writable = vec![if cfg!(windows) {
+        "private `TMPDIR` (also `TEMP` and `TMP`)".to_string()
+    } else {
+        "private `TMPDIR`".to_string()
+    }];
+    if let Some(entries) = policy
+        .get("filesystem")
+        .and_then(|filesystem| filesystem.get("entries"))
+        .and_then(Value::as_array)
+    {
+        for entry in entries {
+            if entry.get("access").and_then(Value::as_str) == Some("write")
+                && let Some(path) = entry.get("path").and_then(|path| path.get("path"))
+            {
+                writable.push(format!("`{path}`"));
+            }
+        }
+    }
+    let writable = format!(
+        "Writable locations: {}; subject to more specific read/deny rules",
+        writable.join(", ")
+    );
+    format!(
+        "Evaluated code can read host files subject to configured restrictions and {network_access}. {writable}. Package preparation may execute installation or build code with separate filesystem and network permissions; use only trusted dependencies."
+    )
 }
 
 pub(super) fn stdin_description() -> String {

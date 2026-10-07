@@ -262,14 +262,23 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
                 suite_name,
                 case_name,
                 recorded,
-                update=update and (index == 0 or initialization),
+                update=update
+                and (
+                    index == 0
+                    or initialization
+                    or getattr(case, "execution_snapshots", False)
+                ),
                 execution=execution.name if execution is not None else None,
                 platform_specific=sys.platform
                 in getattr(case, "snapshot_platforms", ()),
+                execution_specific=getattr(case, "execution_snapshots", False),
             )
-            assert initialization or index == 0 or mode_snapshots == checked, (
-                "execution modes produced different companion snapshots"
-            )
+            assert (
+                initialization
+                or index == 0
+                or getattr(case, "execution_snapshots", False)
+                or mode_snapshots == checked
+            ), "execution modes produced different companion snapshots"
             checked.update(mode_snapshots)
             status = "passed"
         except BaseException as error:
@@ -472,6 +481,7 @@ def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> 
     }
     orphans = set(orphans)
     declared_platforms = {}
+    declared_execution_modes = {}
     suites = {}
     for owner in checked_cases:
         suite = owner.parent.relative_to(snapshot_root)
@@ -479,9 +489,12 @@ def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> 
             suites[suite] = load_suite(
                 root / "tests" / "boundaries" / suite.with_suffix(".py")
             )
-        declared_platforms[owner] = set(
-            getattr(suites[suite][owner.name], "snapshot_platforms", ())
-        )
+        case = suites[suite][owner.name]
+        declared_platforms[owner] = set(getattr(case, "snapshot_platforms", ()))
+        if getattr(case, "execution_snapshots", False):
+            declared_execution_modes[owner] = {
+                execution.name for execution in getattr(case, "executions", ())
+            }
 
     for snapshot in snapshot_root.rglob("*"):
         if not snapshot.is_file() or snapshot.suffix not in {".yaml", ".md", ".qmd"}:
@@ -502,12 +515,27 @@ def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> 
             for checked in checked_snapshots
             if checked.parent / checked.name.split(".", 1)[0] == owner
         )
+        mode = "sandbox" if "sandbox" in snapshot.name.split(".")[1:] else "direct"
+        retired_platform = bool(
+            ({"darwin", "linux", "win32"} - declared_platforms.get(owner, set()))
+            & set(snapshot.name.split(".")[1:])
+        )
+        unavailable_execution_mode = (
+            not retired_platform
+            and mode in declared_execution_modes.get(owner, set())
+            and not any(
+                ("sandbox" in checked.name.split(".")[1:]) == (mode == "sandbox")
+                for checked in checked_snapshots
+                if checked.parent / checked.name.split(".", 1)[0] == owner
+            )
+        )
         stale = snapshot in orphans or (
             owner in checked_cases
             and snapshot not in checked_snapshots
             and not other_platform
             and not shared_reference
             and not unavailable_initialization_mode
+            and not unavailable_execution_mode
         )
 
         if stale:
