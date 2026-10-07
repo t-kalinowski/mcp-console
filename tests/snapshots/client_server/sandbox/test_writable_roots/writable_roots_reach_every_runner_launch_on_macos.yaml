@@ -32,8 +32,11 @@ result:
 
         For databases and structured files, consider DuckDB SQL first for
         inspection, joins, and aggregation. Use R for vectorized data and string
-        operations, statistics, and plots. Use Python when its libraries or
-        format-specific parsing simplify the task. Switch languages when useful.
+        operations, statistics, and plots. For a reusable R script, include
+        imports, data inputs, and `#| packages:`/`#| r-version:` metadata for
+        `ir run script.R`, which starts without live Console objects. Use Python
+        when its libraries or format-specific parsing simplify the task. Switch
+        languages when useful.
 
 
         DuckDB can query CSV, Parquet, JSON, and JSONL directly, including
@@ -265,6 +268,7 @@ send:
     print(
         "both grants and subprocess writes verified; neighboring and symlink writes denied"
     )
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -335,6 +339,7 @@ send:
     print(
         "both grants and subprocess writes verified; neighboring and symlink writes denied"
     )
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -402,6 +407,7 @@ send:
     print(
         "both grants and subprocess writes verified; neighboring and symlink writes denied"
     )
+  timeout_ms: 600000
 result:
   content:
     - type: text

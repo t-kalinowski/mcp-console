@@ -2,6 +2,18 @@
 !same-as writable MCP initialization for this execution mode
 ---
 send:
+  python: pass
+  requirements:
+    python:
+      - duckdb==1.5.5
+  timeout_ms: 600000
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   python: |
     import os
     import tempfile
@@ -52,9 +64,6 @@ send:
         stdout.write(progress)
     with open("completion-release", "rb", buffering=0) as release:
         assert release.read(1) == b"1"
-  requirements:
-    python:
-      - duckdb==1.5.5
   timeout_ms: 0
 result:
   content:

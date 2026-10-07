@@ -326,7 +326,7 @@ pub(super) fn worker_reader() -> Result<MutexGuard<'static, crate::sideband::Rea
         .map_err(|_| "R worker sideband reader lock poisoned".to_string())
 }
 
-fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
+pub(super) fn send_worker_message(message: &WorkerMessage) -> Result<(), String> {
     if !crate::sideband::available_in_process() {
         return Err("managed environment resolution is unavailable in a fork child".to_string());
     }

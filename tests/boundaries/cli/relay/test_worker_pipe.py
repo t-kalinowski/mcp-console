@@ -28,9 +28,10 @@ def test_worker_reports_closed_output_pipe_without_r_sigpipe_handler(
         environment = dict(
             os.environ,
             TMPDIR=temporary,
-            R_PROFILE_USER=os.devnull,
             R_DEFAULT_PACKAGES="NULL",
         )
+        for name in ("R_ENVIRON", "R_ENVIRON_USER", "R_PROFILE", "R_PROFILE_USER"):
+            environment[name] = os.devnull
         environment["MCP_CONSOLE_SIDEBAND_READ_FD"] = str(worker_read)
         environment["MCP_CONSOLE_SIDEBAND_WRITE_FD"] = str(worker_write)
         process = subprocess.Popen(
@@ -50,6 +51,25 @@ def test_worker_reports_closed_output_pipe_without_r_sigpipe_handler(
                 assert json.loads(read_lines(output, 1, "worker ready")[0]) == {
                     "kind": "ready"
                 }
+                commands.write(
+                    json.dumps(
+                        {
+                            "kind": "evaluate",
+                            "language": "r",
+                            "source": "invisible(NULL)",
+                        }
+                    )
+                    + "\n"
+                )
+                commands.flush()
+                assert [
+                    json.loads(line)
+                    for line in read_lines(output, 3, "R initialization")
+                ] == [
+                    {"kind": "r_initialization", "complete": False},
+                    {"kind": "r_initialization", "complete": True},
+                    {"kind": "completed"},
+                ]
                 output.close()
                 commands.write(
                     json.dumps(

@@ -15,6 +15,7 @@ from support.assertions import (
     assert_result_content,
     last_tool_text,
     wait_for_evaluation_output,
+    wait_for_idle_output,
 )
 from support.checkpoints import wait_for_worker_file
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -905,6 +906,14 @@ def test_missing_r_startup_withholds_sql(
         config.write_text(json.dumps(settings))
         configuration = captured_configuration(config, python=sys.executable)
         with sql_client(binary, execution, environment(workspace), workspace) as client:
+            # Collect the startup receipt before SQL admission so its idle/cell
+            # separator cannot depend on which owner ran first.
+            wait_for_idle_output(
+                client,
+                "Error: R is unavailable in this session; SQL withheld; explicit restart required\n\n[idle]",
+                "missing R startup receipt",
+                completion_timeout_seconds=client.response_timeout,
+            )
             client.send(sql="SELECT 42 AS answer")
             output = last_tool_text(client)
             assert "R is unavailable" in output and "SQL unavailable" in output, output

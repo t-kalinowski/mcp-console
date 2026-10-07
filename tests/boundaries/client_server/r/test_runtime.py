@@ -368,7 +368,7 @@ def test_launches_r_children_from_interpreter_identity(
                   file.exists(arguments[[1L]]),
                   identical(arguments[[1L]], file.path(R.home("bin"), "R")),
                   interactive(),
-                  identical(arguments[-1L], c("--quiet", "--interactive", "--vanilla")),
+                  identical(arguments[-1L], c("--quiet", "--interactive", "--no-save")),
                   identical(commandArgs(TRUE), character())
                 )
                 environment_names <- c(
