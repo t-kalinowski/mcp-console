@@ -34,6 +34,8 @@ Worker startup remains observable until transport readiness, including after its
 An observation is omitted while its owner is busy; it never extends a response deadline or delays cancellation.
 They do not describe interpreter activity or promise initialization completion.
 Completion and generation retirement invalidate the matching observation; sending an interrupt or cancelling a poll does not.
+If a captured owner completes before projection, the response observes the current lifecycle owner in that generation; replacement takes precedence over its nested worker startup.
+Recovered responses refresh their observation when the current owner is available.
 Phase updates do not accumulate in output, and their text shares the complete 8 KiB response budget with diagnostics and other notices.
 
 Early standalone requirements that time out before readiness have **not** been accepted and must be submitted again.

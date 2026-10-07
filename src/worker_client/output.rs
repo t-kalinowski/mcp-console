@@ -210,8 +210,9 @@ impl Response {
     }
 
     pub(super) fn observe_phase(&mut self, source: Option<super::status::Source>) {
-        if self.phase.is_none() {
-            self.phase = source;
+        // Preserve a retained observation only when current capture is unavailable.
+        if let Some(source) = source {
+            self.phase = Some(source);
         }
     }
 

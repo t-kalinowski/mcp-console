@@ -202,7 +202,7 @@ impl Evaluation {
         ))
     }
 
-    /// None invalidates the observation; true identifies owned replacement work.
+    /// True identifies owned replacement work; None leaves other owners observable.
     pub(super) fn replacement_observation(&self) -> Option<bool> {
         let state = self.state.try_lock().ok()?;
         if state.retired {

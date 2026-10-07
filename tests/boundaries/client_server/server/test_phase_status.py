@@ -9,6 +9,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.client_server.lifecycle.test_startup import startup_fixture
+from boundaries.client_server.python.test_startup import (
+    isolated_python,
+    selected_python,
+)
 from boundaries.client_server.server.test_startup import gated_discovery
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint, wait_for_path, wait_for_worker_file
@@ -35,6 +39,86 @@ from support.requirements import (
 from support.resolvers import checkpoint_uv_environment
 from support.snapshots import execution_snapshots
 from support.suites import run_this_suite
+
+
+@requires(NATIVE_FIXTURES, POSIX)
+def test_completed_early_cell_keeps_prelaunch_phase(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
+        root = Path(temporary).resolve()
+        python, site = isolated_python(root)
+        probe, probe_release, started, startup_release = [
+            resources.enter_context(closing(FifoCheckpoint.create(root / name)))
+            for name in ("probe", "probe-release", "ready", "ready-release")
+        ]
+        (site / "sitecustomize.py").write_text(
+            # fmt: python
+            code(f"""
+                import sys
+
+                if sys.argv[0] == "-c":
+                    with open({str(probe.path)!r}, "wb", buffering=0) as probe:
+                        assert probe.write(b"1") == 1
+                    with open({str(probe_release.path)!r}, "rb", buffering=0) as release:
+                        assert release.read(1) == b"1"
+                """)
+        )
+        environment = selected_python(root, python)
+        environment.pop("R_HOME", None)
+        environment.update(
+            {
+                "PATH": str(root),
+                "MCP_CONSOLE_TEST_PHASE_LOADER": LOADER_VARIABLE,
+                "MCP_CONSOLE_TEST_PHASE_LIBRARY": str(
+                    build_interposer(root, "relay_stdout_read_interposer")
+                ),
+                "MCP_CONSOLE_TEST_RELAY_READ_MATCH": '{"kind":"ready"}',
+                "MCP_CONSOLE_TEST_RELAY_READ_BLOCKED": str(started.path),
+                "MCP_CONSOLE_TEST_RELAY_READ_RELEASE": str(startup_release.path),
+            }
+        )
+        # fmt: python
+        launcher = code("""
+            import os
+            import sys
+
+            os.environ["MCP_CONSOLE_TEST_RELAY_READ_PID"] = str(os.getpid())
+            os.environ[os.environ.pop("MCP_CONSOLE_TEST_PHASE_LOADER")] = os.environ.pop(
+                "MCP_CONSOLE_TEST_PHASE_LIBRARY"
+            )
+            os.execv(sys.argv[1], sys.argv[1:])
+            """)
+        client = resources.enter_context(
+            McpClient(
+                Path(sys.executable),
+                ("-c", launcher, str(binary), *DIRECT.serve()),
+                environment,
+                root,
+            )
+        )
+        resources.callback(probe_release.release)
+        resources.callback(startup_release.release)
+        probe.wait("selected Python inspection is blocked")
+        client.initialize_and_list_tools()
+        client.send(
+            r="must not execute", requirements={"python": ["six"]}, timeout_ms=0
+        )
+        assert phase_progress(last_result_text(client)) == "dependency preparation"
+        probe_release.release()
+        # Prelaunch rejects the R cell before starting the Python-only worker.
+        # Its completed evaluation remains installed until its result is claimed.
+        started.wait("default transport is waiting before ready")
+        client.send(requirements={"action": "get"}, timeout_ms=0)
+        assert last_result_text(client) == "\n[phase: startup]\n[worker starting]"
+        startup_release.release()
+        client.send()
+        assert client.transcript[-1]["result"]["isError"]
+        assert (
+            last_result_text(client)
+            == "R cells are unavailable in Python sessions without R"
+        )
+        client.send(python="42")
+        assert last_result_text(client) == "42\n"
+        return client.finish()
 
 
 @execution_snapshots

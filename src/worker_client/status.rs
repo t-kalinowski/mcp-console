@@ -24,7 +24,10 @@ impl Source {
     pub(super) fn phase(&self) -> Option<&'static str> {
         let client = self.client.upgrade()?;
         let replacing = match &self.owner {
-            Owner::Evaluation(evaluation) => evaluation.upgrade()?.replacement_observation()?,
+            Owner::Evaluation(evaluation) => evaluation
+                .upgrade()
+                .and_then(|evaluation| evaluation.replacement_observation())
+                .unwrap_or(false),
             _ => false,
         };
         // Status is disposable: contention must not extend a response deadline
@@ -35,7 +38,7 @@ impl Source {
         {
             return None;
         }
-        match &self.owner {
+        let observed = match &self.owner {
             Owner::Resolver(resolver) => resolver.phase(),
             Owner::Startup(startup)
                 if startup
@@ -53,27 +56,30 @@ impl Source {
             Owner::Replacement if matches!(lifecycle.state, LifecycleState::Restarting { .. }) => {
                 Some("replacement")
             }
-            Owner::Evaluation(_) => {
-                if replacing {
-                    Some("replacement")
-                } else if let Some(phase) = lifecycle
-                    .processes
-                    .resolver
-                    .as_ref()
-                    .and_then(|handle| handle.phase_observation().phase())
-                {
-                    Some(phase)
-                } else if (!client.startup_observation_complete.load(Ordering::Acquire)
-                    && self.generation.is(&client.startup_generation))
-                    || lifecycle.starting()
-                {
-                    Some("startup")
-                } else {
-                    None
-                }
-            }
+            Owner::Evaluation(_) if replacing => Some("replacement"),
             _ => None,
-        }
+        };
+        // Completion can leave a captured owner installed until delivery, or
+        // hand preparation over to startup before this response is projected.
+        observed.or_else(|| {
+            if let Some(phase) = lifecycle
+                .processes
+                .resolver
+                .as_ref()
+                .and_then(|handle| handle.phase_observation().phase())
+            {
+                Some(phase)
+            } else if matches!(lifecycle.state, LifecycleState::Restarting { .. }) {
+                Some("replacement")
+            } else if (!client.startup_observation_complete.load(Ordering::Acquire)
+                && self.generation.is(&client.startup_generation))
+                || lifecycle.starting()
+            {
+                Some("startup")
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -100,14 +106,14 @@ impl Client {
             Owner::Evaluation(evaluation)
         } else if let Some(resolver) = lifecycle.processes.resolver.as_ref() {
             Owner::Resolver(resolver.phase_observation())
+        } else if matches!(lifecycle.state, LifecycleState::Restarting { .. }) {
+            Owner::Replacement
         } else if let Some(startup) = lifecycle.startup_observation() {
             Owner::Startup(startup)
         } else if !self.0.startup_observation_complete.load(Ordering::Acquire)
             && generation.is(&self.0.startup_generation)
         {
             Owner::ConnectionStartup
-        } else if matches!(lifecycle.state, LifecycleState::Restarting { .. }) {
-            Owner::Replacement
         } else {
             return None;
         };
