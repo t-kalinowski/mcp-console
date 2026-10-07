@@ -91,6 +91,8 @@ struct Project {
     startup: Option<startup::Startup>,
     cache: Option<Cache>,
     python: Option<std::path::PathBuf>,
+    #[serde(deserialize_with = "sandbox::supplied_mapping")]
+    r: Option<R>,
     languages: Option<Vec<crate::cell::Language>>,
     #[serde(default = "inherit_by_default")]
     inherit_environment: bool,
@@ -100,6 +102,12 @@ struct Project {
     sandbox: Option<sandbox::Sandbox>,
     #[serde(deserialize_with = "sandbox::mapping")]
     resolver: Resolver,
+}
+
+#[derive(Clone, Copy, Default, serde::Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct R {
+    pub vanilla: bool,
 }
 
 fn inherit_by_default() -> bool {
@@ -138,6 +146,7 @@ pub(crate) struct Captured {
     pub startup: Option<startup::Startup>,
     pub cache: Option<Cache>,
     pub python: Option<std::path::PathBuf>,
+    pub r: Option<R>,
     pub languages: Option<crate::cell::Languages>,
     pub source: Option<String>,
     pub policy: SandboxSettings,
@@ -260,6 +269,7 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
         }
     }
     Ok(Captured {
+        r: project.r,
         startup: project.startup,
         cache: project.cache,
         languages,

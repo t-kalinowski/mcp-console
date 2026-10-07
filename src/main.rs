@@ -139,6 +139,7 @@ fn run_server(
         startup,
         cache,
         python,
+        r,
         languages,
         source: _,
         mut policy,
@@ -167,6 +168,9 @@ fn run_server(
     if python.is_some() && (worker.is_some() || relay.is_some()) {
         return Err("python selection requires the built-in worker and relay".into());
     }
+    if r.is_some() && (worker.is_some() || relay.is_some()) {
+        return Err("r settings require the built-in worker and relay".into());
+    }
     let settings = if no_sandbox {
         policy
     } else {
@@ -178,7 +182,15 @@ fn run_server(
         .enable_all()
         .build()?;
     let result = runtime.block_on(server::run(
-        worker, relay, no_sandbox, settings, python, resolver, startup, languages,
+        worker,
+        relay,
+        no_sandbox,
+        settings,
+        python,
+        r.unwrap_or_default(),
+        resolver,
+        startup,
+        languages,
     ));
     // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client

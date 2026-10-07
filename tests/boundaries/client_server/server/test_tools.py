@@ -121,6 +121,9 @@ def test_initializes_and_lists_tools(
                 "custom.yaml": _initializes_and_lists_tools(
                     binary, execution, custom=True
                 ),
+                "r-only.yaml": _initializes_and_lists_tools(
+                    binary, execution, bootstrap_languages="r"
+                ),
             },
         )
     companions = {
@@ -145,6 +148,9 @@ def test_initializes_and_lists_tools(
         "configured-r-sql.yaml": _initializes_and_lists_tools(
             binary, execution, languages=("r", "sql")
         ),
+        "r-only.yaml": _initializes_and_lists_tools(
+            binary, execution, bootstrap_languages="r"
+        ),
     }
     if execution == SANDBOXED:
         companions["proxy.yaml"] = _initializes_and_lists_tools(
@@ -158,6 +164,9 @@ def test_initializes_and_lists_tools(
         )
         companions["custom-writable.yaml"] = _initializes_and_lists_tools(
             binary, execution, custom=True, writable=True
+        )
+        companions["r-only-writable.yaml"] = _initializes_and_lists_tools(
+            binary, execution, bootstrap_languages="r", writable=True
         )
     baseline = _initializes_and_lists_tools(binary, execution)
     # Runtime discovery must not change the configured public interface.
@@ -281,7 +290,7 @@ def _initializes_and_lists_tools(
                 assert "custom-worker" in description
                 assert "does not supply built-in runtime packages" in description
                 assert "defaults include SQLite" not in description
-            elif SQL.available:
+            elif SQL.available and "sql" in properties:
                 assert description.index("Send one complete") < description.index(
                     "consider DuckDB SQL first"
                 )

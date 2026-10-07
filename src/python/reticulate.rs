@@ -29,50 +29,6 @@ pub(crate) fn configure_worker_environment() -> std::io::Result<()> {
     super::platform::set_environment(c"R_SESSION_INITIALIZED", &marker, true)
 }
 
-// Install callbacks before eager startup packages can request input or enter
-// reticulate. Late R startup also protects an already running Python identity.
-// Called after R reads the system Renviron, before it loads default packages.
-// This and R's own bootstrap environment writes require no concurrent native
-// environment access. See the unresolved constraint in docs/ARCHITECTURE.md.
-pub(crate) fn defer_r_startup() -> Result<Option<Option<std::ffi::OsString>>, String> {
-    if super::library::initialized_selection()?.is_none() && !crate::worker::bootstrapping() {
-        return Ok(None);
-    }
-    let packages = std::env::var_os("R_DEFAULT_PACKAGES");
-    super::platform::set_environment(c"R_DEFAULT_PACKAGES", c"NULL", true)
-        .map_err(|error| error.to_string())?;
-    Ok(Some(packages))
-}
-
-pub(crate) fn finish_r_startup(deferred: Option<Option<std::ffi::OsString>>) -> Result<(), String> {
-    let Some(packages) = deferred else {
-        return Ok(());
-    };
-    let value = std::ffi::CString::new(
-        packages
-            .as_deref()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .as_bytes(),
-    )
-    .map_err(|error| error.to_string())?;
-    super::platform::set_environment(c"R_DEFAULT_PACKAGES", &value, true)
-        .map_err(|error| error.to_string())?;
-    if packages.is_none() {
-        unsafe { std::env::remove_var("R_DEFAULT_PACKAGES") };
-    }
-    harp::parse_eval_base(r#"local({
-        dp <- Sys.getenv("R_DEFAULT_PACKAGES")
-        if (identical(dp, "")) dp <- c("datasets", "utils", "grDevices", "graphics", "stats", "methods")
-        else if (identical(dp, "NULL")) dp <- character()
-        else dp <- strsplit(dp, ",")[[1L]]
-        options(defaultPackages = trimws(dp))
-        .OptRequireMethods()
-        .First.sys()
-    })"#).map_err(|error| error.to_string())?;
-    Ok(())
-}
-
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_python_retained_manifest() -> harp::Result<SEXP> {

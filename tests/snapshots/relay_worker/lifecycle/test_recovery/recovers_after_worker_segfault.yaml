@@ -10,6 +10,14 @@ relay:
     cat("before crash\n")
 ---
 worker:
+  kind: r_initialization
+  complete: false
+---
+worker:
+  kind: r_initialization
+  complete: true
+---
+worker:
   kind: console_output
   data: |
     before crash
@@ -37,6 +45,14 @@ relay:
   source: |
     stopifnot(!exists("crash_marker", inherits = FALSE))
     cat("after crash\n")
+---
+worker:
+  kind: r_initialization
+  complete: false
+---
+worker:
+  kind: r_initialization
+  complete: true
 ---
 worker:
   kind: console_output
