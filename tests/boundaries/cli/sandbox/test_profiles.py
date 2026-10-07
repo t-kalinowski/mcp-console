@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import SANDBOX, requires
+from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 CONFIG = ".agents/console/config.yaml"
@@ -315,6 +316,7 @@ def test_unsupported_profile_names_use_native_diagnostics(binary: Path) -> Trans
 
 
 @requires(SANDBOX)
+@platform_snapshots("linux")
 def test_denied_workspace_keeps_metadata_unreadable(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -347,6 +349,7 @@ def test_denied_workspace_keeps_metadata_unreadable(binary: Path) -> Transcript:
                 text=True,
             )
             assert result.returncode != 0 and result.stdout == "", result
+            assert result.stderr.startswith("cat: "), result
             transcript.append(
                 {
                     "path": name,
