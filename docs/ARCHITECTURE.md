@@ -175,6 +175,7 @@ If restart takes over during failed-worker retirement, the retiring caller keeps
 
 The operation keeps normal command/barrier failure separate from physical cleanup and the dispatcher outcome.
 Confirmed physical cleanup and joined tasks can supersede a failed normal barrier; failed native cleanup still blocks replacement.
+Launcher reaping and successful I/O settlement also supersede that barrier when launcher-status or temporary-storage cleanup reports an independent error; the cleanup error remains authoritative.
 Process and worker consumers read separate cleanup and I/O views of that retained result, avoiding duplicate diagnostics within one shutdown response.
 Restart and EOF check the retiring launch's retained I/O result even when an initial launch failed before readiness, a failed evaluation has already stopped the logical worker or physical cleanup fails.
 Failed-worker replacement also requires launcher reaping and confirmed retirement of its owned temporary storage.

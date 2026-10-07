@@ -118,6 +118,7 @@ struct RetirementResult {
     normal: Result<(), String>,
     cleanup: Result<(), String>,
     io: Result<Option<WorkerProcessOutcome>, String>,
+    launcher_reaped: bool,
     // Replacement evidence is separate from native launcher status policy.
     resources_confirmed: bool,
 }
@@ -127,8 +128,11 @@ impl RetirementResult {
         // Both consumers observe this same completed operation. The process
         // observer reports cleanup; Worker reports the retained I/O outcome.
         // Combining I/O here would report its failure again when Worker stops.
-        if self.cleanup.is_ok() {
-            Ok(())
+        // Reaping and successful I/O settlement also supersede the normal
+        // barrier when launcher status or temporary-storage cleanup fails.
+        // Those independent cleanup failures still retain their own evidence.
+        if self.cleanup.is_ok() || self.launcher_reaped && self.io.is_ok() {
+            self.cleanup.clone()
         } else {
             combine_shutdown_results(self.normal.clone(), self.cleanup.clone())
         }
@@ -1371,10 +1375,16 @@ impl WorkerShutdownHandle {
             ),
         );
         let cleanup = self.stop_relay(deadline, retirement_deadline, allowance);
-        let resources_confirmed = self
+        let (launcher_reaped, resources_confirmed) = self
             .child
             .lock()
-            .is_ok_and(|child| child.is_reaped() && child.temporary_retirement.is_ok());
+            .map(|child| {
+                (
+                    child.is_reaped(),
+                    child.is_reaped() && child.temporary_retirement.is_ok(),
+                )
+            })
+            .unwrap_or((false, false));
         // Failed process cleanup must still drain available output and join all
         // owned I/O. Neither a normal-barrier timeout nor an I/O join confirms
         // native cleanup; the retained process result remains authoritative.
@@ -1397,6 +1407,7 @@ impl WorkerShutdownHandle {
             normal,
             cleanup,
             io,
+            launcher_reaped,
             resources_confirmed,
         };
         let mut state = self
