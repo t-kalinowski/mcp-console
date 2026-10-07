@@ -959,7 +959,9 @@ def test_restores_virtualenv_after_selection_interrupt(
 def test_recovers_from_conflicting_requirements_after_python_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with McpClient(binary, execution.serve()) as client:
+    # Fix uv's logging level so the complete error is deterministic.
+    environment = dict(os.environ, RUST_LOG="error")
+    with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
         client.send(r="startup_marker <- 41L")
         assert last_result_text(client) == "[done]", client.transcript[-1]
