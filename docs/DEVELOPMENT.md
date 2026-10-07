@@ -154,7 +154,8 @@ Set `MCP_CONSOLE_TEST_BINARY` to an absolute installed executable to skip the ch
 Use `--jobs N` and `--timeout SECONDS` to control case concurrency and deadlines.
 The default concurrency is `max(1, N - 1)` on all platforms, where `N` is the logical CPU count.
 An unavailable CPU count uses one case.
-Explicit `--jobs N` / `-j N` overrides must be at least one.
+Explicit `--jobs N` overrides must be at least one.
+The shared boundary runner also accepts `-j N`; unscoped Windows `--full` runs require `--jobs N`.
 See the [timing comparison](benchmarks/transcript-concurrency.md) for the choice of default and its coverage limits.
 
 ## Find the public test

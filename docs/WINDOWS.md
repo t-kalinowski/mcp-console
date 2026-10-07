@@ -172,7 +172,8 @@ Boundary selectors use the shared `BOUNDARY/SUITE::CASE` syntax and support `--u
 Unscoped `test --full` adds all applicable shared cases.
 Shared concurrency defaults to `max(1, N - 1)` on all platforms, where `N` is the logical CPU count.
 An unavailable CPU count uses one case.
-Explicit `--jobs N` / `-j N` overrides must be at least one.
+Explicit `--jobs N` overrides must be at least one.
+Boundary selectors also accept `-j N`; unscoped `test --full` runs require `--jobs N`.
 `check` validates embedded sources, architecture, Rust formatting, Clippy, Rust tests, and native acceptance.
 `--full` adds shared boundary cases, portable transcript-runner/MCP-client/release tooling regressions, wheel acceptance, and source-install acceptance in a temporary virtualenv.
 `format` runs ruff, yamark, rustfmt, and air, reports every failure, and only returns failure with `--strict`.
