@@ -16,8 +16,8 @@ def main() -> None:
     try:
         relay.make_checkpoint("retirement-fault-release")
         relay.make_checkpoint("retirement-fault-sent")
-        relay.ready()
         if failed.exists():
+            relay.ready()
             while True:
                 command = relay.receive()
                 if command["kind"] == "shutdown":
@@ -26,8 +26,12 @@ def main() -> None:
                 assert command["kind"] == "evaluate", command
                 relay.send({"kind": "stdout", "data": "replacement cell executed\n"})
                 relay.complete()
-        assert relay.receive()["kind"] == "evaluate"
-        relay.send({"kind": "fatal", "message": "scripted evaluation failure"})
+        if "MCP_CONSOLE_TEST_INITIAL_FAILURE" in os.environ:
+            relay.send({"kind": "fatal", "message": "scripted startup failure"})
+        else:
+            relay.ready()
+            assert relay.receive()["kind"] == "evaluate"
+            relay.send({"kind": "fatal", "message": "scripted evaluation failure"})
         assert relay.receive()["kind"] == "shutdown"
         relay.send({"kind": "shutdown_started"})
         relay.wait_for_checkpoint("retirement-fault-release")

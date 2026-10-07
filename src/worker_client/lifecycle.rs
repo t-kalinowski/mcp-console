@@ -553,11 +553,13 @@ impl Client {
         };
         if let Err(mut error) = restart.processes.shutdown(restart.deadline) {
             let retirement = self.finish_worker_retirement().and_then(|retirement| {
-                if matches!(retirement, WorkerRetirement::AlreadyStopped)
-                    && let Some(worker) = &restart.processes.worker
+                if matches!(
+                    retirement,
+                    WorkerRetirement::NeverStarted | WorkerRetirement::AlreadyStopped
+                ) && let Some(worker) = &restart.processes.worker
                 {
-                    // Failed-worker retirement may have stopped the logical
-                    // worker. Cleanup failure does not settle its retained I/O.
+                    // A failed launch may never become Running or may already
+                    // be Stopped. Cleanup failure does not settle retained I/O.
                     worker.finish_retirement()?;
                 }
                 Ok(retirement)
@@ -762,12 +764,14 @@ impl Client {
             .map_err(|_| RestartFailure::new("worker lock poisoned".to_string()))?;
         self.ensure_restarting().map_err(RestartFailure::new)?;
         let retirement = worker.finish_retirement().map_err(RestartFailure::new)?;
-        if matches!(retirement, WorkerRetirement::AlreadyStopped)
-            && let Some(retiring_worker) = retiring_worker
+        if matches!(
+            retirement,
+            WorkerRetirement::NeverStarted | WorkerRetirement::AlreadyStopped
+        ) && let Some(retiring_worker) = retiring_worker
         {
-            // A failed evaluation can stop the worker after restart changes
-            // generation. Its logical Stopped state does not settle the old
-            // launch's retained dispatcher failure for this replacing caller.
+            // An initial launch can fail before becoming Running; a failed
+            // evaluation can already have stopped it. Neither logical state
+            // settles the launch's retained I/O result for this replacing caller.
             retiring_worker
                 .finish_retirement()
                 .map_err(RestartFailure::new)?;
@@ -1458,11 +1462,13 @@ impl Client {
             });
             let stopped = stop_handles.finish_shutdown(errors);
             let retired = client.finish_worker_retirement().and_then(|retirement| {
-                if matches!(retirement, WorkerRetirement::AlreadyStopped)
-                    && let Some(worker) = &stop_handles.worker
+                if matches!(
+                    retirement,
+                    WorkerRetirement::NeverStarted | WorkerRetirement::AlreadyStopped
+                ) && let Some(worker) = &stop_handles.worker
                 {
-                    // Failed-worker retirement can stop the logical worker
-                    // before EOF. Observe its launch's retained I/O result;
+                    // A failed launch may never become Running or may already
+                    // be Stopped before EOF. Observe its retained I/O result;
                     // a running worker already reports that result above.
                     worker.finish_retirement()?;
                 }

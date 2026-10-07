@@ -169,7 +169,7 @@ Publishing a failed-worker transition checks that its generation still owns it.
 The operation keeps normal command/barrier failure separate from physical cleanup and the dispatcher outcome.
 Confirmed physical cleanup and joined tasks can supersede a failed normal barrier; failed native cleanup still blocks replacement.
 Process and worker consumers read separate cleanup and I/O views of that retained result, avoiding duplicate diagnostics within one shutdown response.
-Restart and EOF check the retiring launch's retained I/O result even when a failed evaluation has already stopped the logical worker or physical cleanup fails.
+Restart and EOF check the retiring launch's retained I/O result even when an initial launch failed before readiness, a failed evaluation has already stopped the logical worker or physical cleanup fails.
 Failed-worker replacement also requires launcher reaping and confirmed retirement of its owned temporary storage.
 Available output is drained even when cleanup fails.
 The existing worker, relay, launcher and force-stop allowances are captured once.

@@ -43,8 +43,24 @@ def test_restart_preserves_cleanup_and_io_failures(
     return _overlapping_failed_retirement(binary, execution, cleanup_failure=True)
 
 
+@requires(POSIX, NATIVE_FIXTURES)
+@executions(DIRECT, SANDBOXED)
+def test_restart_preserves_initial_launch_retirement_failure(
+    binary: Path, execution: Execution
+) -> Transcript:
+    # Startup fails before Ready. A later retirement failure must reject the
+    # replacement and survive EOF through the same retained retirement result.
+    return _overlapping_failed_retirement(
+        binary, execution, cleanup_failure=False, initial_failure=True
+    )
+
+
 def _overlapping_failed_retirement(
-    binary: Path, execution: Execution, *, cleanup_failure: bool
+    binary: Path,
+    execution: Execution,
+    *,
+    cleanup_failure: bool,
+    initial_failure: bool = False,
 ) -> Transcript:
     # fmt: python
     launcher = code("""
@@ -81,6 +97,8 @@ def _overlapping_failed_retirement(
         }
         if cleanup_failure:
             environment["MCP_CONSOLE_TEST_RETIREMENT_EXIT_STATUS"] = "47"
+        if initial_failure:
+            environment["MCP_CONSOLE_TEST_INITIAL_FAILURE"] = "1"
         relay = (
             Path(__file__).resolve().parents[3]
             / "fixtures/server_relay/failed_retirement_restart.py"
@@ -150,12 +168,17 @@ def _overlapping_failed_retirement(
         client.receive_many([failed, restart])
         next_cell = client.send(r="42")
         assert failed["result"]["isError"], failed
-        assert (
-            "scripted retirement failure" in failed["result"]["content"][0]["text"]
-        ), failed
+        if initial_failure:
+            assert failed["result"]["content"][0]["text"] == (
+                "[stopped by session restart request before evaluation finished]"
+            ), failed
+        else:
+            assert (
+                "scripted retirement failure" in failed["result"]["content"][0]["text"]
+            ), failed
         assert restart["result"]["isError"], (failed, restart, next_cell)
         restart_text = restart["result"]["content"][0]["text"]
-        assert "scripted retirement failure" in restart_text, restart
+        assert restart_text.count("scripted retirement failure") == 1, restart
         if cleanup_failure:
             for response in (failed, restart):
                 text = response["result"]["content"][0]["text"]
