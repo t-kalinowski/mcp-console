@@ -104,6 +104,9 @@ def test_native_order_and_captured_configuration(
             capture_output=True,
         )
         workspace_contents = (root / ".RData").read_bytes()
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text("r:\n  vanilla: false\n")
         with McpClient(
             binary,
             startup_arguments(execution),
@@ -129,7 +132,6 @@ def test_native_order_and_captured_configuration(
                 cat("native startup complete\n")
                 """)
             client.expect("native startup complete\n", r=check)
-            config = root / ".agents/console/config.yaml"
             config.write_text("r:\n  vanilla: true\n")
             (root / ".Rprofile").write_text(profile + "native_edited <- TRUE\n")
             client.send(control="restart")
