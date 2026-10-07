@@ -47,7 +47,7 @@ def _assert_guidance(tool: dict, languages: set[str], *, custom: bool) -> None:
                 rf"(?<![a-z]){language}(?![a-z])", description, re.I
             ), (language, path, description)
     description = tool["description"]
-    assert "Cells are not transactional" in description
+    assert "An error can leave earlier changes in place" in description
     assert "do not resubmit the cell" in description
     assert "use only trusted dependencies" in description
     assert ("Switch languages when useful" in description) == (len(languages) > 1)
@@ -58,12 +58,10 @@ def _assert_guidance(tool: dict, languages: set[str], *, custom: bool) -> None:
     )
     if custom:
         assert "does not supply built-in runtime packages" in description
-        assert "Managed requirements require" in description
+        assert "Managed requirements need" in description
     elif "sql" in languages:
-        if languages != {"r", "python", "sql"}:
-            assert "without a setup cell" in description
         assert "CSV, Parquet, JSON, and JSONL directly" in description
-        assert "provider" in description.lower() or languages == {"r", "python", "sql"}
+        assert "provider" not in description.lower()
         sql = properties["sql"]["description"]
         assert "selected driver supplies its own SQL" in sql
         assert "CLI dot commands are not supported" in sql
@@ -75,7 +73,7 @@ def _assert_guidance(tool: dict, languages: set[str], *, custom: bool) -> None:
             assert "console_sql_connection(connection)" in python
             assert "register(name, frame)" in python
             if "r" not in languages:
-                assert "only when" in python and "owns" in python
+                assert "requires Python-owned DuckDB" in python
 
 
 def _matrix(binary: Path, *, custom: bool) -> Transcript:

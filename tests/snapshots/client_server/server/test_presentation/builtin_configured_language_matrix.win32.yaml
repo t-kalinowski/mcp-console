@@ -7,14 +7,10 @@ language_guidance: >-
   plots return as images.
 
 
-  Language fields describe the configured interface, not installed runtimes.
-  Managed resolution needs execution-host resolver support. Bare runtimes and
-  explicitly selected Python use preinstalled packages.
-
-
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -23,9 +19,8 @@ language_guidance: >-
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
 preparation_error:
   content:
     - type: text
@@ -45,14 +40,10 @@ language_guidance: >-
   plots return as images.
 
 
-  Language fields describe the configured interface, not installed runtimes.
-  Managed resolution needs execution-host resolver support. Bare runtimes and
-  explicitly selected Python use preinstalled packages.
-
-
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -61,9 +52,8 @@ language_guidance: >-
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
 ---
 languages: python
 language_guidance: >-
@@ -73,14 +63,10 @@ language_guidance: >-
   plots return as images.
 
 
-  Language fields describe the configured interface, not installed runtimes.
-  Managed resolution needs execution-host resolver support. Bare runtimes and
-  explicitly selected Python use preinstalled packages.
-
-
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -89,6 +75,5 @@ language_guidance: >-
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.

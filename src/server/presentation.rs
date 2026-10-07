@@ -145,13 +145,6 @@ impl Profile {
                 description.push_str("\n\n");
                 description.push_str(&self.language_guidance());
             }
-            description.push_str("\n\n");
-            description.push_str(sections::INTERFACE);
-            description.push_str(if self.restricted_guidance() && !self.languages.python {
-                sections::MANAGED_PREPARATION_SELECTED
-            } else {
-                sections::MANAGED_PREPARATION
-            });
         } else {
             description.push_str("\n\n");
             description.push_str(if self.restricted_guidance() {
@@ -192,8 +185,7 @@ impl Profile {
         if self.languages.sql {
             guidance.push_str("\n\n");
             guidance.push_str(sections::SQL_FILES);
-            guidance.push_str(sections::SQL_DEFAULTS);
-            guidance.push_str(sections::SQL_PROVIDER_SELECTED);
+            guidance.truncate(guidance.trim_end().len());
         }
         guidance
     }
@@ -302,14 +294,10 @@ pub(super) fn control_description() -> String {
 }
 
 fn control_description_for(full: bool) -> String {
-    let interrupt = if cfg!(windows) {
-        sections::WINDOWS_INTERRUPT
-    } else {
-        sections::UNIX_INTERRUPT
-    };
     format!(
-        "{}{interrupt}{}",
+        "{}{}{}",
         sections::CONTROL_START,
+        sections::INTERRUPT,
         if full {
             sections::CONTROL_END
         } else {
@@ -344,16 +332,48 @@ fn description_for_launch(policy: &SandboxSettings, no_sandbox: bool) -> String 
         }
         _ => "has network access governed by the launcher's sandbox settings",
     };
+    let mut writable = vec![if cfg!(windows) {
+        "private `TMPDIR` (also `TEMP` and `TMP`)".to_string()
+    } else {
+        "private `TMPDIR`".to_string()
+    }];
+    if profile == Some(":workspace")
+        && let Some(workspace) = policy.get("workspace")
+    {
+        writable.push(format!("`{workspace}`"));
+    }
+    if let Some(entries) = policy
+        .get("filesystem")
+        .and_then(|filesystem| filesystem.get("entries"))
+        .and_then(Value::as_array)
+    {
+        for entry in entries {
+            if entry
+                .get("access")
+                .and_then(crate::settings::native_variant_name)
+                == Some("write")
+                && let Some(path) = entry.get("path")
+            {
+                let location = match (path.get("type").and_then(Value::as_str), path.get("path")) {
+                    (Some("path"), Some(location)) => location,
+                    _ => path,
+                };
+                writable.push(format!("`{location}`"));
+            }
+        }
+    }
+    let writable = format!(
+        "Writable locations: {}; subject to more specific read/deny rules",
+        writable.join(", ")
+    );
     let sandbox_access = match filesystem {
         Some("restricted") if profile == Some(":workspace") => format!(
-            "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
+            "uses the native \":workspace\" profile and {network_access}. {writable}. Workspace .git, .agents, .codex, and .claude paths are readable and protected from writes by default; explicit rules can override these defaults or restrict reads"
         ),
         Some("restricted") if profile == Some(":read-only") => format!(
-            "uses the native \":read-only\" profile: it can read host files subject to configured read restrictions, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}"
+            "uses the native \":read-only\" profile: it can read host files subject to configured restrictions and {network_access}. {writable}"
         ),
-        Some("restricted") => format!(
-            "can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
-        ),
+        Some("restricted") => format!("can read host files and {network_access}. {writable}"),
         Some("unrestricted") => {
             format!("has unrestricted filesystem access and {network_access}")
         }
@@ -363,10 +383,10 @@ fn description_for_launch(policy: &SandboxSettings, no_sandbox: bool) -> String 
     };
 
     if no_sandbox {
-        "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.".into()
+        "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Package preparation may execute installation or build code; use only trusted dependencies.".into()
     } else {
         format!(
-            "Evaluated code {sandbox_access}. Dependency resolution may run installation or build code in a separate native resolver sandbox on macOS and Linux with its own read, write, and network policy; use only trusted dependencies."
+            "Evaluated code {sandbox_access}. Package preparation may execute installation or build code with separate filesystem and network permissions; use only trusted dependencies."
         )
     }
 }

@@ -55,10 +55,19 @@ pub(super) struct SendArguments {
     pub(super) python: Option<String>,
     #[schemars(description = super::presentation::sql_description())]
     pub(super) sql: Option<String>,
+    /// Wait for output for up to this many milliseconds (default 60,000). `0` returns without
+    /// waiting for completion. Expiry returns available output while work continues. This is a wait
+    /// budget, not cancellation or a whole-call deadline: preparation and control can exceed it;
+    /// standalone preparation has no timeout.
+    #[serde(default = "default_timeout_ms")]
+    pub(super) timeout_ms: u64,
     #[schemars(description = super::presentation::control_description())]
     pub(super) control: Option<SendControl>,
+    #[schemars(description = super::presentation::stdin_description())]
+    pub(super) stdin: Option<String>,
     /// Inspect declarations or prepare dependencies on the execution host without importing,
-    /// attaching, or loading them. Alone, performs standalone preparation. With a cell, preparation
+    /// attaching, or loading them. Requires host preparation support; bare runtimes use installed
+    /// packages. Alone, performs standalone preparation. With a cell, preparation
     /// precedes code; without control it also precedes bundled stdin. Failure or a required restart
     /// withholds the cell.
     /// Compatible additions preserve live state on an idle worker; other changes need restart.
@@ -67,16 +76,7 @@ pub(super) struct SendArguments {
     /// Only add can accompany interrupt, with a following cell; providers without this preparation
     /// support reject the combination before signaling or input. Otherwise interrupt and stdin
     /// precede deferred validation/preparation and are not rolled back on failure.
-    /// SQL does not discover packages; follow missing-provider notices for preparation.
     pub(super) requirements: Option<Requirements>,
-    #[schemars(description = super::presentation::stdin_description())]
-    pub(super) stdin: Option<String>,
-    /// Wait budget in milliseconds (default 60,000); omit for ordinary calls. `0` starts
-    /// background work without waiting for completion. Expiry returns available output without cancelling
-    /// execution, startup, or resolution. This is not a whole-call deadline: explicit preparation
-    /// and lifecycle control may exceed it; standalone preparation is not limited by it.
-    #[serde(default = "default_timeout_ms")]
-    pub(super) timeout_ms: u64,
 }
 
 #[derive(Clone, Copy, Deserialize, schemars::JsonSchema)]

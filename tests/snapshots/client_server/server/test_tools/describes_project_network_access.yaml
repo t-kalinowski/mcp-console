@@ -7,15 +7,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -24,9 +24,8 @@ description: >-
 
 
   Evaluated code has unrestricted filesystem access and cannot directly access
-  the network. Dependency resolution may run installation or build code in a
-  separate native resolver sandbox on macOS and Linux with its own read, write,
-  and network policy; use only trusted dependencies.
+  the network. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: unrestricted restricted (mapping)
 description: >-
@@ -36,15 +35,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -53,9 +52,8 @@ description: >-
 
 
   Evaluated code has unrestricted filesystem access and cannot directly access
-  the network. Dependency resolution may run installation or build code in a
-  separate native resolver sandbox on macOS and Linux with its own read, write,
-  and network policy; use only trusted dependencies.
+  the network. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: unrestricted enabled (string)
 description: >-
@@ -65,15 +63,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -82,9 +80,8 @@ description: >-
 
 
   Evaluated code has unrestricted filesystem access and can directly access the
-  network. Dependency resolution may run installation or build code in a
-  separate native resolver sandbox on macOS and Linux with its own read, write,
-  and network policy; use only trusted dependencies.
+  network. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: unrestricted enabled (mapping)
 description: >-
@@ -94,15 +91,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -111,9 +108,8 @@ description: >-
 
 
   Evaluated code has unrestricted filesystem access and can directly access the
-  network. Dependency resolution may run installation or build code in a
-  separate native resolver sandbox on macOS and Linux with its own read, write,
-  and network policy; use only trusted dependencies.
+  network. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: restricted restricted (string)
 description: >-
@@ -123,15 +119,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -139,11 +135,10 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files, cannot directly access the network, and
-  can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution may run installation or build
-  code in a separate native resolver sandbox on macOS and Linux with its own
-  read, write, and network policy; use only trusted dependencies.
+  Evaluated code can read host files and cannot directly access the network.
+  Writable locations: private `TMPDIR`; subject to more specific read/deny
+  rules. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: restricted restricted (mapping)
 description: >-
@@ -153,15 +148,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -169,11 +164,10 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files, cannot directly access the network, and
-  can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution may run installation or build
-  code in a separate native resolver sandbox on macOS and Linux with its own
-  read, write, and network policy; use only trusted dependencies.
+  Evaluated code can read host files and cannot directly access the network.
+  Writable locations: private `TMPDIR`; subject to more specific read/deny
+  rules. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: restricted enabled (string)
 description: >-
@@ -183,15 +177,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -199,11 +193,10 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files, can directly access the network, and can
-  write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution may run installation or build
-  code in a separate native resolver sandbox on macOS and Linux with its own
-  read, write, and network policy; use only trusted dependencies.
+  Evaluated code can read host files and can directly access the network.
+  Writable locations: private `TMPDIR`; subject to more specific read/deny
+  rules. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: restricted enabled (mapping)
 description: >-
@@ -213,15 +206,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -229,11 +222,10 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files, can directly access the network, and can
-  write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution may run installation or build
-  code in a separate native resolver sandbox on macOS and Linux with its own
-  read, write, and network policy; use only trusted dependencies.
+  Evaluated code can read host files and can directly access the network.
+  Writable locations: private `TMPDIR`; subject to more specific read/deny
+  rules. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: external-sandbox restricted (string)
 description: >-
@@ -243,15 +235,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -261,9 +253,8 @@ description: >-
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution may run installation or build code in a separate native
-  resolver sandbox on macOS and Linux with its own read, write, and network
-  policy; use only trusted dependencies.
+  Package preparation may execute installation or build code with separate
+  filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: external-sandbox restricted (mapping)
 description: >-
@@ -273,15 +264,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -291,9 +282,8 @@ description: >-
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution may run installation or build code in a separate native
-  resolver sandbox on macOS and Linux with its own read, write, and network
-  policy; use only trusted dependencies.
+  Package preparation may execute installation or build code with separate
+  filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: external-sandbox enabled (string)
 description: >-
@@ -303,15 +293,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -321,9 +311,8 @@ description: >-
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution may run installation or build code in a separate native
-  resolver sandbox on macOS and Linux with its own read, write, and network
-  policy; use only trusted dependencies.
+  Package preparation may execute installation or build code with separate
+  filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: external-sandbox enabled (mapping)
 description: >-
@@ -333,15 +322,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -351,9 +340,8 @@ description: >-
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution may run installation or build code in a separate native
-  resolver sandbox on macOS and Linux with its own read, write, and network
-  policy; use only trusted dependencies.
+  Package preparation may execute installation or build code with separate
+  filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: restricted
 description: >-
@@ -363,15 +351,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -379,11 +367,10 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files, cannot directly access the network, and
-  can write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution may run installation or build
-  code in a separate native resolver sandbox on macOS and Linux with its own
-  read, write, and network policy; use only trusted dependencies.
+  Evaluated code can read host files and cannot directly access the network.
+  Writable locations: private `TMPDIR`; subject to more specific read/deny
+  rules. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: enabled
 description: >-
@@ -393,15 +380,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -409,11 +396,10 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files, can directly access the network, and can
-  write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution may run installation or build
-  code in a separate native resolver sandbox on macOS and Linux with its own
-  read, write, and network policy; use only trusted dependencies.
+  Evaluated code can read host files and can directly access the network.
+  Writable locations: private `TMPDIR`; subject to more specific read/deny
+  rules. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: proxy
 description: >-
@@ -423,15 +409,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -439,12 +425,11 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files, can access the network subject to the
-  launcher's proxy settings, and can write in the worker's private temporary
-  directory and to paths explicitly allowed by the launcher. Dependency
-  resolution may run installation or build code in a separate native resolver
-  sandbox on macOS and Linux with its own read, write, and network policy; use
-  only trusted dependencies.
+  Evaluated code can read host files and can access the network subject to the
+  launcher's proxy settings. Writable locations: private `TMPDIR`; subject to
+  more specific read/deny rules. Package preparation may execute installation or
+  build code with separate filesystem and network permissions; use only trusted
+  dependencies.
 ---
 configuration: proxy with local binding
 description: >-
@@ -454,15 +439,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -470,12 +455,11 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files, can access the network subject to the
-  launcher's proxy settings, and can write in the worker's private temporary
-  directory and to paths explicitly allowed by the launcher. Dependency
-  resolution may run installation or build code in a separate native resolver
-  sandbox on macOS and Linux with its own read, write, and network policy; use
-  only trusted dependencies.
+  Evaluated code can read host files and can access the network subject to the
+  launcher's proxy settings. Writable locations: private `TMPDIR`; subject to
+  more specific read/deny rules. Package preparation may execute installation or
+  build code with separate filesystem and network permissions; use only trusted
+  dependencies.
 ---
 configuration: proxy with network enabled
 description: >-
@@ -485,15 +469,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -501,12 +485,11 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files, can access the network subject to the
-  launcher's proxy settings, and can write in the worker's private temporary
-  directory and to paths explicitly allowed by the launcher. Dependency
-  resolution may run installation or build code in a separate native resolver
-  sandbox on macOS and Linux with its own read, write, and network policy; use
-  only trusted dependencies.
+  Evaluated code can read host files and can access the network subject to the
+  launcher's proxy settings. Writable locations: private `TMPDIR`; subject to
+  more specific read/deny rules. Package preparation may execute installation or
+  build code with separate filesystem and network permissions; use only trusted
+  dependencies.
 ---
 configuration: native network representation
 description: >-
@@ -516,15 +499,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -532,11 +515,10 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files, can directly access the network, and can
-  write in the worker's private temporary directory and to paths explicitly
-  allowed by the launcher. Dependency resolution may run installation or build
-  code in a separate native resolver sandbox on macOS and Linux with its own
-  read, write, and network policy; use only trusted dependencies.
+  Evaluated code can read host files and can directly access the network.
+  Writable locations: private `TMPDIR`; subject to more specific read/deny
+  rules. Package preparation may execute installation or build code with
+  separate filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: external enforcement
 description: >-
@@ -546,15 +528,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -564,9 +546,8 @@ description: >-
 
   Evaluated code has filesystem access governed by the launcher's sandbox
   settings and has network access governed by the launcher's sandbox settings.
-  Dependency resolution may run installation or build code in a separate native
-  resolver sandbox on macOS and Linux with its own read, write, and network
-  policy; use only trusted dependencies.
+  Package preparation may execute installation or build code with separate
+  filesystem and network permissions; use only trusted dependencies.
 ---
 configuration: no sandbox
 description: >-
@@ -576,15 +557,15 @@ description: >-
 
   Language fields describe the configured interface; evaluation, display, SQL,
   and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements
-  require host resolver support and compatible worker callbacks; Python
-  requirements are unavailable. Switch languages when useful, using the worker's
-  capabilities.
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Code-bearing calls must be sequential; a control-only interrupt may overlap a
-  pending `send`. Cells are not transactional; effects before an error may
-  remain. Poll running work with an empty `send`; do not resubmit the cell.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
   Text results, including notices, have an 8 KiB limit, retaining the beginning
@@ -593,6 +574,5 @@ description: >-
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.

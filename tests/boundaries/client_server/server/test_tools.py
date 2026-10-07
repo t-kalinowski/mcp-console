@@ -22,7 +22,7 @@ from support.records import Transcript, TranscriptWithCompanions
 from support.resolvers import bare_runtime_environment
 from support.sandbox_configuration import NATIVE_PROXY
 from support.suites import run_this_suite
-from support.snapshots import platform_snapshots
+from support.snapshots import execution_snapshots, platform_snapshots
 
 
 @contextmanager
@@ -152,6 +152,12 @@ def test_initializes_and_lists_tools(
         companions["workspace.yaml"] = _initializes_and_lists_tools(
             binary, execution, workspace_profile=True
         )
+        companions["writable.yaml"] = _initializes_and_lists_tools(
+            binary, execution, writable=True
+        )
+        companions["custom-writable.yaml"] = _initializes_and_lists_tools(
+            binary, execution, custom=True, writable=True
+        )
     baseline = _initializes_and_lists_tools(binary, execution)
     # Runtime discovery must not change the configured public interface.
     for name in ("bare.yaml", "python-only.yaml", "python-managed.yaml"):
@@ -171,6 +177,7 @@ def _initializes_and_lists_tools(
     python_managed: bool = False,
     proxy: bool = False,
     workspace_profile: bool = False,
+    writable: bool = False,
     bootstrap_languages: str | None = None,
     languages: tuple[str, ...] | None = None,
 ) -> Transcript:
@@ -200,7 +207,7 @@ def _initializes_and_lists_tools(
                 environment.pop(name, None)
             if not python_managed:
                 environment["RETICULATE_PYTHON"] = str(python_bin / "python3")
-        workspace = Path(library) / "workspace"
+        workspace = (Path(library) / "workspace").resolve()
         workspace.mkdir()
         if proxy or workspace_profile:
             config = workspace / ".agents/console/config.yaml"
@@ -225,6 +232,7 @@ def _initializes_and_lists_tools(
                 *("-c", "languages=" + json.dumps(languages))
                 if languages is not None
                 else (),
+                *("--writable-root", str(workspace)) if writable else (),
             ),
             environment,
             workspace,
@@ -242,7 +250,29 @@ def _initializes_and_lists_tools(
                     "stdin",
                     "timeout_ms",
                 }, send
+            properties = send["inputSchema"]["properties"]
+            assert list(properties) == [
+                field
+                for field in (
+                    "r",
+                    "python",
+                    "sql",
+                    "timeout_ms",
+                    "control",
+                    "stdin",
+                    "requirements",
+                )
+                if field in properties
+            ], list(properties)
+            for field in ("r", "python", "sql"):
+                if field in properties:
+                    assert properties[field]["description"].startswith(
+                        "Evaluate one complete"
+                    )
             description = send["description"]
+            assert "Run one cell at a time" in description
+            assert "An error can leave earlier changes in place" in description
+            assert "active host resolver" not in properties["control"]["description"]
             if custom:
                 assert "custom-worker" in description
                 assert "does not supply built-in runtime packages" in description
@@ -261,7 +291,8 @@ def _initializes_and_lists_tools(
                     in sql_description
                 )
                 assert "TYPE sqlite, READ_ONLY" in sql_description
-                assert "managed defaults include SQLite when" in description
+                assert "missing-provider" not in description
+                assert "Language fields describe" not in description
                 if "r" in send["inputSchema"]["properties"]:
                     assert (
                         "Use R for vectorized data and string operations" in description
@@ -327,12 +358,17 @@ def _initializes_and_lists_tools(
             assert not prepared.get("isError", False), prepared
             assert client.request("tools/list")["result"] == transcript[2]["result"]
             client.finish()
+            for response in transcript:
+                for tool in response.get("result", {}).get("tools", []):
+                    tool["description"] = tool["description"].replace(
+                        json.dumps(str(workspace))[1:-1], "<workspace>"
+                    )
             return transcript
 
 
 @requires(SANDBOX)
 def test_describes_project_network_access(binary: Path) -> Transcript:
-    restricted_filesystem = "can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
+    restricted_filesystem = "Writable locations: private `TMPDIR`"
     external_filesystem = (
         "filesystem access governed by the launcher's sandbox settings"
     )
@@ -444,13 +480,75 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
                     assert (restricted_filesystem in description) == (
                         filesystem_access == restricted_filesystem
                     ), (name, description)
-                    assert "separate native resolver sandbox" in description
+                    assert "separate filesystem and network permissions" in description
                 config.write_text("invalid: [", encoding="utf-8")
                 listed = client.request("tools/list")
                 assert listed["result"]["tools"][0]["description"] == description
                 client.finish()
                 transcript.append({"configuration": name, "description": description})
     return transcript
+
+
+@requires(SANDBOX)
+def test_describes_captured_writable_locations(binary: Path) -> Transcript:
+    records = []
+    for profile in (None, ":workspace", ":read-only"):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            config = workspace / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            policy = {
+                "sandbox": {
+                    "filesystem": {
+                        "entries": [
+                            {
+                                "path": {"type": "path", "path": "configured output"},
+                                "access": "write",
+                            },
+                            {
+                                "path": {"type": "path", "path": "read only"},
+                                "access": "read",
+                            },
+                            {
+                                "path": {"type": "path", "path": "denied"},
+                                "access": "deny",
+                            },
+                        ]
+                    }
+                }
+            }
+            if profile is not None:
+                policy["extends"] = profile
+            config.write_text(json.dumps(policy), encoding="utf-8")
+            with McpClient(
+                binary,
+                ("serve", "--worker", "unused-worker", "--writable-root", "cli output"),
+                current_directory=workspace,
+                record_in_project=False,
+            ) as client:
+                client.initialize_and_list_tools()
+                tool = client.transcript[-1]["result"]["tools"][0]
+                description = tool["description"]
+                assert "Writable locations: private `TMPDIR`" in description
+                for path in ("configured output", "cli output"):
+                    assert json.dumps(str(workspace / path)) in description
+                assert json.dumps(str(workspace / "read only")) not in description
+                assert json.dumps(str(workspace / "denied")) not in description
+                if profile == ":workspace":
+                    assert json.dumps(str(workspace)) in description
+                assert "more specific read/deny rules" in description
+                config.write_text("invalid: [", encoding="utf-8")
+                assert client.request("tools/list")["result"]["tools"] == [tool]
+                client.finish()
+                records.append(
+                    {
+                        "profile": profile,
+                        "description": description.replace(
+                            json.dumps(str(workspace))[1:-1], "<workspace>"
+                        ),
+                    }
+                )
+    return records
 
 
 @platform_snapshots("win32")
@@ -651,6 +749,7 @@ def _reject_send_arguments(client: McpClient) -> None:
     ), result
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_bounds_argument_decoding_errors(
@@ -664,7 +763,7 @@ def test_bounds_argument_decoding_errors(
         ({"timeout_ms": value}, "invalid type", "expected u64"),
     )
     with tempfile.TemporaryDirectory() as temporary:
-        workspace = Path(temporary)
+        workspace = Path(temporary).resolve()
         started = workspace / "worker-started"
         roots = ("--writable-root", str(workspace)) if execution == SANDBOXED else ()
         with McpClient(

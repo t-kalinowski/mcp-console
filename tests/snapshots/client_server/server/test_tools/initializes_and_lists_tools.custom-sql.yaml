@@ -31,15 +31,15 @@ result:
         Language fields describe the configured interface; evaluation, display,
         connections, and sharing depend on the worker. Console does not supply
         built-in runtime packages, import hooks, or a default database
-        connection. Managed requirements require host resolver support and
-        compatible worker callbacks; registry package preparation is
-        unavailable.
+        connection. Managed requirements need compatible worker callbacks;
+        registry package preparation is unavailable.
 
 
-        Code-bearing calls must be sequential; a control-only interrupt may
-        overlap a pending `send`. Cells are not transactional; effects before an
-        error may remain. Poll running work with an empty `send`; do not
-        resubmit the cell.
+        Run one cell at a time. Wait for its `send` to return before another
+        call with code. You can interrupt a pending call with
+        `send(control="interrupt")`. An error can leave earlier changes in
+        place. If work is still running, poll with an empty `send` until it
+        finishes; do not resubmit the cell.
 
 
         Text results, including notices, have an 8 KiB limit, retaining the
@@ -47,12 +47,11 @@ result:
         report state and omitted-output locations.
 
 
-        Evaluated code can read host files, cannot directly access the network,
-        and can write in the worker's private temporary directory and to paths
-        explicitly allowed by the launcher. Dependency resolution may run
-        installation or build code in a separate native resolver sandbox on
-        macOS and Linux with its own read, write, and network policy; use only
-        trusted dependencies.
+        Evaluated code can read host files and cannot directly access the
+        network. Writable locations: private `TMPDIR`; subject to more specific
+        read/deny rules. Package preparation may execute installation or build
+        code with separate filesystem and network permissions; use only trusted
+        dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -60,28 +59,49 @@ result:
         properties:
           sql:
             description: >-
-              One complete SQL cell; the custom worker supplies the connection,
-              dialect, and display.
+              Evaluate one complete SQL cell; the custom worker supplies the
+              connection, dialect, and display.
             type:
               - string
               - "null"
+          timeout_ms:
+            description: >-
+              Wait for output for up to this many milliseconds (default 60,000). `0`
+              returns without waiting for completion. Expiry returns available output
+              while work continues. This is a wait budget, not cancellation or a
+              whole-call deadline: preparation and control can exceed it; standalone
+              preparation has no timeout.
+            type: integer
+            format: uint64
+            minimum: 0
+            default: 60000
           control:
             description: >-
-              Apply control before same-call input/code. `interrupt` requests SIGINT
-              from the active host resolver or a cooperative interrupt from the
-              worker, preserving live state. A following cell runs only if prior work
-              stops. `restart` discards live state, including debugger and unread
-              input; same-call stdin/code go only to the replacement. Requirements
-              resolve before replacement; resolution failure preserves the current
-              worker.
+              Apply control before same-call stdin/code. `interrupt` requests a
+              cooperative interrupt and cancellation of dependency preparation,
+              preserving live state. A following cell runs only if prior work stops.
+              `restart` discards live state, including debugger and unread input;
+              same-call stdin/code go only to the replacement.
             type: string
             enum:
               - interrupt
               - restart
+          stdin:
+            description: >-
+              Send stdin alone to answer an active read, prompt, or debugger. UTF-8
+              text is queued exactly; no newline is added, so line input normally
+              needs a trailing `\n`. Empty text queues nothing. With a cell, input
+              queues before code; an already waiting read may consume it first,
+              including while interrupted work unwinds. Unread input can satisfy later
+              reads; restart discards it.
+            type:
+              - string
+              - "null"
           requirements:
             description: >-
               Inspect declarations or prepare dependencies on the execution host
-              without importing, attaching, or loading them. Alone, performs
+              without importing, attaching, or loading them. Requires host preparation
+              support; bare runtimes use installed packages. Alone, performs
               standalone preparation. With a cell, preparation precedes code; without
               control it also precedes bundled stdin. Failure or a required restart
               withholds the cell. Compatible additions preserve live state on an idle
@@ -91,9 +111,7 @@ result:
               Only add can accompany interrupt, with a following cell; providers
               without this preparation support reject the combination before signaling
               or input. Otherwise interrupt and stdin precede deferred
-              validation/preparation and are not rolled back on failure. SQL does not
-              discover packages; follow missing-provider notices for preparation,
-              including requirements for hidden providers.
+              validation/preparation and are not rolled back on failure.
             type:
               - object
               - "null"
@@ -118,7 +136,7 @@ result:
                   - reset
               python_version:
                 description: >-
-                  Host-provider version numbers or ==, !=, <, <=, >, >= constraints (e.g.
+                  Runtime version numbers or ==, !=, <, <=, >, >= constraints (e.g.
                   >=3.11). add appends; changes with a live worker require
                   control="restart".
                 type: array
@@ -144,17 +162,16 @@ result:
                   maxLength: 64
               r:
                 description: >-
-                  Single-line ir package references for host-provider preparation, e.g.
-                  DBI or duckdb, including supported remote references; local sources and
-                  NUL/line breaks are rejected. Use when a provider notice requests
-                  preparation.
+                  Single-line ir package references for dependency preparation, e.g. DBI
+                  or duckdb, including supported remote references; local sources and
+                  NUL/line breaks are rejected.
                 type: array
                 items:
                   type: string
                   minLength: 1
               python:
                 description: >-
-                  Named PEP 508 registry requirements for host-provider preparation, e.g.
+                  Named PEP 508 registry requirements for dependency preparation, e.g.
                   duckdb>=1, with versions, extras, or markers. Paths, URLs, editable
                   requirements, direct references, and local sources are rejected. Bare or
                   user-selected environments and custom workers disable managed registry
@@ -164,26 +181,3 @@ result:
                   type: string
                   minLength: 1
             additionalProperties: false
-          stdin:
-            description: >-
-              Send stdin alone to answer an active read, prompt, or debugger. UTF-8
-              text is queued exactly; no newline is added, so line input normally
-              needs a trailing `\n`. Empty text queues nothing. With a cell, input
-              queues before code; an already waiting read may consume it first,
-              including while interrupted work unwinds. Unread input can satisfy later
-              reads; restart discards it.
-            type:
-              - string
-              - "null"
-          timeout_ms:
-            description: >-
-              Wait budget in milliseconds (default 60,000); omit for ordinary calls.
-              `0` starts background work without waiting for completion. Expiry
-              returns available output without cancelling execution, startup, or
-              resolution. This is not a whole-call deadline: explicit preparation and
-              lifecycle control may exceed it; standalone preparation is not limited
-              by it.
-            type: integer
-            format: uint64
-            minimum: 0
-            default: 60000
