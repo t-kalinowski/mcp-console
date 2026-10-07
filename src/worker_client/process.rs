@@ -902,7 +902,7 @@ impl Worker {
         let shutdown = self.shutdown_handle();
         let deadline = Instant::now();
         shutdown.request_shutdown(deadline, deadline);
-        shutdown.retire().io
+        shutdown.finish_retirement()
     }
 
     pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
@@ -1326,6 +1326,10 @@ impl WorkerShutdownHandle {
 
     pub(super) fn finish_shutdown(&self) -> Result<(), String> {
         self.retire().process_result()
+    }
+
+    pub(super) fn finish_retirement(&self) -> Result<Option<WorkerProcessOutcome>, String> {
+        self.retire().io
     }
 
     fn retire(&self) -> RetirementResult {

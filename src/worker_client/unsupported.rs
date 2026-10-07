@@ -114,4 +114,8 @@ impl WorkerShutdownHandle {
     pub(super) fn finish_shutdown(&self) -> Result<(), String> {
         Ok(())
     }
+
+    pub(super) fn finish_retirement(&self) -> Result<Option<super::WorkerProcessOutcome>, String> {
+        Ok(None)
+    }
 }

@@ -3,15 +3,127 @@
 import os
 import sys
 import tempfile
+import time
+from contextlib import ExitStack, closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_result_text
+from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import POSIX, UNPRIVILEGED, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, UNPRIVILEGED, requires
+
+
+@requires(POSIX, NATIVE_FIXTURES)
+@executions(DIRECT, SANDBOXED)
+def test_restart_preserves_overlapping_failed_retirement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    # fmt: python
+    launcher = code("""
+        import os
+        import sys
+
+        os.environ["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_PID"] = str(os.getpid())
+        os.environ[os.environ.pop("MCP_CONSOLE_TEST_LOADER")] = os.environ.pop(
+            "MCP_CONSOLE_TEST_RETIREMENT_LIBRARY"
+        )
+        os.execv(sys.argv[1], sys.argv[1:])
+        """)
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
+        root = Path(temporary)
+        blocked, release, returned = [
+            resources.enter_context(closing(FifoCheckpoint.create(root / name)))
+            for name in (
+                "blocked",
+                "release",
+                "returned",
+            )
+        ]
+        environment = {
+            **os.environ,
+            "TMPDIR": str(root),
+            "MCP_CONSOLE_TEST_LOADER": LOADER_VARIABLE,
+            "MCP_CONSOLE_TEST_RETIREMENT_LIBRARY": str(
+                build_interposer(root, "launcher_retirement_interposer")
+            ),
+            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_BLOCKED": str(blocked.path),
+            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE": str(release.path),
+            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURNED": str(returned.path),
+            "MCP_CONSOLE_TEST_GENERATION_FAILED": str(root / "failed"),
+        }
+        relay = (
+            Path(__file__).resolve().parents[3]
+            / "fixtures/server_relay/failed_retirement_restart.py"
+        )
+        client = resources.enter_context(
+            McpClient(
+                Path(sys.executable),
+                (
+                    "-c",
+                    launcher,
+                    str(binary),
+                    *execution.serve("--worker", str(binary), "--relay", str(relay)),
+                ),
+                environment,
+                root,
+            )
+        )
+        resources.callback(release.release)
+        client.initialize_and_list_tools()
+        failed = client.start_send(r="42")
+        checkpoint = wait_for_worker_file(root, "retirement-fault-sent", client)
+        fault_release, fault_sent = [
+            resources.enter_context(
+                closing(FifoCheckpoint.attach(checkpoint.with_name(name)))
+            )
+            for name in ("retirement-fault-release", "retirement-fault-sent")
+        ]
+        resources.callback(fault_release.release)
+        blocked.wait(
+            "failed-worker retirement reached native cleanup after the dispatcher barrier"
+        )
+        (root / "failed").touch()
+        restart = client.start_send(control="restart")
+        # Public admission is the generation-change receipt. Intermediate
+        # probes can see the still-active cell or the reserved control; retain
+        # only the final receipt in the transcript after asserting each probe.
+        first_probe = len(client.transcript)
+        deadline = time.monotonic() + 10
+        while True:
+            probe = client.send(r="must not run during retirement", timeout_ms=0)
+            text = last_result_text(client)
+            assert probe["isError"], probe
+            if text == "[worker is restarting]":
+                break
+            assert text in (
+                "[session control is in progress]",
+                "[worker is already evaluating a cell; poll without a code field]",
+            ), probe
+            assert time.monotonic() < deadline, client.transcript
+        client.transcript[first_probe:] = client.transcript[-1:]
+        fault_release.release()
+        fault_sent.wait("old relay published Fatal during retirement")
+        release.release()
+        returned.wait("native retirement signal completed")
+        client.receive_many([failed, restart])
+        next_cell = client.send(r="42")
+        assert failed["result"]["isError"], failed
+        assert (
+            "scripted retirement failure" in failed["result"]["content"][0]["text"]
+        ), failed
+        assert restart["result"]["isError"], (failed, restart, next_cell)
+        restart_text = restart["result"]["content"][0]["text"]
+        assert "scripted retirement failure" in restart_text, restart
+        assert "[starting new worker]" not in restart_text, restart
+        assert next_cell["isError"], next_cell
+        assert last_result_text(client) == "[worker is shutting down]", next_cell
+        return client.finish()
 
 
 @requires(POSIX, UNPRIVILEGED)

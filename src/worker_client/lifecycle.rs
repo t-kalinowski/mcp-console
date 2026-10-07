@@ -596,6 +596,7 @@ impl Client {
             &mut restart.evaluation,
             restart.generation.clone(),
             !defer_idle,
+            restart.processes.worker.as_ref(),
         ) {
             Ok(replacement) => {
                 let transition = self.finish_restart(&restart.generation);
@@ -743,6 +744,7 @@ impl Client {
         evaluation: &mut Option<EvaluationReservation>,
         generation: WorkerGeneration,
         report_idle: bool,
+        retiring_worker: Option<&platform::WorkerShutdownHandle>,
     ) -> Result<WorkerReplacement, RestartFailure> {
         let mut worker = self
             .0
@@ -751,6 +753,16 @@ impl Client {
             .map_err(|_| RestartFailure::new("worker lock poisoned".to_string()))?;
         self.ensure_restarting().map_err(RestartFailure::new)?;
         let retirement = worker.finish_retirement().map_err(RestartFailure::new)?;
+        if matches!(retirement, WorkerRetirement::AlreadyStopped)
+            && let Some(retiring_worker) = retiring_worker
+        {
+            // A failed evaluation can stop the worker after restart changes
+            // generation. Its logical Stopped state does not settle the old
+            // launch's retained dispatcher failure for this replacing caller.
+            retiring_worker
+                .finish_retirement()
+                .map_err(RestartFailure::new)?;
+        }
         self.clear_restart_stop_handle()
             .map_err(RestartFailure::new)?;
         if matches!(retirement, WorkerRetirement::NeverStarted) {
@@ -1498,10 +1510,11 @@ mod tests {
         };
         let response = render_response(SendResponse::Completed(response));
         let mut reservation = Some(evaluation.reserve_for_restart().unwrap());
-        let failure = match client.replace_worker(&mut reservation, WorkerGeneration::new(), true) {
-            Ok(_) => panic!("replacement unexpectedly succeeded outside a restart"),
-            Err(failure) => failure,
-        };
+        let failure =
+            match client.replace_worker(&mut reservation, WorkerGeneration::new(), true, None) {
+                Ok(_) => panic!("replacement unexpectedly succeeded outside a restart"),
+                Err(failure) => failure,
+            };
         assert_eq!(failure.message, "worker restart state changed");
         assert!(reservation.is_some());
         let (_, _, delivery) = response.into_parts();
