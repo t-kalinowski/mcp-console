@@ -73,8 +73,8 @@ Host preparation examples require resolver support; bare runtimes and explicitly
 Requirement inspection is a declaration, not an installed-package inventory.
 
 Native prose must reflect selected filesystem and network policy.
-Name private `TMPDIR` storage (`TEMP` and `TMP` too on Windows), the captured workspace for `:workspace`, and explicit writable paths.
-Render other native write selectors as captured; do not expand them or probe filesystem permissions.
+Name private `TMPDIR` storage (`TEMP` and `TMP` too on Windows) and concrete writable paths from the normalized policy.
+Do not expand paths or probe filesystem permissions.
 Describe write grants as subject to more specific read/deny rules, rather than promising writes throughout each tree.
 Workspace metadata is protected by default, not by an unchangeable denial ceiling; explicit native rules can alter those defaults.
 A `read` entry grants reads as well as narrowing writes.

@@ -1,9 +1,8 @@
 ---
-native_profile: :workspace
+read_write:
+  - .
 fixed_workspace: true
 identical_launches: 4
-network_inherited: true
-workspace_options:
-  exclude_tmpdir_env_var: true
-  exclude_slash_tmp: true
-console_read_adjustment: .claude
+network: restricted
+read_only:
+  - .claude

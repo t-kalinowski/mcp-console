@@ -68,16 +68,13 @@ def _snapshot_survives_replacement(
         config.parent.mkdir(parents=True)
         if configured:
             config.write_text(
-                code("""
-                sandbox:
-                  filesystem:
-                    entries:
-                      - path: {type: path, path: ./output café 雪}
-                        access: write
-                  proxy: PROXY_CONFIGURATION
-                """).replace(
-                    "PROXY_CONFIGURATION",
-                    json.dumps({**NATIVE_PROXY, "domains": {"127.0.0.1": "allow"}}),
+                json.dumps(
+                    {
+                        "sandbox": {
+                            "filesystem": {"read_write": ["./output café 雪"]},
+                            "network": {"proxy": {"domains": {"allow": ["127.0.0.1"]}}},
+                        }
+                    }
                 ),
                 encoding="utf-8",
             )

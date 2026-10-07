@@ -1,5 +1,5 @@
 ---
-profile: ~
+workspace_writable: false
 description: >-
   Persistent custom-worker workbench. Send one complete `r`, `python`, or `sql`
   cell per call. Inspect its output and reuse persistent objects.
@@ -23,46 +23,14 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code can read host files and cannot directly access the network.
-  Writable locations: private `TMPDIR`, `"<workspace>/configured output"`,
-  `"<workspace>/cli output"`; subject to more specific read/deny rules. Package
-  preparation may execute installation or build code with separate filesystem
-  and network permissions; use only trusted dependencies.
----
-profile: :workspace
-description: >-
-  Persistent custom-worker workbench. Send one complete `r`, `python`, or `sql`
-  cell per call. Inspect its output and reuse persistent objects.
-
-
-  Language fields describe the configured interface; evaluation, display, SQL,
-  and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements need
-  compatible worker callbacks; Python requirements are unavailable. Switch
-  languages when useful, using the worker's capabilities.
-
-
-  Run one cell at a time. Wait for its `send` to return before another call with
-  code. You can interrupt a pending call with `send(control="interrupt")`. An
-  error can leave earlier changes in place. If work is still running, poll with
-  an empty `send` until it finishes; do not resubmit the cell.
-
-
-  Text results, including notices, have an 8 KiB limit, retaining the beginning
-  and latest tail; images have separate limits. Response notices report state
-  and omitted-output locations.
-
-
-  Evaluated code uses the native ":workspace" profile and cannot directly access
-  the network. Writable locations: private `TMPDIR`, `"<workspace>"`,
+  Evaluated code can read host files subject to configured restrictions and
+  cannot directly access the network. Writable locations: private `TMPDIR`,
   `"<workspace>/configured output"`, `"<workspace>/cli output"`; subject to more
-  specific read/deny rules. Workspace .git, .agents, .codex, and .claude paths
-  are readable and protected from writes by default; explicit rules can override
-  these defaults or restrict reads. Package preparation may execute installation
-  or build code with separate filesystem and network permissions; use only
-  trusted dependencies.
+  specific read/deny rules. Package preparation may execute installation or
+  build code with separate filesystem and network permissions; use only trusted
+  dependencies.
 ---
-profile: :read-only
+workspace_writable: true
 description: >-
   Persistent custom-worker workbench. Send one complete `r`, `python`, or `sql`
   cell per call. Inspect its output and reuse persistent objects.
@@ -86,9 +54,9 @@ description: >-
   and omitted-output locations.
 
 
-  Evaluated code uses the native ":read-only" profile: it can read host files
-  subject to configured restrictions and cannot directly access the network.
-  Writable locations: private `TMPDIR`, `"<workspace>/configured output"`,
-  `"<workspace>/cli output"`; subject to more specific read/deny rules. Package
-  preparation may execute installation or build code with separate filesystem
-  and network permissions; use only trusted dependencies.
+  Evaluated code can read host files subject to configured restrictions and
+  cannot directly access the network. Writable locations: private `TMPDIR`,
+  `"<workspace>/configured output"`, `"<workspace>"`, `"<workspace>/cli
+  output"`; subject to more specific read/deny rules. Package preparation may
+  execute installation or build code with separate filesystem and network
+  permissions; use only trusted dependencies.

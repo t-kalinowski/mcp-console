@@ -48,11 +48,11 @@ result:
         report state and omitted-output locations.
 
 
-        Evaluated code can read host files and cannot directly access the
-        network. Writable locations: private `TMPDIR`, `"<writable-root>"`;
-        subject to more specific read/deny rules. Package preparation may
-        execute installation or build code with separate filesystem and network
-        permissions; use only trusted dependencies.
+        Evaluated code can read host files subject to configured restrictions
+        and cannot directly access the network. Writable locations: private
+        `TMPDIR`, `"<writable-root>"`; subject to more specific read/deny rules.
+        Package preparation may execute installation or build code with separate
+        filesystem and network permissions; use only trusted dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false

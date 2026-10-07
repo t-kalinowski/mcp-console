@@ -32,7 +32,7 @@ Console captures this selection once for preparation and worker restarts.
 The writable dependency directory is separate from `mcp-console/sandbox`, which holds the source checkout and build artifacts used for host-side companion staging.
 On macOS and Linux, the default resolver policy permits reads of that companion cache but denies writes to it and the shared Console cache parent.
 
-Console overrides cache-location variables inherited from the host or supplied in `resolver.environment` and `sandbox.environment`.
+Console overrides cache-location variables inherited from the host or supplied in `resolver.environment` and top-level `environment`.
 uv's cache, Python installations, tools, and executable links use `uv/`; IR uses `ir/`; renv uses `renv/`; R's package cache base is the Console root, including `R/reticulate` and `R/pkgcache`.
 DuckDB uses `duckdb/extensions`, Matplotlib uses `matplotlib`, and Python's bytecode cache uses `python/bytecode`.
 Managed Python also redirects its user base to `python/user`.
@@ -65,32 +65,64 @@ Windows redirects cache paths but still prepares dependencies with host permissi
 
 ## Configuration
 
-Use the top-level `resolver` mapping in `.agents/console/config.yaml`, the home configuration, or `-c` overrides.
-It accepts native sandbox fields independently of the worker's `sandbox` mapping, profiles, and writable roots.
-Console supplies `lifecycle` and private temporary storage; `extends` and `workspace` are also reserved.
-Other values pass through to the native runner for validation.
-See [native policy fields](SANDBOX_CONFIGURATION.md).
+For a different package mirror:
 
-Omitted filesystem kind, entries, network, and proxy fields receive resolver defaults.
-Explicit `filesystem.entries` replaces all default entries; explicit `proxy.domains` replaces the download allowlist.
-`proxy: null` disables the proxy.
-An empty domains mapping allows no proxy destinations.
-Literal paths are relative to the execution workspace; they do not expand `~` or environment variables.
-Default cache directories are created before launch.
-The Console cache root is created even with explicit filesystem entries.
-Create custom writable directories before launch on Linux, where absent roots cannot be bound.
+```yaml
+resolver:
+  environment:
+    UV_INDEX_URL: https://packages.example.org/simple
+  sandbox:
+    network:
+      proxy:
+        domains:
+          allow: [packages.example.org, artifacts.example.org]
+```
 
-With `cache: console`, the default resolver write grant covers only the Console cache root, in addition to private temporary storage.
-Explicit `filesystem.entries` must include that root when preparation needs persistent writes.
-With `cache: host`, default cache grants cover the locations and direct environment overrides listed below.
-Default resolver cache grants include metadata directories such as `.git`, so preparation can populate complete dependency checkouts without workspace metadata masks in shared caches.
-Console does not inspect uv configuration files to discover additional writable paths.
-In Console cache mode, the captured `UV_CACHE_DIR` overrides a config-file `cache-dir`.
-In host cache mode, if `UV_CONFIG_FILE` or `uv.toml` selects a custom `cache-dir`, set the matching `resolver.environment.UV_CACHE_DIR` or grant that path in `resolver.filesystem.entries`.
-Use the expanded default as the starting point when supplying entries, since they replace all default grants.
-Other storage settings and package sources may also need explicit filesystem or proxy permissions.
+Include every host serving artifacts or redirects, plus the R and DuckDB sources needed by the session.
+An explicit domains mapping replaces the generated download allowlist; omitted allow/deny lists are empty.
+`domains: {}` or `domains: {allow: []}` allows no proxy destinations.
+Omitting domains retains the default hosts listed below.
 
-For a custom uv cache with an automatic write grant:
+`resolver.sandbox` uses exactly the same [public sandbox schema](SANDBOX_CONFIGURATION.md) as the worker.
+Its permissions are independent of `sandbox` and worker writable roots.
+Explicit `network: restricted` or `network: enabled` selects no proxy, including after CLI layering.
+Omitted networking keeps the managed download proxy on macOS/Linux.
+A managed mapping defaults to full mode, TCP SOCKS, no upstream proxy, an empty socket allowlist, and local binding enabled.
+Limited mode selects both native SOCKS flags as false; explicit SOCKS fields are errors.
+Limited mode blocks HTTPS CONNECT, so normal HTTPS dependency downloads are unavailable under that selection.
+
+Top-level environment values are shared with preparation, including credentials.
+`resolver.environment` overrides individual shared values.
+`resolver.inherit_environment` defaults to top-level `inherit_environment`, which defaults to true.
+Disabling inheritance keeps explicit environment values.
+Console's existing runtime, cache, and transport adjustments take precedence.
+Settings and cache locations are captured at startup and retained across preparation calls and worker restarts; worker environment mutations do not reconfigure the resolver.
+Python selection remains the server's `python` setting or launch `RETICULATE_PYTHON`; workload overrides do not replace that choice.
+
+An omitted resolver filesystem permits host reads and writes to the selected caches and private temporary storage.
+An explicitly supplied filesystem mapping replaces all default entries.
+Include necessary reads and cache writes; Console does not augment explicit entries automatically.
+For example, with host caches:
+
+```yaml
+cache: host
+resolver:
+  environment:
+    UV_CACHE_DIR: /home/alice/package-caches/uv
+  sandbox:
+    filesystem:
+      read_only: [/]
+      read_write: [/home/alice/package-caches/uv]
+```
+
+That example grants only the selected uv cache; Python installations, R preparation, and DuckDB may need additional writable directories.
+Create custom writable directories before Linux launch; Console creates only its existing default caches.
+Paths resolve against the fixed workspace without `~`, variable expansion, symlink rewriting, or parent grants.
+The Console cache root is created even with an explicit filesystem mapping, but creation does not grant the resolver access to it.
+Default resolver grants keep the native metadata write protections at each cache root; they do not grant its `.git`, `.agents`, or `.codex` children separately.
+uv's Git repositories and build metadata live in nested cache directories and use the ordinary cache-root grant.
+
+To select a custom uv cache and retain automatic host-cache grants, omit the filesystem:
 
 ```yaml
 cache: host
@@ -99,34 +131,11 @@ resolver:
     UV_CACHE_DIR: /home/alice/package-caches/uv
 ```
 
-For a different PyPI mirror:
+Console does not inspect uv configuration files to discover additional writable paths.
+In Console cache mode, captured `UV_CACHE_DIR` overrides a config-file `cache-dir`.
+In host cache mode, if uv configuration selects a different cache, set the corresponding environment value or grant it explicitly.
 
-```yaml
-resolver:
-  environment:
-    UV_INDEX_URL: https://packages.example.org/simple
-  proxy:
-    domains:
-      packages.example.org: allow
-      files.pythonhosted.org: allow
-      astral.sh: allow
-      releases.astral.sh: allow
-      github.com: allow
-      release-assets.githubusercontent.com: allow
-```
-
-Include every host that serves the mirror's artifacts or redirects, plus the R and DuckDB sources needed by the session.
-The proxy's native host matching and local-network checks apply.
-Resolver environment values configure preparation; worker environment values do not.
-R availability is discovered inside the resolver after its environment policy applies.
-Resolver and worker policies preserve the server's Python selection: `python` in Console YAML, otherwise the server's `RETICULATE_PYTHON`.
-Omit both to use managed Python.
-Configuration and cache paths are captured at Console startup and retained across preparation calls and worker restarts.
-Changes to a running worker's environment do not reconfigure the resolver.
-Native resolver policy fields apply only to local sandboxed preparation on macOS/Linux.
-Windows local sandboxed sessions apply resolver environment settings without native resolver enforcement.
-
-For a host DuckDB cache at a different path:
+For a host DuckDB cache:
 
 ```yaml
 cache: host
@@ -135,60 +144,60 @@ resolver:
     MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY: /home/alice/package-caches/duckdb
 ```
 
-Console captures this path for installation and the managed R/Python SQL connections.
-In host cache mode without this override, both use `.duckdb/extensions` beneath the resolver's effective `HOME`, even when it differs from the server or worker `HOME`.
-Custom workers receive the same captured path at launch, before accepting their first managed R layer.
-User-selected Python retains DuckDB's own cache settings and preinstalled extensions.
-An explicit `filesystem.entries` must grant writes to the selected directory.
+Console captures this path for installation and managed R/Python SQL connections.
+Without this override in host cache mode, both use `.duckdb/extensions` beneath the resolver's effective `HOME`.
+Sandboxed preparation requires an absolute resolver `HOME` or an explicit `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY`, including when explicit filesystem entries replace the defaults.
+If environment inheritance is disabled, provide these values through the shared or resolver environment mappings.
+Custom workers receive the captured path before their first managed R layer.
+User-selected Python retains DuckDB's own settings and preinstalled extensions.
+Explicit filesystem entries must grant writes to the selected directory.
 
-## Expanded default
+Windows preparation retains host permissions and Job lifecycle.
+Explicit `resolver.sandbox` requests are rejected before preparation rather than accepted without enforcement.
+Environment and cache settings still apply.
+`serve --no-sandbox` likewise rejects explicit sandbox settings while applying workload environment settings with host caches.
 
-For a Linux account with `HOME=/home/alice` and no cache overrides, the following spells out the default permissions.
-The `macos_seatbelt_profile_extension` field is absent on Linux.
-On macOS Console supplies the same [trusted application extension](../src/sandbox/policy_extensions.sbpl) as the worker unless explicitly overridden, including by null.
-Version, caller observation, cleanup, and private `TMPDIR` are supplied by Console and are omitted here.
+## Expanded public default
+
+On macOS/Linux, the following spells out the resolver's default networking.
+Omit `resolver.sandbox.filesystem` to retain generated host reads and cache grants.
+Console owns private temporary storage, lifecycle, runtime/cache variables, and the macOS extension.
+This example is not the omitted Windows resolver policy.
 
 ```yaml
 resolver:
-  filesystem:
-    kind: restricted
-    entries:
-      - path: {type: special, value: {kind: root}}
-        access: read
-      - path: {type: path, path: /home/alice/.cache/mcp-console/dependencies}
-        access: write
-  network: restricted
-  proxy:
-    enabled: true
-    enableSocks5: true
-    enableSocks5Udp: false
-    allowUpstreamProxy: false
-    dangerouslyAllowAllUnixSockets: false
-    allowLocalBinding: true
-    mode: full
-    domains:
-      pypi.org: allow
-      files.pythonhosted.org: allow
-      astral.sh: allow
-      releases.astral.sh: allow
-      github.com: allow
-      api.github.com: allow
-      codeload.github.com: allow
-      raw.githubusercontent.com: allow
-      objects.githubusercontent.com: allow
-      release-assets.githubusercontent.com: allow
-      r-lib.github.io: allow
-      packagemanager.posit.co: allow
-      rspm-sync.rstudio.com: allow
-      bioconductor.posit.co: allow
-      bioconductor.org: allow
-      cran.r-project.org: allow
-      cloud.r-project.org: allow
-      cran.rstudio.com: allow
-      extensions.duckdb.org: allow
   inherit_environment: true
-  # Console supplies the cache environment described above.
   environment: {}
+  sandbox:
+    network:
+      proxy:
+        mode: full
+        socks5: tcp
+        allow_upstream_proxy: false
+        domains:
+          allow:
+            - pypi.org
+            - files.pythonhosted.org
+            - astral.sh
+            - releases.astral.sh
+            - github.com
+            - api.github.com
+            - codeload.github.com
+            - raw.githubusercontent.com
+            - objects.githubusercontent.com
+            - release-assets.githubusercontent.com
+            - r-lib.github.io
+            - packagemanager.posit.co
+            - rspm-sync.rstudio.com
+            - bioconductor.posit.co
+            - bioconductor.org
+            - cran.r-project.org
+            - cloud.r-project.org
+            - cran.rstudio.com
+            - extensions.duckdb.org
+      sockets:
+        unix_sockets: []
+      allow_local_binding: true
 ```
 
 ## Host cache selection

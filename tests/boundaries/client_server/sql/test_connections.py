@@ -43,7 +43,11 @@ def test_prepares_builtin_extensions_without_downloads(
         assert not list((root / "extensions").glob("**/parquet.duckdb_extension"))
         config = root / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True, exist_ok=True)
-        config.write_text(json.dumps({"resolver": {"proxy": {"domains": {}}}}))
+        config.write_text(
+            json.dumps(
+                {"resolver": {"sandbox": {"network": {"proxy": {"domains": {}}}}}}
+            )
+        )
         environment["UV_OFFLINE"] = "1"
         with McpClient(binary, arguments, environment, root) as client:
             client.initialize_and_list_tools()

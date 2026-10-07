@@ -68,23 +68,17 @@ An up-to-date setup is reused without changes; this summary describes provisioni
 `--status` retains its read-only JSON readiness report.
 
 The default elevated backend enforces restricted networking and filesystem writes.
-`:workspace`, `:read-only`, and `--writable-root` use native policy composition.
+Grouped filesystem permissions and `--writable-root` use native policy composition.
 Private storage is exported through `TMPDIR`, `TEMP`, and `TMP`.
 Standalone execution uses the same bundle: `mcp-console sandbox -- python script.py`.
 
-For explicitly network-enabled workloads, the unelevated backend avoids account provisioning.
-Use `unelevated` in place of `restricted-token` in existing configuration:
-
-```yaml
-sandbox:
-  windows_sandbox_level: unelevated
-  network: enabled
-```
-
-It restricts writes but requires host reads; read-deny policies are rejected.
-`windows_state_dir` optionally selects an absolute persistent state directory; use the matching `sandbox-setup --state-dir PATH` when provisioning.
-Use one stable directory per Windows user: accounts and firewall policy are machine resources, and capability ACL entries persist on filesystem objects.
-Managed proxy configuration, custom cleanup timeouts, and Unix-only backend options are unsupported and fail before target launch.
+Public `config.yaml` uses the same schema as macOS/Linux and keeps the native elevated backend and default state directory.
+OS-specific backend and state-directory controls belong only to the separate complete-native-policy CLI transport.
+The default state directory is `%LOCALAPPDATA%\mcp-console`; provision that location for ordinary application launches.
+The complete transport can still explicitly select the unelevated backend for network-enabled workloads; it requires host reads and rejects read-deny policies.
+Use one stable state directory per Windows user: accounts and firewall policy are machine resources, and capability ACL entries persist on filesystem objects.
+Managed proxy mappings and explicit resolver sandbox settings are rejected before workload/preparation launch.
+Omitted resolver settings retain existing host preparation with environment/cache controls; parser parity does not imply native enforcement parity.
 
 The native runner owns a non-breakaway Job for each workload.
 It terminates remaining descendants and confirms zero active processes before reporting exit.
@@ -183,8 +177,10 @@ Install those formatters separately; missing tools and host policy blocks are re
 
 Native input/interrupt acceptance uses the public `waiting for stdin` receipt before providing input, then observes loop output before interrupting.
 It requires no networking or host-to-sandbox fixture access.
-The same scenario runs directly and with an explicitly network-enabled restricted token in `WindowsSandbox.test_restricted_token_input_and_interrupt`.
-To run it against an already-provisioned elevated, network-restricted backend, set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to its absolute state directory and run `WindowsSandbox.test_provisioned_network_restricted_input_and_interrupt`.
+The same scenario runs directly and with the public `network: enabled` selection in `WindowsSandbox.test_network_enabled_input_and_interrupt`.
+Public-policy tests use the default elevated backend and default persistent state directory (`%LOCALAPPDATA%/mcp-console`).
+To run them against an already-provisioned default backend, set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to that absolute state directory.
+`WindowsSandbox.test_provisioned_network_restricted_input_and_interrupt` exercises the public network-restricted selection against that default backend.
 The test never provisions accounts or chooses another backend.
 Without that opt-in directory, it reports unavailable coverage; a skip does not establish network-restricted compatibility.
 Windows CI builds the staged Console and runs `python scripts/prepare-windows-tests` before the full gate.

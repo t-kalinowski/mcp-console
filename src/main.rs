@@ -142,7 +142,12 @@ fn run_server(
         source: _,
         mut policy,
         mut resolver,
+        sandbox_requested,
+        resolver_sandbox_requested,
     } = settings::discover(overrides, no_project_config)?;
+    if no_sandbox && (sandbox_requested || resolver_sandbox_requested) {
+        return Err("explicit sandbox or resolver.sandbox permissions require sandboxing; remove them when using --no-sandbox".into());
+    }
     resolver::cache::configure(
         cache,
         no_sandbox,
@@ -154,7 +159,7 @@ fn run_server(
         return Err("python selection requires the built-in worker and relay".into());
     }
     let settings = if no_sandbox {
-        settings::SandboxSettings::default()
+        policy
     } else {
         // Native validation belongs to the owned background launch. Running a
         // preflight child here would precede MCP serving and EOF ownership.

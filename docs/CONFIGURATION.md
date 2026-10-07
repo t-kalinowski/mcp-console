@@ -1,5 +1,23 @@
 # Configuration
 
+For workspace writes and one permitted API host:
+
+```yaml
+sandbox:
+  filesystem:
+    read_write: [.]
+  network:
+    proxy:
+      domains:
+        allow: [api.example.com]
+```
+
+All configuration fields use snake_case; environment-variable names keep their actual spelling.
+Domains and paths are list values, never mapping keys.
+Worker and resolver permissions are independent.
+See [sandbox configuration](SANDBOX_CONFIGURATION.md) for defaults and native limitations.
+The same short example is available as [config.yaml](../examples/config.yaml).
+
 `serve` and ordinary `sandbox` launches load configuration in this order:
 
 1. `.agents/console/config.yaml` in the launch directory, or the home Console `config.yaml` **only if the project file is absent**.
@@ -15,10 +33,10 @@ Home configuration is still discovered, and `-c` overrides still apply in order.
 The flag does not change recording location.
 
 ```sh
-mcp-console serve -c extends=:workspace
-mcp-console serve --no-project-config -c extends=:workspace
-mcp-console -c extends=:workspace serve -c sandbox.network=enabled
-mcp-console sandbox -c 'sandbox.environment={LABEL: analysis}' -- Rscript analysis.R
+mcp-console serve -c 'sandbox.filesystem.read_write=[.]'
+mcp-console serve --no-project-config -c 'sandbox.filesystem.read_write=[.]'
+mcp-console -c 'sandbox.filesystem.read_write=[.]' serve -c sandbox.network=enabled
+mcp-console sandbox -c 'environment={LABEL: analysis}' -- Rscript analysis.R
 ```
 
 See [resolver settings](RESOLVER.md) and [sandbox settings](SANDBOX_CONFIGURATION.md) for available keys.
@@ -97,7 +115,7 @@ Dotted assignment keys address nested mappings, not list indexes.
 For a literal dotted key, supply its containing object:
 
 ```sh
-mcp-console serve -c 'sandbox.environment={"APP.VERSION": "v1", COUNT: "42"}'
+mcp-console serve -c 'environment={"APP.VERSION": "v1", COUNT: "42"}'
 ```
 
 Inline values accept YAML strings, booleans, finite numbers, `null`, nested lists, and objects.
@@ -118,11 +136,101 @@ A mapping replaces a non-mapping, but an empty mapping does **not** clear an exi
 To clear and rebuild one, assign `null`, then the new mapping in a later override.
 Only the final result is validated.
 
-These rules are schema-independent: changing `kind` or `extends` does not remove inherited siblings.
-Defaults, profile expansion, application decoding, and native-policy validation happen afterward; `--writable-root` adds grants after layering.
+These rules are schema-independent: changing `sandbox.network.proxy.mode` does not remove an explicitly configured `socks5` sibling.
+Selecting `limited` with that sibling still present is an error.
+The final document is validated before selecting variants, supplying defaults, and compiling native policy; `--writable-root` adds grants after layering.
 
 Settings are captured once and reused across worker generations.
 Worker and resolver launches consume that captured input without rediscovering YAML.
 Explicit native `--config-env` and internal `--settings-env` inputs are already complete and reject `-c` overrides and `--no-project-config`.
 
 The layering code is in [`src/config.rs`](../src/config.rs) and `src/config/`; application decoding belongs to [`src/settings.rs`](../src/settings.rs).
+
+## Shared environment
+
+```yaml
+environment:
+  OMP_NUM_THREADS: "4"
+resolver:
+  environment:
+    OMP_NUM_THREADS: "1"
+```
+
+The worker receives inherited launch variables, then top-level `environment` values.
+Preparation receives the same values, then individual `resolver.environment` overrides.
+Console-owned runtime, cache, private-storage, managed-proxy, and transport adjustments take precedence afterward.
+Shared values, including credentials, are also available to dependency preparation.
+Values must be strings; quote numbers and booleans.
+
+`inherit_environment` defaults to true; `resolver.inherit_environment` defaults to the top-level setting.
+False excludes inherited launch variables and retains explicit configuration values.
+An isolated environment must explicitly supply any workload variables it needs, including paths used for cache selection.
+These controls apply to workloads, including `serve --no-sandbox`, without changing the supervisor's own loader/helper environment.
+Settings are captured once; worker environment mutations and restarts do not reconfigure preparation.
+
+## Expanded example
+
+Most settings below can be omitted.
+Worker and resolver permissions are independent:
+
+```yaml
+cache: console
+inherit_environment: true
+environment:
+  OMP_NUM_THREADS: "4"
+sandbox:
+  filesystem:
+    read_only: [./data]
+    read_write: [.]
+    deny: [./secrets]
+  network:
+    proxy:
+      mode: full
+      domains:
+        allow: [api.example.com, "*.example.org"]
+        deny: [blocked.example.org]
+      socks5: tcp
+      allow_upstream_proxy: false
+    sockets:
+      unix_sockets: []
+    allow_local_binding: false
+resolver:
+  environment:
+    OMP_NUM_THREADS: "1"
+    UV_INDEX_URL: https://packages.example.org/simple
+  sandbox:
+    network:
+      proxy:
+        domains:
+          allow: [packages.example.org, artifacts.example.org]
+```
+
+The generated [configuration transcripts](../tests/snapshots/cli/test_public_configuration/) pair user YAML with the native runner policy in separate documents.
+CLI layering examples include a middle document showing the overrides.
+Host paths and process IDs are normalized; other policy values are retained.
+They record normalization and native launches on the exercised platform; capability limits remain described in [sandbox configuration](SANDBOX_CONFIGURATION.md#native-capabilities).
+
+## Migration
+
+The public format deliberately replaces the previous native-shaped YAML.
+Unknown fields, old shapes, camelCase aliases, null permission selectors, and incompatible explicit settings fail with a configuration path.
+There are no profiles, `extends`, `add`, or raw-options fields.
+
+| Previous input                                        | Public replacement                                            |
+| ----------------------------------------------------- | ------------------------------------------------------------- |
+| `extends: :workspace`                                 | `sandbox.filesystem: {read_write: [.], read_only: [.claude]}` |
+| `extends: :read-only`                                 | Omit `sandbox` to keep the worker baseline                    |
+| `sandbox.environment` / `sandbox.inherit_environment` | Top-level `environment` / `inherit_environment`               |
+| `filesystem.entries`                                  | `filesystem.read_only`, `read_write`, and `deny` lists        |
+| Sibling `proxy` and `network: restricted`             | `network: {proxy: {...}}`                                     |
+| `proxy: null`                                         | Explicit `network: restricted` or `network: enabled`          |
+| `enableSocks5` / `enableSocks5Udp`                    | Full-mode `socks5: disabled`, `tcp`, or `tcp_udp`             |
+| Domain permission mapping                             | `domains: {allow: [...], deny: [...]}`                        |
+| `unixSockets` / `dangerouslyAllowAllUnixSockets`      | `sockets.unix_sockets: [...]` or `dangerously_allow_all`      |
+| Native fields directly under `resolver`               | The same public schema under `resolver.sandbox`               |
+
+The native runner protects writes to `.git`, `.agents`, `.codex`, and `.aws` beneath writable roots, subject to its permission rules.
+The former workspace profile also protected `.claude`; include `read_only: [.claude]` to retain that explicit restriction.
+OS-specific runner controls are unavailable in this public format.
+The separate, explicit complete-native-policy CLI transport remains unchanged; it is not a field in `config.yaml`.
+Explicit `sandbox` or `resolver.sandbox` settings are rejected with `serve --no-sandbox`, rather than silently discarded.

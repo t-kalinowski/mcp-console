@@ -8,11 +8,12 @@ writable_roots:
 network: restricted
 proxy:
   enabled: true
+  mode: full
   enableSocks5: true
   enableSocks5Udp: false
   allowUpstreamProxy: false
-  dangerouslyAllowAllUnixSockets: false
-  mode: full
-  allowLocalBinding: false
   domains:
     127.0.0.1: allow
+  unixSockets: {}
+  dangerouslyAllowAllUnixSockets: false
+  allowLocalBinding: false

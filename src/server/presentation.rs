@@ -307,58 +307,33 @@ fn control_description_for(full: bool) -> String {
 }
 
 fn description_for_launch(policy: &SandboxSettings, no_sandbox: bool) -> String {
-    let profile = policy.get("extends").and_then(serde_json::Value::as_str);
-    let filesystem = policy
-        .get("filesystem")
-        .and_then(|filesystem| filesystem.get("kind"))
-        .and_then(crate::settings::native_variant_name)
-        .or_else(|| {
-            (!policy.contains_key("filesystem") && profile.is_some()).then_some("restricted")
-        });
-    let network = policy
-        .get("network")
-        .and_then(crate::settings::native_variant_name)
-        .or_else(|| (!policy.contains_key("network") && profile.is_some()).then_some("restricted"));
-    let network_access = match (filesystem, network, policy.get("proxy")) {
-        // The pinned runner enforces managed proxy routing even with network enabled.
-        (_, _, Some(proxy)) if !proxy.is_null() => {
-            "can access the network subject to the launcher's proxy settings"
+    if no_sandbox {
+        return "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Package preparation may execute installation or build code; use only trusted dependencies.".into();
+    }
+    let network_access = if policy.contains_key("proxy") {
+        "can access the network subject to the launcher's proxy settings"
+    } else {
+        match policy.get("network").and_then(serde_json::Value::as_str) {
+            Some("enabled") => "can directly access the network",
+            Some("restricted") => "cannot directly access the network",
+            _ => unreachable!("normalized worker network choice"),
         }
-        (Some("restricted" | "unrestricted"), Some("enabled"), _) => {
-            "can directly access the network"
-        }
-        (Some("restricted" | "unrestricted"), Some("restricted"), _) => {
-            "cannot directly access the network"
-        }
-        _ => "has network access governed by the launcher's sandbox settings",
     };
     let mut writable = vec![if cfg!(windows) {
         "private `TMPDIR` (also `TEMP` and `TMP`)".to_string()
     } else {
         "private `TMPDIR`".to_string()
     }];
-    if profile == Some(":workspace")
-        && let Some(workspace) = policy.get("workspace")
-    {
-        writable.push(format!("`{workspace}`"));
-    }
     if let Some(entries) = policy
         .get("filesystem")
         .and_then(|filesystem| filesystem.get("entries"))
         .and_then(Value::as_array)
     {
         for entry in entries {
-            if entry
-                .get("access")
-                .and_then(crate::settings::native_variant_name)
-                == Some("write")
-                && let Some(path) = entry.get("path")
+            if entry.get("access").and_then(Value::as_str) == Some("write")
+                && let Some(path) = entry.get("path").and_then(|path| path.get("path"))
             {
-                let location = match (path.get("type").and_then(Value::as_str), path.get("path")) {
-                    (Some("path"), Some(location)) => location,
-                    _ => path,
-                };
-                writable.push(format!("`{location}`"));
+                writable.push(format!("`{path}`"));
             }
         }
     }
@@ -366,29 +341,9 @@ fn description_for_launch(policy: &SandboxSettings, no_sandbox: bool) -> String 
         "Writable locations: {}; subject to more specific read/deny rules",
         writable.join(", ")
     );
-    let sandbox_access = match filesystem {
-        Some("restricted") if profile == Some(":workspace") => format!(
-            "uses the native \":workspace\" profile and {network_access}. {writable}. Workspace .git, .agents, .codex, and .claude paths are readable and protected from writes by default; explicit rules can override these defaults or restrict reads"
-        ),
-        Some("restricted") if profile == Some(":read-only") => format!(
-            "uses the native \":read-only\" profile: it can read host files subject to configured restrictions and {network_access}. {writable}"
-        ),
-        Some("restricted") => format!("can read host files and {network_access}. {writable}"),
-        Some("unrestricted") => {
-            format!("has unrestricted filesystem access and {network_access}")
-        }
-        _ => format!(
-            "has filesystem access governed by the launcher's sandbox settings and {network_access}"
-        ),
-    };
-
-    if no_sandbox {
-        "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Package preparation may execute installation or build code; use only trusted dependencies.".into()
-    } else {
-        format!(
-            "Evaluated code {sandbox_access}. Package preparation may execute installation or build code with separate filesystem and network permissions; use only trusted dependencies."
-        )
-    }
+    format!(
+        "Evaluated code can read host files subject to configured restrictions and {network_access}. {writable}. Package preparation may execute installation or build code with separate filesystem and network permissions; use only trusted dependencies."
+    )
 }
 
 pub(super) fn stdin_description() -> String {

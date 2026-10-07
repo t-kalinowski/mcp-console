@@ -1,4 +1,4 @@
-"""Public Windows sandbox acceptance; no elevated account provisioning."""
+"""Public Windows configuration and explicitly provisioned sandbox acceptance."""
 
 import ctypes
 import json
@@ -16,6 +16,7 @@ from ctypes import wintypes
 from pathlib import Path
 from textwrap import dedent
 from support.installation import native_console
+from support.public_configuration import INVALID_CONFIGURATIONS
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
@@ -47,9 +48,17 @@ def workspace():
 
 @unittest.skipUnless(os.name == "nt", "native Windows sandbox")
 class WindowsSandbox(unittest.TestCase):
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
     def test_console_cache_paths_reach_resolver_and_worker(self):
         self.console_cache_paths(profile_fallback=False)
 
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
     def test_console_cache_falls_back_to_userprofile_after_relative_home(self):
         self.console_cache_paths(profile_fallback=True)
 
@@ -95,13 +104,13 @@ class WindowsSandbox(unittest.TestCase):
                     """)
             )
             session = Session(
-                environment,
+                os.environ,
                 python=python,
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
-                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
+                    "inherit_environment=false",
+                    "environment=" + json.dumps(environment),
                 ],
             )
             try:
@@ -125,16 +134,18 @@ class WindowsSandbox(unittest.TestCase):
             self.assertFalse((root / "host-ir").exists())
 
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
-    def test_restricted_token_input_and_interrupt(self):
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
+    def test_network_enabled_input_and_interrupt(self):
         from windows import Session, exercise_input_and_interrupt
 
         with workspace() as root:
             session = Session(
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
-                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
             )
             try:
@@ -144,16 +155,18 @@ class WindowsSandbox(unittest.TestCase):
                 session.close()
 
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
-    def test_restricted_token_idle_later_callbacks(self):
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
+    def test_network_enabled_idle_later_callbacks(self):
         from windows import Session, exercise_later_callbacks
 
         with workspace() as root:
             session = Session(
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
-                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
             )
             try:
@@ -242,13 +255,10 @@ class WindowsSandbox(unittest.TestCase):
     def test_provisioned_network_restricted_input_and_interrupt(self):
         from windows import Session, exercise_input_and_interrupt
 
-        state = os.environ["MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"]
         session = Session(
             sandbox=True,
             overrides=[
-                'sandbox.windows_sandbox_level="elevated"',
                 'sandbox.network="restricted"',
-                f"sandbox.windows_state_dir={json.dumps(state)}",
             ],
         )
         try:
@@ -257,6 +267,10 @@ class WindowsSandbox(unittest.TestCase):
         finally:
             session.close()
 
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
     def test_network_enabled_allows_loopback_exchange(self):
         from windows import Session
 
@@ -264,9 +278,7 @@ class WindowsSandbox(unittest.TestCase):
             session = Session(
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
-                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
             )
             try:
@@ -303,6 +315,10 @@ class WindowsSandbox(unittest.TestCase):
                 session.close()
 
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
     def test_r_uses_private_storage_and_preserves_state(self):
         from windows import Session
 
@@ -310,9 +326,7 @@ class WindowsSandbox(unittest.TestCase):
             session = Session(
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
-                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
             )
             try:
@@ -474,6 +488,10 @@ class WindowsSandbox(unittest.TestCase):
                 b"private artifact does not match this installation", result.stderr
             )
 
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
     def test_python_state_and_restart_with_private_temporary_storage(self):
         from windows import Session
 
@@ -481,9 +499,7 @@ class WindowsSandbox(unittest.TestCase):
             session = Session(
                 sandbox=True,
                 overrides=[
-                    'sandbox.windows_sandbox_level="unelevated"',
                     'sandbox.network="enabled"',
-                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
                 ],
             )
             try:
@@ -549,32 +565,98 @@ class WindowsSandbox(unittest.TestCase):
             finally:
                 session.close()
 
-    def test_restricted_network_does_not_fall_back_to_restricted_token(self):
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
+    def test_shared_public_policies(self):
+        from support.public_configuration import CONFIGURATION_EXAMPLES
+
         with workspace() as root:
-            result = subprocess.run(
-                [
-                    str(BINARY),
-                    "sandbox",
-                    "-c",
-                    'sandbox.windows_sandbox_level="unelevated"',
-                    "-c",
-                    f"sandbox.windows_state_dir={json.dumps(str(root / 'state'))}",
-                    "--",
-                    "cmd.exe",
-                    "/d",
-                    "/c",
-                    "echo launched",
-                ],
-                cwd=root,
-                env=dict(os.environ, MCP_CONSOLE_HOME=str(root / "home")),
-                check=False,
-                capture_output=True,
-                timeout=30,
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertEqual(result.stdout, b"")
-            self.assertIn(b"restricted networking requires the elevated", result.stderr)
-            self.assertFalse((root / "state").exists())
+            for name in ("data", "secrets"):
+                (root / name).mkdir()
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            for name, document in CONFIGURATION_EXAMPLES.items():
+                with self.subTest(name=name):
+                    config.write_text(json.dumps(document))
+                    result = subprocess.run(
+                        [
+                            str(BINARY),
+                            "sandbox",
+                            "--",
+                            sys.executable,
+                            "-c",
+                            "print('launched')",
+                        ],
+                        cwd=root,
+                        env=dict(os.environ, MCP_CONSOLE_HOME=str(root / "home")),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if isinstance(document["sandbox"].get("network"), dict):
+                        self.assertEqual(result.returncode, 1)
+                        self.assertEqual(result.stdout, "")
+                        self.assertIn(
+                            "managed proxies are not supported", result.stderr
+                        )
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.strip(), "launched")
+
+    def test_rejects_unsupported_public_permissions(self):
+        with workspace() as root:
+            for path, value in INVALID_CONFIGURATIONS:
+                with self.subTest(path=path):
+                    result = subprocess.run(
+                        [
+                            str(BINARY),
+                            "sandbox",
+                            "-c",
+                            path + "=" + json.dumps(value),
+                            "--",
+                            "unused",
+                        ],
+                        cwd=root,
+                        env=dict(os.environ, MCP_CONSOLE_HOME=str(root / "home")),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 1)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn("configuration", result.stderr)
+                    self.assertNotIn("secret sentinel", result.stderr)
+                    self.assertNotIn("654987123", result.stderr)
+            for override, diagnostic in (
+                ("sandbox.network={proxy: {}}", "sandbox.network.proxy"),
+                ("resolver.sandbox.network=restricted", "resolver.sandbox"),
+                ("resolver.sandbox.filesystem={}", "resolver.sandbox"),
+                ("sandbox.windows_sandbox_level=unelevated", "windows_sandbox_level"),
+                ("sandbox.windows_state_dir=/tmp/state", "windows_state_dir"),
+            ):
+                with self.subTest(override=override):
+                    result = subprocess.run(
+                        [
+                            str(BINARY),
+                            "sandbox",
+                            "-c",
+                            override,
+                            "--",
+                            "cmd.exe",
+                            "/c",
+                            "echo launched",
+                        ],
+                        cwd=root,
+                        env=dict(os.environ, MCP_CONSOLE_HOME=str(root / "home")),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.stdout, "")
+                    self.assertIn(diagnostic, result.stderr)
 
     def test_stdio_write_policy_and_exit_status(self):
         with workspace() as root:

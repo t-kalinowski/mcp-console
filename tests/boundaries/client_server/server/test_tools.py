@@ -20,7 +20,6 @@ from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
 from support.resolvers import bare_runtime_environment
-from support.sandbox_configuration import NATIVE_PROXY
 from support.suites import run_this_suite
 from support.snapshots import execution_snapshots, platform_snapshots
 
@@ -214,9 +213,9 @@ def _initializes_and_lists_tools(
             config.parent.mkdir(parents=True)
             config.write_text(
                 json.dumps(
-                    {"extends": ":workspace"}
+                    {"sandbox": {"filesystem": {"read_write": ["."]}}}
                     if workspace_profile
-                    else {"sandbox": {"proxy": NATIVE_PROXY}}
+                    else {"sandbox": {"network": {"proxy": {}}}}
                 ),
                 encoding="utf-8",
             )
@@ -369,9 +368,6 @@ def _initializes_and_lists_tools(
 @requires(SANDBOX)
 def test_describes_project_network_access(binary: Path) -> Transcript:
     restricted_filesystem = "Writable locations: private `TMPDIR`"
-    external_filesystem = (
-        "filesystem access governed by the launcher's sandbox settings"
-    )
     cases = (
         (
             "restricted",
@@ -389,7 +385,7 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
         ),
         (
             "proxy",
-            json.dumps({"sandbox": {"proxy": NATIVE_PROXY}}),
+            json.dumps({"sandbox": {"network": {"proxy": {}}}}),
             False,
             "network subject to the launcher's proxy settings",
             restricted_filesystem,
@@ -397,69 +393,19 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
         (
             "proxy with local binding",
             json.dumps(
-                {"sandbox": {"proxy": {**NATIVE_PROXY, "allowLocalBinding": True}}}
+                {"sandbox": {"network": {"proxy": {}, "allow_local_binding": True}}}
             ),
             False,
             "network subject to the launcher's proxy settings",
             restricted_filesystem,
         ),
         (
-            "proxy with network enabled",
-            json.dumps({"sandbox": {"network": "enabled", "proxy": NATIVE_PROXY}}),
-            False,
-            "network subject to the launcher's proxy settings",
-            restricted_filesystem,
-        ),
-        (
-            "native network representation",
-            "sandbox: {network: {enabled: null}}",
-            False,
-            "can directly access the network",
-            restricted_filesystem,
-        ),
-        (
-            "external enforcement",
-            "sandbox: {filesystem: {kind: external-sandbox}}",
-            False,
-            "network access governed by the launcher's sandbox settings",
-            external_filesystem,
-        ),
-        (
             "no sandbox",
-            "sandbox: {network: restricted}",
+            "{}",
             True,
             "without a sandbox, with the server's permissions, including filesystem and network access",
             "filesystem and network access",
         ),
-    )
-    cases = (
-        tuple(
-            (
-                f"{kind} {network} ({'mapping' if mapping else 'string'})",
-                json.dumps(
-                    {
-                        "sandbox": {
-                            "filesystem": {"kind": {kind: None} if mapping else kind},
-                            "network": {network: None} if mapping else network,
-                        }
-                    }
-                ),
-                False,
-                "network access governed by the launcher's sandbox settings"
-                if kind == "external-sandbox"
-                else ("can" if network == "enabled" else "cannot")
-                + " directly access the network",
-                filesystem_access,
-            )
-            for kind, filesystem_access in (
-                ("unrestricted", "has unrestricted filesystem access"),
-                ("restricted", restricted_filesystem),
-                ("external-sandbox", external_filesystem),
-            )
-            for network in ("restricted", "enabled")
-            for mapping in (False, True)
-        )
-        + cases
     )
     transcript: Transcript = []
     for name, source, no_sandbox, expected, filesystem_access in cases:
@@ -492,7 +438,7 @@ def test_describes_project_network_access(binary: Path) -> Transcript:
 @requires(SANDBOX)
 def test_describes_captured_writable_locations(binary: Path) -> Transcript:
     records = []
-    for profile in (None, ":workspace", ":read-only"):
+    for workspace_writable in (False, True):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory).resolve()
             config = workspace / ".agents/console/config.yaml"
@@ -500,25 +446,14 @@ def test_describes_captured_writable_locations(binary: Path) -> Transcript:
             policy = {
                 "sandbox": {
                     "filesystem": {
-                        "entries": [
-                            {
-                                "path": {"type": "path", "path": "configured output"},
-                                "access": "write",
-                            },
-                            {
-                                "path": {"type": "path", "path": "read only"},
-                                "access": "read",
-                            },
-                            {
-                                "path": {"type": "path", "path": "denied"},
-                                "access": "deny",
-                            },
-                        ]
+                        "read_write": ["configured output"],
+                        "read_only": ["read only"],
+                        "deny": ["denied"],
                     }
                 }
             }
-            if profile is not None:
-                policy["extends"] = profile
+            if workspace_writable:
+                policy["sandbox"]["filesystem"]["read_write"].append(".")
             config.write_text(json.dumps(policy), encoding="utf-8")
             with McpClient(
                 binary,
@@ -534,7 +469,7 @@ def test_describes_captured_writable_locations(binary: Path) -> Transcript:
                     assert json.dumps(str(workspace / path)) in description
                 assert json.dumps(str(workspace / "read only")) not in description
                 assert json.dumps(str(workspace / "denied")) not in description
-                if profile == ":workspace":
+                if workspace_writable:
                     assert json.dumps(str(workspace)) in description
                 assert "more specific read/deny rules" in description
                 config.write_text("invalid: [", encoding="utf-8")
@@ -542,7 +477,7 @@ def test_describes_captured_writable_locations(binary: Path) -> Transcript:
                 client.finish()
                 records.append(
                     {
-                        "profile": profile,
+                        "workspace_writable": workspace_writable,
                         "description": description.replace(
                             json.dumps(str(workspace))[1:-1], "<workspace>"
                         ),

@@ -201,12 +201,13 @@ impl Preparation {
 
     pub(crate) fn open_local(
         mode: Mode,
-        resolver: Option<crate::settings::SandboxSettings>,
+        mut settings: crate::settings::SandboxSettings,
+        no_sandbox: bool,
         python: Option<&std::ffi::OsStr>,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let mut command = if let Some(mut settings) = resolver {
+        let mut command = if !no_sandbox {
             // Preparation and the retained worker must agree on whether Python
             // is managed, including with an isolated resolver environment.
             crate::settings::preserve_environment(
@@ -222,20 +223,16 @@ impl Preparation {
                 let mut command = std::process::Command::new(
                     std::env::current_exe().map_err(|error| error.to_string())?,
                 );
-                if settings.get("inherit_environment") == Some(&serde_json::Value::Bool(false)) {
-                    command.env_clear();
-                }
-                if let Some(environment) = settings.get("environment") {
-                    let values: std::collections::BTreeMap<String, String> =
-                        serde_json::from_value(environment.clone())
-                            .map_err(|error| error.to_string())?;
-                    command.envs(values);
-                }
+                crate::settings::configure_environment(&mut command, &settings);
                 command
             };
             command
         } else {
-            std::process::Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
+            let mut command = std::process::Command::new(
+                std::env::current_exe().map_err(|error| error.to_string())?,
+            );
+            crate::settings::configure_environment(&mut command, &settings);
+            command
         };
         if let Some(python) = python {
             command.env("RETICULATE_PYTHON", python);
