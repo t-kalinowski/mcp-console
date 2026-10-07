@@ -494,9 +494,9 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
 
             client.send(control="interrupt", timeout_ms=0)
             assert (
-                without_elapsed(last_tool_text(client))
-                == "\n[running; poll with an empty send]"
-            )
+                last_tool_text(client)
+                == "\n[phase: dependency preparation]\n[running; poll with an empty send]"
+            ), client.transcript[-1]
             observer_release.release()
             holder_release.release()
             client.receive(pending)

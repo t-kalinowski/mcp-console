@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,8 @@ pub(super) struct LifecycleControl {
     pub(super) requirement_changes: RequirementChangeState,
     pub(super) processes: ProcessStopHandles,
     startup: Option<WorkerStartup>,
+    // Registration transfers interrupt ownership before transport readiness.
+    startup_transport: Option<Weak<AtomicBool>>,
 }
 
 struct WorkerStartup {
@@ -40,6 +43,7 @@ struct WorkerStartup {
 pub(crate) struct WorkerStartupAdmission {
     client: Client,
     generation: WorkerGeneration,
+    pub(super) transport_ready: Arc<AtomicBool>,
 }
 
 struct RetiringGeneration {
@@ -63,6 +67,7 @@ impl LifecycleControl {
             requirement_changes: RequirementChangeState::Available,
             processes: ProcessStopHandles::default(),
             startup: None,
+            startup_transport: None,
         }
     }
 
@@ -81,6 +86,7 @@ impl LifecycleControl {
         self.generation = WorkerGeneration::new();
         self.processes.resolver = None;
         self.startup = None;
+        self.startup_transport = None;
         (stop_handles, deadline, self.generation.clone())
     }
 
@@ -112,6 +118,21 @@ impl LifecycleControl {
         self.startup
             .as_ref()
             .is_some_and(|startup| startup.interrupted && startup.owner.strong_count() != 0)
+    }
+
+    pub(super) fn starting(&self) -> bool {
+        self.startup_observation().is_some()
+    }
+
+    pub(super) fn startup_observation(&self) -> Option<Weak<AtomicBool>> {
+        self.startup_transport
+            .as_ref()
+            .filter(|ready| {
+                ready
+                    .upgrade()
+                    .is_some_and(|ready| !ready.load(Ordering::Acquire))
+            })
+            .cloned()
     }
 
     fn interrupt_startup(&mut self) -> bool {
@@ -400,7 +421,9 @@ impl Client {
         let owner = Arc::new(WorkerStartupAdmission {
             client: self.clone(),
             generation: generation.clone(),
+            transport_ready: Arc::new(AtomicBool::new(false)),
         });
+        lifecycle.startup_transport = Some(Arc::downgrade(&owner.transport_ready));
         lifecycle.startup = Some(WorkerStartup {
             owner: Arc::downgrade(&owner),
             interrupted: false,

@@ -77,6 +77,10 @@ def preview_image_limit(context: WorkerContext, source: str) -> None:
 
 
 def preview_allocation_image(context: WorkerContext, source: str) -> None:
+    if source.endswith("then fail"):
+        checkpoint = Path(os.environ["ZOD_STARTUP_CONTROL"]).with_name("image-release")
+        with checkpoint.open("rb", buffering=0) as release:
+            assert release.read(1) == b"1"
     send(
         context.writer,
         {
@@ -87,6 +91,10 @@ def preview_allocation_image(context: WorkerContext, source: str) -> None:
     )
     if source.endswith("and text"):
         send_output(context.writer, "preview head\n" + "x" * 32768 + "\npreview tail\n")
+    if source.endswith("then fail"):
+        wait_for_server_to_process_sideband(context.reader, context.writer)
+        Path(os.environ["ZOD_STARTUP_CONTROL"]).write_text("block")
+        os._exit(86)
     send(context.writer, {"kind": "completed"})
 
 

@@ -110,6 +110,16 @@ struct Control {
 }
 
 impl ResolverControl for Control {
+    fn phase(&self) -> Option<&'static str> {
+        if self.state.finished.load(Ordering::SeqCst) {
+            None
+        } else if self.id == 0 {
+            Some("startup")
+        } else {
+            Some("dependency preparation")
+        }
+    }
+
     fn stop(&self) -> Result<(), String> {
         if !self.state.finished.load(Ordering::SeqCst) {
             self.events

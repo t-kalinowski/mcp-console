@@ -89,12 +89,12 @@ pub(crate) use managed_r::{
     ManagedRBootstrap, ManagedRResolverConfiguration, discover, resolve_r, resolve_r_with,
 };
 #[cfg(any(unix, windows))]
-pub(crate) use process::{ResolverControl, ResolverStopHandle};
+pub(crate) use process::{ResolverControl, ResolverPhase, ResolverStopHandle};
 #[cfg(not(any(unix, windows)))]
 pub(crate) use unsupported::{
-    ManagedPython, ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, ResolverStopHandle,
-    resolve_duckdb_extensions, resolve_python, resolve_python_manifest, resolve_python_version,
-    resolve_r, resolve_r_with,
+    ManagedPython, ManagedR, ManagedRBootstrap, ManagedRResolverConfiguration, ResolverPhase,
+    ResolverStopHandle, resolve_duckdb_extensions, resolve_python, resolve_python_manifest,
+    resolve_python_version, resolve_r, resolve_r_with,
 };
 
 #[cfg(all(test, unix))]

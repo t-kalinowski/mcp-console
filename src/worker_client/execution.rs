@@ -391,7 +391,7 @@ impl Client {
             {
                 preparation.check_ready()?;
             }
-            let _startup = self.reserve_worker_startup(&generation)?;
+            let startup = self.reserve_worker_startup(&generation)?;
             let mut environment = match &self.0.environment {
                 Some(environment) => Some(
                     environment
@@ -466,10 +466,16 @@ impl Client {
                     .to_string()
                     .into());
             }
-            let running =
-                self.0
-                    .runtime
-                    .spawn(spec, self.0.output.clone(), on_started, on_ready)?;
+            let running = self
+                .0
+                .runtime
+                .spawn(spec, self.0.output.clone(), on_started, || {
+                    on_ready()?;
+                    if let Some(startup) = startup.as_ref() {
+                        startup.transport_ready.store(true, Ordering::Release);
+                    }
+                    Ok(())
+                })?;
             if let Some(environment) = environment.as_mut() {
                 // An external `--worker` must apply its first managed R layer before
                 // loading DuckDB; arbitrary preloaded namespaces are not tracked.

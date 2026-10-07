@@ -508,6 +508,10 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
         ) as client,
     ):
         client.initialize_and_list_tools()
+        # Finish shared discovery and lazy worker startup before replacement.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
         client.send(r="overflow cell output file", timeout_ms=0)
         assert (
             without_elapsed(last_tool_text(client))

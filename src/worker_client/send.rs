@@ -35,6 +35,22 @@ impl Client {
         request: SendRequest,
         initial_restart: bool,
     ) -> Result<Response, String> {
+        let replacing = matches!(request.control, Some(SendControl::Restart));
+        let generation = self.status_generation();
+        let mut response = self.send_observed(request, initial_restart).await?;
+        response.observe_phase(self.status_source(if replacing {
+            self.status_generation()
+        } else {
+            generation
+        }));
+        Ok(response)
+    }
+
+    async fn send_observed(
+        &self,
+        request: SendRequest,
+        initial_restart: bool,
+    ) -> Result<Response, String> {
         if self.is_configured()
             && let Some(cell) = &request.cell
         {

@@ -58,6 +58,12 @@ def test_silent_polls_retain_admission_age(
             ) as client,
         ):
             client.initialize_and_list_tools()
+            # Resolve connection startup before measuring the admitted cell's
+            # age; discovery time precedes that clock.
+            client.send(requirements={"action": "get"})
+            # A public restart also waits for this lazy relay's transport.
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="42", timeout_ms=250)
             first_age, silent = elapsed_progress(last_tool_text(client))
             assert first_age >= 0.2 and silent
@@ -174,8 +180,14 @@ def test_worker_activity_survives_preview_projection(
             ) as client,
         ):
             client.initialize_and_list_tools()
+            # Finish connection discovery and this lazy relay's transport
+            # startup before observing the admitted cell's activity.
+            client.send(requirements={"action": "get"})
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="42", timeout_ms=0)
             assert elapsed_progress(last_tool_text(client))[1]
+            assert without_elapsed(last_tool_text(client)) == RUNNING
             for name, (_, expected, worker_activity) in intervals.items():
                 release.release()
                 processed.wait(f"{name} interval ingested before its response cut")
@@ -220,7 +232,7 @@ def test_worker_activity_survives_preview_projection(
             release.release()
             client.send()
             assert last_tool_text(client) == "[done]"
-            assert cell_text(client, 1) == (
+            assert cell_text(client, 3) == (
                 "worker text\nworker diagnostic\n€\nworker stderr\nerase\r\x1b[2K"
                 + overflow
                 + "native diagnostic\n"
@@ -245,6 +257,9 @@ def test_restart_starts_a_new_admission_clock(
         ) as client,
     ):
         client.initialize_and_list_tools()
+        # Measure cell admission after the lazy worker reaches readiness.
+        client.send(r="complete silently")
+        assert last_tool_text(client) == "[done]"
         client.send(r="stall", timeout_ms=250)
         old_age, silent = elapsed_progress(last_tool_text(client))
         assert old_age >= 0.2 and silent

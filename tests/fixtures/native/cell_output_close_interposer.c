@@ -11,10 +11,13 @@
 #include <unistd.h>
 
 static pid_t owner;
+static const char *cell_output_suffix;
 typedef int (*close_function)(int);
 
 __attribute__((constructor)) static void initialize(void) {
     owner = getpid();
+    cell_output_suffix = getenv("MCP_CONSOLE_TEST_CELL_OUTPUT_SUFFIX");
+    if (cell_output_suffix == NULL) { _exit(125); }
     unsetenv("DYLD_INSERT_LIBRARIES");
     unsetenv("LD_PRELOAD");
 }
@@ -30,10 +33,10 @@ static bool is_cell_output(int descriptor) {
     if (path_length < 0) { return false; }
     path[path_length] = '\0';
 #endif
-    const char suffix[] = "/outputs/call-000001.log";
+    size_t suffix_length = strlen(cell_output_suffix);
     size_t length = strlen(path);
-    return length >= sizeof(suffix) - 1 &&
-        strcmp(path + length - (sizeof(suffix) - 1), suffix) == 0;
+    return length >= suffix_length &&
+        strcmp(path + length - suffix_length, cell_output_suffix) == 0;
 }
 
 static int observed_close(int descriptor) {

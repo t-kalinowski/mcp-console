@@ -57,6 +57,13 @@ def test_interrupts_running_worker_with_sigint(
         try:
             client.initialize_and_list_tools()
 
+            # Establish a ready worker before observing the interruptible cell.
+            ready_id = client._next_request_id
+            client.send(r=f"checkpoint {ready_id}")
+            assert last_tool_text(client) == "[done]"
+            control.connect(client)
+            control.wait_for(ready_id, "worker_operation_completed")
+
             target_id = client._next_request_id
             client.send(
                 r=f"wait for interrupt: {target_id}",
@@ -67,7 +74,6 @@ def test_interrupts_running_worker_with_sigint(
                 without_elapsed(last_tool_text(client))
                 == "\n[running; poll with an empty send]"
             )
-            control.connect(client)
             control.wait_for(target_id, "worker_operation_started")
 
             interrupt_id = client._next_request_id

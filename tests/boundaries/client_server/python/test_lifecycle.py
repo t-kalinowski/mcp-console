@@ -718,7 +718,10 @@ def test_interrupts_live_python_resolver(
                 "content": [
                     {
                         "type": "text",
-                        "text": "\n[running; poll with an empty send]",
+                        "text": (
+                            "\n[phase: dependency preparation]"
+                            "\n[running; poll with an empty send]"
+                        ),
                     }
                 ],
                 "isError": False,

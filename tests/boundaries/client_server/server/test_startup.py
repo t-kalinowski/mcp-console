@@ -277,9 +277,9 @@ def wait_for_send_admission(client: McpClient) -> None:
                 "isError": True,
             }, result
             break
-        assert result["content"] == [{"type": "text", "text": "[worker starting]"}], (
-            result
-        )
+        assert result["content"] == [
+            {"type": "text", "text": "\n[phase: startup]\n[worker starting]"}
+        ], result
         assert time.monotonic() < deadline, "pending send did not claim its evaluation"
     # Only the scheduling-dependent startup observations are incidental.
     client.transcript[first_poll:] = [client.transcript[-1]]

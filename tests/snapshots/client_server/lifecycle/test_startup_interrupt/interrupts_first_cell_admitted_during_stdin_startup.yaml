@@ -8,7 +8,10 @@ send:
 result:
   content:
     - type: text
-      text: "[worker starting]"
+      text: |-
+
+        [phase: dependency preparation]
+        [worker starting]
   isError: false
 ---
 send:
@@ -19,7 +22,7 @@ result:
     - type: text
       text: |-
 
-        [elapsed: <elapsed>s since admission; no new output]
+        [elapsed: <elapsed>s since admission; no new output; phase: dependency preparation]
         [running; poll with an empty send]
   isError: false
 ---
@@ -31,7 +34,7 @@ result:
     - type: text
       text: |-
 
-        [elapsed: <elapsed>s since admission; no new output]
+        [elapsed: <elapsed>s since admission; no new output; phase: dependency preparation]
         [running; poll with an empty send]
   isError: false
 ---

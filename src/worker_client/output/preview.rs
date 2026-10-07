@@ -1,6 +1,7 @@
 //! Bounded ordered text projection, independent of raw-file retention.
 
 use super::{Content, utf8_prefix_length};
+use std::sync::Arc;
 
 /// Complete rendered tool-result text, including all Console notices.
 pub(crate) const TEXT_BYTES: usize = 8 * 1024;
@@ -20,7 +21,8 @@ pub(super) enum Part {
     Gap(Gap),
     Notice(Control),
     Information(String),
-    Image(Content),
+    // Ephemeral text projections share the retained image until MCP rendering.
+    Image(Arc<Content>),
     ImageGap,
     Source(Source),
     Summary(Summary),
@@ -48,6 +50,28 @@ pub(super) struct Preview {
 }
 
 impl Preview {
+    pub(super) fn phase_before_terminal(&mut self, phase: &str, cell_clock: bool) {
+        if let Some(progress) = self.parts.iter_mut().rev().find_map(|part| match part {
+            Part::Notice(control) if cell_clock && control.head.starts_with("\n[elapsed: ") => {
+                Some(control)
+            }
+            _ => None,
+        }) {
+            assert!(
+                progress.head.ends_with(']') && progress.tail.is_empty() && progress.omitted == 0
+            );
+            progress.head.pop();
+            progress.head.push_str(&format!("; phase: {phase}]"));
+            return;
+        }
+        let Some(Part::Notice(terminal)) = self.parts.pop() else {
+            unreachable!("a phase response has a terminal banner");
+        };
+        let prefix = if self.ends_with_newline() { "" } else { "\n" };
+        self.notice(format!("{prefix}[phase: {phase}]"));
+        self.control(terminal);
+    }
+
     pub(super) fn text(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -162,12 +186,12 @@ impl Preview {
         self.omitted_image_bytes = self.omitted_image_bytes.saturating_add(bytes as u64);
     }
 
-    pub(super) fn image(&mut self, content: Content) {
+    pub(super) fn image(&mut self, content: Arc<Content>) {
         let Content::Image {
             data,
             mime_type,
             artifact,
-        } = &content
+        } = content.as_ref()
         else {
             unreachable!("only image content enters the independent image budget")
         };
@@ -400,6 +424,11 @@ impl Preview {
 
     /// Reserve notices first, then divide ordinary text between its head and tail.
     pub(super) fn render(&mut self) -> Vec<Content> {
+        self.bound();
+        self.project(true).content.expect("rendered projection")
+    }
+
+    pub(super) fn bound(&mut self) {
         let mut allowance = TEXT_BYTES;
         loop {
             self.trim(allowance);
@@ -409,7 +438,7 @@ impl Preview {
                 bytes = self.project(false).text_bytes;
             }
             if bytes <= TEXT_BYTES {
-                return self.project(true).content.expect("rendered projection");
+                return;
             }
             assert!(
                 allowance > 0,
@@ -502,7 +531,7 @@ impl Preview {
                     }
                     Part::Image(image) => {
                         if let Some(content) = &mut projection.content {
-                            content.push(image.clone());
+                            content.push(image.as_ref().clone());
                         }
                     }
                     Part::ImageGap => {

@@ -10,13 +10,13 @@ import sys
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.progress import without_elapsed
+from support.progress import phase_progress, without_elapsed
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SQL, command, requires
 from support.assertions import (
     collect_running_output,
@@ -170,7 +170,9 @@ def test_preserves_initialize_buffered_during_startup(
         client.initialize_and_list_tools()
         client.request("ping")
         client.send(timeout_ms=0)
-        assert last_tool_text(client) == "[worker starting]"
+        assert last_tool_text(client) == (
+            "\n[phase: dependency preparation]\n[worker starting]"
+        )
         client.send(r="must not run", requirements={"r": [""]})
         assert client.transcript[-1]["result"]["isError"] is True
         assert fixture.invocations() == invocations, (
@@ -202,13 +204,16 @@ def test_prepares_python_before_r_bootstrap_validation(
     with startup_fixture(binary, execution, phase="discovery") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        fixture.wait_for_resolver()
         # fmt: r
         r = code(r"""
             cat("ready\n")
             """)
         client.send(r=r, timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         assert fixture.invocations()[-1] == {
             "program": "ir",
             "arguments": ["--version"],
@@ -237,6 +242,7 @@ def test_first_cell_prepares_defaults_after_running_response(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        fixture.wait_for_resolver()
         # fmt: r
         r = code(r"""
             defaults <- c(
@@ -259,7 +265,9 @@ def test_first_cell_prepares_defaults_after_running_response(
             """)
         client.send(r=r, timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         storage = list(fixture.root.glob("sandbox-*"))
         assert len(storage) == (1 if execution is SANDBOXED else 0), storage
         assert any(
@@ -289,6 +297,9 @@ def test_first_cell_prepares_defaults_after_running_response(
         }, preparation
         client.send(timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         fixture.release.release()
         client.response_timeout = 600
         assert collect_running_output(client, "first cell", timeouts_ms=(600_000,)) == (
@@ -366,9 +377,13 @@ def test_cancels_resolver_discovery_when_stdin_closes(
     with startup_fixture(binary, execution, phase="discovery") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        # Bootstrap discovery is held inside the default preparation operation.
+        fixture.wait_for_resolver()
         client.send(r="42L", timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         client.stdin.close()
         exit_code = client.process.wait(timeout=5)
         fixture.wait_for_resolver_exit()
@@ -390,9 +405,13 @@ def test_cancels_default_preparation_when_stdin_closes(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        # Hold preparation before admission so the observed phase is fixed.
+        fixture.wait_for_resolver()
         client.send(r="42L", timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         client.stdin.close()
         exit_code = client.process.wait(timeout=5)
         fixture.wait_for_resolver_exit()
@@ -415,9 +434,13 @@ def test_interrupts_first_use_preparation_without_running_cell(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        # Hold preparation before admission so the observed phase is fixed.
+        fixture.wait_for_resolver()
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         client.send(control="interrupt", timeout_ms=30_000)
         fixture.wait_for_resolver_exit()
         client.response_timeout = 600
@@ -456,9 +479,13 @@ def test_restart_replaces_first_use_cell_and_stdin(
         resources.callback(release.release)
         client = fixture.client
         client.initialize_and_list_tools()
+        # Hold preparation before admission so the first observed phase is fixed.
+        fixture.wait_for_resolver()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            client.transcript[-1]
+        )
         armed.touch()
         client.response_timeout = 600
         # fmt: python
@@ -495,9 +522,37 @@ def test_restart_replaces_first_use_cell_and_stdin(
         assert last_tool_text(client).count("replacement only\n") == 1, (
             client.transcript[-1]
         )
+        # The replacement's active cell cannot borrow the still-pending initial
+        # startup observation, even before its late outcome reaches the server.
+        new_cell_release = resources.enter_context(
+            closing(
+                FifoCheckpoint.create(
+                    Path(client.temporary_directory.name) / "new-cell-release"
+                )
+            )
+        )
+        resources.callback(new_cell_release.release)
+        # fmt: python
+        python = code("""
+            with open("new-cell-release", "rb", buffering=0) as gate:
+                assert gate.read(1) == b"1"
+            input("replacement> ")
+            """)
+        client.send(python=python, timeout_ms=0)
+        assert without_elapsed(last_tool_text(client)) == RUNNING
+        assert "phase:" not in last_tool_text(client)
         fixture.wait_for_resolver_exit()
         release.release()
         parked.wait("cancelled startup task returned to the pool")
+        client.send(timeout_ms=0)
+        assert without_elapsed(last_tool_text(client)) == RUNNING
+        assert "phase:" not in last_tool_text(client)
+        new_cell_release.release()
+        client.send(stdin="replacement still usable\n")
+        assert last_tool_text(client) == (
+            "[input requested: \"replacement> \"]\n'replacement still usable'\n"
+        )
+        assert "phase:" not in last_tool_text(client)
         client.send()
         assert last_tool_text(client) == "\n[idle]"
         return client.finish()

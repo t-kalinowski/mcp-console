@@ -49,7 +49,12 @@ def wait_for_worker_ready(client: McpClient, description: str) -> None:
     deadline = time.monotonic() + client.response_timeout
     poll_start = len(client.transcript)
     result = _send_before(client, deadline, description)
-    while tool_text(result) == "[worker starting]":
+    # Phase observation is optional when its owner is busy.
+    while tool_text(result) in {
+        "[worker starting]",
+        "\n[phase: startup]\n[worker starting]",
+        "\n[phase: dependency preparation]\n[worker starting]",
+    }:
         remaining = deadline - time.monotonic()
         assert remaining > 0, f"{description} did not complete"
         result = _send_before(

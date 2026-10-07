@@ -11,6 +11,7 @@ mod execution;
 mod lifecycle;
 mod output;
 mod send;
+mod status;
 
 #[cfg(any(unix, windows))]
 mod events;
@@ -119,6 +120,10 @@ pub(crate) struct Client(Arc<ClientInner>);
 struct ClientInner {
     configuration: OnceLock<ClientConfiguration>,
     startup: Mutex<tokio::sync::watch::Sender<Option<Result<(), String>>>>,
+    /// Identity of connection startup, including the interval before admission.
+    startup_generation: WorkerGeneration,
+    /// Disposable presentation fact; admission still uses the startup outcome.
+    startup_observation_complete: AtomicBool,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
     /// Settles operations admitted before inline control reserves its optional new cell.
@@ -296,14 +301,18 @@ struct ActiveEvaluation {
 impl Client {
     pub(crate) fn pending() -> Self {
         let (startup, _) = tokio::sync::watch::channel(None);
+        let lifecycle = LifecycleControl::new();
+        let startup_generation = lifecycle.generation.clone();
         Self(Arc::new(ClientInner {
             configuration: OnceLock::new(),
             startup: Mutex::new(startup),
+            startup_generation,
+            startup_observation_complete: AtomicBool::new(false),
             evaluation: Mutex::new(None),
             admission: tokio::sync::RwLock::new(()),
             preparation: tokio::sync::RwLock::new(()),
             output: OutputTape::new(),
-            lifecycle: Mutex::new(LifecycleControl::new()),
+            lifecycle: Mutex::new(lifecycle),
             recording: Mutex::new(None),
             startup_failed: AtomicBool::new(false),
             startup_stdin: Mutex::new(String::new()),
@@ -334,6 +343,9 @@ impl Client {
                     return false;
                 }
                 *outcome = Some(result);
+                self.0
+                    .startup_observation_complete
+                    .store(true, Ordering::Release);
                 true
             });
     }
@@ -401,6 +413,9 @@ impl Client {
         // Existing observers keep the failed attempt. A rejected cell must
         // never become runnable when a new attempt is installed.
         *startup = tokio::sync::watch::channel(None).0;
+        self.0
+            .startup_observation_complete
+            .store(false, Ordering::Release);
         self.0
             .startup_stdin
             .lock()

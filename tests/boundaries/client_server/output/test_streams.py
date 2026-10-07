@@ -441,6 +441,10 @@ def test_finishes_ansi_at_polls_but_preserves_split_utf8(
         ):
             try:
                 client.initialize_and_list_tools()
+                # Finish shared discovery and lazy relay startup before polling.
+                client.send(requirements={"action": "get"})
+                client.send(control="restart")
+                assert last_tool_text(client) == "[starting new worker]\n[idle]"
                 running = "\n[running; poll with an empty send]"
                 assert without_elapsed_result(client.send(r="42", timeout_ms=0))[
                     "content"
@@ -461,7 +465,7 @@ def test_finishes_ansi_at_polls_but_preserves_split_utf8(
                         "isError": False,
                     }, result
                     assert (
-                        session_directory(client) / "outputs/call-000001.log"
+                        session_directory(client) / "outputs/call-000003.log"
                     ).read_bytes() == raw
                 release.release()
                 assert without_elapsed(last_tool_text(client)) == "€\n" + running
@@ -508,10 +512,15 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
         ):
             try:
                 client.initialize_and_list_tools()
+                # Finish shared discovery and lazy relay startup before polling.
+                client.send(requirements={"action": "get"})
+                client.send(control="restart")
+                assert last_tool_text(client) == "[starting new worker]\n[idle]"
                 running = "\n[running; poll with an empty send]"
                 assert without_elapsed_result(client.send(r="42", timeout_ms=0))[
                     "content"
                 ] == [{"type": "text", "text": running}]
+                session = next((directory / ".agents/console/sessions").iterdir())
                 raw = b""
                 for data, expected in (
                     (b"A\xe2", "A"),
@@ -521,8 +530,6 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
                 ):
                     release.release()
                     processed.wait("direct bytes reached the output tape")
-                    # The initial nonblocking send can precede recording metadata.
-                    session = next((directory / ".agents/console/sessions").iterdir())
                     raw += data
                     result = client.send(timeout_ms=0)
                     assert without_elapsed_result(result) == {
@@ -532,13 +539,13 @@ def test_keeps_partial_utf8_across_polls_and_orders_stream_switches(
                     assert without_elapsed_result(client.send(timeout_ms=0))[
                         "content"
                     ] == [{"type": "text", "text": running}]
-                    assert (session / "outputs/call-000001.log").read_bytes() == raw
+                    assert (session / "outputs/call-000003.log").read_bytes() == raw
                 release.release()
                 assert client.send()["content"] == [{"type": "text", "text": "�"}]
                 assert client.send(r="42")["content"] == [
                     {"type": "text", "text": "��"}
                 ]
-                assert (session / "outputs/call-000011.log").read_bytes() == b"\x82\xac"
+                assert (session / "outputs/call-000013.log").read_bytes() == b"\x82\xac"
                 assert client.send()["content"] == [
                     {"type": "text", "text": "\n[idle]"}
                 ]
@@ -606,6 +613,10 @@ def test_compacts_each_polled_output_segment(
         )
         client.initialize_and_list_tools()
 
+        # Finish shared discovery and lazy worker startup before polling.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
         client.send(r="redraw across polls", timeout_ms=0)
         assert (
             without_elapsed(last_tool_text(client))
@@ -918,6 +929,10 @@ def test_drains_pending_sideband_output_while_running(
         )
         client.initialize_and_list_tools()
 
+        # Finish shared discovery and lazy worker startup before polling.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
         client.send(r="emit output and image before completion", timeout_ms=0)
         assert (
             without_elapsed(last_tool_text(client))
@@ -947,7 +962,7 @@ def test_drains_pending_sideband_output_while_running(
         assert client.temporary_directory is not None
         workspace = Path(client.temporary_directory.name)
         session = next((workspace / ".agents/console" / "sessions").iterdir())
-        assert (session / "outputs" / "call-000001.log").read_text(
+        assert (session / "outputs" / "call-000003.log").read_text(
             encoding="utf-8"
         ) == "before pending image\nafter pending image\n"
 

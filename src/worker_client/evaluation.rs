@@ -202,6 +202,12 @@ impl Evaluation {
         ))
     }
 
+    /// None omits a busy observation; false leaves other owners observable.
+    pub(super) fn replacement_observation(&self) -> Option<bool> {
+        let state = self.state.try_lock().ok()?;
+        Some(!state.retired && matches!(state.phase, EvaluationPhase::ReplacementStarting))
+    }
+
     pub(super) fn interrupt_bootstrap(&self) -> Result<(), String> {
         let mut state = self
             .state

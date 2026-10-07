@@ -35,6 +35,10 @@ def test_interrupt_preserves_active_poll_output(
             binary, execution.serve("--worker", str(worker)), environment
         ) as client:
             client.initialize_and_list_tools()
+            # Finish shared discovery and lazy worker startup before polling.
+            client.send(requirements={"action": "get"})
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="shutdown output checkpoints", timeout_ms=0)
             assert (
                 without_elapsed(last_tool_text(client))
@@ -132,6 +136,10 @@ def test_interrupt_preserves_completed_response_delivery(
                 binary, execution.serve("--worker", str(worker)), environment
             ) as client:
                 client.initialize_and_list_tools()
+                # Finish shared discovery and lazy worker startup before polling.
+                client.send(requirements={"action": "get"})
+                client.send(control="restart")
+                assert last_tool_text(client) == "[starting new worker]\n[idle]"
                 client.send(r="shutdown output checkpoints", timeout_ms=0)
                 control.connect(client)
                 control.wait_for(0, "evaluation_started")

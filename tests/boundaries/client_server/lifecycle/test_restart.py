@@ -58,6 +58,7 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
             build_interposer(temporary_path, "cell_output_close_interposer")
         )
         environment["MCP_CONSOLE_TEST_CELL_OUTPUT_CLOSED"] = str(output_closed.path)
+        environment["MCP_CONSOLE_TEST_CELL_OUTPUT_SUFFIX"] = "/outputs/call-000003.log"
         environment["ZOD_STDIN_CLOSE_RELEASE"] = str(output_closed.path)
         client = McpClient(
             binary,
@@ -65,6 +66,10 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
             environment,
         )
         client.initialize_and_list_tools()
+        # Finish discovery and lazy startup before exercising worker retirement.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
         client.send(r="wait for stdin close", timeout_ms=0)
         assert (
             without_elapsed(last_tool_text(client))
@@ -78,7 +83,7 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
 
         client.send(control="restart")
         output = last_tool_text(client)
-        raw = cell_text(client, 1)
+        raw = cell_text(client, 3)
         assert raw == "", "output after the restart cut does not belong to the cell log"
         assert "outputs/session.log" in output, output
         recorded = (session_directory(client) / "outputs/session.log").read_text()
@@ -297,6 +302,10 @@ def test_restart_force_stops_stalled_worker(
         passed = False
         try:
             client.initialize_and_list_tools()
+            # The stalled evaluation belongs to an established worker.
+            client.send(requirements={"action": "get"})
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="stall", timeout_ms=0)
             assert (
                 without_elapsed(last_tool_text(client))

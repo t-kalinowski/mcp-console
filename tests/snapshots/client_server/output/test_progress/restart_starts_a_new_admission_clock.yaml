@@ -2,6 +2,14 @@
 !same-as custom MCP initialization for this execution mode
 ---
 send:
+  r: complete silently
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   r: stall
   timeout_ms: 250
 result:

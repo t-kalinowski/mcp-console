@@ -226,6 +226,9 @@ def test_preserves_unexposed_input_output(
         )
         client.initialize_and_list_tools()
 
+        # Observe input from an established worker, after a completed public cell.
+        client.send(r="echo ready")
+        assert last_tool_text(client) == "zod: ready\n"
         client.send(
             r="request input after timeout",
             stdin="answer\n",

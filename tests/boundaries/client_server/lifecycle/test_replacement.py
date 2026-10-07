@@ -219,6 +219,7 @@ def test_polls_replacement_startup_after_send_timeout(
                             "[worker exited with status 86]\n"
                             "[worker stopped: in-memory state lost]\n"
                             "[starting new worker]\n"
+                            "[phase: replacement]\n"
                             "[worker starting]"
                         ),
                     }
@@ -286,6 +287,7 @@ def test_orders_explicit_restart_output(
             build_interposer(temporary_path, "cell_output_close_interposer")
         )
         environment["MCP_CONSOLE_TEST_CELL_OUTPUT_CLOSED"] = str(output_closed.path)
+        environment["MCP_CONSOLE_TEST_CELL_OUTPUT_SUFFIX"] = "/outputs/call-000003.log"
         environment["ZOD_STDIN_CLOSE_RELEASE"] = str(output_closed.path)
         client = McpClient(
             binary,
@@ -293,6 +295,11 @@ def test_orders_explicit_restart_output(
             environment,
         )
         client.initialize_and_list_tools()
+
+        # Finish discovery and lazy startup before exercising worker retirement.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
 
         client.send(r="wait for stdin close", timeout_ms=0)
         assert (
@@ -553,7 +560,10 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
                     "content": [
                         {
                             "type": "text",
-                            "text": "\n[running; poll with an empty send]",
+                            "text": (
+                                "\n[phase: dependency preparation]"
+                                "\n[running; poll with an empty send]"
+                            ),
                         }
                     ],
                     "isError": False,
@@ -622,6 +632,11 @@ def test_restart_preserves_pending_sideband_output(
         )
         client.initialize_and_list_tools()
 
+        # Finish discovery and lazy startup before exercising worker retirement.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
+
         client.send(r="emit output and image before completion", timeout_ms=0)
         assert (
             without_elapsed(last_tool_text(client))
@@ -673,6 +688,11 @@ def test_restart_preserves_unpolled_completion(
             environment,
         )
         client.initialize_and_list_tools()
+
+        # Finish discovery and lazy startup before exercising worker retirement.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
 
         client.send(r="complete before restart checkpoint", timeout_ms=0)
         assert (
