@@ -126,24 +126,39 @@ def test_restart_preserves_overlapping_failed_retirement(
         return client.finish()
 
 
-@requires(POSIX, UNPRIVILEGED)
+@requires(POSIX, NATIVE_FIXTURES, UNPRIVILEGED)
 def test_failed_storage_retirement_blocks_replacement(binary: Path) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)
         owned = root / "owned"
         owned.mkdir()
+        reaped, shutdown, retired, relay_release, signal_release = [
+            resources.enter_context(closing(FifoCheckpoint.create(root / name)))
+            for name in (
+                "worker-reaped",
+                "shutdown-written",
+                "launcher-retiring",
+                "relay-release",
+                "signal-release",
+            )
+        ]
         environment = dict(
             os.environ,
             PATH=str(root),
             RETICULATE_PYTHON=sys.executable,
             TMPDIR=str(owned),
+            MCP_CONSOLE_TEST_STORAGE_RETIREMENT_ROOT=str(root),
         )
+        environment[LOADER_VARIABLE] = str(build_interposer(root, "storage_retirement"))
         environment.pop("R_HOME", None)
         temporary = None
         try:
-            with McpClient(
-                binary, ("serve", "--no-sandbox"), environment, root
-            ) as client:
+            with (
+                McpClient(binary, DIRECT.serve(), environment, root) as client,
+                ExitStack() as gates,
+            ):
+                gates.callback(relay_release.release)
+                gates.callback(signal_release.release)
                 client.initialize_and_list_tools()
                 # fmt: python
                 python = code("""
@@ -160,7 +175,16 @@ def test_failed_storage_retirement_blocks_replacement(binary: Path) -> Transcrip
                 client.send(python=python)
                 temporary = Path((root / "worker-temporary").read_text())
                 assert temporary.is_relative_to(owned), temporary
-                failure = client.send(python="os._exit(47)")
+                failed = client.start_send(python="os._exit(47)")
+                reaped.wait("real relay reaped the worker that exited with status 47")
+                shutdown.wait("server wrote the generation's complete Shutdown command")
+                retired.wait(
+                    "server reached launcher retirement after its dispatcher barrier"
+                )
+                relay_release.release()
+                signal_release.release()
+                client.receive(failed)
+                failure = failed["result"]
                 assert failure["isError"], failure
                 assert "cannot remove worker temporary directory" in last_result_text(
                     client
