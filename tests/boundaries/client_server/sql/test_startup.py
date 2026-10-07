@@ -940,12 +940,21 @@ def test_missing_selected_python_has_no_sql_fallback(
         configuration = captured_configuration(config)
         with McpClient(binary, execution.serve(), os.environ, workspace) as client:
             client.initialize_and_list_tools()
+            wait_for_idle_output(
+                client,
+                "Error: selected Python executable is not an absolute file: "
+                "/mcp-console-startup-missing-python\n"
+                "Error: Python initialization is incomplete; SQL withheld; "
+                "explicit restart required\n\n[idle]",
+                "missing selected Python startup diagnostics",
+                completion_timeout_seconds=client.response_timeout,
+            )
             client.send(sql="SELECT 42 AS answer")
             output = client.transcript[-1]["result"]["content"][0]["text"]
-            assert "mcp-console-startup-missing-python" in output, output
-            assert "source must not execute" not in output and "42" not in output, (
-                output
-            )
+            assert output == (
+                "Error: SQL unavailable: Python initialization is incomplete; "
+                "explicit restart required\n"
+            ), output
             transcript = client.finish()
     return [configuration, *transcript, {"missing_selected_python": output}]
 
