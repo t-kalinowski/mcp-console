@@ -286,6 +286,12 @@ fn dispatch_worker_events(
                         "worker relay sent a semantic event after closing the worker sideband"
                             .to_string(),
                     ),
+                    RelayEvent::RInitialization { complete: false } => {
+                        // Retirement must retain evidence of startup user code,
+                        // even when ordinary callbacks are no longer admitted.
+                        callbacks.generation.r_initialization(false);
+                        Ok(())
+                    }
                     _ if semantic_failure => Ok(()),
                     semantic if retiring && ignored_during_retirement(&semantic) => Ok(()),
                     RelayEvent::Ready => {
@@ -416,6 +422,7 @@ fn sideband_semantic(event: &RelayEvent) -> bool {
     !matches!(
         event,
         RelayEvent::Stdout { .. }
+            | RelayEvent::RInitialization { .. }
             | RelayEvent::StdoutBytes { .. }
             | RelayEvent::Stderr { .. }
             | RelayEvent::StderrBytes { .. }
@@ -435,6 +442,7 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
         event,
         RelayEvent::Ready
             | RelayEvent::RuntimeInitialized { .. }
+            | RelayEvent::RInitialization { .. }
             | RelayEvent::InputRequested { .. }
             | RelayEvent::InputReceived
             | RelayEvent::InputCancelled
@@ -700,6 +708,10 @@ fn handle_semantic_event(
                 callbacks.interrupt_bootstrap_cell()?;
             }
             operation.finish_bootstrap()
+        }
+        RelayEvent::RInitialization { complete } => {
+            callbacks.generation.r_initialization(complete);
+            Ok(())
         }
         event @ (RelayEvent::Completed
         | RelayEvent::RPrepared { .. }

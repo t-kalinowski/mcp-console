@@ -212,7 +212,7 @@ def test_duckdb_cache_waits_for_terminal_sql_results(binary: Path) -> Transcript
     ]
 
 
-@requires(R, command("ir"))
+@requires(POSIX, R, SQL, command("ir"))
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_captures_duckdb_cache_before_live_r(
     binary: Path, execution: Execution

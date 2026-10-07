@@ -468,9 +468,10 @@ base::local(
         "mcp_console_running_python"
       )))
       globals <- get(".globals", envir = asNamespace("reticulate"))
-      globals$py_config[c("pythonpath", "numpy")] <- live[c(
+      globals$py_config[c("pythonpath", "numpy", "ephemeral")] <- live[c(
         "pythonpath",
-        "numpy"
+        "numpy",
+        "ephemeral"
       )]
       invisible(TRUE)
     }

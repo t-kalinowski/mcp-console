@@ -27,6 +27,14 @@ relay:
     thread.start()
     thread.join()
 ---
+worker:
+  kind: r_initialization
+  complete: false
+---
+worker:
+  kind: r_initialization
+  complete: true
+---
 stdout: |
   thread stdout
 stderr: |

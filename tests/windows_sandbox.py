@@ -16,6 +16,7 @@ from ctypes import wintypes
 from pathlib import Path
 from textwrap import dedent
 from support.installation import native_console
+from support.normalization import code
 from support.public_configuration import INVALID_CONFIGURATIONS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +51,74 @@ def workspace(parent: Path | None = None):
 
 @unittest.skipUnless(os.name == "nt", "native Windows sandbox")
 class WindowsSandbox(unittest.TestCase):
+    @unittest.skipUnless(
+        os.environ.get("R_HOME")
+        and os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "configured R and provisioned default Windows sandbox",
+    )
+    def test_native_r_startup_is_contained_and_reread_on_restart(self):
+        from windows import Session
+
+        with workspace() as root:
+            home = root / "home"
+            home.mkdir()
+            environ = home / ".Renviron"
+            environ.write_text("CONSOLE_NATIVE_STARTUP=first\n")
+            profile = home / ".Rprofile"
+            profile.write_text(
+                # fmt: r
+                code("""
+                    native_value <- Sys.getenv("CONSOLE_NATIVE_STARTUP")
+                    native_allowed <- file.path(tempdir(), "native-allowed")
+                    writeLines(native_value, native_allowed)
+                    native_blocked <- tryCatch(
+                      {
+                        suppressWarnings(writeLines(
+                          "forbidden",
+                          Sys.getenv("CONSOLE_NATIVE_FORBIDDEN")
+                        ))
+                        FALSE
+                      },
+                      error = function(error) TRUE
+                    )
+                    stopifnot(native_blocked)
+                    options(width = 73L)
+                    .First <- function() cat("native Windows startup\\n")
+                    """)
+            )
+            environment = dict(
+                os.environ,
+                HOME=str(home),
+                R_USER=str(home),
+                R_ENVIRON=os.devnull,
+                R_PROFILE=os.devnull,
+                R_ENVIRON_USER=str(environ),
+                R_PROFILE_USER=str(profile),
+                MCP_CONSOLE_LANGUAGES="r",
+                CONSOLE_NATIVE_FORBIDDEN=str(root / "forbidden"),
+            )
+            session = Session(environment, sandbox=True, use_r_startup_files=True)
+            try:
+                session.initialize()
+                # fmt: r
+                check = code("""
+                    stopifnot(
+                      native_blocked,
+                      file.exists(native_allowed),
+                      identical(getOption("width"), 73L),
+                      identical(readLines(native_allowed), native_value)
+                    )
+                    cat(native_value)
+                    """)
+                self.assertIn("first", json.dumps(session.send(r=check)))
+                self.assertFalse((root / "forbidden").exists())
+                environ.write_text("CONSOLE_NATIVE_STARTUP=edited\n")
+                result = session.send(control="restart", r=check)
+                self.assertIn("edited", json.dumps(result))
+                self.assertFalse((root / "forbidden").exists())
+            finally:
+                session.close()
+
     @unittest.skipUnless(
         os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
         "provisioned default Windows sandbox",

@@ -68,6 +68,9 @@ pub(crate) enum RelayEvent {
     RuntimeInitialized {
         interrupted: bool,
     },
+    RInitialization {
+        complete: bool,
+    },
     ConsoleOutput {
         data: String,
     },
@@ -166,6 +169,7 @@ impl From<WorkerMessage> for RelayEvent {
             WorkerMessage::RuntimeInitialized { interrupted } => {
                 Self::RuntimeInitialized { interrupted }
             }
+            WorkerMessage::RInitialization { complete } => Self::RInitialization { complete },
             WorkerMessage::ConsoleOutput { data } => Self::ConsoleOutput { data },
             WorkerMessage::ConsoleDiagnostic { data } => Self::ConsoleDiagnostic { data },
             WorkerMessage::Image { data, mime_type } => Self::Image { data, mime_type },

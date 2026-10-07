@@ -119,14 +119,16 @@ Evaluation and print errors are console outcomes; they preserve earlier effects 
 R's native bootstrap and event APIs are component-local to Unix and Windows.
 Both use the same console callbacks, parser, REPL, graphics scopes, and environment integration on the coordinator's interpreter thread.
 Bootstrap restores the captured R installation immediately before startup; argument strings and Windows startup paths live until worker exit.
-Bootstrap defers default packages when needed to attach runtime services and the R/Python adapter first.
+R owns environment files, profiles, workspace restoration, `.First()`, and default-package attachment during native initialization.
+Console installs native I/O and interrupt callbacks before startup; runtime bridges and managed graphics attach after R has initialized.
+See [native R startup](CONFIGURATION.md#native-r-startup) for the default and `r.vanilla` escape hatch.
 Windows installs an interrupt-delivery callback and wakes its idle command wait for R's window messages.
 Event dispatch runs inside R's top-level error boundary, after releasing the command reader and within the ordinary graphics/input scope.
 
 On macOS, Linux, and Windows, R event handlers, including `later` callbacks, run while idle.
 They may change state and produce output returned by a later poll, Python cell, or SQL cell.
 When needed, `[output produced while idle]` separates that region from new-cell output.
-The initial display width is 200 columns and remains user-configurable.
+R's display width follows native startup and remains user-configurable.
 
 Use package-loading operations normally.
 Managed sessions resolve reached missing plain packages without scanning or replaying the source.
