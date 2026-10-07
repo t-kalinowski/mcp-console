@@ -467,10 +467,13 @@ def test_restart_replaces_first_use_cell_and_stdin(
         resources.callback(release.release)
         client = fixture.client
         client.initialize_and_list_tools()
+        # Hold preparation before admission so the first observed phase is fixed.
+        fixture.wait_for_resolver()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        assert phase_progress(last_tool_text(client)) == "startup"
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            client.transcript[-1]
+        )
         armed.touch()
         client.response_timeout = 600
         # fmt: python

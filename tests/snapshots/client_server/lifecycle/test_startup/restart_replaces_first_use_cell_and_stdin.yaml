@@ -11,7 +11,7 @@ result:
     - type: text
       text: |-
 
-        [elapsed: <elapsed>s since admission; no new output; phase: startup]
+        [elapsed: <elapsed>s since admission; no new output; phase: dependency preparation]
         [running; poll with an empty send]
   isError: false
 ---
