@@ -702,7 +702,7 @@ def test_cancelled_restart_shares_retry_and_preserves_next_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
     with retry_inspection(binary, execution) as (client, reached, release, attempts):
-        pending = client.start_send(control="restart")
+        pending = client.start_send(control="restart", python="cancelled_cell = True")
         reached.wait("explicit restart owns Python inspection")
         # Completed public observations prove the callers have joined the
         # blocked attempt before cancellation and repair are released.
@@ -725,8 +725,49 @@ def test_cancelled_restart_shares_retry_and_preserves_next_cell(
         }, timed_out
         client.notify("notifications/cancelled", requestId=pending["id"])
         client.request("ping")
+        (journal,) = attempts.parent.glob(
+            ".agents/console/sessions/*/internal/events.jsonl"
+        )
+
+        def cancellation_recorded() -> Path | None:
+            # Cancellation suppresses the wire response. Its recorded outcome
+            # proves the wait ended before shared inspection is released.
+            events = [
+                json.loads(line)
+                for line in journal.read_text().rpartition("\n")[0].splitlines()
+            ]
+            call = next(
+                event
+                for event in events
+                if event["event"] == "tool_call"
+                and event["request_id"] == pending["id"]
+            )
+            for event in events:
+                if (
+                    event["event"] == "tool_result"
+                    and event["call_id"] == call["call_id"]
+                ):
+                    assert event["error"] == {
+                        "code": -32603,
+                        "message": "request cancelled; poll with an empty send for any admitted cell",
+                    }, event
+                    return journal
+            return None
+
+        wait_for_checkpoint(
+            cancellation_recorded,
+            "cancelled restart stops waiting before shared inspection completes",
+            root=journal.parent,
+            client=client,
+        )
         next_cell = client.start_send(
-            python="assert 'timed_out_cell' not in globals(); answer = 42; answer"
+            # fmt: python
+            python=code("""
+                assert "cancelled_cell" not in globals()
+                assert "timed_out_cell" not in globals()
+                answer = 42
+                answer
+                """)
         )
         wait_for_send_admission(client)
         release.release()

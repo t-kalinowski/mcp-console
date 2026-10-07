@@ -12,6 +12,7 @@ result:
 ---
 send:
   control: restart
+  python: cancelled_cell = True
 id: <cancelled request 1>
 ---
 send:
@@ -54,7 +55,11 @@ input:
 result: {}
 ---
 send:
-  python: assert 'timed_out_cell' not in globals(); answer = 42; answer
+  python: |
+    assert "cancelled_cell" not in globals()
+    assert "timed_out_cell" not in globals()
+    answer = 42
+    answer
 result:
   content:
     - type: text

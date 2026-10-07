@@ -51,6 +51,7 @@ Discovery or initial preparation failure is retained by ordinary sends; tool dis
 Closing the connection preserves completed setup failures in the server's exit status and stderr, including failures before a resolver is registered.
 After correcting setup, an explicit `control="restart"` retries that failed readiness attempt using the server's captured configuration and current filesystem/tool availability.
 Concurrent restart callers share an in-flight retry; request cancellation and timeout leave it running, while connection closure cancels and retires it.
+Cancelling a restart before its bundled cell is admitted leaves that cell unaccepted.
 If setup still fails, the retry reports and retains its new diagnostic.
 Previously rejected cells and their bundled stdin or requirements are not replayed; their diagnostics remain available for polling.
 A retry that succeeds accepts its environment once; joining restart callers do not replace that worker or discard state accepted meanwhile.

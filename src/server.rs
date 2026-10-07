@@ -375,7 +375,10 @@ impl ServerHandler for ConsoleServer {
         };
         context.extensions.insert(delivery.clone());
         let runtime = self.startup.runtime();
-        let waiting_for_startup = !runtime.worker.startup_finished();
+        // A restart can reset completed failed readiness later in this call.
+        // Its wait stays cancellable until initial configuration is accepted.
+        let waiting_for_startup =
+            !runtime.worker.startup_finished() || !runtime.worker.is_configured();
         let transcript = runtime.transcript.clone();
         context.extensions.insert(runtime);
         let request_meta = context.meta.clone();
