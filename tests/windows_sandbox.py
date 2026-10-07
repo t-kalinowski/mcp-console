@@ -16,6 +16,7 @@ from ctypes import wintypes
 from pathlib import Path
 from textwrap import dedent
 from support.installation import native_console
+from support.normalization import code
 from support.public_configuration import INVALID_CONFIGURATIONS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,18 +64,25 @@ class WindowsSandbox(unittest.TestCase):
             environ.write_text("CONSOLE_NATIVE_STARTUP=first\n")
             profile = home / ".Rprofile"
             profile.write_text(
-                dedent("""
-                native_value <- Sys.getenv("CONSOLE_NATIVE_STARTUP")
-                native_allowed <- file.path(tempdir(), "native-allowed")
-                writeLines(native_value, native_allowed)
-                native_blocked <- tryCatch({
-                  suppressWarnings(writeLines("forbidden", Sys.getenv("CONSOLE_NATIVE_FORBIDDEN")))
-                  FALSE
-                }, error = function(error) TRUE)
-                stopifnot(native_blocked)
-                options(width = 73L)
-                .First <- function() cat("native Windows startup\\n")
-                """)
+                # fmt: r
+                code("""
+                    native_value <- Sys.getenv("CONSOLE_NATIVE_STARTUP")
+                    native_allowed <- file.path(tempdir(), "native-allowed")
+                    writeLines(native_value, native_allowed)
+                    native_blocked <- tryCatch(
+                      {
+                        suppressWarnings(writeLines(
+                          "forbidden",
+                          Sys.getenv("CONSOLE_NATIVE_FORBIDDEN")
+                        ))
+                        FALSE
+                      },
+                      error = function(error) TRUE
+                    )
+                    stopifnot(native_blocked)
+                    options(width = 73L)
+                    .First <- function() cat("native Windows startup\\n")
+                    """)
             )
             environment = dict(
                 os.environ,
@@ -90,9 +98,11 @@ class WindowsSandbox(unittest.TestCase):
             session = Session(environment, sandbox=True, use_r_startup_files=True)
             try:
                 session.initialize()
-                check = dedent("""
+                # fmt: r
+                check = code("""
                     stopifnot(
-                      native_blocked, file.exists(native_allowed),
+                      native_blocked,
+                      file.exists(native_allowed),
                       identical(getOption("width"), 73L),
                       identical(readLines(native_allowed), native_value)
                     )

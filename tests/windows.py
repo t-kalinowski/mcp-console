@@ -1459,7 +1459,8 @@ class WindowsConsole(unittest.TestCase):
                     "CONSOLE_NATIVE_ENV=first\nR_DEFAULT_PACKAGES=utils\n"
                 )
                 profile.write_text(
-                    dedent("""
+                    # fmt: r
+                    code("""
                         native_value <- Sys.getenv("CONSOLE_NATIVE_ENV")
                         options(width = 73L)
                         .First <- function() native_first <<- TRUE
@@ -1498,22 +1499,26 @@ class WindowsConsole(unittest.TestCase):
                             )
                             session.send(control="restart")
                         if vanilla:
-                            check = dedent("""
+                            # fmt: r
+                            check = code("""
                                 stopifnot(
                                   "--vanilla" %in% commandArgs(),
                                   Sys.getenv("CONSOLE_NATIVE_ENV") == "",
-                                  !exists("native_value"), !exists("native_first"),
+                                  !exists("native_value"),
+                                  !exists("native_first"),
                                   "package:stats" %in% search()
                                 )
                                 cat("vanilla startup complete")
                                 """)
                             expected = "vanilla startup complete"
                         else:
-                            check = dedent(f"""
+                            # fmt: r
+                            check = code(f"""
                                 stopifnot(
                                   !("--vanilla" %in% commandArgs()),
                                   "--no-save" %in% commandArgs(),
-                                  identical(native_value, "{value}"), native_first,
+                                  identical(native_value, "{value}"),
+                                  native_first,
                                   identical(getOption("width"), 73L),
                                   "package:utils" %in% search(),
                                   !("package:stats" %in% search())

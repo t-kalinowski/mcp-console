@@ -189,12 +189,3 @@ result:
                   type: string
                   minLength: 1
             additionalProperties: false
----
-send:
-  r: '"--vanilla" %in% commandArgs()'
-result:
-  content:
-    - type: text
-      text: |
-        [1] TRUE
-  isError: false

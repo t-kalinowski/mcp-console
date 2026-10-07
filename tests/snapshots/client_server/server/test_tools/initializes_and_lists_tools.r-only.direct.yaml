@@ -48,11 +48,9 @@ result:
         report state and omitted-output locations.
 
 
-        Evaluated code can read host files subject to configured restrictions
-        and cannot directly access the network. Writable locations: private
-        `TMPDIR`; subject to more specific read/deny rules. Package preparation
-        may execute installation or build code with separate filesystem and
-        network permissions; use only trusted dependencies.
+        Evaluated code runs without a sandbox, with the server's permissions,
+        including filesystem and network access. Package preparation may execute
+        installation or build code; use only trusted dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -189,48 +187,3 @@ result:
                   type: string
                   minLength: 1
             additionalProperties: false
----
-send:
-  r: |2
-                    stopifnot(
-                      identical(native_order, "user first"),
-                      identical(getOption("defaultPackages"), "utils"),
-                      "package:utils" %in% search(),
-                      !("package:stats" %in% search())
-                    )
-                    cat("native overrides and package selection retained
-    ")
-result:
-  content:
-    - type: text
-      text: |
-        native overrides and package selection retained
-  isError: false
----
-send:
-  control: restart
-result:
-  content:
-    - type: text
-      text: |-
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [idle]
-  isError: false
----
-send:
-  r: |2
-                    stopifnot(
-                      identical(native_order, "user first"),
-                      identical(getOption("defaultPackages"), "utils"),
-                      "package:utils" %in% search(),
-                      !("package:stats" %in% search())
-                    )
-                    cat("native overrides and package selection retained
-    ")
-result:
-  content:
-    - type: text
-      text: |
-        native overrides and package selection retained
-  isError: false

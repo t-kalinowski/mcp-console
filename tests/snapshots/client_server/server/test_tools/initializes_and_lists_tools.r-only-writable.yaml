@@ -50,9 +50,9 @@ result:
 
         Evaluated code can read host files subject to configured restrictions
         and cannot directly access the network. Writable locations: private
-        `TMPDIR`; subject to more specific read/deny rules. Package preparation
-        may execute installation or build code with separate filesystem and
-        network permissions; use only trusted dependencies.
+        `TMPDIR`, `"<writable-root>"`; subject to more specific read/deny rules.
+        Package preparation may execute installation or build code with separate
+        filesystem and network permissions; use only trusted dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -189,77 +189,3 @@ result:
                   type: string
                   minLength: 1
             additionalProperties: false
----
-send:
-  r: |2
-                    stopifnot(
-                      native_profile,
-                      native_first,
-                      identical(restored_value, 42L),
-                      identical(getOption("width"), 73L),
-                      identical(getOption("defaultPackages"), "utils"),
-                      "package:utils" %in% search(),
-                      !("package:stats" %in% search()),
-                      interactive(),
-                      "--no-save" %in% commandArgs(),
-                      !("--vanilla" %in% commandArgs())
-                    )
-                    cat("native startup complete
-    ")
-result:
-  content:
-    - type: text
-      text: |
-        native startup complete
-  isError: false
----
-send:
-  control: restart
-result:
-  content:
-    - type: text
-      text: |-
-        [worker stopped: in-memory state lost]
-        [starting new worker]
-        [idle]
-  isError: false
----
-send:
-  r: |2
-                    stopifnot(
-                      native_profile,
-                      native_first,
-                      identical(restored_value, 42L),
-                      identical(getOption("width"), 73L),
-                      identical(getOption("defaultPackages"), "utils"),
-                      "package:utils" %in% search(),
-                      !("package:stats" %in% search()),
-                      interactive(),
-                      "--no-save" %in% commandArgs(),
-                      !("--vanilla" %in% commandArgs())
-                    )
-                    cat("native startup complete
-    ")
-result:
-  content:
-    - type: text
-      text: |
-        native startup complete
-  isError: false
----
-send:
-  r: native_edited
-result:
-  content:
-    - type: text
-      text: |
-        [1] TRUE
-  isError: false
----
-send:
-  r: restored_value <- 99L
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false

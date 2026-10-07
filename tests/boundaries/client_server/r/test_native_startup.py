@@ -1,6 +1,5 @@
 """R owns startup discovery, ordering, and retry inside each worker."""
 
-import json
 import os
 import subprocess
 import sys
@@ -67,7 +66,6 @@ def writable_arguments(execution: Execution, root: Path) -> tuple[str, ...]:
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_native_order_and_captured_configuration(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -76,7 +74,7 @@ def test_native_order_and_captured_configuration(
         environment = startup_environment(root)
         (root / ".Renviron").write_text("CONSOLE_NATIVE_ENV=from-environ\n")
         # fmt: r
-        profile = code("""
+        profile = code(r"""
             stopifnot(identical(Sys.getenv("CONSOLE_NATIVE_ENV"), "from-environ"))
             options(width = 73L, defaultPackages = "utils")
             native_profile <- TRUE
@@ -91,13 +89,13 @@ def test_native_order_and_captured_configuration(
             / "bin"
             / ("Rscript.exe" if os.name == "nt" else "Rscript")
         )
+        # fmt: r
+        workspace = code("""
+            restored_value <- 42L
+            save(restored_value, file = ".RData")
+            """)
         subprocess.run(
-            [
-                rscript,
-                "--vanilla",
-                "-e",
-                'restored_value <- 42L; save(restored_value, file = ".RData")',
-            ],
+            [rscript, "--vanilla", "-e", workspace],
             cwd=root,
             env=environment,
             check=True,
@@ -116,7 +114,7 @@ def test_native_order_and_captured_configuration(
         ) as client:
             client.initialize_and_list_tools()
             # fmt: r
-            check = code("""
+            check = code(r"""
                 stopifnot(
                   native_profile,
                   native_first,
@@ -145,7 +143,6 @@ def test_native_order_and_captured_configuration(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_vanilla_override_survives_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -159,13 +156,14 @@ def test_vanilla_override_survives_restart(
             / "bin"
             / ("Rscript.exe" if os.name == "nt" else "Rscript")
         )
+        # fmt: r
+        workspace = code("""
+            restored_value <- TRUE
+            .First <- function() stop("workspace First must be suppressed")
+            save(restored_value, .First, file = ".RData")
+            """)
         subprocess.run(
-            [
-                rscript,
-                "--vanilla",
-                "-e",
-                'restored_value <- TRUE; .First <- function() stop("workspace First must be suppressed"); save(restored_value, .First, file = ".RData")',
-            ],
+            [rscript, "--vanilla", "-e", workspace],
             cwd=root,
             env=environment,
             check=True,
@@ -183,7 +181,7 @@ def test_vanilla_override_survives_restart(
         ) as client:
             client.initialize_and_list_tools()
             # fmt: r
-            check = code("""
+            check = code(r"""
                 stopifnot(
                   Sys.getenv("CONSOLE_NATIVE_ENV") == "",
                   "--vanilla" %in% commandArgs(),
@@ -211,9 +209,12 @@ def test_exit_requires_explicit_retry(binary: Path, execution: Execution) -> Tra
         profile = root / ".Rprofile"
         marker = root / "attempts"
         profile.write_text(
-            'cat("attempt\\n", file = "attempts", append = TRUE)\n'
-            'cat("native profile diagnostic before exit\\n")\n'
-            'quit(save = "no", status = 23L, runLast = FALSE)\n'
+            # fmt: r
+            code(r"""
+                cat("attempt\n", file = "attempts", append = TRUE)
+                cat("native profile diagnostic before exit\n")
+                quit(save = "no", status = 23L, runLast = FALSE)
+                """)
         )
         with McpClient(
             binary,
@@ -244,8 +245,11 @@ def test_exit_requires_explicit_retry(binary: Path, execution: Execution) -> Tra
                 assert marker.read_text().splitlines() == ["attempt"], result
                 assert "retry cell must not run" not in str(result), result
             profile.write_text(
-                'cat("attempt\\n", file = "attempts", append = TRUE)\n'
-                "native_repaired <- TRUE\n"
+                # fmt: r
+                code(r"""
+                    cat("attempt\n", file = "attempts", append = TRUE)
+                    native_repaired <- TRUE
+                    """)
             )
             client.send(control="restart")
             client.expect("[1] TRUE\n", r="native_repaired")
@@ -265,9 +269,12 @@ def test_eager_exit_does_not_authorize_unused_replacement(
         profile = root / ".Rprofile"
         marker = root / "attempts"
         profile.write_text(
-            'cat("attempt\\n", file = "attempts", append = TRUE)\n'
-            'cat("eager native profile diagnostic\\n")\n'
-            'quit(save = "no", status = 24L, runLast = FALSE)\n'
+            # fmt: r
+            code(r"""
+                cat("attempt\n", file = "attempts", append = TRUE)
+                cat("eager native profile diagnostic\n")
+                quit(save = "no", status = 24L, runLast = FALSE)
+                """)
         )
         with McpClient(
             binary,
@@ -303,8 +310,11 @@ def test_eager_exit_does_not_authorize_unused_replacement(
             client.send(r='stop("eager startup must not retry")')
             assert marker.read_text().splitlines() == ["attempt"]
             profile.write_text(
-                'cat("attempt\\n", file = "attempts", append = TRUE)\n'
-                "native_repaired <- TRUE\n"
+                # fmt: r
+                code(r"""
+                    cat("attempt\n", file = "attempts", append = TRUE)
+                    native_repaired <- TRUE
+                    """)
             )
             client.send(control="restart")
             client.expect("[1] TRUE\n", r="native_repaired")
@@ -328,19 +338,31 @@ def test_preparation_waits_for_native_startup(
         release = resources.enter_context(
             closing(FifoCheckpoint.create(root / "release"))
         )
+        environment.update(
+            MCP_CONSOLE_TEST_STARTUP_READY=str(reached.path),
+            MCP_CONSOLE_TEST_STARTUP_RELEASE=str(release.path),
+        )
         marker = root / "attempts"
         (root / ".Rprofile").write_text(
             # fmt: r
-            code(f"""
-                cat("attempt\\n", file = "attempts", append = TRUE)
-                if (length(readLines("attempts")) == 1L) {{
-                  reached <- fifo({json.dumps(str(reached.path))}, "wb", blocking = TRUE)
+            code(r"""
+                cat("attempt\n", file = "attempts", append = TRUE)
+                if (length(readLines("attempts")) == 1L) {
+                  reached <- fifo(
+                    Sys.getenv("MCP_CONSOLE_TEST_STARTUP_READY"),
+                    "wb",
+                    blocking = TRUE
+                  )
                   writeBin(charToRaw("1"), reached)
                   close(reached)
-                  release <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
+                  release <- fifo(
+                    Sys.getenv("MCP_CONSOLE_TEST_STARTUP_RELEASE"),
+                    "rb",
+                    blocking = TRUE
+                  )
                   readBin(release, "raw", 1L)
                   close(release)
-                }}
+                }
                 native_ready <- TRUE
                 """)
         )
@@ -374,7 +396,6 @@ def test_preparation_waits_for_native_startup(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_directory_and_home_discovery(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -383,8 +404,11 @@ def test_directory_and_home_discovery(binary: Path, execution: Execution) -> Tra
         for directory, label in ((home, "home"), (root, "directory")):
             (directory / ".Renviron").write_text(f"CONSOLE_PROFILE_LOCATION={label}\n")
             (directory / ".Rprofile").write_text(
-                f'stopifnot(Sys.getenv("CONSOLE_PROFILE_LOCATION") == "{label}")\n'
-                f'native_location <- "{label}"\n'
+                # fmt: r
+                code(f"""
+                    stopifnot(Sys.getenv("CONSOLE_PROFILE_LOCATION") == "{label}")
+                    native_location <- "{label}"
+                    """)
             )
         with McpClient(
             binary,
@@ -404,7 +428,6 @@ def test_directory_and_home_discovery(binary: Path, execution: Execution) -> Tra
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_overrides_and_native_default_packages(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -422,13 +445,19 @@ def test_overrides_and_native_default_packages(
             "CONSOLE_NATIVE_ORDER=user\nR_DEFAULT_PACKAGES=utils\n"
         )
         (root / "site-profile").write_text(
-            'stopifnot(Sys.getenv("CONSOLE_NATIVE_ORDER") == "user")\n'
-            'native_order <- "site"\n'
+            # fmt: r
+            code("""
+                stopifnot(Sys.getenv("CONSOLE_NATIVE_ORDER") == "user")
+                native_order <- "site"
+                """)
         )
         (root / "user-profile").write_text(
-            'stopifnot(identical(native_order, "site"))\n'
-            'native_order <- "user"\n'
-            '.First <- function() native_order <<- paste(native_order, "first")\n'
+            # fmt: r
+            code("""
+                stopifnot(identical(native_order, "site"))
+                native_order <- "user"
+                .First <- function() native_order <<- paste(native_order, "first")
+                """)
         )
         (root / ".Rprofile").write_text(
             'stop("directory profile must be overridden")\n'
@@ -445,7 +474,7 @@ def test_overrides_and_native_default_packages(
         ) as client:
             client.initialize_and_list_tools()
             # fmt: r
-            check = code("""
+            check = code(r"""
                 stopifnot(
                   identical(native_order, "user first"),
                   identical(getOption("defaultPackages"), "utils"),
@@ -462,7 +491,6 @@ def test_overrides_and_native_default_packages(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_profile_error_follows_r_behavior(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -470,7 +498,11 @@ def test_profile_error_follows_r_behavior(
         root = Path(temporary).resolve()
         environment = startup_environment(root)
         (root / ".Rprofile").write_text(
-            'options(width = 71L)\nstop("native profile error continues in R")\n'
+            # fmt: r
+            code("""
+                options(width = 71L)
+                stop("native profile error continues in R")
+                """)
         )
         with McpClient(
             binary,
@@ -505,8 +537,11 @@ def test_interrupted_profile_is_not_replayed(
         profile = root / ".Rprofile"
         marker = root / "attempts"
         profile.write_text(
-            'cat("attempt\\n", file = "attempts", append = TRUE)\n'
-            'readline("native startup> ")\n'
+            # fmt: r
+            code(r"""
+                cat("attempt\n", file = "attempts", append = TRUE)
+                readline("native startup> ")
+                """)
         )
         with McpClient(
             binary,
@@ -552,7 +587,7 @@ def test_startup_containment_and_preparation_isolation(binary: Path) -> Transcri
         environment["IR_REFRESH"] = "1"
         environment["CONSOLE_FORBIDDEN_STARTUP_WRITE"] = str(root / "forbidden")
         # fmt: r
-        profile = code("""
+        profile = code(r"""
             cat("attempt\n", file = "attempts", append = TRUE)
             blocked <- tryCatch(
               {
@@ -599,7 +634,6 @@ def test_startup_containment_and_preparation_isolation(binary: Path) -> Transcri
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_yaml_vanilla_suppresses_native_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
