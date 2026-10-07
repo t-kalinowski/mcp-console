@@ -62,6 +62,17 @@ impl Source {
         // Completion can leave a captured owner installed until delivery, or
         // hand preparation over to startup before this response is projected.
         observed.or_else(|| {
+            // Retained sources can outlive a failed refresh. Observe the current
+            // evaluation before falling back to lifecycle work.
+            let active = client.evaluation.try_lock().ok()?;
+            if let Some(active) = active
+                .as_ref()
+                .filter(|active| active.generation.is(&self.generation))
+                && active.evaluation.replacement_observation()?
+            {
+                return Some("replacement");
+            }
+            drop(active);
             if let Some(phase) = lifecycle
                 .processes
                 .resolver
