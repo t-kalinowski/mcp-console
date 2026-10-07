@@ -65,7 +65,12 @@ profiles.add_argument(
 profiles.add_argument(
     "--full",
     action="store_true",
-    help="run all capability-applicable cases when no selectors are supplied",
+    help="run all functional capability-applicable cases when no selectors are supplied",
+)
+profiles.add_argument(
+    "--stress",
+    action="store_true",
+    help="run allocation scale cases; explicit selectors keep their scope",
 )
 parser.add_argument(
     "--timeout",
@@ -747,16 +752,25 @@ def main() -> None:
         return
 
     selectors = options.selectors
-    if not selectors and not options.full:
-        from _profiles import SMOKE
+    if not selectors:
+        from _profiles import SMOKE, STRESS
 
-        selectors = SMOKE
+        if options.stress:
+            selectors = STRESS
+        elif not options.full:
+            selectors = SMOKE
     selected = selected_cases(
         suites,
         selectors,
         report=not options.build,
         check_requirements=not options.list_tests,
     )
+    if options.full and not options.selectors:
+        selected = [
+            (suite, case, path)
+            for suite, case, path in selected
+            if f"{suite}::{case}" not in STRESS
+        ]
     if options.list_tests:
         for suite_name, case_name, _ in selected:
             print(f"{suite_name}::{case_name}")

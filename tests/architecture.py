@@ -19,6 +19,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = ROOT / "src"
@@ -259,27 +260,52 @@ class ArchitectureCheckTests(unittest.TestCase):
             (root / "tests").mkdir()
             checker = root / "tests" / "architecture.py"
             shutil.copy2(__file__, checker)
-            shutil.copytree(SOURCE_ROOT, root / "src")
-            for relative, statement, diagnostic in cases:
-                with self.subTest(path=relative, statement=statement):
-                    path = root / "src" / relative
-                    original = path.read_text(encoding="utf-8")
-                    path.write_text(original + "\n" + statement, encoding="utf-8")
-                    try:
-                        result = subprocess.run(
-                            [sys.executable, checker, "SandboxProcessBoundaryTests"],
-                            capture_output=True,
-                            text=True,
-                            timeout=10,
-                        )
-                    finally:
-                        path.write_text(original, encoding="utf-8")
-                    if diagnostic is None:
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                    else:
-                        self.assertEqual(result.returncode, 1, result.stderr)
-                        self.assertIn(diagnostic, result.stderr)
-                        self.assertIn(f"src/{relative}:", result.stderr)
+            source = root / "src"
+            # Exercise the public guards on small source trees, rather than
+            # copying production sources and launching Python for each snippet.
+            for relative in {
+                "sandbox.rs",
+                "process_exit.rs",
+                "process_descriptors.rs",
+                "worker_relay.rs",
+                "relay_protocol.rs",
+                *(relative for relative, _, _ in cases),
+            }:
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            with patch.multiple(sys.modules[__name__], ROOT=root, SOURCE_ROOT=source):
+                for relative, statement, diagnostic in cases:
+                    with self.subTest(path=relative, statement=statement):
+                        path = source / relative
+                        path.write_text(statement, encoding="utf-8")
+                        try:
+                            result = unittest.TestResult()
+                            unittest.defaultTestLoader.loadTestsFromTestCase(
+                                SandboxProcessBoundaryTests
+                            ).run(result)
+                        finally:
+                            path.write_text("", encoding="utf-8")
+                        self.assertEqual(result.errors, [])
+                        if diagnostic is None:
+                            self.assertTrue(result.wasSuccessful(), result.failures)
+                        else:
+                            self.assertEqual(len(result.failures), 1, result.failures)
+                            message = result.failures[0][1]
+                            self.assertIn(diagnostic, message)
+                            self.assertIn(f"src/{relative}:", message)
+            # One process invocation verifies the checker entry point and its
+            # exit status/diagnostic for a real dependency-direction violation.
+            (source / "sandbox/runner.rs").write_text("use crate::server;")
+            result = subprocess.run(
+                [sys.executable, checker, "SandboxProcessBoundaryTests"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("depends on", result.stderr)
+            self.assertIn("src/sandbox/runner.rs:1:", result.stderr)
 
 
 if __name__ == "__main__":

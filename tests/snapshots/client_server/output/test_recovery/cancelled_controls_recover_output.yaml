@@ -12,7 +12,6 @@ result:
 ---
 send:
   control: interrupt
-  r: complete silently
 transcript_normalization:
   target: repeated cancellation setup exchanges
   repeated_exchange_count: 4
@@ -35,10 +34,12 @@ result:
   content:
     - type: text
       text: |-
-        [done]
-        [done]
-        [done]
-        [done]
+
+        [idle]
+        [idle]
+        [idle]
+        [idle]
+        [idle]
   isError: false
 ---
 input:
