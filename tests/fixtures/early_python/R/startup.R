@@ -18,6 +18,7 @@
     sep = "\n"
   ))
   if (identical(Sys.getenv("MCP_CONSOLE_TEST_STARTUP_PLOTS"), "1")) {
+    grDevices::pdf("startup-plots.pdf")
     graphics::plot(1:3)
   }
 }
@@ -28,6 +29,7 @@
   }
   if (identical(Sys.getenv("MCP_CONSOLE_TEST_STARTUP_PLOTS"), "1")) {
     graphics::plot(3:1)
+    invisible(grDevices::dev.off())
   }
   ready <- Sys.getenv("MCP_CONSOLE_TEST_STARTUP_READY")
   if (interactive() && nzchar(ready)) {

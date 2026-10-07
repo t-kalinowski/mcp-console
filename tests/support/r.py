@@ -19,7 +19,8 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 def r_test_environment() -> tuple[dict[str, str], Path]:
     environment = os.environ.copy()
     # Keep personal startup code out of isolated fixture libraries.
-    environment["R_PROFILE_USER"] = os.devnull
+    for name in ("R_ENVIRON", "R_ENVIRON_USER", "R_PROFILE", "R_PROFILE_USER"):
+        environment[name] = os.devnull
     if r_home := environment.get("R_HOME"):
         home = Path(r_home)
     else:

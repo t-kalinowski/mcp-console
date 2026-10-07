@@ -81,7 +81,8 @@ A failed close handshake kills the preparation child before joining I/O and reap
 It joins owned shutdown before retiring relay I/O so the relay can stop and reap its direct worker.
 Retirement cancels an in-flight Python bootstrap inspection without reporting that cancellation as a Python setup error.
 
-Initialization alone does not consume the unused-worker replacement exception.
+An unused worker can be replaced during preparation, but an incomplete native R initialization cannot authorize another startup attempt.
+User input or evaluation consumes the unused-worker replacement exception.
 Preparation reserves an ordered bootstrap-callback barrier before acquiring the environment.
 Once a callback is deferred, later output, images, and input events from that worker sideband wait behind it; independent stdout, stderr, and retirement observations remain responsive.
 Deferred events use a private temporary spool capped at 16 MiB and removed when its last handle closes; the dispatcher resumes them in order before accepting later sideband events.
@@ -97,7 +98,8 @@ Custom workers retain lazy initialization, and an absent provider can be prepare
 An explicit or host-resolved Python selection can start without R.
 Unresolved R-side selection hints use R's compatibility adapter when installed; its absence does not prevent bare R use.
 Background selection also permits an ordinary absent-interpreter discovery result, preserving R without treating selection errors as absence.
-Later R cells, Python's R bridge, and R-owned SQL retry incomplete initialization through the same facade.
+Later R cells, Python's R bridge, and R-owned SQL enter R through the same facade.
+Failed or interrupted native R initialization requires an explicit worker restart; it is never retried in place.
 Console owns CPython bootstrap and services; reticulate supplies R selection compatibility and object conversion.
 Attaching the bridge must use the running interpreter identity, not select or initialize a second Python.
 Host inspection remains isolated; after setup, conversion paths and NumPy metadata describe the live interpreter without preparing or importing optional packages.
@@ -136,6 +138,9 @@ Successful replacement starts fresh interpreters and database state with the ser
 An established worker failure permits one automatic replacement attempt for the call.
 The failed cell and stdin are **not replayed**.
 Explicit and failure-driven replacement both respect retirement barriers.
+Native R startup reports its admission and completion through the generation-owned worker protocol.
+A failed or interrupted R initialization withholds automatic replacement until explicit restart authorizes another attempt.
+R's own surviving profile errors remain ordinary diagnostics.
 
 ## Preparation and activation
 

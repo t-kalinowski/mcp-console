@@ -107,6 +107,7 @@ impl Client {
             .0
             .unused_default
             .load(std::sync::atomic::Ordering::Acquire)
+            && generation.r_startup_permitted()
             && matches!(&*worker, WorkerState::Running(_));
         let environment_preparation = if let WorkerState::Running(running) = &*worker {
             match running.reserve_environment_preparation(replace_default) {
@@ -250,6 +251,9 @@ impl Client {
         };
 
         if replace_default {
+            if !generation.r_startup_permitted() {
+                return Err("R initialization is incomplete; explicit restart required".into());
+            }
             // Resolve the complete candidate first: failed preparation must
             // preserve the prewarmed worker and committed declaration.
             match self

@@ -18,7 +18,6 @@ from boundaries.client_server.python.test_setup import deferred_selection_client
 from support.progress import without_elapsed
 from support.requirements import NATIVE_FIXTURES, POSIX, R, SQL, command, requires
 from support.assertions import (
-    assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
 )
@@ -28,12 +27,13 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.native import build_interposer
+from support.snapshots import execution_snapshots
 from support.records import ToolResult, Transcript
 from support.resolvers import (
     checkpoint_uv_environment,
     send_and_collect_runtime_python_resolution,
 )
-from support.r import isolated_r_home, r_test_environment, reference_plots
+from support.r import isolated_r_home, r_test_environment
 from support.python import virtualenv_python, write_test_wheel
 
 
@@ -963,7 +963,7 @@ def test_shared_managed_bootstrap_and_replacement(
                     client.expect(
                         r="stopifnot(!reticulate::py_available(initialize = FALSE))",
                     )
-                client.send(requirements={"python": ["py-yaml12"]})
+                client.send(control="restart", requirements={"python": ["py-yaml12"]})
                 assert not client.transcript[-1]["result"].get("isError"), (
                     client.transcript[-1]
                 )
@@ -1114,7 +1114,8 @@ def test_late_r_startup_uses_running_python(
 @requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-def test_late_r_startup_captures_package_plots(
+@execution_snapshots
+def test_late_r_startup_uses_native_package_device(
     binary: Path, execution: Execution
 ) -> Transcript:
     records = []
@@ -1135,6 +1136,7 @@ def test_late_r_startup_captures_package_plots(
 @requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_system_default_packages_survive_late_r_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1148,21 +1150,6 @@ def test_system_default_packages_survive_late_r_startup(
             system_default_packages=True,
         )
     return records
-
-
-@cache
-def early_python_reference_plots(
-    rscript: Path, environment: tuple[tuple[str, str], ...]
-) -> list[bytes]:
-    return reference_plots(
-        rscript,
-        dict(environment),
-        "graphics::plot(1:3); graphics::plot(3:1)\n",
-        width=800 / 96,
-        height=600 / 96,
-        dpi=96,
-        pages=2,
-    )
 
 
 @requires(R)
@@ -1506,11 +1493,6 @@ def r_startup_with_python(
         root = Path(directory)
         _, library = installed_early_python_library()
         environment, rscript = r_test_environment()
-        expected_plots = (
-            early_python_reference_plots(rscript, tuple(sorted(environment.items())))
-            if startup_plots
-            else []
-        )
         environment.update(
             R_LIBS=os.pathsep.join(
                 filter(None, (str(library), environment.get("R_LIBS")))
@@ -1546,13 +1528,15 @@ def r_startup_with_python(
             environment["RETICULATE_PYTHONPATH"] = str(modules)
         serve = (
             execution.serve("--writable-root", str(root))
-            if system_default_packages and execution == SANDBOXED
+            if (system_default_packages or startup_plots) and execution == SANDBOXED
             else execution.serve()
         )
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
             if managed:
-                client.expect("[prepared]", requirements={"python_version": [version]})
+                client.expect(
+                    None, control="restart", requirements={"python_version": [version]}
+                )
             if python_first:
                 defer_r_bootstrap(client)
                 collected = send_and_collect_runtime_python_resolution(
@@ -1587,10 +1571,11 @@ def r_startup_with_python(
                 client.send(python="assert 3 < r.pi < 4")
             else:
                 client.send(r="invisible(NULL)")
+            assert last_result_text(client) == "[done]", client.transcript[-1]
             if startup_plots:
-                assert_result_content(client, expected_plots)
-            else:
-                assert last_result_text(client) == "[done]", client.transcript[-1]
+                # Native startup runs before Console's graphics bridge exists.
+                # Its ordinary R device writes into this explicitly granted cwd.
+                assert (root / "startup-plots.pdf").read_bytes().startswith(b"%PDF-")
             # fmt: r
             client.expect(
                 r=code("""

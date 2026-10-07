@@ -55,6 +55,7 @@ class Session:
         defer_bootstrap=False,
         sandbox=False,
         overrides=(),
+        use_r_startup_files=False,
     ):
         if sandbox:
             from windows_sandbox import workspace
@@ -84,6 +85,9 @@ class Session:
         environment = dict(
             environment, MCP_CONSOLE_HOME=str(Path(self.directory.name) / "home")
         )
+        if not use_r_startup_files:
+            for name in ("R_ENVIRON", "R_ENVIRON_USER", "R_PROFILE", "R_PROFILE_USER"):
+                environment[name] = os.devnull
         if bare_r:
             # Hiding ir/uv on PATH is insufficient when ambient reticulate can
             # bootstrap uv. Isolate package libraries for preinstalled-R cases.

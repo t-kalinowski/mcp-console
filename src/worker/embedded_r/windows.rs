@@ -54,7 +54,7 @@ pub(super) extern "C-unwind" fn process_events() {
 pub(super) fn initialize_r(
     r_home: &std::path::Path,
     arguments: &mut [*mut c_char],
-) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
+) -> Result<(), Box<dyn Error>> {
     use std::mem::MaybeUninit;
     static STARTUP_PATHS: OnceLock<(CString, CString)> = OnceLock::new();
 
@@ -94,8 +94,6 @@ pub(super) fn initialize_r(
         params.CharacterMode = libr::UImode_RGui;
         // Console transports plain UTF-8, not RGui's marked UTF-8 spans.
         params.EmitEmbeddedUTF8 = libr::Rboolean_FALSE;
-        params.LoadInitFile = libr::Rboolean_FALSE;
-        params.LoadSiteFile = libr::Rboolean_FALSE;
         params.rhome = r_home.as_ptr().cast_mut();
         params.home = user_home.as_ptr().cast_mut();
         params.WriteConsole = None;
@@ -108,9 +106,8 @@ pub(super) fn initialize_r(
         libr::graphapp::GA_initapp(0, std::ptr::null_mut());
         libr::readconsolecfg();
     }
-    let deferred = crate::python::defer_r_startup()?;
     unsafe {
         libr::setup_Rmainloop();
     }
-    Ok(deferred)
+    Ok(())
 }

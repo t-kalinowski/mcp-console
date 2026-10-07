@@ -129,8 +129,11 @@ The server withholds an accepted cell's `evaluate` frame until bootstrap finishe
 An interrupted bootstrap withholds any cell admitted before its incomplete receipt, including a cell whose evaluator has not begun waiting; a later cell can retry incomplete setup in the same interpreter.
 The controller also orders interrupt admission against this receipt and withholds the waiting cell when the interrupt comes first.
 This covers signals delivered after the worker has sampled its interrupt state: the relay's interrupt result acknowledges signal dispatch, not worker-side handling.
-Fatal startup failure follows ordinary generation failure and replacement handling.
-Custom workers retain their existing readiness and evaluation contract and do not send this event.
+Native R startup emits `{"kind":"r_initialization","complete":false}` before entering R, and `complete:true` only after initialization and attachment succeed without an interrupt.
+Admission withholds automatic retry for that generation, including through unused-worker replacement; completion permits ordinary failure recovery again.
+These lifecycle events do not wait behind preparation's bootstrap callback barrier, and retirement retains admission evidence without reopening the generation.
+Fatal or interrupted R startup retains diagnostics and requires explicit restart after confirmed retirement.
+External custom workers retain their existing readiness and evaluation contract and need not send this event.
 The default local launcher opts into interpreter bootstrap with the private `worker --bootstrap-runtimes` argument.
 
 The server admits one evaluation or explicit preparation at a time.

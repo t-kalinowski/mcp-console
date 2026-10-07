@@ -3,10 +3,20 @@ use super::{core, embedded_r, interrupt};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::local_runtime::RInstallation;
 
 static R_INSTALLATION: OnceLock<Option<RInstallation>> = OnceLock::new();
+static R_SETTINGS: OnceLock<crate::settings::R> = OnceLock::new();
+static INITIALIZING: AtomicBool = AtomicBool::new(false);
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+pub(super) fn record_initialization_interrupt() {
+    if INITIALIZING.load(Ordering::SeqCst) {
+        INTERRUPTED.store(true, Ordering::SeqCst);
+    }
+}
 thread_local! {
     static RUNTIME: RefCell<Option<Rc<embedded_r::Runtime>>> = const { RefCell::new(None) };
     static STARTED: Cell<bool> = const { Cell::new(false) };
@@ -41,14 +51,29 @@ pub(crate) fn ensure_initialized() -> Result<(), String> {
     if STARTED.with(|started| started.replace(true)) {
         return Err("R initialization is incomplete; restart required".into());
     }
+    core::send_worker_message(&crate::worker_protocol::WorkerMessage::RInitialization {
+        complete: false,
+    })?;
+    INITIALIZING.store(true, Ordering::SeqCst);
     let result = initialize(installation);
+    INITIALIZING.store(false, Ordering::SeqCst);
+    let result = result.and_then(|()| {
+        if INTERRUPTED.load(Ordering::SeqCst) {
+            Err("R initialization interrupted; explicit restart required".into())
+        } else {
+            core::send_worker_message(&crate::worker_protocol::WorkerMessage::RInitialization {
+                complete: true,
+            })
+        }
+    });
     FAILED.with(|failed| failed.set(result.is_err()));
     result
 }
 
 fn initialize(installation: &RInstallation) -> Result<(), String> {
-    let deferred = embedded_r::initialize_r(installation).map_err(|error| error.to_string())?;
     crate::python::configure_r_environment().map_err(|error| error.to_string())?;
+    embedded_r::initialize_r(installation, R_SETTINGS.get().unwrap().vanilla)
+        .map_err(|error| error.to_string())?;
     let runtime = Rc::new(embedded_r::Runtime::initialize().map_err(|error| error.to_string())?);
     RUNTIME.with(|slot| *slot.borrow_mut() = Some(runtime.clone()));
     if core::bootstrapping()
@@ -58,7 +83,6 @@ fn initialize(installation: &RInstallation) -> Result<(), String> {
         runtime.begin_graphics()?;
     }
     crate::python::attach_r_adapter()?;
-    crate::python::finish_r_startup(deferred)?;
     crate::sql::attach_r()?;
     interrupt::reinstall().map_err(|error| error.to_string())?;
     crate::python::reinstall_services()?;
@@ -77,7 +101,13 @@ pub(crate) fn ensure_bridge() -> Result<(), String> {
 pub(super) struct Integration;
 
 impl Integration {
-    pub(super) fn new(installation: Option<RInstallation>) -> std::io::Result<Self> {
+    pub(super) fn new(
+        installation: Option<RInstallation>,
+        settings: crate::settings::R,
+    ) -> std::io::Result<Self> {
+        R_SETTINGS
+            .set(settings)
+            .map_err(|_| std::io::Error::other("R settings already configured"))?;
         R_INSTALLATION
             .set(installation)
             .map_err(|_| std::io::Error::other("R capability already configured"))?;
