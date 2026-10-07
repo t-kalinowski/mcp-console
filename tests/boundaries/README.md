@@ -36,14 +36,17 @@ For native Windows acceptance, use the [Windows validation guide](../../docs/WIN
 
 ```sh
 scripts/test --full --list
+scripts/test --stress --list
 scripts/test --locate client_server/server/test_tools
 scripts/test client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
 
 A selector names `BOUNDARY/SUITE` or `BOUNDARY/SUITE::CASE`.
-Default runs use the explicit smoke profile; `--full` includes every capability-applicable case.
-Selectors retain their scope under either profile.
+Default runs use the explicit smoke profile; `--full` includes every functional capability-applicable case.
+`--stress` runs the three allocation scale cases with their original workloads and ceilings.
+Short recovery cases in `--full` check delivery, recording, and image aggregation without claiming bounded allocation growth.
+Selectors retain their scope under every profile.
 See the [validation ladder](../../docs/DEVELOPMENT.md#validation-ladder) for the full workflow, installed-binary override, and build ownership.
 
 Cases run in separate processes.

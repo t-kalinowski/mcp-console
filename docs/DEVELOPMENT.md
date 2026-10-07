@@ -110,15 +110,16 @@ For Console sessions in WSL, run the MCP client and Console together in that dis
 
 ## Validation ladder
 
-| Command                               | Use                                                      |
-| ------------------------------------- | -------------------------------------------------------- |
-| `scripts/test --full --list`          | Discover cases without building the executable.          |
-| `scripts/test --locate SELECTOR`      | Find case source and its snapshot.                       |
-| `scripts/test BOUNDARY/SUITE[::CASE]` | Focused red/green loop.                                  |
-| `scripts/test --update SELECTOR`      | Accept an intentional snapshot change.                   |
-| `scripts/format`                      | Run all formatters; inspect their results and the diff.  |
-| `scripts/check`                       | Ordinary final local gate.                               |
-| `scripts/check --full`                | Exhaustive local validation when requested or warranted. |
+| Command                               | Use                                                       |
+| ------------------------------------- | --------------------------------------------------------- |
+| `scripts/test --full --list`          | Discover cases without building the executable.           |
+| `scripts/test --stress`               | Run allocation scale cases with their original workloads. |
+| `scripts/test --locate SELECTOR`      | Find case source and its snapshot.                        |
+| `scripts/test BOUNDARY/SUITE[::CASE]` | Focused red/green loop.                                   |
+| `scripts/test --update SELECTOR`      | Accept an intentional snapshot change.                    |
+| `scripts/format`                      | Run all formatters; inspect their results and the diff.   |
+| `scripts/check`                       | Ordinary final local gate.                                |
+| `scripts/check --full`                | Functional, tooling, and installation validation.         |
 
 Start a behavior change with a failing public regression; establish the existing public baseline for a refactor.
 After implementation, rerun the focused case.
@@ -133,7 +134,7 @@ On macOS/Linux, the default `scripts/check` stages the companion, validates extr
 On Windows, it uses the previously staged companion, performs the same source and Rust checks, builds the debug executable, and runs the native acceptance suite.
 `--quick` is an alias for this default, not a narrower check.
 
-The full gate adds platform-applicable repository-tooling self-tests, all capability-applicable acceptance cases, and source/wheel installation checks.
+The full gate adds platform-applicable repository-tooling self-tests, all capability-applicable functional acceptance cases, and source/wheel installation checks.
 Windows also runs portable transcript-runner, MCP-client, and release-manifest regressions.
 Unix release-staging fixtures retain their declared platform requirements.
 Installation checks run last because Unix checks temporarily replace the application `target` directory.
@@ -141,14 +142,16 @@ Windows builds a wheel and exercises wheel and source installs in a temporary vi
 CI runs the full profiles and is the comprehensive merge gate.
 Run the owning focused tests when changing tooling; the default gate does not cover all tooling regressions.
 
-On macOS/Linux, `scripts/test` without selectors runs the smoke profile in [`_profiles.py`](../tests/boundaries/_profiles.py); `--full` runs all applicable cases.
+On macOS/Linux, `scripts/test` without selectors runs the smoke profile in [`_profiles.py`](../tests/boundaries/_profiles.py); `--full` runs all applicable functional cases.
+`scripts/test --stress` runs the separate allocation scale profile on hosts with native instrumentation.
+Explicit case and suite selectors include scale cases regardless of profile.
 On Windows, the default and `--quick` run the native suite; selectors use `CLASS[.CASE]`, for example `WindowsConsole.test_python_without_r`.
-An unscoped `--full` also runs all applicable shared boundary cases.
+An unscoped `--full` also runs all applicable shared functional boundary cases.
 Boundary selectors use the same `BOUNDARY/SUITE::CASE` syntax on every platform.
 Both platforms support `--list` and `--locate` without building or acquiring checkout ownership.
 Windows native cases use unittest assertions.
-Shared boundary cases support `--update`, `--jobs`, and transcript deadlines on Windows; these options require a boundary selector or an unscoped `--full`.
-Explicit selectors keep their scope with either profile.
+Shared boundary cases support `--update`, `--jobs`, and transcript deadlines on Windows; these options require a boundary selector or an unscoped `--full` or `--stress`.
+Explicit selectors keep their scope with every profile.
 Only an unscoped full run audits orphan snapshots, and only a successful full update removes them.
 Focused updates preserve unselected snapshots and remove obsolete companions of successfully updated cases, including variants whose platform declaration was removed.
 
