@@ -2096,6 +2096,109 @@ class TranscriptDiscoveryTests(TranscriptRunnerFixture):
             timeout=10,
         )
 
+    def cpu_host(self) -> Path:
+        launcher = self.root / "cpu_host.py"
+        launcher.write_text(
+            # fmt: python
+            code("""
+                import json
+                import os
+                import pathlib
+                import runpy
+                import shutil
+                import sys
+                from types import ModuleType
+                from unittest.mock import patch
+
+                runner = sys.argv.pop(1)
+                cpu_count = json.loads(sys.argv.pop(1))
+                host_name = sys.argv.pop(1)
+                # Keep native paths/terminal support; only the runner sees the simulated host.
+                host = ModuleType("os")
+                vars(host).update(vars(os))
+                host.name = host_name
+                host.cpu_count = lambda: cpu_count
+                with patch.dict(sys.modules, {"os": host}):
+                    runpy.run_path(runner, run_name="__main__")
+                """),
+            encoding="utf-8",
+        )
+        return launcher
+
+    def test_help_reports_default_concurrency_for_available_cpus(self) -> None:
+        launcher = self.cpu_host()
+        counts = ((None, 1), (0, 1), (1, 1), (2, 1), (8, 7), (64, 63))
+        for host_name in ("posix", "nt"):
+            for cpu_count, jobs in counts:
+                with self.subTest(host_name=host_name, cpu_count=cpu_count):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            launcher,
+                            self.boundaries / "_run.py",
+                            json.dumps(cpu_count),
+                            host_name,
+                            "--bootstrap",
+                            "--help",
+                        ],
+                        cwd=self.root,
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(
+                        f"concurrent transcript cases (default: {jobs}; logical CPU count "
+                        "minus one, at least 1)",
+                        " ".join(result.stdout.split()),
+                    )
+
+    def test_jobs_overrides_preserve_values_and_validation(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("concurrency override fixture failed")
+                """),
+            encoding="utf-8",
+        )
+        launcher = self.cpu_host()
+        for arguments, status, expected in (
+            (
+                ("--full", "--update", "--jobs", "2"),
+                1,
+                "rerun: scripts/test --full --update --jobs 2\n",
+            ),
+            (
+                ("--full", "--update", "-j", "3"),
+                1,
+                "rerun: scripts/test --full --update --jobs 3\n",
+            ),
+            (("--jobs", "0"), 2, "--jobs must be at least 1"),
+            (("-j", "-1"), 2, "--jobs must be at least 1"),
+            (("--jobs", "invalid"), 2, "invalid int value"),
+        ):
+            with self.subTest(arguments=arguments):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        launcher,
+                        self.boundaries / "_run.py",
+                        "1",
+                        os.name,
+                        *arguments,
+                    ],
+                    cwd=self.root,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(
+                    result.returncode, status, result.stdout + result.stderr
+                )
+                self.assertIn(expected, result.stderr)
+
     def test_runner_metadata_does_not_require_a_binary(self) -> None:
         (self.root / "target/release/mcp-console").unlink()
         for arguments in (("--list",), ("--locate", "client_server/server/test_tools")):
