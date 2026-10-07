@@ -192,6 +192,10 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
         passed = False
         try:
             client.initialize_and_list_tools()
+            # Establish the worker and relay before testing their retirement.
+            client.send(requirements={"action": "get"})
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="kill relay and remain live", timeout_ms=0)
             assert (
                 without_elapsed(last_tool_text(client))

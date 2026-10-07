@@ -285,6 +285,7 @@ def test_orders_explicit_restart_output(
             build_interposer(temporary_path, "cell_output_close_interposer")
         )
         environment["MCP_CONSOLE_TEST_CELL_OUTPUT_CLOSED"] = str(output_closed.path)
+        environment["MCP_CONSOLE_TEST_CELL_OUTPUT_SUFFIX"] = "/outputs/call-000001.log"
         environment["ZOD_STDIN_CLOSE_RELEASE"] = str(output_closed.path)
         client = McpClient(
             binary,
