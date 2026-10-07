@@ -557,5 +557,64 @@ if "MCP_CONSOLE_LOCAL_RUNTIME" not in os.environ:
     return transcript
 
 
+@requires(SANDBOX)
+def test_isolated_host_cache_requires_resolver_home(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        configure(
+            root,
+            {
+                "cache": "host",
+                "python": sys.executable,
+                "languages": ["python"],
+                "inherit_environment": False,
+                "resolver": {"sandbox": {"filesystem": {"read_only": ["/"]}}},
+            },
+        )
+        with McpClient(binary, ("serve",), dict(os.environ), root) as client:
+            client.initialize_and_list_tools()
+            result = client.send(python="print('must not run')")
+            assert result.get("isError"), result
+            text = result["content"][0]["text"]
+            assert "resolver.environment" in text and "HOME" in text, result
+            assert "panic" not in text and "must not run" not in text, result
+            client.finish_with_standard_error(expected_exit_status=1)
+        cache = root / "cache"
+        cache.mkdir()
+        tools = root / "bin"
+        tools.mkdir()
+        (tools / "uv").symlink_to(shutil.which("uv"))
+        configure(
+            root,
+            {
+                "cache": "host",
+                "python": sys.executable,
+                "languages": ["python"],
+                "inherit_environment": False,
+                "environment": {
+                    "PATH": str(tools),
+                    "UV_CACHE_DIR": str(cache),
+                    "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY": str(cache / "duckdb"),
+                },
+                "resolver": {
+                    "sandbox": {
+                        "filesystem": {"read_only": ["/"], "read_write": [str(cache)]}
+                    }
+                },
+            },
+        )
+        environment = {**os.environ, "PATH": str(tools)}
+        environment.pop("R_HOME", None)
+        environment.pop("RHOME", None)
+        with McpClient(binary, ("serve",), environment, root) as client:
+            client.initialize_and_list_tools()
+            client.expect("ready\n", python="print('ready')")
+            client.finish()
+        return [
+            {"preparation_error": text},
+            {"explicit_duckdb_directory_without_home": True},
+        ]
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

@@ -146,6 +146,8 @@ resolver:
 
 Console captures this path for installation and managed R/Python SQL connections.
 Without this override in host cache mode, both use `.duckdb/extensions` beneath the resolver's effective `HOME`.
+Sandboxed preparation requires an absolute resolver `HOME` or an explicit `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY`, including when explicit filesystem entries replace the defaults.
+If environment inheritance is disabled, provide these values through the shared or resolver environment mappings.
 Custom workers receive the captured path before their first managed R layer.
 User-selected Python retains DuckDB's own settings and preinstalled extensions.
 Explicit filesystem entries must grant writes to the selected directory.
