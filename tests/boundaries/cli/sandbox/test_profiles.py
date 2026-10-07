@@ -12,7 +12,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.normalization import code
 from support.records import Transcript
 from support.requirements import SANDBOX, requires
-from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 CONFIG = ".agents/console/config.yaml"
@@ -316,7 +315,6 @@ def test_unsupported_profile_names_use_native_diagnostics(binary: Path) -> Trans
 
 
 @requires(SANDBOX)
-@platform_snapshots("linux")
 def test_denied_workspace_keeps_metadata_unreadable(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -340,23 +338,35 @@ def test_denied_workspace_keeps_metadata_unreadable(binary: Path) -> Transcript:
                 }
             ),
         )
-        transcript = []
-        for name in PROTECTED:
-            result = subprocess.run(
-                [binary, "sandbox", "--", "/bin/cat", str(host / name / "keep")],
-                cwd=host,
-                capture_output=True,
-                text=True,
-            )
-            assert result.returncode != 0 and result.stdout == "", result
-            assert result.stderr.startswith("cat: "), result
-            transcript.append(
-                {
-                    "path": name,
-                    "stderr": result.stderr.replace(str(host), "<workspace>"),
-                }
-            )
-        return transcript
+        # Observe the denied reads in the workload. A runner setup failure or
+        # missing fixture cannot produce this output; errno differs by backend.
+        exercise = (
+            # fmt: python
+            code(f"""
+                import errno
+                from pathlib import Path
+
+                for name in {PROTECTED!r}:
+                    try:
+                        Path(name, "keep").read_text()
+                    except PermissionError as error:
+                        assert error.errno in (errno.EACCES, errno.EPERM), error
+                        print(name + ": read denied")
+                    else:
+                        raise AssertionError(name + " was readable")
+                """)
+        )
+        result = subprocess.run(
+            [binary, "sandbox", "--", sys.executable, "-I", "-c", exercise],
+            cwd=host,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0 and result.stderr == "", result
+        assert result.stdout == "".join(
+            name + ": read denied\n" for name in PROTECTED
+        ), result
+        return [{"stdout": result.stdout, "stderr": result.stderr}]
 
 
 @requires(SANDBOX)
