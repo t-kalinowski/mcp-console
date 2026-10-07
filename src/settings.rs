@@ -3,28 +3,8 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Map, Value};
-
-mod target;
-#[cfg(unix)]
-pub(crate) use target::Access;
-pub(crate) use target::{Compute, DockerSandbox, Pull, Target};
-
-/// Selected enforcement, independently of direct versus inner-runner launch.
-#[derive(Clone, Copy, Default, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Provider {
-    #[default]
-    Native,
-    Compute,
-}
-
-impl Provider {
-    pub fn needs_native_runner(self, no_sandbox: bool) -> bool {
-        self == Self::Native && !no_sandbox
-    }
-}
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 
@@ -93,21 +73,20 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 struct Project {
     cache: Option<Cache>,
     python: Option<std::path::PathBuf>,
+    languages: Option<Vec<crate::cell::Language>>,
     extends: Option<String>,
     sandbox: Map<String, Value>,
     resolver: Map<String, Value>,
-    target: Option<Target>,
 }
 
 #[derive(Default)]
 pub(crate) struct Captured {
     pub cache: Option<Cache>,
     pub python: Option<std::path::PathBuf>,
+    pub languages: Option<crate::cell::Languages>,
     pub source: Option<String>,
     pub policy: SandboxSettings,
     pub resolver: SandboxSettings,
-    pub target: Option<Target>,
-    pub provider: Provider,
 }
 
 pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Captured, String> {
@@ -144,33 +123,36 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
     } else {
         "configuration with CLI overrides".into()
     };
-    let has_extends = value.get("extends").is_some();
     let mut project: Project =
         serde_path_to_error::deserialize(value).map_err(|error| format!("{name}: {error}"))?;
-    let compute = project
-        .target
-        .as_ref()
-        .is_some_and(|target| matches!(target.compute, Compute::DockerSandbox(_)));
-    let provider = match project.sandbox.remove("provider") {
-        Some(value) => serde_json::from_value(value)
-            .map_err(|error| format!("{name}: sandbox.provider: {error}"))?,
-        None if compute => Provider::Compute,
-        None => Provider::Native,
-    };
-    if provider == Provider::Compute {
-        if !compute {
-            return Err(format!(
-                "{name}: sandbox.provider: compute requires target.compute.kind: docker_sandbox"
-            ));
-        }
-        crate::docker_sandbox::validate_policy(&project.sandbox, has_extends, &[])
-            .map_err(|error| format!("{name}: {error}"))?;
-    } else if compute {
-        return Err(format!(
-            "{name}: docker_sandbox only supports sandbox.provider: compute; inner native enforcement is not supported"
-        ));
-    }
+    let languages = project
+        .languages
+        .map(|selected| {
+            if selected.is_empty() {
+                return Err(format!(
+                    "{name}: languages must contain at least one of r, python, or sql"
+                ));
+            }
+            let mut languages = crate::cell::Languages::default();
+            for language in selected {
+                match language {
+                    crate::cell::Language::R => languages.r = true,
+                    crate::cell::Language::Python => languages.python = true,
+                    crate::cell::Language::Sql => {
+                        if cfg!(windows) {
+                            return Err(format!(
+                                "{name}: languages: SQL is not yet supported on Windows"
+                            ));
+                        }
+                        languages.sql = true;
+                    }
+                }
+            }
+            Ok(languages)
+        })
+        .transpose()?;
     // These fields belong to Console's launch protocol and worker lifetime.
+    // Keep the obsolete version field reserved to reject it before startup.
     // All other sandbox fields and values are interpreted by the native runner.
     for field in ["version", "lifecycle", "extends", "workspace"] {
         if project.sandbox.contains_key(field) {
@@ -183,51 +165,31 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
     if let Some(profile) = project.extends {
         project.sandbox.insert("extends".into(), profile.into());
     }
-    if let Some(target) = &mut project.target {
-        target
-            .capture()
-            .map_err(|error| format!("{name}: {error}"))?;
-    }
-    let target = project.target.filter(|target| !target.is_local_host());
-    let remote_python = target.is_some();
     Ok(Captured {
         cache: project.cache,
+        languages,
         python: project
             .python
             .map(|path| {
                 if path.as_os_str().is_empty() {
-                    let default = match target.as_ref().map(|target| &target.compute) {
-                        Some(Compute::Docker(_) | Compute::DockerSandbox(_)) => {
-                            "select preinstalled target Python"
-                        }
-                        _ => "use uv",
-                    };
-                    return Err(format!(
-                        "python must name an executable; omit it to {default}"
-                    ));
+                    return Err("python must name an executable; omit it to use uv".into());
                 }
-                if remote_python {
-                    Ok(path)
+                let path = if let Ok(relative) = path.strip_prefix("~") {
+                    let home = std::env::var_os("HOME")
+                        .map(PathBuf::from)
+                        .filter(|home| home.is_absolute())
+                        .ok_or("configured Python home expansion requires an absolute HOME")?;
+                    home.join(relative)
                 } else {
-                    let path = if let Ok(relative) = path.strip_prefix("~") {
-                        let home = std::env::var_os("HOME")
-                            .map(PathBuf::from)
-                            .filter(|home| home.is_absolute())
-                            .ok_or("configured Python home expansion requires an absolute HOME")?;
-                        home.join(relative)
-                    } else {
-                        path
-                    };
-                    std::path::absolute(path)
-                        .map_err(|error| format!("cannot locate configured Python: {error}"))
-                }
+                    path
+                };
+                std::path::absolute(path)
+                    .map_err(|error| format!("cannot locate configured Python: {error}"))
             })
             .transpose()?,
         source: Some(name),
         policy: project.sandbox,
         resolver: project.resolver,
-        target,
-        provider,
     })
 }
 

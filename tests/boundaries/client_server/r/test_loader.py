@@ -9,6 +9,7 @@ from contextlib import ExitStack
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.requirements import LINUX_NATIVE, NON_UTF8_FILENAMES, POSIX, requires
 from support.assertions import collect_running_output, tool_text
 from support.client import McpClient
@@ -102,7 +103,10 @@ def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript
                     """),
                 timeout_ms=0,
             )
-            assert tool_text(result) == "\n[running; poll with an empty send]", result
+            assert (
+                without_elapsed(tool_text(result))
+                == "\n[running; poll with an empty send]"
+            ), result
             gate.release()
             output = collect_running_output(
                 client, "R loader probe", timeouts_ms=(60_000,) * 8

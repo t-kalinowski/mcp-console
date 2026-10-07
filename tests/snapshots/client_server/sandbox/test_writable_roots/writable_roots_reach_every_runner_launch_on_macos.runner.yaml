@@ -78,7 +78,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -178,7 +177,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -278,7 +276,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -380,7 +377,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -482,7 +478,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  version: 2
   lifecycle:
     private_tmp:
       environment:

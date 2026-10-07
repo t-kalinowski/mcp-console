@@ -10,7 +10,15 @@ result:
   isError: false
 ---
 send:
-  python: import sys; print(sys.executable)
+  python: |
+    import json
+    import os
+    import sys
+
+    prior_module = json
+    prior_state = {"answer": 42}
+    prior_pid = os.getpid()
+    print(sys.executable)
 result:
   content:
     - type: text
@@ -19,13 +27,18 @@ result:
   isError: false
 ---
 send:
-  python: import sklearn
+  python: |
+    automatic_failure_attempts = globals().get("automatic_failure_attempts", 0) + 1
+    prior_state["answer"] += 1
+    import sklearn
+
+    automatic_failure_suffix = True
 result:
   content:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<mcp-console:python:e3>", line 1, in <module>
+          File "<mcp-console:python:e3>", line 3, in <module>
         ModuleNotFoundError: No module named 'sklearn'.
 
         MCP Console inferred the PyPI distribution `scikit-learn` from the import `sklearn`, but automatic package resolution failed:
@@ -37,6 +50,8 @@ result:
           "packages": [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
             "scikit-learn"
           ]
         }
@@ -58,10 +73,20 @@ result:
   isError: false
 ---
 send:
-  python: 6 * 7
+  python: |
+    import json
+
+    (
+        json is prior_module,
+        json.loads('{"answer": 42}')["answer"],
+        prior_state["answer"],
+        automatic_failure_attempts,
+        "automatic_failure_suffix" not in globals(),
+        os.getpid() == prior_pid,
+    )
 result:
   content:
     - type: text
       text: |
-        42
+        (True, 42, 43, 1, True, True)
   isError: false

@@ -9,8 +9,6 @@ mod cell;
 mod cli;
 mod config;
 mod console_paths;
-mod docker;
-mod docker_sandbox;
 #[cfg(unix)]
 mod input_watch;
 #[cfg(any(unix, windows))]
@@ -20,6 +18,8 @@ mod local_runtime;
 mod process_descriptors;
 #[cfg(any(unix, windows))]
 mod process_exit;
+#[cfg(unix)]
+mod process_io;
 #[cfg(any(unix, windows))]
 mod process_output;
 #[cfg(any(unix, windows))]
@@ -44,9 +44,6 @@ mod settings;
 mod sideband;
 #[cfg(any(unix, windows))]
 mod sql;
-mod ssh;
-mod target_launch;
-mod target_session;
 mod transcript;
 mod worker;
 mod worker_client;
@@ -61,7 +58,12 @@ fn main() -> ExitCode {
         #[cfg(windows)]
         cli::Command::SandboxSetup { status, state_dir } => {
             match sandbox::windows_setup(status, state_dir) {
-                Ok(status) => status,
+                Ok(exit_code) => {
+                    if !status && exit_code == ExitCode::SUCCESS {
+                        println!("\n{}", cli::SANDBOX_SETUP_DETAILS);
+                    }
+                    exit_code
+                }
                 Err(error) => {
                     eprintln!("{error}");
                     ExitCode::FAILURE
@@ -93,52 +95,6 @@ fn main() -> ExitCode {
             Err(error) => exit_with_error(error),
         },
         cli::Command::Resolve => match resolver::run() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        cli::Command::DockerSandboxOwner => match docker_sandbox::run_owner() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        cli::Command::DockerSandboxLaunch => {
-            match target_launch::run(docker_sandbox::PROTOCOL, false, Some("docker_sandbox")) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
-        cli::Command::DockerSandboxProbe => {
-            match target_launch::run(docker_sandbox::PROTOCOL, true, Some("docker_sandbox")) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
-        cli::Command::DockerOwner => match docker::run_owner() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        cli::Command::DockerLaunch => {
-            match target_launch::run(docker::PROTOCOL, false, Some("docker")) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
-        cli::Command::DockerProbe => {
-            match target_launch::run(docker::PROTOCOL, true, Some("docker")) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
-        cli::Command::ImageRuntimeProbe { python } => {
-            match target_launch::runtime::runtime_probe(python.as_deref()) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
-        cli::Command::SshLaunch => match ssh::run() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        cli::Command::SshPrepare => match ssh::preparation::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -182,42 +138,22 @@ fn run_server(
     let settings::Captured {
         cache,
         python,
+        languages,
         source: _,
         mut policy,
         mut resolver,
-        target,
-        provider,
     } = settings::discover(overrides, no_project_config)?;
-    if target.is_none() {
-        resolver::cache::configure(
-            cache,
-            no_sandbox,
-            python.as_deref(),
-            &mut resolver,
-            &mut policy,
-        )?;
-    } else if matches!(cache, Some(settings::Cache::Console)) {
-        return Err("cache: console requires a local execution target".into());
-    }
-    if provider == settings::Provider::Compute {
-        docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
-    }
-    #[cfg(windows)]
-    {
-        if target.is_some() {
-            return Err("Windows currently supports local execution only".into());
-        }
-    }
+    resolver::cache::configure(
+        cache,
+        no_sandbox,
+        python.as_deref(),
+        &mut resolver,
+        &mut policy,
+    )?;
     if python.is_some() && (worker.is_some() || relay.is_some()) {
         return Err("python selection requires the built-in worker and relay".into());
     }
-    let target = target.map(|target| (target, writable_roots.clone()));
-    if target.is_some() && (worker.is_some() || relay.is_some()) {
-        return Err("Execution targets require the built-in worker and relay".into());
-    }
-    let settings = if target.is_some() {
-        policy
-    } else if no_sandbox {
+    let settings = if no_sandbox {
         settings::SandboxSettings::default()
     } else {
         // Native validation belongs to the owned background launch. Running a
@@ -228,7 +164,7 @@ fn run_server(
         .enable_all()
         .build()?;
     let result = runtime.block_on(server::run(
-        worker, relay, no_sandbox, settings, target, python, resolver,
+        worker, relay, no_sandbox, settings, python, resolver, languages,
     ));
     // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client

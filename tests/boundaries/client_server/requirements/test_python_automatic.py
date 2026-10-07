@@ -21,7 +21,6 @@ from support.normalization import (
     normalize_python_traceback_paths,
 )
 from support.records import Transcript
-from support.snapshots import platform_snapshots
 from support.resolvers import (
     initialize_python_and_record_baseline,
     recording_uv_environment,
@@ -89,7 +88,6 @@ def test_resolves_missing_python_import_without_replaying_cell(
     return client.finish()
 
 
-@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     binary: Path,
@@ -121,18 +119,17 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     public_output = (
         f".agents/console/sessions{os.sep}{session.name}{os.sep}outputs/call-000001.log"
     )
-    assert f"raw cell log: {public_output}" in output, output[len(prefix) :]
+    assert f"raw log: {public_output}" in output, output[len(prefix) :]
     assert (session / relative_output).read_text(encoding="utf-8") == (
         prefix + "'yaml12'\n"
     )
     client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
-        session.name, "<run ID>"
-    )
+        public_output, public_output.replace(os.sep, "/")
+    ).replace(session.name, "<run ID>")
     compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
     return client.finish()
 
 
-@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
     binary: Path, execution: Execution
@@ -156,7 +153,7 @@ def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
             "\n[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
         )
         assert_preview(output, head + notice + tail)
-        assert "generated notice bytes not retained" in output
+        assert "generated notice bytes unavailable" in output
         assert "resolved PyPI distribution" not in output
         assert client.temporary_directory is not None
         session = next(
@@ -165,9 +162,11 @@ def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
             ).iterdir()
         )
         assert (session / "outputs/call-000001.log").read_text() == head + tail
+        public_output = f".agents/console/sessions{os.sep}{session.name}{os.sep}outputs/call-000001.log"
+        assert f"raw log: {public_output}" in output
         client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
-            session.name, "<run ID>"
-        )
+            public_output, public_output.replace(os.sep, "/")
+        ).replace(session.name, "<run ID>")
         compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()
 
@@ -623,13 +622,32 @@ def test_reports_automatic_python_resolution_failure(
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
-        client.send(python="import sys; print(sys.executable)")
+        # fmt: python
+        python = code("""
+            import json
+            import os
+            import sys
+
+            prior_module = json
+            prior_state = {"answer": 42}
+            prior_pid = os.getpid()
+            print(sys.executable)
+            """)
+        client.send(python=python)
         executable = last_result_text(client).strip()
         client.transcript[-1]["result"]["content"][0]["text"] = "<running Python>\n"
 
+        # fmt: python
+        python = code("""
+            automatic_failure_attempts = globals().get("automatic_failure_attempts", 0) + 1
+            prior_state["answer"] += 1
+            import sklearn
+
+            automatic_failure_suffix = True
+            """)
         output = send_and_collect_runtime_python_resolution(
             client,
-            python="import sklearn",
+            python=python,
         )
         for expected in (
             "ModuleNotFoundError",
@@ -650,8 +668,22 @@ def test_reports_automatic_python_resolution_failure(
 
         client.send(r=f'"{requirement}" %in% reticulate::py_require()$packages')
         assert last_result_text(client) == "[1] FALSE\n"
-        client.send(python="6 * 7")
-        assert last_result_text(client) == "42\n"
+        # fmt: python
+        python = code("""
+            import json
+
+            (
+                json is prior_module,
+                json.loads('{"answer": 42}')["answer"],
+                prior_state["answer"],
+                automatic_failure_attempts,
+                "automatic_failure_suffix" not in globals(),
+                os.getpid() == prior_pid,
+            )
+            """)
+        client.send(python=python)
+        assert last_result_text(client) == "(True, 42, 43, 1, True, True)\n"
+        assert len(uv_tool_run_requirements(record)) == baseline + 1
         return client.finish()
 
 

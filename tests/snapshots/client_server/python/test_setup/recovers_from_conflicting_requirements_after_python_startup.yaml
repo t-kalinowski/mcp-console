@@ -36,6 +36,8 @@ result:
           "packages": [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
             "py-yaml12<0"
           ]
         }

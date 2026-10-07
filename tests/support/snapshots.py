@@ -6,7 +6,13 @@ from pathlib import Path
 
 from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
 
-from support.records import Transcript, TranscriptWithCompanions, YamlStream
+from support.records import (
+    McpTranscript,
+    Transcript,
+    TranscriptWithCompanions,
+    YamlStream,
+)
+from support.progress import normalize_elapsed
 
 root = Path(__file__).resolve().parents[2]
 snapshot_directory = root / "tests" / "snapshots"
@@ -178,6 +184,16 @@ def normalize_request_ids(transcript: Transcript) -> Transcript:
     rendered = []
     for entry in transcript:
         entry = entry.copy()
+        if isinstance(result := entry.get("result"), dict) and "content" in result:
+            entry["result"] = {
+                **result,
+                "content": [
+                    {**part, "text": normalize_elapsed(part["text"])}
+                    if part["type"] == "text" and isinstance(part["text"], str)
+                    else part
+                    for part in result["content"]
+                ],
+            }
         if entry.keys() & {"input", "send"}:
             request_id = entry.pop("id", None)
             if request_id in labels:
@@ -304,9 +320,15 @@ def check_recording(
             check_text_snapshot(companion, contents, case, update=update)
         else:
             assert companion.suffix == ".yaml", companion
-            if initialization:
-                # These companions are MCP handshakes; other YAML companions
-                # can carry protocol IDs that must remain visible.
+            if isinstance(contents, McpTranscript):
+                contents = normalize_request_ids(contents.transcript)
+                if not initialization:
+                    contents = compact_initializations(
+                        contents, references, execution=execution
+                    )
+            elif initialization:
+                # Canonical companions are MCP handshakes; ordinary YAML
+                # companions can carry protocol IDs that must remain visible.
                 contents = normalize_request_ids(contents)
             check_snapshot(companion, contents, case, update=update)
         checked.add(companion)

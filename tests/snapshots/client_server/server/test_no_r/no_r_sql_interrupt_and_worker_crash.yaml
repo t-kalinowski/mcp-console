@@ -70,7 +70,7 @@ result:
           <mcp-console:python:e1>(2): sql_gate
           <string>(216): _evaluate
           <string>(246): _dispatch
-          <string>(732): _mcp_console_without_automatic_resolution
+          <string>(712): _mcp_console_without_automatic_resolution
           <string>(255): dispatch
 
   isError: false
@@ -96,6 +96,7 @@ result:
     - type: text
       text: |-
 
+        [elapsed: <elapsed>s since admission; no new output]
         [running; poll with an empty send]
   isError: false
 ---

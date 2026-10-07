@@ -52,7 +52,7 @@ stdout: |
   Options:
         --no-project-config     Skip launch-directory project configuration; still load home configuration and apply -c overrides
     -c, --config <KEY=VALUE>    Override project configuration; repeat for multiple dotted KEY=VALUE assignments
-        --no-sandbox            Skip inner native enforcement; retain any selected Docker container or Sandbox microVM and its provider policy
+        --no-sandbox            Run evaluated code and dependency resolution with host permissions
         --writable-root <PATH>  Allow writes to an additional path (temporary launch option)
     -h, --help                  Print help
 ---

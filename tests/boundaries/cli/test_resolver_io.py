@@ -4,7 +4,6 @@ import re
 import signal
 import subprocess
 import sys
-import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -33,8 +32,6 @@ ROOT = Path(__file__).resolve().parents[3]
 def preparation(
     binary: Path, root: Path, environment: dict[str, str]
 ) -> Iterator[tuple]:
-    with (ROOT / "Cargo.toml").open("rb") as source:
-        build = tomllib.load(source)["package"]["version"]
     process = subprocess.Popen(
         [binary, "resolve"],
         stdin=subprocess.PIPE,
@@ -60,23 +57,15 @@ def preparation(
 
     def receive(description: str) -> object:
         try:
-            return json.loads(reader.readline(timeout=10))
+            line = reader.readline(timeout=10)
+            assert line, (description, process.wait(timeout=10), process.stderr.read())
+            return json.loads(line)
         except TimeoutError:
             raise AssertionError(f"timed out waiting for {description}") from None
 
     try:
-        send(
-            {
-                "Open": {
-                    "version": 6,
-                    "build": build,
-                    "workspace": "",
-                    "selections": {"r_home": None, "python": None},
-                    "mode": "PythonOnly",
-                }
-            }
-        )
-        assert receive("hello") == {"Hello": {"version": 6, "build": build}}
+        send({"Open": {"mode": "PythonOnly"}})
+        assert receive("hello") == "Hello"
         discovery = receive("discovery")["Completed"]
         assert discovery["confirmed"] and "Ok" in discovery["result"], discovery
         yield process, send, receive
@@ -236,6 +225,13 @@ def test_exit_during_observer_registration_keeps_accepted_interrupt(
     binary: Path,
 ) -> Transcript:
     return inherited_output(binary, "interrupt")
+
+
+@requires(MACOS_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_exit_during_registration_waits_for_terminal_status_before_reaping(
+    binary: Path,
+) -> Transcript:
+    return inherited_output(binary, "registration")
 
 
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
@@ -399,7 +395,7 @@ def cleanup_failure(
                 stderr = process.stderr.read()
                 assert (
                     process.returncode != 0
-                    and "remote preparation retirement is unconfirmed" in stderr
+                    and "preparation retirement is unconfirmed" in stderr
                 ), stderr
                 os.kill(leader, 0)
                 assert not (root / "early-reap").exists()
@@ -438,6 +434,8 @@ def inherited_output(
                 "release",
                 "killed",
                 "streaming",
+                "pending",
+                "status",
             )
         }
         uv = root / "uv"
@@ -459,7 +457,7 @@ def inherited_output(
                         "MCP_CONSOLE_TEST_STDIN_BLOCKED": str(root / "blocked"),
                     }
                 )
-            elif mode == "interrupt" or pidfd_error is not None:
+            elif mode in ("interrupt", "registration") or pidfd_error is not None:
                 environment.update(
                     {
                         LOADER_VARIABLE: str(
@@ -471,6 +469,14 @@ def inherited_output(
                         "MCP_CONSOLE_TEST_OBSERVER_RELEASE": str(root / "release"),
                         "MCP_CONSOLE_TEST_CHILD_KILLED": str(root / "killed"),
                         "MCP_CONSOLE_TEST_EARLY_REAP": str(root / "early-reap"),
+                    }
+                )
+            if mode == "registration":
+                environment.update(
+                    {
+                        "MCP_CONSOLE_TEST_OBSERVER_DELAY_STATUS": "1",
+                        "MCP_CONSOLE_TEST_STATUS_PENDING": str(root / "pending"),
+                        "MCP_CONSOLE_TEST_STATUS_RELEASE": str(root / "status"),
                     }
                 )
             if pidfd_error is not None:
@@ -495,7 +501,7 @@ def inherited_output(
                     gates["blocked"].wait(
                         "materializer stdin writer reached actual backpressure"
                     )
-                elif mode == "interrupt" or pidfd_error is not None:
+                elif mode in ("interrupt", "registration") or pidfd_error is not None:
                     gates["entered"].wait("live-child exit probe held")
                     if pidfd_error is not None:
                         gates["release"].release()
@@ -519,11 +525,19 @@ def inherited_output(
                         "Controlled": {"id": 1, "result": {"Ok": True}}
                     }
                     gates["release"].release()
+                elif mode == "registration":
+                    # The child exited while the initial live-status probe was
+                    # held. NOTE_EXIT registration now reports ESRCH, before
+                    # the fixture permits terminal-status confirmation.
+                    gates["release"].release()
+                    gates["pending"].wait("registration exit precedes terminal status")
+                    assert not (root / "early-reap").exists()
+                    gates["status"].release()
                 completed = receive("completion independent of inherited output EOF")[
                     "Completed"
                 ]
                 assert completed["confirmed"] is True, completed
-                if mode in ("success", "stream"):
+                if mode in ("success", "stream", "registration"):
                     assert completed["result"] == {"Ok": "3.12.7"}, completed
                     assert completed["control"] is None, completed
                 elif mode == "interrupt":

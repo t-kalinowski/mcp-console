@@ -102,6 +102,26 @@ jobs:
           scripts/preflight.cmd --json
       - name: Stage native Windows sandbox
         run: scripts/stage-sandbox-runner.cmd
+      - name: Provision native Windows sandbox acceptance
+        run: |
+          scripts/with-checkout.cmd cargo build --target-dir target
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Hosted runtimes and the checkout live outside the sandbox's
+          # standard read roots. Prepare their read ACLs on the trusted host.
+          $ciReadRoots = @("$env:GITHUB_WORKSPACE/target", $env:UV_CACHE_DIR)
+          $ciReadRoots += python -c "import sys; print(sys.prefix); print(sys.base_prefix)"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $ciReadRoots += & (Get-Command Rscript.exe).Source --vanilla -e 'cat(R.home(), .libPaths(), sep="\n")'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $prepareArguments = @(
+            "--state-dir", "$env:RUNNER_TEMP/console-windows-sandbox",
+            "--github-env", "$env:GITHUB_ENV"
+          )
+          foreach ($root in $ciReadRoots) {
+            $prepareArguments += @("--read-root", $root)
+          }
+          python scripts/prepare-windows-tests @prepareArguments
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Run native Windows development and installation checks
         run: |
           scripts/check.cmd --full
@@ -252,8 +272,7 @@ jobs:
           printf 'Dir::Cache::archives "%s";\nAPT::Install-Recommends "false";\n' \
             "$RUNNER_TEMP/apt-archives" | sudo tee /etc/apt/apt.conf.d/99-ci-archives
           sudo apt-get update
-          sudo apt-get install -y --no-upgrade build-essential pkg-config libcurl4-openssl-dev libcap-dev openssh-server
-          sudo mkdir -p /run/sshd
+          sudo apt-get install -y --no-upgrade build-essential pkg-config libcurl4-openssl-dev libcap-dev
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Configure R cache paths

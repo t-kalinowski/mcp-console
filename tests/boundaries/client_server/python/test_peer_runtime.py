@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.client_server.python.test_setup import deferred_selection_client
 
+from support.progress import without_elapsed
 from support.requirements import NATIVE_FIXTURES, POSIX, R, SQL, command, requires
 from support.assertions import (
     assert_result_content,
@@ -35,15 +36,6 @@ from support.resolvers import (
 )
 from support.r import isolated_r_home, r_test_environment, reference_plots
 from support.python import virtualenv_python, write_test_wheel
-from support.ssh import (
-    SSH,
-    configure,
-    localhost,
-    poison_controller,
-    remote_command,
-    client_environment,
-)
-from support.ssh_external import EXTERNAL_SSH, external_target
 
 
 # fmt: python
@@ -250,75 +242,6 @@ def test_late_r_preserves_python_runtime(
     return records
 
 
-@requires(SQL)
-@requires(EXTERNAL_SSH)
-def test_external_peer_initialization_order(binary: Path) -> Transcript:
-    records = []
-    with external_target() as external, tempfile.TemporaryDirectory() as directory:
-        local = Path(directory)
-        hooks = external["target"]["workspace"] + "/cli/python-hooks"
-        external_hook = DEFER_R_STARTUP.replace(
-            "import sys\n", "import sys\nfrom pathlib import Path\n"
-        ).replace(
-            'if not getattr(builtins, "peer_bootstrap_interrupted", False):',
-            'if not getattr(builtins, "peer_bootstrap_interrupted", False) and Path(__file__).with_suffix(".defer").exists():\n'
-            '        Path(__file__).with_suffix(".defer").unlink()',
-        )
-        config = local / ".agents/console/config.yaml"
-        config.parent.mkdir(parents=True)
-        config.write_text(
-            json.dumps(
-                {
-                    "target": external["target"],
-                    "sandbox": {
-                        "environment": {
-                            **external["environment"],
-                            "RETICULATE_PYTHONPATH": hooks,
-                        }
-                    },
-                }
-            )
-        )
-        environment = client_environment(
-            local, config=external.get("ssh_config"), remote_path=external.get("path")
-        )
-        trap = poison_controller(local, environment)
-        for execution in (DIRECT, SANDBOXED):
-            serve = (
-                execution.serve("--writable-root", "cli")
-                if execution == SANDBOXED
-                else execution.serve()
-            )
-            with McpClient(binary, serve, environment, local) as client:
-                client.initialize_and_list_tools()
-                # Create the startup-hook fixture on its execution host, then
-                # start the generation whose in-memory continuity is exercised.
-                # Bare targets use their installed packages. Managed targets may
-                # return a running response while their defaults are prepared.
-                collected = send_and_collect_runtime_python_resolution(
-                    client,
-                    # fmt: python
-                    python=code(f"""
-                        import os
-                        from pathlib import Path
-
-                        hooks = Path(os.environ["RETICULATE_PYTHONPATH"])
-                        hooks.mkdir(exist_ok=True)
-                        _ = (hooks / "sitecustomize.py").write_text({external_hook!r})
-                        (hooks / "sitecustomize.defer").touch()
-                        """),
-                )
-                assert collected == "[done]", client.transcript[-1]
-                client.send(control="restart")
-                defer_r_bootstrap(client)
-                exercise_late_r(client)
-                records.extend(client.finish()[3:])
-        assert not trap.exists(), (
-            "controller inspected or resolved an execution-host runtime"
-        )
-    return records
-
-
 @requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_late_attachment_preserves_environment_metadata(
@@ -473,78 +396,6 @@ def test_interrupt_wakes_input_before_and_after_attachment(
             release.close()
 
 
-def exercise_prepared_r_only(binary: Path, provider: str) -> None:
-    # Extend each provider's existing public runtime-discovery acceptance.
-    from support import docker, docker_sandbox
-
-    fixture = docker if provider == "docker" else docker_sandbox
-    workspace = (
-        fixture.workspace() if provider == "docker" else fixture.workspace(real=True)
-    )
-    with workspace as root:
-        environment = {
-            "R_HOME": "/usr/lib/R",
-            "PATH": "/no-python",
-            "RETICULATE_PYTHON": "",
-        }
-        if provider == "docker":
-            config = fixture.configure(
-                root,
-                fixture.image(),
-                command=["/opt/analysis/bin/mcp-console"],
-                environment=environment,
-            )
-        else:
-            config = fixture.configure(
-                root, command=["/usr/local/bin/mcp-console"], environment=environment
-            )
-        policy = json.loads(config.read_text())
-        policy["sandbox"]["inherit_environment"] = False
-        config.write_text(json.dumps(policy))
-        with McpClient(
-            binary, ("serve", "--no-sandbox"), current_directory=root
-        ) as client:
-            client.initialize_and_list_tools()
-            tool = client.transcript[-1]["result"]["tools"][0]
-            fields = tool["inputSchema"]["properties"]
-            assert {"r", "python", "sql"} <= fields.keys(), fields
-            assert (
-                "Language fields describe the configured interface"
-                in tool["description"]
-            )
-            result = client.send(python="raise AssertionError('unavailable cell ran')")
-            assert result["isError"], result
-            assert last_result_text(client) == (
-                "Python cells are unavailable: the target has no Python runtime"
-            ), result
-            client.expect(
-                "[1] 42\n",
-                r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer <- 42L; answer",
-            )
-            result = client.send(
-                control="restart",
-                python="raise AssertionError('unavailable cell ran')",
-            )
-            assert result["isError"], result
-            assert last_result_text(client) == (
-                "Python cells are unavailable: the target has no Python runtime"
-            ), result
-            client.expect(
-                "[1] 42\n",
-                r="stopifnot(!reticulate::py_available(initialize = FALSE)); answer",
-            )
-            client.finish()
-        policy["python"] = "/missing-explicit-python"
-        config.write_text(json.dumps(policy))
-        with McpClient(
-            binary, ("serve", "--no-sandbox"), current_directory=root
-        ) as client:
-            assert client.stdout.read(timeout=30) == ""
-            error = client.stderr.read(timeout=30)
-            assert "python configuration validation failed" in error, error
-            assert client.process.wait(timeout=5) != 0
-
-
 @requires(POSIX)
 @requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
@@ -558,6 +409,7 @@ def test_idle_preparation_keeps_r_uninitialized(
         (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
         environment = dict(os.environ, RETICULATE_PYTHONPATH=str(modules))
         environment.pop("RETICULATE_PYTHON", None)
+        environment["UV_TOOL_DIR"] = str(root)
         arguments = root / "uv-arguments"
         environment.update(
             RETICULATE_UV=str(
@@ -568,9 +420,9 @@ def test_idle_preparation_keeps_r_uninitialized(
             MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD=str(arguments),
         )
         serve = (
-            execution.serve("--writable-root", str(root))
+            execution.serve("-c", "cache=host", "--writable-root", str(root))
             if execution == SANDBOXED
-            else execution.serve()
+            else execution.serve("-c", "cache=host")
         )
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
@@ -1068,93 +920,6 @@ def test_r_does_not_initialize_python(binary: Path, execution: Execution) -> Tra
                 python="assert id(peer_object) == peer_identity; print('runtime objects retained')",
             )
             return client.finish()[3:]
-
-
-@requires(R, SSH, command("uv"), command("ir"))
-@executions(DIRECT, SANDBOXED)
-def test_remote_managed_identity_survives_restart(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-        root = Path(directory).resolve()
-        local, remote = root / "controller", root / "remote"
-        local.mkdir()
-        remote.mkdir()
-        environment, _ = r_test_environment()
-        environment = {
-            name: value
-            for name, value in environment.items()
-            if name
-            in {
-                "PATH",
-                "HOME",
-                "R_HOME",
-                "R_LIBS",
-                "R_LIBS_USER",
-                "R_LIBS_SITE",
-                "R_PROFILE_USER",
-                "IR_CACHE_DIR",
-                "UV_CACHE_DIR",
-            }
-        }
-        resolver_environment, started, release = checkpoint_uv_environment(
-            remote, "numpy"
-        )
-        resources.callback(started.close)
-        resources.callback(release.close)
-        environment.update(
-            (name, value)
-            for name, value in resolver_environment.items()
-            if name == "RETICULATE_UV" or name.startswith("MCP_CONSOLE_TEST_")
-        )
-        configure(local, remote, remote_command(remote, binary, environment))
-        with localhost(root / "sshd") as controller:
-            trap = poison_controller(root / "sshd", controller)
-
-            class ReleaseResolverAfterPoll(McpClient):
-                def send(self, **arguments: object) -> ToolResult:
-                    result = super().send(**arguments)
-                    if arguments == {"timeout_ms": 0}:
-                        assert last_result_text(self) == (
-                            "\n[running; poll with an empty send]"
-                        ), result
-                        release.release()
-                    return result
-
-            with ReleaseResolverAfterPoll(
-                binary, execution.serve("-c", "cache=host"), controller, local
-            ) as client:
-                client.initialize_and_list_tools()
-                client.expect(
-                    "\n[running; poll with an empty send]",
-                    python="import sys; peer_object = object(); peer_id = id(peer_object)",
-                    timeout_ms=0,
-                )
-                # Release only after the collector observes an empty running
-                # poll, so completion must survive that earlier empty cut.
-                collected = send_and_collect_runtime_python_resolution(
-                    client, timeout_ms=0
-                )
-                assert collected == "[done]", repr(collected)
-                started.wait("remote managed Python resolver")
-                client.send(requirements={"python": ["py-yaml12"]})
-                assert not client.transcript[-1]["result"].get("isError"), (
-                    client.transcript[-1]
-                )
-                client.expect(
-                    "live identity retained\n",
-                    python="import yaml12; assert id(peer_object) == peer_id; print('live identity retained')",
-                )
-                client.expect(
-                    "[worker stopped: in-memory state lost]\n[starting new worker]\naccepted environment retained\n[done]",
-                    control="restart",
-                    python="import yaml12; print('accepted environment retained')",
-                )
-                records = client.finish()[3:]
-            assert not trap.exists(), (
-                "controller inspected or resolved a remote runtime"
-            )
-        return records
 
 
 @requires(R, command("uv"))
@@ -1809,7 +1574,7 @@ def r_startup_with_python(
                 try:
                     ready.wait("R startup package", timeout=client.response_timeout)
                     client.receive(startup)
-                    assert last_result_text(client) == (
+                    assert without_elapsed(last_result_text(client)) == (
                         "\n[running; poll with an empty send]"
                     ), client.transcript[-1]
                 finally:

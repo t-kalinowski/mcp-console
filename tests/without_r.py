@@ -24,7 +24,7 @@ assert all(shutil.which(name) is None for name in ("R", "Rscript", "ir"))
 assert not any(
     Path(root).exists() for root in ("/usr/lib/R", "/usr/local/lib/R", "/opt/R")
 )
-binary = Path(shutil.which("mcp-console") or "").absolute()
+binary = Path(shutil.which("mcp-console") or "").resolve()
 assert binary.is_file(), "install the wheel before running acceptance"
 suite = Path(__file__).parent / "boundaries/client_server/python/test_without_r.py"
 spec = importlib.util.spec_from_file_location("sans_r_acceptance", suite)

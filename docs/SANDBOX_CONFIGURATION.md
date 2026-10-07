@@ -6,9 +6,7 @@ Review it before starting Console.
 
 ## Project configuration
 
-`sandbox.provider: native` is the default for local, SSH, and ordinary Docker.
-Docker Sandbox selects `compute`, which accepts only `provider`, `environment`, and `inherit_environment` under `sandbox`; native fields, top-level `extends`, and CLI writable roots are invalid.
-See [SBX](DOCKER_SANDBOX.md).
+The `sandbox` mapping configures native enforcement on the local host.
 
 For project editing:
 
@@ -16,7 +14,7 @@ For project editing:
 extends: :workspace
 ```
 
-`:workspace` grants workspace writes while `.git`, `.agents`, `.codex`, and `.claude` are readable but protected from writes by default.
+`:workspace` grants workspace writes while `.git`, `.agents`, `.codex`, `.aws`, and `.claude` are readable but protected from writes by default.
 `:read-only` selects the native read-only baseline.
 Omission keeps Console's host-read/private-write policy.
 These reserved names include the colon; there are no user-defined profile chains.
@@ -47,7 +45,7 @@ A read entry grants reads as well as limiting broader writes.
 macOS can reopen reads beneath a broader denial; Linux mount masking may hide that grant or fail on a deeper nested denial.
 Console does not rewrite policy or switch backends to hide native limitations.
 
-Console owns `version`, `lifecycle`, `extends`, and `workspace` inside the sandbox mapping.
+Console owns `lifecycle`, `extends`, and `workspace` inside the sandbox mapping.
 Select profiles at the top level; workspace is captured from launch.
 Other native fields/types pass through for runner validation, not a parallel Console allowlist.
 An omitted macOS extension gets Console's trusted extension for restricted application policy; explicit values, including null, override it.
@@ -96,7 +94,7 @@ sandbox:
 The runner owns host normalization, matching, local-network checks, and routing.
 An empty allowlist allows no destinations.
 A supplied enabled proxy enforces managed routing even with `network: enabled`, subject to explicit local-binding exceptions.
-Proxy endpoints are execution-host addresses, including SSH/Docker.
+Proxy endpoint addresses are interpreted on the Console host.
 
 ## Resolver policy
 
@@ -113,9 +111,11 @@ Cwd is selected by the caller's process API, not a configuration `command`/`cwd`
 `environment` supplies workload overrides; `inherit_environment: false` makes that the complete ordinary workload map.
 In native execution these values apply after helper setup, so they cannot select host helpers, move setup storage, or inject host-loader code.
 The trusted launch environment still controls frontend loading and helper selection.
+When inheritance is disabled in application policy, Console omits non-UTF-8 host environment names and values from the native launch environment.
+They cannot contribute to the selected workload environment.
 
 For `serve`, Console reapplies the selected R/Python generation environment and resolution policy after workload controls, even without inheritance.
-Workload settings do not configure trusted resolvers; supported remote runtime selections are conveyed separately.
+Workload settings do not configure trusted resolvers.
 Ordinary application launches preserve `MCP_CONSOLE_SANDBOX=1`; the marker is not authorization.
 
 Settings are captured once and retained across initial launch, restart, and failure recovery.
@@ -123,16 +123,14 @@ When selected configuration requires it, a no-op native preflight validates poli
 Children receive captured values, never a filename to rediscover.
 Ambient private transport variables cannot select policy.
 
-For targets, see [SSH](SSH.md), [Docker](DOCKER.md), and [SBX](DOCKER_SANDBOX.md).
-`--no-sandbox` still parses target configuration and preserves the outer provider; it is not a way to bypass malformed configuration or unsupported SBX fields.
-Standalone `sandbox` remains local and rejects compute-provider enforcement.
+`--no-sandbox` still validates configuration before launch.
 
 ## Explicit complete policy
 
 A trusted standalone caller can bypass discovery and all Console defaults:
 
 ```sh
-SANDBOX_POLICY='{"version":2,"filesystem":{"kind":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"}]},"network":"restricted"}' \
+SANDBOX_POLICY='{"filesystem":{"kind":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"}]},"network":"restricted"}' \
   mcp-console sandbox --config-env SANDBOX_POLICY -- /bin/echo 'literal argument'
 ```
 
@@ -142,8 +140,9 @@ The runner consumes the chosen variable once and strips it and reserved transpor
 `--config-env` rejects `-c`, writable roots, and conflicting private handoffs.
 Stdin always belongs to the target.
 
-The pinned [runner protocol](https://github.com/t-kalinowski/cobox/blob/6a18b21c2e75a10229a842424403d71cbd1e60ef/codex-rs/mcp-console-sandbox/PROTOCOL.md#complete-json-reference) is the canonical complete schema.
-Key differences from Console's application policy: `version: 2` is required; filesystem/network are required without a profile; environment inheritance defaults true; lifecycle storage and caller observation are opt-in.
+The pinned [runner protocol](https://github.com/t-kalinowski/cobox/blob/85d407d8a4544ed0916aff3c7a273461e739f215/codex-rs/mcp-console-sandbox/PROTOCOL.md#complete-json-reference) is the canonical complete schema.
+The private protocol is unversioned; a `version` field is rejected.
+Key differences from Console's application policy: filesystem/network are required without a profile; environment inheritance defaults true; lifecycle storage and caller observation are opt-in.
 On Unix, `parent_pid` must identify the actual caller; supervised cleanup defaults to 1000 ms, with explicit values from 1 to 60000 ms.
 Windows observes the runner's direct parent plus an optional session owner and uses a fixed five-second Job retirement deadline.
 
@@ -172,7 +171,7 @@ See [lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 Windows defaults to `sandbox.windows_sandbox_level: elevated` and requires explicit `mcp-console sandbox-setup` provisioning.
 `sandbox.windows_state_dir` can select an absolute persistent state directory.
-An explicitly selected `restricted-token` backend requires `network: enabled` and host reads; it rejects read-deny policy.
+An explicitly selected `unelevated` backend requires `network: enabled` and host reads; it rejects read-deny policy.
 Neither mode silently weakens policy when a feature is unavailable.
 Managed proxy configuration and custom cleanup timeouts are currently unsupported.
 See [Windows support](WINDOWS.md#native-sandbox) for lifecycle and setup details.
@@ -184,14 +183,9 @@ Namespace failure never causes a backend switch or unsandboxed retry.
 The inherited-procfs alternative retains the same backend and policy.
 External mode without a proxy still delegates enforcement with `bubblewrap` set.
 
-Standalone `linux_backend: landlock` selects direct Landlock/seccomp execution: no namespaces, supervisor, descendant cleanup, or private storage.
-It rejects proxy routing, external mode, caller observation, retirement SIGTERM, and explicit cleanup/storage options.
-Console's server does not select it.
-
-Landlock supports only policies its native representation can preserve, not restricted reads or unsupported carveouts.
-Restricted filesystem enforcement requires ABI 3 truncate support; explicit full-write policies skip that filesystem requirement but still apply selected network policy.
-Device ioctl restrictions are not a portable guarantee, and same-user host signaling may remain possible.
-See [Linux compatibility](LINUX_COMPATIBILITY.md#filesystem-classification).
+Standalone `linux_backend: landlock` has been removed and is rejected before native setup.
+Omit `linux_backend` or select `bubblewrap` explicitly.
+See [Linux compatibility](LINUX_COMPATIBILITY.md#policy-and-backend-contract).
 
 ## Integrity, stdin, and large requests
 

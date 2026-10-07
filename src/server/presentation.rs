@@ -1,4 +1,5 @@
 //! Tool prose derived only from captured launch configuration.
+mod requirements;
 mod sections;
 
 use std::sync::Arc;
@@ -8,38 +9,34 @@ use serde_json::{Map, Value};
 
 use super::ConsoleServer;
 use crate::cell::Languages;
-use crate::settings::{Compute, SandboxSettings, Target};
+use crate::settings::SandboxSettings;
 
 /// Requested interface and preparation mode, never discovered runtime availability.
 struct Profile {
     languages: Languages,
+    configured_visibility: bool,
     builtin: bool,
-    prepared: Option<&'static str>,
 }
 
 impl ConsoleServer {
     pub(super) fn configured_tool_router(
         languages: Languages,
+        configured_visibility: bool,
         builtin: bool,
         policy: &SandboxSettings,
         no_sandbox: bool,
-        target: Option<&Target>,
     ) -> ToolRouter<Self> {
         let profile = Profile {
             languages,
+            configured_visibility,
             builtin,
-            prepared: target.and_then(|target| match &target.compute {
-                Compute::Docker(_) => Some("image"),
-                Compute::DockerSandbox(_) => Some("template"),
-                Compute::Host {} => None,
-            }),
         };
         let mut router = Self::tool_router();
         let send = router
             .map
             .get_mut("send")
             .expect("send tool must be registered");
-        send.attr.description = Some(profile.description(policy, no_sandbox, target).into());
+        send.attr.description = Some(profile.description(policy, no_sandbox).into());
         let schema = Arc::make_mut(&mut send.attr.input_schema);
         let properties = schema
             .get_mut("properties")
@@ -77,23 +74,16 @@ impl ConsoleServer {
             }
         }
         profile.configure_fields(properties);
-        if profile.prepared.is_some() {
-            let requirements = properties
-                .get_mut("requirements")
-                .expect("requirements schema");
-            *requirements = serde_json::json!({
-                "type": ["object", "null"],
-                "description": "Inspect the server's retained declaration with action=get. Preparation is unavailable for this target; the declaration is not an installed-package inventory.",
-                "properties": {"action": {"type": "string", "enum": ["get"]}},
-                "required": ["action"],
-                "additionalProperties": false,
-            });
-        }
         router
     }
 }
 
 impl Profile {
+    fn restricted_guidance(&self) -> bool {
+        self.configured_visibility
+            && !(self.languages.r && self.languages.python && self.languages.sql)
+    }
+
     fn multiple_languages(&self) -> bool {
         [self.languages.r, self.languages.python, self.languages.sql]
             .into_iter()
@@ -102,55 +92,100 @@ impl Profile {
             > 1
     }
 
-    fn description(
-        &self,
-        policy: &SandboxSettings,
-        no_sandbox: bool,
-        target: Option<&Target>,
-    ) -> String {
+    fn description(&self, policy: &SandboxSettings, no_sandbox: bool) -> String {
+        // The internal environment filter retains its legacy presentation.
+        // Only the public setting selects the new language-specific guidance.
+        let described_languages = if self.configured_visibility {
+            self.languages
+        } else {
+            Languages::all()
+        };
         let mut description = if !self.builtin {
-            let mut scope = sections::CUSTOM_SCOPE.to_string();
+            let mut scope = if self.restricted_guidance() {
+                sections::CUSTOM_SELECTED_SCOPE
+            } else {
+                sections::CUSTOM_SCOPE
+            }
+            .to_string();
             if self.multiple_languages() {
                 scope.push_str(sections::CUSTOM_SWITCHING);
             }
             scope
-        } else if cfg!(windows) {
+        } else if cfg!(windows) && !self.configured_visibility {
             sections::WINDOWS_SCOPE.to_string()
         } else {
-            let mut scope = sections::BUILTIN_SCOPE.to_string();
+            let mut scope = if described_languages.r
+                && described_languages.python
+                && described_languages.sql
+            {
+                sections::BUILTIN_SCOPE.to_string()
+            } else {
+                let names = self
+                    .languages
+                    .fields()
+                    .iter()
+                    .map(|field| match *field {
+                        "r" => "R",
+                        "python" => "Python",
+                        "sql" => "SQL",
+                        _ => unreachable!(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                let location = if cfg!(windows) {
+                    " for local execution on Windows"
+                } else {
+                    ""
+                };
+                format!(
+                    "Persistent {names} workbench{location} for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls."
+                )
+            };
+            if cfg!(windows) {
+                scope.push_str(sections::WINDOWS_SELECTED_PREPARATION);
+            }
             scope.push_str("\n\n");
             scope.push_str(&self.language_guidance());
             scope.push_str("\n\n");
-            scope.push_str(sections::SHARING);
-            scope.push_str(if self.prepared.is_some() {
-                sections::PREPARED_SQL_SHARING
-            } else {
-                sections::MANAGED_SQL_SHARING
-            });
-            scope.push_str(if self.prepared.is_some() {
-                sections::PREPARED_PREPARATION
+            scope.push_str(sections::INTERFACE);
+            if described_languages.r && described_languages.python {
+                scope.push_str(sections::SHARING);
+            }
+            if described_languages.sql {
+                if described_languages.r && described_languages.python {
+                    scope.push_str(sections::MANAGED_SQL_SHARING);
+                } else {
+                    if described_languages.r {
+                        scope.push_str(sections::MANAGED_SQL_R);
+                    }
+                    if described_languages.python {
+                        scope.push_str(sections::MANAGED_SQL_PYTHON_SELECTED);
+                    }
+                    scope.push_str(sections::SQL_PROVIDER_SELECTED);
+                }
+            }
+            scope.push_str(if self.restricted_guidance() && !self.languages.python {
+                sections::MANAGED_PREPARATION_SELECTED
             } else {
                 sections::MANAGED_PREPARATION
             });
             scope
         };
         description.push_str("\n\nSend one complete ");
-        description.push_str(if self.builtin && cfg!(windows) {
-            sections::WINDOWS_CELL_FIELDS
+        if self.configured_visibility {
+            description.push_str(&self.languages.cell_fields());
+        } else if cfg!(windows) && self.builtin {
+            description.push_str("`r` or `python`");
         } else {
-            sections::CELL_FIELDS
-        });
+            description.push_str("`r`, `python`, or `sql`");
+        }
         description.push_str(sections::SEND_ORDERING);
         description.push_str("\n\n");
         description.push_str(sections::POLLING);
         description.push_str("\n\n");
         description.push_str(sections::OUTPUT);
         description.push_str("\n\n");
-        description.push_str(&description_for_launch(policy, no_sandbox, target));
-        if let Some(source) = self.prepared {
-            description.push_str("\n\n");
-            description.push_str(&sections::prepared_target(source));
-        }
+        description.push_str(&description_for_launch(policy, no_sandbox));
         description
     }
 
@@ -172,30 +207,23 @@ impl Profile {
         if self.languages.sql {
             guidance.push_str("\n\n");
             guidance.push_str(sections::SQL_FILES);
-            if self.prepared.is_none() {
-                guidance.push_str(sections::SQL_DEFAULTS);
-            }
+            guidance.push_str(sections::SQL_DEFAULTS);
             guidance.push_str(sections::SQL_SQLITE);
-            if self.prepared.is_none() {
-                guidance.push_str(sections::SQL_EXTENSIONS);
-            }
+            guidance.push_str(sections::SQL_EXTENSIONS);
             guidance.push_str(sections::SQL_RESULTS);
         }
         guidance
     }
 
     fn configure_fields(&self, properties: &mut Map<String, Value>) {
-        if let Some(source) = self.prepared {
-            for (field, section) in [
-                ("r", sections::PREPARED_R),
-                ("python", sections::PREPARED_PYTHON),
-                ("sql", sections::PREPARED_SQL),
-                ("control", sections::PREPARED_CONTROL),
+        if self.builtin && self.configured_visibility {
+            for (field, description) in [
+                ("r", r_description_for(self.languages)),
+                ("python", python_description_for(self.languages)),
+                ("sql", sql_description_for(self.languages)),
             ] {
                 if let Some(property) = properties.get_mut(field) {
-                    property["description"] =
-                        format!("{section} Dependencies must be preinstalled in the {source}.")
-                            .into();
+                    property["description"] = description.into();
                 }
             }
         } else if !self.builtin {
@@ -209,14 +237,28 @@ impl Profile {
                 }
             }
         }
+        if self.restricted_guidance() {
+            properties["stdin"]["description"] =
+                format!("{}{}", sections::STDIN_SELECTED, sections::STDIN_ORDERING).into();
+            properties["control"]["description"] = control_description_for(false).into();
+            properties["timeout_ms"]["description"] = sections::TIMEOUT_SELECTED.into();
+            requirements::configure(properties, self.languages, self.builtin);
+        }
     }
 }
 
 // Schemars uses the same named sections for the ordinary field metadata.
 // SQL-only sections are omitted on Windows at construction, never removed by prose matching.
 pub(super) fn r_description() -> String {
+    r_description_for(Languages::all())
+}
+
+fn r_description_for(languages: Languages) -> String {
     let mut description = sections::R_RUNTIME.to_string();
-    if !cfg!(windows) {
+    if languages.python {
+        description.push_str(sections::R_BRIDGE);
+    }
+    if languages.sql {
         description.push_str(sections::R_SQL);
     }
     description.push_str(sections::R_PLOTS);
@@ -224,15 +266,70 @@ pub(super) fn r_description() -> String {
 }
 
 pub(super) fn python_description() -> String {
+    python_description_for(Languages::all())
+}
+
+fn python_description_for(languages: Languages) -> String {
     let mut description = sections::PYTHON_RUNTIME.to_string();
-    if !cfg!(windows) {
+    if languages.r {
+        description.push_str(sections::PYTHON_BRIDGE);
+    }
+    if languages.sql {
         description.push_str(sections::PYTHON_SQL);
+        if languages.r {
+            description.push_str(sections::PYTHON_SQL_R);
+            description.push_str(sections::PYTHON_SQL_CONNECTION);
+        } else {
+            description.push_str(sections::PYTHON_SQL_CONNECTION_SELECTED);
+        }
     }
     description.push_str(sections::PYTHON_PLOTS);
+    if languages.r {
+        description.push_str(sections::PYTHON_R_PLOTS);
+    }
+    description.push_str(sections::PYTHON_END);
+    description
+}
+
+pub(super) fn sql_description() -> String {
+    sql_description_for(Languages::all())
+}
+
+fn sql_description_for(languages: Languages) -> String {
+    let mut description = sections::SQL_RUNTIME.to_string();
+    if languages.r {
+        description.push_str(sections::SQL_R_FRAMES);
+    }
+    if languages.r && languages.python {
+        description.push_str(sections::SQL_DRIVERS);
+    } else {
+        if languages.r {
+            description.push_str(sections::SQL_R_DRIVER);
+        }
+        if languages.python {
+            description.push_str(sections::SQL_PYTHON_DRIVER);
+        }
+        description.push_str(sections::SQL_DIALECT);
+    }
+    if languages.r {
+        description.push_str(sections::SQL_R_STATEMENTS);
+    }
+    if languages.python {
+        description.push_str(if languages.r {
+            sections::SQL_PYTHON_FRAMES
+        } else {
+            sections::SQL_PYTHON_FRAMES_SELECTED
+        });
+    }
+    description.push_str(sections::SQL_OPERATIONS);
     description
 }
 
 pub(super) fn control_description() -> String {
+    control_description_for(true)
+}
+
+fn control_description_for(full: bool) -> String {
     let interrupt = if cfg!(windows) {
         sections::WINDOWS_INTERRUPT
     } else {
@@ -241,30 +338,15 @@ pub(super) fn control_description() -> String {
     format!(
         "{}{interrupt}{}",
         sections::CONTROL_START,
-        sections::CONTROL_END
+        if full {
+            sections::CONTROL_END
+        } else {
+            sections::CONTROL_END_SELECTED
+        }
     )
 }
 
-fn description_for_launch(
-    policy: &SandboxSettings,
-    no_sandbox: bool,
-    target: Option<&Target>,
-) -> String {
-    let kind = target.map(|target| match &target.compute {
-        Compute::Host {} => "host",
-        Compute::Docker(_) => "docker",
-        Compute::DockerSandbox(_) => "docker_sandbox",
-    });
-    // SBX only accepts compute enforcement; settings validation rejects other providers.
-    let remote = target.is_some_and(|target| {
-        !target.is_local_host() && matches!(target.compute, Compute::Host {})
-    });
-
-    let files = match kind {
-        Some("docker") => "container files",
-        Some("docker_sandbox") => "VM files",
-        _ => "host files",
-    };
+fn description_for_launch(policy: &SandboxSettings, no_sandbox: bool) -> String {
     let profile = policy.get("extends").and_then(serde_json::Value::as_str);
     let filesystem = policy
         .get("filesystem")
@@ -295,10 +377,10 @@ fn description_for_launch(
             "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
         ),
         Some("restricted") if profile == Some(":read-only") => format!(
-            "uses the native \":read-only\" profile: it can read {files} subject to configured read restrictions, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}"
+            "uses the native \":read-only\" profile: it can read host files subject to configured read restrictions, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}"
         ),
         Some("restricted") => format!(
-            "can read {files}, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
+            "can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
         ),
         Some("unrestricted") => {
             format!("has unrestricted filesystem access and {network_access}")
@@ -308,39 +390,15 @@ fn description_for_launch(
         ),
     };
 
-    let mut description = match kind {
-        Some("docker_sandbox") => "Evaluated code runs inside a Console-owned Docker Sandbox microVM, enforced by Docker Sandboxes and its current inherited machine/organization policy and host integrations. Both relay and worker run in the VM. Native filesystem, network, proxy, and metadata defaults do not apply. Writable shares can expose .git, .agents, and controller records. Provider rules can change during the session. --no-sandbox retains the microVM and cannot bypass Docker policy.".to_string(),
-        Some("docker") if no_sandbox => "Evaluated code runs inside an owned Docker container without an inner native sandbox. Docker bind access, namespaces, bridge networking, and container retirement still apply.".to_string(),
-        _ if no_sandbox => format!("Evaluated code runs without a sandbox, with {} permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.", if remote { "the remote account's" } else { "the server's" }),
-        _ if remote => format!("Evaluated code {sandbox_access}. Dependency resolution, when available, runs outside the worker sandbox with the remote account's host permissions and may execute installation or build code; use only trusted dependencies."),
-        _ => format!("Evaluated code {sandbox_access}. Dependency resolution, when available, uses a separate native resolver sandbox on macOS and Linux with configurable host reads, cache writes, and proxy destinations. Installation or build code may run there; use only trusted dependencies."),
-    };
-    if let Some(target) = target {
-        // Only explicit placement fields belong in presentation, never discovered identities
-        // or the command/environment/policy payload used to launch the target.
-        if remote {
-            let host = target.host();
-            description.push_str(&format!("\n\nConfigured SSH host: {host:?}. "));
-        } else {
-            description.push_str("\n\nConfigured local transport. ");
-        }
-        if !target.is_local_host() {
-            description.push_str(&format!(
-                "Configured execution workspace: {:?}. ",
-                target.workspace
-            ));
-        }
-        match kind {
-            Some("docker" | "docker_sandbox") => {
-                let (identity, storage) = if kind == Some("docker_sandbox") { ("template", "VM") } else { ("image", "container") };
-                description.push_str(&format!("Startup captures an immutable {identity} identity and runtime selection for subsequent generations. Use preinstalled runtime packages; dynamic package preparation is disabled even if ir or uv is installed. Records, output spools, and returned images are written by the controller beneath its existing project .agents/console directory or its Console home directory; declared shares can expose them to the worker. Restart discards files stored only in the {storage} and preserves shared files. Quarto exports execute recorded cells when rendered; prepare the target environment and files first."));
-                if kind == Some("docker") {
-                    description.push_str(" Docker uses ordinary bridge networking. Without a proxy, external-sandbox delegates filesystem and network enforcement to Docker: native filesystem entries and network: restricted add no restrictions in that mode.");
-                }
-            }
-            _ if remote => description.push_str("Dependency capability is discovered there. When available, managed defaults and requested R, Python, and DuckDB dependencies are prepared outside the worker sandbox with the remote account's trusted setup permissions; bare runtimes require preinstalled packages. Records and returned images are saved on the controller beneath its existing project .agents/console directory or its Console home directory. Files created by code remain remote. The source-only Quarto export does not reproduce the remote filesystem."),
-            _ => {},
-        }
+    if no_sandbox {
+        "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.".into()
+    } else {
+        format!(
+            "Evaluated code {sandbox_access}. Dependency resolution, when available, uses a separate native resolver sandbox on macOS and Linux with configurable host reads, cache writes, and proxy destinations. Installation or build code may run there; use only trusted dependencies."
+        )
     }
-    description
+}
+
+pub(super) fn stdin_description() -> String {
+    format!("{}{}", sections::STDIN_START, sections::STDIN_ORDERING)
 }

@@ -86,15 +86,25 @@ pub(crate) fn configure(
     if let Value::Object(filesystem) = filesystem
         && !filesystem.contains_key("entries")
     {
-        filesystem.insert(
-            "entries".into(),
-            json!([
-                {"path": {"type": "special", "value": {"kind": "root"}}, "access": "read"},
-                {"path": {"type": "path", "path": path("")?}, "access": "write"},
-            ]),
-        );
+        let mut entries = vec![json!({
+            "path": {"type": "special", "value": {"kind": "root"}}, "access": "read"
+        })];
+        entries.extend(writable_cache_entries(&root)?);
+        filesystem.insert("entries".into(), entries.into());
     }
     Ok(())
+}
+
+pub(super) fn writable_cache_entries(root: &std::path::Path) -> Result<Vec<Value>, String> {
+    // Trusted preparation owns complete cache contents, including Git checkouts.
+    // Workspace metadata defaults must not create masks in shared package caches.
+    std::iter::once(root.to_path_buf())
+        .chain([".git", ".agents", ".codex"].map(|name| root.join(name)))
+        .map(|path| {
+            let path = path.to_str().ok_or("resolver policy paths must be UTF-8")?;
+            Ok(json!({"path": {"type": "path", "path": path}, "access": "write"}))
+        })
+        .collect()
 }
 
 fn console_root(settings: &SandboxSettings) -> Result<PathBuf, String> {
@@ -192,7 +202,13 @@ pub(crate) fn writable_roots(settings: &SandboxSettings) -> Result<Vec<PathBuf>,
         // tools::R_user_dir appends R/<package> even to R_USER_CACHE_DIR.
         r_cache.join("R/reticulate"),
         duckdb_extension_directory(settings)?.expect("absolute resolver HOME"),
-        env("MPLCONFIGDIR").unwrap_or_else(|| xdg_cache.join("matplotlib")),
+        env("MPLCONFIGDIR").unwrap_or_else(|| {
+            if cfg!(target_os = "macos") {
+                home.join(".matplotlib")
+            } else {
+                xdg_cache.join("matplotlib")
+            }
+        }),
         env("RENV_PATHS_ROOT").unwrap_or_else(|| r_cache.join("R/renv")),
         r_cache.join("R/pkgcache"),
     ];

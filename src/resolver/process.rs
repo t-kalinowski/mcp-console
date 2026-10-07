@@ -33,6 +33,11 @@ pub(crate) trait ResolverControl: Send + Sync {
     fn interrupt(&self) -> Result<bool, String>;
     fn control_outcome(&self) -> Option<super::ResolverControlOutcome>;
     fn cleanup_confirmed(&self) -> bool;
+    /// Setup consumers must retain an independent operation failure even when
+    /// a control and confirmed cleanup accompanied it.
+    fn failure_is_controlled(&self) -> bool {
+        self.control_outcome().is_some()
+    }
 }
 
 impl ResolverStopHandle {
@@ -50,6 +55,9 @@ impl ResolverStopHandle {
     }
     pub(crate) fn cleanup_confirmed(&self) -> bool {
         self.0.cleanup_confirmed()
+    }
+    pub(crate) fn failure_is_controlled(&self) -> bool {
+        self.0.failure_is_controlled()
     }
 }
 
@@ -332,7 +340,7 @@ struct Endpoints {
 }
 
 /// Evidence only for this materializer's native process scope and owned tasks;
-/// it says nothing about preparation transport or outer compute retirement.
+/// it says nothing about preparation transport or worker retirement.
 struct ResolverRetirement {
     process: Result<ExitStatus, String>,
     observation: Result<Option<String>, String>,

@@ -7,15 +7,18 @@ Reticulate provides interoperability when both runtimes and the bridge are avail
 
 Managed R and Python dependencies use the shared hidden `resolve` subcommand, with `ir` and `uv` materializing the environments on the host.
 SQL remains deferred; Windows defaults do not prepare DuckDB extensions.
-Windows SSH/Docker/Docker Sandbox controllers remain unsupported.
 The release workflow does not publish Windows wheels; Windows source checkouts can build and install a local wheel.
 
 ## Build and run
 
 Install Rust's MSVC toolchain, Visual Studio's C++ build tools and Windows SDK, Python 3.11 or newer, and uv.
 For R execution, install current x64 R and set `R_HOME` to its installation directory (or place R on `PATH`).
+PATH discovery supports `R.exe`, `R.bat`, and `R.cmd`, including rig's batch launcher.
+It searches directories in PATH order, preferring `.exe`, then `.bat`, then `.cmd` within each directory.
+An explicit `R_HOME` takes precedence; a broken selected installation or launcher reports an error.
 R is not required to build or run Python-only sessions.
 Windows builds stage the pinned native sandbox executable and both Windows helpers.
+Installed wheels expose an environment-bound Python launcher so `uv tool install` can copy the command onto PATH while the native executable and verified helpers remain together under the tool environment's `libexec` directory.
 Install CMake for the companion build.
 Cargo-only builds first need `python scripts/stage-sandbox-runner`.
 
@@ -54,20 +57,27 @@ Recording follows the shared [recording directory discovery](RECORDING.md), incl
 
 `mcp-console sandbox-setup` explicitly provisions the Console sandbox accounts and network rules through Windows UAC.
 Run it interactively, then use `mcp-console sandbox-setup --status` to check readiness.
+The current runner requires setup version 6; older provisioning needs an approved setup refresh before elevated execution.
 Ordinary sandbox launches fail with setup guidance if provisioning is missing; they do not silently retry unsandboxed or choose a weaker backend.
+The native diagnostic names `mcp-console-sandbox setup`; installed Console users run its public equivalent, `mcp-console sandbox-setup`, with the same state directory.
 Setup uses Console accounts, separate from Codex accounts.
 Persistent state defaults to `%LOCALAPPDATA%\mcp-console`.
+Help and successful setup output describe the resources setup creates or reuses: the local accounts `McpConsoleSandboxOff` (restricted networking) and `McpConsoleSandboxOn` (network enabled), the `ConsoleSandboxUsers` security group, account-scoped Windows Firewall rules and WFP loopback filters, and protected state directories.
+Within the state directory, `.sandbox` holds setup records, `.sandbox-secrets` holds encrypted credentials, and `.sandbox-bin` stores helpers with sandbox read/execute access.
+An up-to-date setup is reused without changes; this summary describes provisioning resources, not a fresh audit of firewall policy.
+`--status` retains its read-only JSON readiness report.
 
 The default elevated backend enforces restricted networking and filesystem writes.
 `:workspace`, `:read-only`, and `--writable-root` use native policy composition.
 Private storage is exported through `TMPDIR`, `TEMP`, and `TMP`.
 Standalone execution uses the same bundle: `mcp-console sandbox -- python script.py`.
 
-For explicitly network-enabled workloads, the restricted-token backend avoids account provisioning:
+For explicitly network-enabled workloads, the unelevated backend avoids account provisioning.
+Use `unelevated` in place of `restricted-token` in existing configuration:
 
 ```yaml
 sandbox:
-  windows_sandbox_level: restricted-token
+  windows_sandbox_level: unelevated
   network: enabled
 ```
 
@@ -92,7 +102,9 @@ The public MCP messages, server-relay JSONL, and worker sideband message shapes 
 R and Python interrupts are cooperative and preserve state when handled; a native call that does not check for interruption may require `restart`.
 The worker updates interpreter pending state and invokes the C runtime's current SIGINT handler without requiring a console window.
 Its idle command wait also wakes for interrupts and consumes them before dispatching a following cell, including an interrupt and cell supplied in the same `send`.
-The Windows worker does not service R's background event loop while waiting between cells; idle callbacks such as `later` are unsupported.
+After R initializes, the idle wait also wakes for Windows messages and services R's background event loop, including `later` timers, on the interpreter thread.
+The wait retires pending pipe I/O and releases the command-reader lock before dispatching callbacks, so callback input and resolver requests can use the same sideband.
+Incomplete command frames survive message and interrupt wakeups.
 
 Resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code.
 Cancellation and resolver interruption terminate the Job, and results are accepted only after the Job has no active processes.
@@ -125,11 +137,12 @@ It also includes `tests/windows_resolver.py`, covering the resolver protocol, ir
 Run native commands exclusively in a checkout.
 The default workflow runs native Windows acceptance.
 The full workflow also discovers and runs the shared boundary cases whose declared capabilities are available.
+The transcript supervisor merges private per-case timing logs after process completion, serializing Windows append writes so parallel cases cannot overwrite records.
+Installation checks additionally exercise the copied public command from an isolated `uv tool install`, including sandbox setup inspection, worker state/restart, stdio, and full-width exit status.
 The `.cmd` launchers work in PowerShell and Command Prompt; `python scripts/COMMAND` is an equivalent entry point using an explicitly selected Python.
 Python 3.11 or newer is required; CI uses Python 3.13.
 
 Configure `R_HOME` before running the complete suite, and use the C locale to match CI.
-If `R` on PATH is a `.bat` or `.cmd` launcher, preflight can probe it successfully while Console's native `R.exe` discovery still treats R as absent.
 An explicit `R_HOME` selects the installation for runtime and resolver tests and enables R sandbox acceptance.
 Replace the example path below with the installed R directory.
 
@@ -150,7 +163,7 @@ scripts/with-checkout.cmd cargo build
 scripts/review-diff.cmd origin/main
 ```
 
-`preflight` is read-only; its Windows inventory currently skips companion inspection and unsupported controller capabilities.
+`preflight` is read-only; its Windows inventory currently skips companion inspection.
 Stage the Windows companion with `scripts/stage-sandbox-runner.cmd` before native build, test, or check commands; packaging stages it automatically.
 R is optional in its inventory so Python-only setups can be inspected; the complete acceptance suite needs both runtimes.
 Failed optional R probes remain visible in the inventory without failing preflight; required tool and probe failures still fail it.
@@ -165,24 +178,50 @@ Install those formatters separately; missing tools and host policy blocks are re
 
 ### Testing parity and remaining gaps
 
+Native input/interrupt acceptance uses the public `waiting for stdin` receipt before providing input, then observes loop output before interrupting.
+It requires no networking or host-to-sandbox fixture access.
+The same scenario runs directly and with an explicitly network-enabled restricted token in `WindowsSandbox.test_restricted_token_input_and_interrupt`.
+To run it against an already-provisioned elevated, network-restricted backend, set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to its absolute state directory and run `WindowsSandbox.test_provisioned_network_restricted_input_and_interrupt`.
+The test never provisions accounts or chooses another backend.
+Without that opt-in directory, it reports unavailable coverage; a skip does not establish network-restricted compatibility.
+Windows CI builds the staged Console and runs `python scripts/prepare-windows-tests` before the full gate.
+GitHub-hosted Windows runners [run as administrators with UAC disabled](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges), so setup can provision their sandbox without an interactive elevation prompt.
+Preparation provisions the runner's sandbox state when needed, verifies setup readiness, and exports both `R_HOME` and `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to subsequent steps.
+Hosted Console and runtime installations can live outside the native backend's standard read roots.
+CI passes those asset directories to preparation with repeated `--read-root` arguments, which grant read/execute ACLs to the verified Console sandbox accounts before exporting the test environment.
+This is a trusted host preparation operation requiring permission to update the selected directories; local callers can omit these grants when their installations are already readable.
+The full gate therefore includes the provisioned elevated test in both checkout and installed-wheel acceptance.
+Local validation uses the same test: inspect `mcp-console sandbox-setup --status`, then set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to its reported state directory before running `scripts/check.cmd` or `scripts/check.cmd --full`.
+The private-installation regression uses preparation's `--require-configured` mode so an unavailable setup fails without provisioning accounts.
+Provision an unconfigured local machine explicitly with `mcp-console sandbox-setup`; the acceptance tests themselves do not provision it.
+
+Inspection, resolver, raw relay, and inherited-writer fixture checkpoints use unique local named pipes with ordinary host ACLs and non-inheritable handles.
+Their readiness and release operations have bounded deadlines; cancellation joins pending native I/O before releasing its storage.
+The host pins process identities before release or cancellation.
+These are host-plumbing tests, not sandbox-enforcement evidence.
+`WindowsSandbox.test_network_enabled_allows_loopback_exchange` explicitly tests positive loopback communication with networking enabled.
+The provisioned backend's loopback restriction still needs separate acceptance against its established policy contract; unelevated tests do not imply loopback denial.
+
 Shared discovery reports unavailable capabilities per case and execution mode; a skip is not validation.
 Windows full checks exercise portable R/Python execution, startup, bridge attachment, input, plots, managed activation, process creation, recording, CLI configuration, and protocol behavior in addition to native acceptance.
 The shared Windows pipe reader uses blocking native reads with socket notifications.
 Each shared case runs in a kill-on-close Job; cancellation gives the case 15 seconds to run cleanup, then requires confirmed descendant retirement before deleting its workspace.
 Owner-loss cleanup remains independent of the case interpreter, including native calls holding Python's GIL.
-Idle R callbacks remain a runtime parity gap: Windows command waiting does not integrate R's polled-event hooks.
-Those cases declare `R_EVENT_LOOP`; Unix FIFO input-handler fixtures declare `POSIX`.
+Portable idle R callback cases declare `R_EVENT_LOOP` and run on Windows; Unix FIFO input-handler fixtures retain `POSIX`.
+Windows `later` uses window messages and timers rather than Unix polled-event hooks.
+Native acceptance also exercises callback input, plots, interruption, and shared R/Python state directly and with a restricted token, and preserves incomplete UTF-8 commands across timer dispatch.
 Shared interpreter-identity cases launch native `R.exe` and `Rscript.exe` and compare resource paths by filesystem identity, since the stock Windows launcher may shorten `R_HOME` to an 8.3 path.
 The native child-launch fixture uses ASCII arguments because the stock `R.exe` delegates through an ANSI command line; shared cell tests separately exercise Unicode R input.
 
 | Exclusion                                                                                                                  | Assessment and Windows coverage                                                                                                                                                                                                                                                     |
 | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SQL and SSH/Docker/SBX controllers                                                                                         | Runtime features are deferred; cases declare those capabilities rather than failing while launching an unavailable runtime.                                                                                                                                                         |
+| SQL                                                                                                                        | Runtime features are deferred; cases declare those capabilities rather than failing while launching an unavailable runtime.                                                                                                                                                         |
 | Seatbelt/bubblewrap policy, ELF interposition, procfs, Unix signals, PTYs, descriptor inheritance, and non-UTF-8 filenames | OS-specific contracts and fixtures remain on their owning platforms. Native Windows policy, relay, input, cancellation, and Job retirement have separate acceptance cases. The shared `sandbox` capability refers to Unix fixtures, not absence of a Windows sandbox.               |
 | Shell/shebang fake workers and resolvers, FIFO checkpoints, Unix virtualenv or R-library layouts                           | Remaining fixture debt for otherwise supported behavior. These cases declare `POSIX`; Windows native tests cover some corresponding contracts, but do not replace every skipped admission, SDK, resolver, and lifecycle scenario. Port the fixture before removing its requirement. |
 | Unix staging/release executable fixtures and Rust Unix descriptor fixtures                                                 | Keep the native ABI/build requirements. Windows checkout ownership, packaging, and installation are exercised through the native workflow; portable release-manifest, client, and runner checks run on both platforms.                                                              |
 
-Handshakes, CLI usage, and early explicit-selection failures retain Windows snapshots where public behavior differs.
+Handshakes, CLI usage, early explicit-selection failures, and background Python stdout retain Windows snapshots where public behavior differs.
+Background Python threads use their original stdout stream and its CRLF line endings on Windows.
 Generic snapshots remain the Unix references; platform updates preserve both and remove only obsolete companions owned by the updated case.
 Use `test --full --list` and capability skip diagnostics to audit current coverage instead of treating native acceptance alone as parity.
 
@@ -196,6 +235,7 @@ The acceptance interpreter needs `packaging` and `matplotlib`; R needs `reticula
 Resolver acceptance also needs uv and package repository access.
 Full checks include shared plotting and R resolver cases that require `ir` 0.4.0 or later on PATH; install it with `uv tool install r-lib-ir`, as CI does.
 For installed-wheel acceptance, set `MCP_CONSOLE_TEST_BINARY` to the installed `mcp-console.exe` and run the same tests.
+When selecting a copied tool command outside its environment, also set `MCP_CONSOLE_TEST_NATIVE_BINARY` to that environment's `libexec/mcp-console.exe` for fixtures that require the native PID or relocate its bundle.
 Tests use `rustc` to build small process fixtures.
 R source validation finds `Rscript.exe` under `R_HOME` (including `bin/x64`) or on `PATH`, and uses `LC_ALL=C` for the syntax checker.
 

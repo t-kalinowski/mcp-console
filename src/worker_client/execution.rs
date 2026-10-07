@@ -51,7 +51,7 @@ impl Client {
         }
         self.ensure_evaluation_admission(&generation, control)?;
         let startup = self.reserve_worker_startup(&generation)?;
-        let idle_prelude = self.0.output.take_prelude();
+        let (idle_prelude, worker_revision) = self.0.output.take_admission_prelude();
         let evaluation = Arc::new(Evaluation::new(
             transcript,
             call_id,
@@ -59,6 +59,7 @@ impl Client {
             control_prelude.take().unwrap_or_default(),
             idle_prelude,
             control.is_some(),
+            worker_revision,
         ));
         let wait_claim = evaluation
             .claim()
@@ -345,9 +346,9 @@ impl Client {
             #[cfg(any(unix, windows))]
             if let Some(preparation) = &*self
                 .0
-                .local_preparation
+                .resolver_preparation
                 .lock()
-                .map_err(|_| "local preparation lock poisoned".to_string())?
+                .map_err(|_| "preparation lock poisoned".to_string())?
             {
                 preparation.check_ready()?;
             }
@@ -388,7 +389,6 @@ impl Client {
                     .as_ref()
                     .is_some_and(|environment| !environment.custom_worker),
                 languages: self.0.languages,
-                target: self.0.target.as_ref(),
                 local_runtime: environment
                     .as_ref()
                     .and_then(|environment| environment.local_runtime.as_ref()),

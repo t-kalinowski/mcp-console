@@ -12,6 +12,7 @@ from boundaries.client_server._harness import (
     submit_prompted_stdin,
     wait_for_marker,
 )
+from support.progress import without_elapsed_result
 from support.assertions import last_tool_text
 from support.checkpoints import release_fixture_checkpoint
 from support.client import McpClient
@@ -61,7 +62,7 @@ zod: echo
                 client,
             )
             client.receive(timed_out)
-            assert timed_out["result"] == {
+            assert without_elapsed_result(timed_out["result"]) == {
                 "content": [
                     {
                         "type": "text",
@@ -83,7 +84,7 @@ zod: echo
                 client,
             )
             client.send(timeout_ms=0)
-            assert client.transcript[-1]["result"] == {
+            assert without_elapsed_result(client.transcript[-1]["result"]) == {
                 "content": [
                     {
                         "type": "text",

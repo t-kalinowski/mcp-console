@@ -12,17 +12,17 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8095
+        text_bytes: 8080
         concat:
           - |
             notice head
           - repeat: x
-            count: 3892
+            count: 3956
           - |
 
-            [output preview: omitted 12286 rendered UTF-8 bytes; 69 generated notice bytes not retained; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 20025 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 12158 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000001.log; 69 generated notice bytes unavailable]
           - repeat: y
-            count: 3891
+            count: 3955
           - |
 
             notice tail

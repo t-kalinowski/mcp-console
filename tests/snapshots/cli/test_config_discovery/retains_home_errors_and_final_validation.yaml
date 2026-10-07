@@ -25,15 +25,15 @@ command: serve
 home: invalid
 stderr: >
   <root>/console-home/config.yaml: unknown: unknown field `unknown`,
-  expected one of `cache`, `python`, `extends`, `sandbox`, `resolver`,
-  `target`
+  expected one of `cache`, `python`, `languages`, `extends`, `sandbox`,
+  `resolver`
 ---
 command: sandbox
 home: invalid
 stderr: >
   <root>/console-home/config.yaml: unknown: unknown field `unknown`,
-  expected one of `cache`, `python`, `extends`, `sandbox`, `resolver`,
-  `target`
+  expected one of `cache`, `python`, `languages`, `extends`, `sandbox`,
+  `resolver`
 ---
 command: serve
 home: invalid override

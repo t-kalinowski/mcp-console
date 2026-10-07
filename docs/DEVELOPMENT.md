@@ -15,7 +15,6 @@ Shared workflow helpers and the packaging backend live under `scripts/`; `pyproj
 
 `scripts/preflight` inventories tools, runtimes, companion staging, and caches; `--json` produces structured output.
 It does not install or build.
-Optional provider probes may contact configured services.
 Missing optional capabilities are skips; required probe failures fail the command.
 Success is an inventory result, not proof that the project builds.
 
@@ -107,14 +106,7 @@ scripts/check
 ```
 
 Use preflight's capability results and [Linux compatibility](LINUX_COMPATIBILITY.md) to diagnose namespace or native-sandbox failures.
-For an MCP client on Windows, launch the built server through WSL using its Linux workspace and environment; for example, from PowerShell:
-
-```powershell
-wsl -d Ubuntu-26.04 --cd /home/USER/src/mcp-console --exec bash -lc 'source .dev-workflow/python-dev/bin/activate && exec target/release/mcp-console serve'
-```
-
-Replace the distro, user, and workspace path for the session.
-`serve` expects MCP protocol input over stdio.
+For Console sessions in WSL, run the MCP client and Console together in that distro, with the client's shell and filesystem tools using the same Linux workspace.
 
 ## Validation ladder
 
@@ -141,7 +133,7 @@ On Windows, it uses the previously staged companion, performs the same source an
 
 The full gate adds platform-applicable repository-tooling self-tests, all capability-applicable acceptance cases, and source/wheel installation checks.
 Windows also runs portable transcript-runner, MCP-client, and release-manifest regressions.
-Unix provider and release-staging fixtures retain their declared platform requirements.
+Unix release-staging fixtures retain their declared platform requirements.
 Installation checks run last because Unix checks temporarily replace the application `target` directory.
 Windows builds a wheel and exercises wheel and source installs in a temporary virtualenv without installing into the caller's Python environment.
 CI runs the full profiles and is the comprehensive merge gate.
@@ -160,13 +152,13 @@ Focused updates preserve unselected snapshots.
 
 Set `MCP_CONSOLE_TEST_BINARY` to an absolute installed executable to skip the checkout build for transcripts; sandboxed cases still need its companion bundle.
 Use `--jobs N` and `--timeout SECONDS` to control case concurrency and deadlines.
-The default concurrency is twice the logical CPU count, with a minimum of four cases; Windows caps this default at six.
+The default concurrency is the logical CPU count minus one, with a minimum of one case; Windows caps this default at six.
 
 ## Find the public test
 
 Start at the outermost boundary that observes the change.
 Use `--full --list`, `--locate`, and scoped source searches rather than maintaining a second inventory of tests.
-Runtime, output, recording, provider, and private-protocol cases live under their corresponding boundary subjects.
+Runtime, output, recording, and private-protocol cases live under their corresponding boundary subjects.
 [Authoring](../tests/boundaries/AUTHORING.md) covers embedded programs and causal lifecycle fixtures.
 
 ## Review boundary

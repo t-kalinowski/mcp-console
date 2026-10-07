@@ -9,7 +9,6 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from support.snapshots import platform_snapshots
 from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
@@ -30,10 +29,7 @@ def configure(workspace: Path, value: object) -> None:
 def test_ignores_yaml_tags_recursively(binary: Path) -> Transcript:
     yaml = code("""
         !configuration
-        !key target: !target
-          transport: !transport {kind: !kind local}
-          compute: !compute {kind: !kind host}
-          command: !command null
+        !key cache: !cache host
         sandbox: !policy
           environment: !environment {LABEL: !text tagged}
           filesystem: !filesystem {entries: !entries []}
@@ -222,7 +218,7 @@ def test_inline_strings_and_objects_without_project_file(binary: Path) -> Transc
 def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        configure(workspace, {"sandbox": False, "target": ["invalid"]})
+        configure(workspace, {"sandbox": False, "python": ["invalid"]})
         overrides = (
             "-c",
             "sandbox.environment.KEEP=first",
@@ -231,7 +227,7 @@ def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
             "-c",
             "sandbox.environment={FINAL: last}",
             "-c",
-            "target=null",
+            "python=null",
         )
         with McpClient(
             binary,
@@ -243,7 +239,7 @@ def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
             assert stderr == "", stderr
         assert json.loads((workspace / CONFIG).read_text()) == {
             "sandbox": False,
-            "target": ["invalid"],
+            "python": ["invalid"],
         }
     return [{"overrides": list(overrides), "initialized": True}]
 
@@ -481,13 +477,12 @@ def test_python_home_expansion_requires_absolute_home(binary: Path) -> Transcrip
     return records
 
 
-@platform_snapshots("win32")
 def test_validates_effective_configuration(binary: Path) -> Transcript:
     cases = (
         ("extends=true", "boolean"),
         ("extends=42", "integer"),
         ("extends=1.5", "floating point"),
-        ("target.command=[far, faz]", "local host target"),
+        ("target.command=[far, faz]", "unknown field"),
         ("unknown={baz: [far, faz]}", "unknown field"),
     )
     records = []

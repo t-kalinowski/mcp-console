@@ -46,6 +46,7 @@ result:
               "DBI",
               "arrow",
               "duckdb",
+              "ggplot2",
               "later",
               "nanoarrow",
               "reticulate",
@@ -54,7 +55,9 @@ result:
             ],
             "python": [
               "numpy",
-              "pandas"
+              "pandas",
+              "matplotlib",
+              "plotnine"
             ],
             "duckdb": [
               "icu",
@@ -86,6 +89,7 @@ result:
         - DBI
         - arrow
         - duckdb
+        - ggplot2
         - later
         - nanoarrow
         - reticulate
@@ -94,6 +98,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
       duckdb:
         - icu
         - json
@@ -183,6 +189,7 @@ result:
               "DBI",
               "arrow",
               "duckdb",
+              "ggplot2",
               "later",
               "nanoarrow",
               "reticulate",
@@ -191,7 +198,9 @@ result:
             ],
             "python": [
               "numpy",
-              "pandas"
+              "pandas",
+              "matplotlib",
+              "plotnine"
             ],
             "duckdb": [
               "icu",
@@ -223,6 +232,7 @@ result:
         - DBI
         - arrow
         - duckdb
+        - ggplot2
         - later
         - nanoarrow
         - reticulate
@@ -231,6 +241,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
       duckdb:
         - icu
         - json

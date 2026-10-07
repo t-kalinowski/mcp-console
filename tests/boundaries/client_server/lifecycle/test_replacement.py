@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import large_output, last_tool_text
 from support.checkpoints import (
     FifoCheckpoint,
@@ -89,7 +90,7 @@ def test_reports_replacement_startup_failure_and_retry(
         )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), *writable_root),
+            execution.serve("-c", "cache=host", "--worker", str(zod), *writable_root),
             environment,
         )
         client.initialize_and_list_tools()
@@ -169,7 +170,7 @@ def test_polls_replacement_startup_after_send_timeout(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
         )
         forced_release = threading.Event()
@@ -292,7 +293,10 @@ def test_orders_explicit_restart_output(
         client.initialize_and_list_tools()
 
         client.send(r="wait for stdin close", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         wait_for_marker(
             temporary_path,
             "zod-waiting-for-stdin-close",
@@ -412,6 +416,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["TMPDIR"] = temporary_directory
+        environment["UV_TOOL_DIR"] = str(temporary_path)
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
         environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
@@ -424,7 +429,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), *writable_root),
+            execution.serve("-c", "cache=host", "--worker", str(zod), *writable_root),
             environment,
         )
         finished = False
@@ -502,6 +507,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["TMPDIR"] = temporary_directory
+        environment["UV_TOOL_DIR"] = str(temporary_path)
         environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
         environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
@@ -513,7 +519,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
 
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
         )
         finished = False
@@ -540,7 +546,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
                     "control-only interrupt waited for explicit preparation to settle"
                 )
                 client.receive(interrupt)
-                assert interrupt["result"] == {
+                assert without_elapsed_result(interrupt["result"]) == {
                     "content": [
                         {
                             "type": "text",
@@ -614,7 +620,10 @@ def test_restart_preserves_pending_sideband_output(
         client.initialize_and_list_tools()
 
         client.send(r="emit output and image before completion", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         image_started = wait_for_marker(
             temporary_path,
             "zod-image-evaluation-started",
@@ -663,7 +672,10 @@ def test_restart_preserves_unpolled_completion(
         client.initialize_and_list_tools()
 
         client.send(r="complete before restart checkpoint", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         wait_for_marker(
             temporary_path,
             "zod-completion-processed",

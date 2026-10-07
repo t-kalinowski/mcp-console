@@ -4,12 +4,15 @@ Run with `uv run --no-project tests/windows.py` after `cargo build`.
 """
 
 import ctypes
+import base64
+import csv
 from contextlib import ExitStack
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
 from queue import Queue
-import socket
 import shutil
 import subprocess
 import sys
@@ -18,6 +21,12 @@ import time
 from threading import Thread
 from textwrap import dedent
 import unittest
+import zipfile
+
+from windows_gate import Gate
+from support.checkpoints import wait_for_path
+from support.installation import native_console
+from support.normalization import code
 
 from windows_cargo import WindowsCargo  # noqa: F401 -- include build acceptance
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
@@ -32,6 +41,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
     os.environ.get("MCP_CONSOLE_TEST_BINARY", ROOT / "target/debug/mcp-console.exe")
 )
+NATIVE_BINARY = native_console(BINARY)
 
 
 class Session:
@@ -220,6 +230,104 @@ class Session:
             self.directory.cleanup()
 
 
+def exercise_input_and_interrupt(session: Session) -> None:
+    """The same public, network-independent scenario for every Windows backend."""
+    result = session.expect(
+        "waiting for stdin",
+        # fmt: r
+        r=dedent("""
+            answer <- readline("Name: ")
+            answer
+            """),
+    )
+    assert "waiting for stdin" in json.dumps(result), result
+    result = session.expect("Windows", stdin="Windows\n")
+    assert "Windows" in json.dumps(result), result
+    result = session.expect(
+        "Loop ready", r='saved <- 42; cat("Loop ready\\n"); repeat {}'
+    )
+    assert "running" in json.dumps(result), result
+    result = session.send(control="interrupt")
+    assert "running;" not in json.dumps(result), result
+    result = session.send(r="saved")
+    assert "42" in json.dumps(result), result
+
+
+def exercise_later_callbacks(session: Session) -> None:
+    """Observe idle timer input, graphics, interruption, and R/Python state."""
+    result = session.send(requirements={"r": ["later"]})
+    assert not result.get("isError"), result
+    # fmt: r
+    r = code(r"""
+        callback_answer <- tempfile("later-answer-")
+        callback_complete <- tempfile("later-complete-")
+        run_callback <- function() {
+          if (!file.exists("later-gate")) {
+            later::later(run_callback, delay = 0.01)
+            return(invisible(NULL))
+          }
+          idle_answer <<- readline("later> ")
+          plot(1:3)
+          tryCatch(
+            {
+              stopifnot(file.create(callback_answer))
+              repeat {
+                Sys.sleep(1)
+              }
+            },
+            interrupt = function(condition) cat("idle callback interrupted\n")
+          )
+          stopifnot(file.create(callback_complete))
+        }
+        later::later(run_callback, delay = 0.01)
+        cat(callback_answer, callback_complete, sep = "\n")
+        """)
+    result = session.send(r=r)
+    assert not result.get("isError"), result
+    paths = result["content"][0]["text"].splitlines()
+    assert len(paths) == 2, result
+    answer_path, complete_path = map(Path, paths)
+    root = Path(session.directory.name)
+    (root / "later-gate").touch()
+    deadline = time.monotonic() + 10
+    while True:
+        result = session.send(timeout_ms=10)
+        assert not result.get("isError"), result
+        if "waiting for stdin" in json.dumps(result):
+            assert "later> " in json.dumps(result), result
+            break
+        assert time.monotonic() < deadline, result
+        time.sleep(0.01)
+    answer = session.send(stdin="Windows callback\n")
+    try:
+        wait_for_path(answer_path, "idle callback received input")
+    except TimeoutError as error:
+        raise AssertionError(
+            [
+                item["text"]
+                for result in (answer, session.send(timeout_ms=10))
+                for item in result.get("content", [])
+                if item["type"] == "text"
+            ]
+        ) from error
+    result = session.send(control="interrupt")
+    wait_for_path(complete_path, "idle callback caught interrupt")
+    content = result["content"][:]
+    deadline = time.monotonic() + 10
+    while not (
+        "idle callback interrupted" in json.dumps(content)
+        and any(item["type"] == "image" for item in content)
+    ):
+        assert not result.get("isError"), result
+        assert time.monotonic() < deadline, content
+        result = session.send(timeout_ms=10)
+        content.extend(result["content"])
+        time.sleep(0.01)
+    result = session.send(python="print(r.idle_answer)")
+    assert not result.get("isError"), result
+    assert "Windows callback" in json.dumps(result), result
+
+
 @unittest.skipUnless(os.name == "nt", "native Windows packaging")
 class WindowsPackaging(unittest.TestCase):
     def test_concurrent_build_waits_and_recovers_after_failure(self):
@@ -292,12 +400,54 @@ class WindowsPackaging(unittest.TestCase):
             second.stdin.flush()
             self.assertEqual(second.wait(timeout=10), 0, second.stderr.read())
             self.assertEqual(second_lines.get(timeout=10), "fixture.whl")
+            with zipfile.ZipFile(root / "fixture.whl") as wheel:
+                self.assertNotIn(
+                    "fixture-1.data/scripts/mcp-console.exe", wheel.namelist()
+                )
+                self.assertEqual(
+                    wheel.read("fixture-1.data/data/libexec/mcp-console.exe"),
+                    b"native fixture",
+                )
+                self.assertIn(
+                    b"mcp-console = mcp_console._launcher:main",
+                    wheel.read("fixture-1.dist-info/entry_points.txt"),
+                )
+                entry_points = wheel.read("fixture-1.dist-info/entry_points.txt")
+                self.assertIn(b"OtherTool = other.module:main", entry_points)
+                records = list(
+                    csv.reader(
+                        io.StringIO(wheel.read("fixture-1.dist-info/RECORD").decode())
+                    )
+                )
+                self.assertEqual({row[0] for row in records}, set(wheel.namelist()))
+                for name, digest, size in records:
+                    if name.endswith("/RECORD"):
+                        self.assertEqual((digest, size), ("", ""))
+                    else:
+                        content = wheel.read(name)
+                        expected = (
+                            base64.urlsafe_b64encode(hashlib.sha256(content).digest())
+                            .rstrip(b"=")
+                            .decode()
+                        )
+                        self.assertEqual(digest, "sha256=" + expected)
+                        self.assertEqual(int(size), len(content))
             archive, archive_lines = start("build_sdist")
             self.assertEqual(archive_lines.get(timeout=10), "building")
             archive.stdin.write("finish\n")
             archive.stdin.flush()
             self.assertEqual(archive.wait(timeout=10), 0, archive.stderr.read())
             self.assertEqual(archive_lines.get(timeout=10), "fixture.whl")
+            metadata, metadata_lines = start("prepare_metadata_for_build_wheel")
+            self.assertEqual(metadata_lines.get(timeout=10), "building")
+            metadata.stdin.write("finish\n")
+            metadata.stdin.flush()
+            self.assertEqual(metadata.wait(timeout=10), 0, metadata.stderr.read())
+            self.assertEqual(metadata_lines.get(timeout=10), "fixture-1.dist-info")
+            self.assertEqual(
+                (root / "fixture-1.dist-info/entry_points.txt").read_bytes(),
+                entry_points,
+            )
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
@@ -424,7 +574,9 @@ class WindowsConsole(unittest.TestCase):
         self.assertIsNotNone(uv, "Windows resolver acceptance requires uv")
         r_home = (
             os.environ.get("R_HOME")
-            or subprocess.check_output(["R", "RHOME"], text=True).strip()
+            or subprocess.check_output(
+                [shutil.which("R") or "R", "RHOME"], text=True
+            ).strip()
         )
         system_path = str(Path(os.environ["SystemRoot"]) / "System32")
         for with_python in (False, True):
@@ -479,7 +631,7 @@ class WindowsConsole(unittest.TestCase):
                 "content": [
                     {
                         "type": "text",
-                        "text": "only one of `r`, `python`, or `sql` may be supplied",
+                        "text": "only one of `r` or `python` may be supplied",
                     }
                 ],
                 "isError": True,
@@ -491,7 +643,9 @@ class WindowsConsole(unittest.TestCase):
         # Capture R before removing the interpreter launchers from PATH.
         r_home = (
             os.environ.get("R_HOME")
-            or subprocess.check_output(["R", "RHOME"], text=True).strip()
+            or subprocess.check_output(
+                [shutil.which("R") or "R", "RHOME"], text=True
+            ).strip()
         )
         environment = dict(
             os.environ,
@@ -507,6 +661,75 @@ class WindowsConsole(unittest.TestCase):
         self.assertIn(
             "FALSE", json.dumps(session.send(control="restart", r="exists('answer')"))
         )
+
+    def test_discovers_r_from_batch_launcher(self):
+        r_home = Path(
+            os.environ.get("R_HOME")
+            or subprocess.check_output(
+                [shutil.which("R") or "R", "RHOME"], text=True
+            ).strip()
+        )
+        for extension in ("bat", "cmd"):
+            with (
+                self.subTest(extension=extension),
+                tempfile.TemporaryDirectory(prefix="console R launcher ") as directory,
+            ):
+                root = Path(directory)
+                launcher = root / f"R.{extension}"
+                launcher.write_text(f'@"{r_home / "bin/R.exe"}" %*\n')
+                later = root / "later"
+                later.mkdir()
+                # An earlier batch launcher takes precedence over a later exe.
+                (later / "R.exe").write_text("broken later installation")
+                environment = dict(
+                    os.environ,
+                    PATH=os.pathsep.join(
+                        (
+                            str(root),
+                            str(later),
+                            str(Path(os.environ["SystemRoot"]) / "System32"),
+                        )
+                    ),
+                    RETICULATE_PYTHON=sys.executable,
+                )
+                environment.pop("R_HOME", None)
+                session = Session(environment, bare_r=True)
+                try:
+                    session.initialize()
+                    result = session.send(r="answer <- 42L; answer")
+                    self.assertFalse(result.get("isError"), result)
+                    self.assertIn("42", json.dumps(result))
+                    # The selected installation survives changes to the launcher.
+                    launcher.write_text("@exit /b 91\n")
+                    result = session.send(control="restart", r="exists('answer')")
+                    self.assertFalse(result.get("isError"), result)
+                    self.assertIn("FALSE", json.dumps(result))
+                finally:
+                    session.close()
+
+    def test_reports_broken_r_batch_launcher(self):
+        with tempfile.TemporaryDirectory(prefix="console broken R ") as directory:
+            root = Path(directory)
+            (root / "R.bat").write_text(
+                "@echo deliberate R discovery failure 1>&2\n@exit /b 91\n"
+            )
+            environment = dict(
+                os.environ,
+                PATH=os.pathsep.join(
+                    (str(root), str(Path(os.environ["SystemRoot"]) / "System32"))
+                ),
+                RETICULATE_PYTHON=sys.executable,
+            )
+            environment.pop("R_HOME", None)
+            session = Session(environment)
+            try:
+                session.initialize()
+                result = session.send(r="42L")
+                self.assertTrue(result.get("isError"), result)
+                self.assertIn("worker R home discovery failed", json.dumps(result))
+                self.assertIn("deliberate R discovery failure", json.dumps(result))
+            finally:
+                session.close()
 
     def test_python_sleep_interrupt(self):
         session = self.session(defer_bootstrap=True)
@@ -620,6 +843,111 @@ class WindowsConsole(unittest.TestCase):
             r="stopifnot(py$python_value == 42L); cat('bridge ready')"
         )
         self.assertIn("bridge ready", json.dumps(result))
+
+    def test_direct_py_access_attaches_on_demand(self):
+        for getter in ("reticulate::py", "py"):
+            with self.subTest(getter=getter):
+                session = self.session()
+                for restart in (False, True):
+                    if restart:
+                        session.send(control="restart")
+                    # fmt: python
+                    session.send(
+                        python=dedent("""
+                            bridge_value = "startup value"
+                            bridge_object = object()
+                            bridge_identity = id(bridge_object)
+                            """)
+                    )
+                    # fmt: r
+                    result = session.send(
+                        r=dedent("""
+                            stopifnot(!reticulate::py_available(initialize = FALSE))
+                            suppressPackageStartupMessages(library(reticulate))
+                            stopifnot(!reticulate::py_available(initialize = FALSE))
+                            main <- GETTER
+                            stopifnot(!reticulate::py_available(initialize = FALSE))
+                            stopifnot(
+                              identical(main$bridge_value, "startup value"),
+                              identical(GETTER$bridge_value, "startup value"),
+                              reticulate::py_available(initialize = FALSE)
+                            )
+                            bridge_from_r <- 42L
+                            cat("direct bridge ready")
+                            """).replace("GETTER", getter)
+                    )
+                    self.assertIn("direct bridge ready", json.dumps(result))
+                    # fmt: python
+                    result = session.send(
+                        python=dedent("""
+                            assert id(bridge_object) == bridge_identity
+                            assert bridge_value == "startup value"
+                            assert int(r.bridge_from_r) == 42
+                            print("bridge state retained")
+                            """)
+                    )
+                    self.assertIn("bridge state retained", json.dumps(result))
+
+    def test_loading_reticulate_does_not_start_python(self):
+        session = Session(dict(os.environ, MCP_CONSOLE_LANGUAGES="r"))
+        self.addCleanup(session.close)
+        session.initialize()
+        # fmt: r
+        result = session.send(
+            r=dedent("""
+                Sys.setenv(RETICULATE_PYTHON = "__console_missing_python__")
+                suppressPackageStartupMessages(library(reticulate))
+                stopifnot(!reticulate::py_available(initialize = FALSE))
+                cat("reticulate loaded without Python")
+                """)
+        )
+        self.assertIn("reticulate loaded without Python", json.dumps(result))
+
+    def test_py_reads_in_initialization_hooks_do_not_reenter(self):
+        for clear_callback in (False, True):
+            with self.subTest(clear_callback=clear_callback):
+                session = self.session()
+                session.send(python='hook_value = "existing Python value"')
+                # fmt: r
+                result = session.send(
+                    r=dedent("""
+                        callback_calls <- 0L
+                        after_calls <- 0L
+                        options(reticulate.python.beforeInitialized = function() {
+                          callback_calls <<- callback_calls + 1L
+                          if (callback_calls > 1L) {
+                            stop("recursive bridge initialization")
+                          }
+                          if (CLEAR_CALLBACK) {
+                            options(reticulate.python.beforeInitialized = NULL)
+                          }
+                          stopifnot(
+                            is.null(reticulate::py),
+                            is.null(py$hook_value),
+                            !reticulate::py_available(initialize = FALSE)
+                          )
+                        })
+                        options(reticulate.python.afterInitialized = function() {
+                          after_calls <<- after_calls + 1L
+                          stopifnot(identical(py$hook_value, "existing Python value"))
+                        })
+                        stopifnot(
+                          identical(reticulate::py$hook_value, "existing Python value"),
+                          callback_calls == 1L,
+                          after_calls == 1L
+                        )
+                        options(reticulate.python.beforeInitialized = NULL)
+                        options(reticulate.python.afterInitialized = NULL)
+                        cat("initialization callback ran once")
+                        """).replace(
+                        "CLEAR_CALLBACK", "TRUE" if clear_callback else "FALSE"
+                    )
+                )
+                self.assertIn("initialization callback ran once", json.dumps(result))
+                self.assertIn(
+                    "existing Python value",
+                    json.dumps(session.send(python="hook_value")),
+                )
 
     def test_selected_virtualenv_with_unicode_path(self):
         directory = tempfile.TemporaryDirectory(prefix="console Python \u03bb ")
@@ -875,7 +1203,7 @@ class WindowsConsole(unittest.TestCase):
             dict(
                 os.environ,
                 TEST_RELAY_SCENARIO=scenario,
-                TEST_CONSOLE_BINARY=str(BINARY),
+                TEST_CONSOLE_BINARY=str(NATIVE_BINARY),
             ),
             relay=executable,
         )
@@ -917,27 +1245,23 @@ class WindowsConsole(unittest.TestCase):
     def test_startup_eof_cancels_python_inspection(self):
         with tempfile.TemporaryDirectory(prefix="console startup ") as directory:
             root = Path(directory)
-            ready = socket.socket()
-            self.addCleanup(ready.close)
-            ready.bind(("127.0.0.1", 0))
-            ready.listen(1)
-            ready.settimeout(8)
-            source = root / "resolver.rs"
-            source.write_text(r"""fn main() {
-    std::fs::write(std::env::var("TEST_RESOLVER_PID").unwrap(), std::process::id().to_string()).unwrap();
-    let _ready = std::net::TcpStream::connect(std::env::var("TEST_READY_ADDR").unwrap()).unwrap();
-    std::thread::sleep(std::time::Duration::from_secs(60));
-}
-""")
             subprocess.run(
-                ["rustc", str(source), "-o", str(root / "python.exe")], check=True
+                [
+                    "rustc",
+                    "--edition=2024",
+                    str(ROOT / "tests/fixtures/windows_inspection.rs"),
+                    "-o",
+                    str(root / "python.exe"),
+                ],
+                check=True,
             )
+            ready = Gate(timeout=8)
+            self.addCleanup(ready.close)
             environment = dict(
                 os.environ,
                 PATH=str(root) + os.pathsep + os.environ["PATH"],
                 RETICULATE_PYTHON=str(root / "python.exe"),
-                TEST_RESOLVER_PID=str(root / "child.pid"),
-                TEST_READY_ADDR=f"127.0.0.1:{ready.getsockname()[1]}",
+                TEST_INSPECTION_GATE=ready.name,
             )
             process = subprocess.Popen(
                 [str(BINARY), "serve", "--no-sandbox"],
@@ -947,21 +1271,47 @@ class WindowsConsole(unittest.TestCase):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.argtypes = [
+                ctypes.c_uint32,
+                ctypes.c_int,
+                ctypes.c_uint32,
+            ]
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            kernel.WaitForSingleObject.restype = ctypes.c_uint32
+            kernel.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            inspection = None
             try:
-                connection, _ = ready.accept()
-                connection.close()
-                process.communicate(timeout=8)
-                self.assertNotEqual(process.returncode, 0)
+                ready.accept(process)
+                pid = int(ready.readline())
+                inspection = kernel.OpenProcess(0x100001, False, pid)
+                self.assertTrue(inspection, ctypes.get_last_error())
+                self.assertEqual(kernel.WaitForSingleObject(inspection, 0), 258)
+                # communicate closes MCP input while inspection awaits release.
+                _, errors = process.communicate(timeout=8)
+                self.assertNotEqual(
+                    process.returncode, 0, errors.decode(errors="replace")
+                )
+                self.assertEqual(
+                    kernel.WaitForSingleObject(inspection, 0),
+                    0,
+                    "server EOF returned before inspection retirement",
+                )
             finally:
-                if process.poll() is None:
-                    process.kill()
-                if (root / "child.pid").exists():
-                    subprocess.run(
-                        ["taskkill", "/PID", (root / "child.pid").read_text(), "/F"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-                process.communicate(timeout=5)
+                with ExitStack() as cleanup:
+                    cleanup.callback(ready.close)
+                    if inspection:
+                        cleanup.callback(kernel.CloseHandle, inspection)
+                    cleanup.callback(process.communicate, timeout=5)
+                    if process.poll() is None:
+                        process.kill()
+                    if inspection and kernel.WaitForSingleObject(inspection, 0) != 0:
+                        kernel.TerminateProcess(inspection, 1)
+                        self.assertEqual(
+                            kernel.WaitForSingleObject(inspection, 5000), 0
+                        )
 
     def test_python_inspection_descendants_are_retired(self):
         with tempfile.TemporaryDirectory(prefix="console resolver ") as directory:
@@ -1267,41 +1617,51 @@ class WindowsConsole(unittest.TestCase):
         self.assertIn("26", json.dumps(result))
 
     def test_input_and_interrupt(self):
+        exercise_input_and_interrupt(self.session())
+
+    def test_idle_later_callbacks(self):
+        exercise_later_callbacks(self.session())
+
+    def test_idle_later_callback_error_preserves_worker(self):
         session = self.session()
-        with socket.create_server(("127.0.0.1", 0)) as listener:
-            listener.settimeout(session.timeout)
-            session.send(r=f"input_port <- {listener.getsockname()[1]}L")
-            result = session.send(
-                # fmt: r
-                r=dedent("""
-                    gate <- socketConnection(
-                      "127.0.0.1",
-                      port = input_port,
-                      blocking = TRUE,
-                      open = "r"
-                    )
-                    invisible(readLines(gate, n = 1L))
-                    close(gate)
-                    answer <- readline("Name: ")
-                    answer
-                    """),
-                timeout_ms=0,
+        self.assertFalse(session.send(requirements={"r": ["later"]})["isError"])
+        # fmt: r
+        r = code(r"""
+            retained <- 41L
+            run_callback <- function() {
+              if (!file.exists("later-gate")) {
+                later::later(run_callback, delay = 0.01)
+                return(invisible(NULL))
+              }
+              later::later(
+                function() {
+                  retained <<- retained + 1L
+                  cat("callback recovered\n")
+                  stopifnot(file.create("later-recovered"))
+                },
+                delay = 0.01
+              )
+              stop("idle callback failure")
+            }
+            later::later(run_callback, delay = 0.01)
+            """)
+        self.assertFalse(session.send(r=r)["isError"])
+        root = Path(session.directory.name)
+        (root / "later-gate").touch()
+        wait_for_path(root / "later-recovered", "callback after an R error")
+        output = ""
+        deadline = time.monotonic() + 10
+        while "callback recovered" not in output:
+            result = session.send(timeout_ms=10)
+            self.assertFalse(result["isError"], result)
+            output += "".join(
+                item.get("text", "") for item in result.get("content", [])
             )
-            with listener.accept()[0] as gate:
-                self.assertIn("running;", json.dumps(result))
-                gate.sendall(b"continue\n")
-            result = session.expect("waiting for stdin")
-        self.assertIn("waiting for stdin", json.dumps(result))
-        result = session.expect("Windows", stdin="Windows\n")
-        self.assertIn("Windows", json.dumps(result))
-        result = session.expect(
-            "Loop ready", r='saved <- 42; cat("Loop ready\\n"); repeat {}'
-        )
-        self.assertIn("running", json.dumps(result))
-        result = session.send(control="interrupt")
-        self.assertNotIn("running;", json.dumps(result))
-        result = session.send(r="saved")
-        self.assertIn("42", json.dumps(result))
+            self.assertLess(time.monotonic(), deadline, output)
+            time.sleep(0.01)
+        self.assertIn("idle callback failure", output)
+        result = session.send(r="retained")
+        self.assertEqual(result["content"], [{"type": "text", "text": "[1] 42\n"}])
 
 
 if __name__ == "__main__":

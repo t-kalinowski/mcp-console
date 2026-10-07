@@ -252,6 +252,7 @@ class TranscriptRunnerFixture(unittest.TestCase):
             "cases.py",
             "records.py",
             "snapshots.py",
+            "progress.py",
             "requirements.py",
             "linux_sandbox.py",
             "execution.py",
@@ -382,7 +383,11 @@ class TranscriptRunnerTests(TranscriptRunnerFixture):
         installed = self.root / "installation" / "bin" / "mcp-console"
         installed.parent.mkdir(parents=True)
         installed.write_text("installed", encoding="utf-8")
-        environment["MCP_CONSOLE_TEST_BINARY"] = str(installed)
+        (installed.parent.parent / "installation.marker").touch()
+        command = self.root / "bin" / "mcp-console"
+        command.parent.mkdir()
+        command.symlink_to(installed)
+        environment["MCP_CONSOLE_TEST_BINARY"] = str(command)
         cargo = self.root / "commands" / "cargo"
         cargo.write_text("#!/bin/sh\nexit 91\n", encoding="utf-8")
         self.suite.write_text(
@@ -391,6 +396,7 @@ class TranscriptRunnerTests(TranscriptRunnerFixture):
             + code("""
                 def test_selected(binary: Path) -> list[dict[str, str]]:
                     assert binary.read_text(encoding="utf-8") == "installed"
+                    assert (binary.parent.parent / "installation.marker").is_file()
                     return record(binary, "selected")
                 """),
             encoding="utf-8",
@@ -615,75 +621,6 @@ class TranscriptRunnerTests(TranscriptRunnerFixture):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(expected, result.stderr)
 
-    def test_sbx_discovery_accepts_newer_versions_without_build_output(self) -> None:
-        scripts = self.root / "scripts"
-        scripts.mkdir()
-        shutil.copy2(ROOT / "scripts/test", scripts / "test")
-        shutil.copytree(
-            ROOT / "tests/support",
-            self.root / "tests/support",
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("__pycache__"),
-        )
-        self.suite.write_text(
-            PUBLIC_SUITE
-            # fmt: python
-            + code("""
-                from support.docker_sandbox import DOCKER_SANDBOX
-                from support.requirements import requires
-
-                assert DOCKER_SANDBOX.available, DOCKER_SANDBOX.reason
-                test_selected = requires(DOCKER_SANDBOX)(test_selected)
-                """)
-        )
-        commands = self.root / "commands"
-        commands.mkdir()
-        # Dependency installation is outside this discovery contract. Keep the
-        # scripts/test bootstrap, using the interpreter running this test.
-        uv = commands / "uv"
-        uv.write_text(
-            f"#!{sys.executable}\n"
-            # fmt: python
-            + code("""
-                import os
-                import sys
-
-                assert sys.argv[1:3] == ["run", "--script"], sys.argv
-                os.execv(sys.executable, [sys.executable, *sys.argv[3:]])
-                """)
-        )
-        uv.chmod(0o755)
-        sbx = commands / "sbx"
-        sbx.write_text(
-            f"#!{sys.executable}\n"
-            # fmt: python
-            + code("""
-                import sys
-                from pathlib import Path
-
-                Path("sbx-probed").touch()
-                print("sbx version: v99.0.0 fixture" if sys.argv[1] == "version" else "[]")
-                """)
-        )
-        sbx.chmod(0o755)
-        shutil.rmtree(self.root / "target")
-        environment = self.script_environment(commands) | {
-            "MCP_CONSOLE_TEST_SBX_TEMPLATE": "fixture@sha256:example",
-            "MCP_CONSOLE_TEST_SBX_NETWORK": "0",
-            "MCP_CONSOLE_TEST_SBX_INNER_DOCKER": "0",
-        }
-        result = subprocess.run(
-            [scripts / "test", "--list", "client_server/server/test_tools::selected"],
-            cwd=self.root,
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.root / "sbx-probed").exists())
-        self.assertFalse((self.root / "target").exists())
-
     def test_help_and_syntax_errors_do_not_resolve_script_dependencies(self) -> None:
         scripts = self.root / "scripts"
         scripts.mkdir()
@@ -717,204 +654,6 @@ exit 97
                     result.returncode, status, result.stdout + result.stderr
                 )
                 self.assertFalse((self.root / "uv-receipt").exists())
-
-    def test_external_ssh_availability_gates_public_cases(self) -> None:
-        shutil.copy2(
-            ROOT / "tests/support/ssh_external.py",
-            self.root / "tests/support/ssh_external.py",
-        )
-        self.suite.write_text(
-            PUBLIC_SUITE
-            # fmt: python
-            + code("""
-                from support.requirements import requires
-                from support.ssh_external import EXTERNAL_SSH
-
-                test_selected = requires(EXTERNAL_SSH)(test_selected)
-                """),
-            encoding="utf-8",
-        )
-        commands = self.root / "commands"
-        commands.mkdir()
-        ssh = commands / "ssh"
-        for status in (0, 255):
-            with self.subTest(status=status):
-                ssh.write_text(
-                    code(f"""
-                        #!/bin/sh
-                        exit {status}
-                        """)
-                )
-                ssh.chmod(0o755)
-                marker = self.root / "selected.marker"
-                marker.unlink(missing_ok=True)
-                result = subprocess.run(
-                    [
-                        sys.executable,
-                        self.boundaries / "_run.py",
-                        "client_server/server/test_tools::selected",
-                    ],
-                    env={
-                        **os.environ,
-                        "PATH": str(commands),
-                        "MCP_CONSOLE_TEST_SSH_HOST": "optional-test-host",
-                        "MCP_CONSOLE_TEST_SSH_EXTERNAL": "",
-                    },
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(marker.exists(), status == 0)
-                self.assertEqual("skipped" in result.stdout, status != 0)
-
-    def run_external_ssh_installation(self, program: str) -> None:
-        fixtures = self.root / "tests/fixtures"
-        fixtures.mkdir()
-        for name in ("support/ssh_external.py", "fixtures/ssh_install.py"):
-            shutil.copy2(ROOT / "tests" / name, self.root / "tests" / name)
-        subprocess.run(["git", "init", "-q", self.root], check=True)
-        (self.root / ".gitignore").write_text("__pycache__/\n*.marker\n")
-        self.suite.write_text(
-            PUBLIC_SUITE
-            # fmt: python
-            + code("""
-                import os
-                import subprocess
-
-                from support.ssh_external import external_target
-
-
-                def installed_revision(external: dict[str, object]) -> str:
-                    return subprocess.check_output(
-                        ["mcp-console"],
-                        env={**os.environ, "PATH": external["path"]},
-                        text=True,
-                    )
-                """)
-            + program
-        )
-        remote = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        commands = remote / "commands"
-        commands.mkdir()
-        (commands / "python3").symlink_to(sys.executable)
-        # These command fixtures exercise source transfer and installation through
-        # the public runner without requiring an SSH host or a package build.
-        programs = {
-            # fmt: python
-            "ssh": code("""
-                import os
-                import shlex
-                import sys
-                from pathlib import Path
-
-                commands = Path(__file__).resolve().parent
-                command = shlex.split(sys.argv[-1])
-                if command[:2] == ["sh", "-lc"]:
-                    command[:2] = ["/bin/sh", "-c"]
-                os.execvpe(
-                    command[0],
-                    command,
-                    {
-                        **os.environ,
-                        "HOME": str(commands.parent),
-                        "PATH": str(commands) + os.pathsep + "/usr/bin:/bin",
-                    },
-                )
-                """),
-            # fmt: python
-            "uv": code("""
-                import os
-                import shutil
-                import sys
-                from pathlib import Path
-
-                source = Path(sys.argv[-1])
-                tool = Path(os.environ["UV_TOOL_DIR"]) / "mcp-console"
-                tool.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source / "revision", tool / "revision")
-                shutil.copy2(Path(__file__).with_name("console"), tool / "mcp-console")
-                commands = Path(os.environ["UV_TOOL_BIN_DIR"])
-                commands.mkdir(parents=True, exist_ok=True)
-                executable = commands / "mcp-console"
-                executable.unlink(missing_ok=True)
-                executable.symlink_to(tool / "mcp-console")
-                """),
-            # fmt: python
-            "console": code("""
-                from pathlib import Path
-
-                print(Path(__file__).resolve().with_name("revision").read_text(), end="")
-                """),
-        }
-        for name, body in programs.items():
-            path = commands / name
-            path.write_text(f"#!{sys.executable}\n" + body)
-            path.chmod(0o755)
-        result = subprocess.run(
-            [
-                sys.executable,
-                self.boundaries / "_run.py",
-                "client_server/server/test_tools::selected",
-            ],
-            cwd=self.root,
-            env={
-                **os.environ,
-                "PATH": str(commands) + os.pathsep + os.environ["PATH"],
-                "MCP_CONSOLE_TEST_SSH_HOST": "optional-test-host",
-                "MCP_CONSOLE_TEST_SSH_EXTERNAL": "",
-            },
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.root / "selected.marker").exists())
-
-    def test_external_ssh_source_cache_handles_file_directory_changes(self) -> None:
-        self.run_external_ssh_installation(
-            # fmt: python
-            code("""
-                def test_selected(binary: Path) -> list[dict[str, str]]:
-                    root = binary.parents[2]
-                    (root / "revision").write_text("first")
-                    shape = root / "shape"
-                    shape.write_text("file")
-                    with external_target() as external:
-                        assert installed_revision(external) == "first"
-                    shape.unlink()
-                    shape.mkdir()
-                    (shape / "child").write_text("directory")
-                    with external_target() as external:
-                        assert installed_revision(external) == "first"
-                    (shape / "child").unlink()
-                    shape.rmdir()
-                    shape.write_text("file again")
-                    with external_target() as external:
-                        assert installed_revision(external) == "first"
-                    return record(binary, "selected")
-                """)
-        )
-
-    def test_external_ssh_runs_keep_their_installed_revision(self) -> None:
-        self.run_external_ssh_installation(
-            # fmt: python
-            code("""
-                def test_selected(binary: Path) -> list[dict[str, str]]:
-                    revision = binary.parents[2] / "revision"
-                    revision.write_text("first")
-                    with external_target() as first:
-                        assert installed_revision(first) == "first"
-                        revision.write_text("second")
-                        with external_target() as second:
-                            assert installed_revision(second) == "second"
-                            assert installed_revision(first) == "first"
-                        assert not Path(second["target"]["workspace"]).exists()
-                        assert installed_revision(first) == "first"
-                    assert not Path(first["target"]["workspace"]).exists()
-                    return record(binary, "selected")
-                """)
-        )
 
     def test_case_requirements_and_skip_reporting(self) -> None:
         self.suite.write_text(
@@ -1006,8 +745,8 @@ exit 97
         environment = self.prepare_script()
         environment.update(
             {
-                "MCP_CONSOLE_TEST_DOCKER_IMAGE": "fixture-image",
-                "MCP_CONSOLE_TEST_SBX_TEMPLATE": "fixture-template",
+                "MCP_CONSOLE_TEST_INPUT": "fixture-input",
+                "MCP_CONSOLE_TEST_FIXTURE": "fixture-value",
             }
         )
         self.suite.write_text(
@@ -1016,8 +755,8 @@ exit 97
             + code("""
                 import os
 
-                assert os.environ["MCP_CONSOLE_TEST_DOCKER_IMAGE"] == "fixture-image"
-                assert os.environ["MCP_CONSOLE_TEST_SBX_TEMPLATE"] == "fixture-template"
+                assert os.environ["MCP_CONSOLE_TEST_INPUT"] == "fixture-input"
+                assert os.environ["MCP_CONSOLE_TEST_FIXTURE"] == "fixture-value"
                 """),
         )
         for profile in ((), ("--quick",), ("--full",)):
@@ -1134,89 +873,6 @@ runner: outdated
                 self.assertEqual(selected.read_bytes(), expected)
                 self.assertTrue(orphan.exists())
 
-    def test_explicit_profiles_preserve_external_ssh_host_selection(
-        self,
-    ) -> None:
-        shutil.copy2(
-            ROOT / "tests/support/ssh_external.py",
-            self.root / "tests/support/ssh_external.py",
-        )
-        self.suite.write_text(
-            PUBLIC_SUITE
-            # fmt: python
-            + code("""
-                import os
-                from support.requirements import requires
-                from support.ssh_external import EXTERNAL_SSH
-
-                assert os.environ["MCP_CONSOLE_TEST_SSH_HOST"] == "fixture-host"
-                assert os.environ["MCP_CONSOLE_TEST_SSH_EXTERNAL"] == os.environ["FIXTURE_SSH_EXTERNAL"]
-                test_selected = requires(EXTERNAL_SSH)(test_selected)
-                """),
-        )
-        commands = self.root / "commands"
-        commands.mkdir()
-        ssh = commands / "ssh"
-        ssh.write_text(
-            f"#!{sys.executable}\n"
-            # fmt: python
-            + code("""
-                import json
-                import sys
-                from pathlib import Path
-
-                with (Path(__file__).parent / "probes.jsonl").open("a") as output:
-                    print(json.dumps(sys.argv[1:]), file=output)
-                """),
-        )
-        ssh.chmod(0o755)
-        probes = commands / "probes.jsonl"
-        configured = {
-            "target": {"transport": {"host": "configured-host"}},
-            "ssh_config": "fixture-ssh-config",
-        }
-        for external in ("", json.dumps(configured)):
-            with self.subTest(external=external):
-                environment = os.environ | {
-                    "PATH": f"{commands}{os.pathsep}{os.environ['PATH']}",
-                    "MCP_CONSOLE_TEST_SSH_HOST": "fixture-host",
-                    "MCP_CONSOLE_TEST_SSH_EXTERNAL": external,
-                    "FIXTURE_SSH_EXTERNAL": external,
-                }
-                for profile in ([], ["--quick"], ["--full"]):
-                    result = subprocess.run(
-                        [
-                            sys.executable,
-                            self.boundaries / "_run.py",
-                            *profile,
-                            "client_server/server/test_tools::selected",
-                        ],
-                        cwd=self.root,
-                        env=environment,
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                    )
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertTrue((self.root / "selected.marker").exists())
-                    expected = [
-                        "-T",
-                        "-a",
-                        "-o",
-                        "BatchMode=yes",
-                        "-o",
-                        "ConnectTimeout=3",
-                        *(["-F", "fixture-ssh-config"] if external else []),
-                        "--",
-                        "configured-host" if external else "fixture-host",
-                        "true",
-                    ]
-                    self.assertTrue(probes.read_text())
-                    for line in probes.read_text().splitlines():
-                        self.assertEqual(json.loads(line), expected)
-                    probes.unlink()
-                    (self.root / "selected.marker").unlink()
-
     def test_records_timings_for_each_execution_and_snapshot_failure(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
@@ -1259,9 +915,7 @@ runner: different
         )
         self.assertTrue(all(r["elapsed_seconds"] > 0 for r in rows))
 
-    def test_repository_cases_skip_missing_resolver_and_formatter_commands(
-        self,
-    ) -> None:
+    def test_repository_cases_skip_missing_commands(self) -> None:
         shutil.copytree(
             ROOT / "tests" / "support",
             self.root / "tests" / "support",
@@ -1269,20 +923,25 @@ runner: different
             ignore=shutil.ignore_patterns("__pycache__"),
         )
         selectors = {
-            "recording/test_markdown::emits_yamark_formatted_documents": ("yamark",),
-            "lifecycle/test_startup": ("ir", "uv"),
-            "lifecycle/test_startup_interrupt": ("ir", "uv"),
-            "requirements/test_r_automatic": ("ir",),
-            "requirements/test_r::failed_mixed_preparation_retains_live_python_activation": (
+            "client_server/recording/test_markdown::emits_yamark_formatted_documents": (
+                "yamark",
+            ),
+            "client_server/lifecycle/test_startup": ("ir", "uv"),
+            "client_server/lifecycle/test_startup_interrupt": ("ir", "uv"),
+            "client_server/requirements/test_r_automatic": ("ir",),
+            "client_server/requirements/test_r::failed_mixed_preparation_retains_live_python_activation": (
                 "ir",
                 "uv",
+            ),
+            "cli/sandbox/test_configuration::child_specific_shell_python_and_processx_examples": (
+                "Rscript",
             ),
         }
         for selector, commands in selectors.items():
             suite = selector.partition("::")[0] + ".py"
-            destination = self.boundaries / "client_server" / suite
+            destination = self.boundaries / suite
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(RUNNER.parent / "client_server" / suite, destination)
+            shutil.copy2(RUNNER.parent / suite, destination)
             for missing in commands:
                 with self.subTest(selector=selector, missing=missing):
                     with tempfile.TemporaryDirectory(dir=self.root) as path:
@@ -1296,7 +955,7 @@ runner: different
                                 self.boundaries / "_run.py",
                                 "--jobs",
                                 "1",
-                                f"client_server/{selector}",
+                                selector,
                             ],
                             cwd=self.root,
                             env={**os.environ, "PATH": path},
@@ -1503,6 +1162,104 @@ runner: different
         self.assertNotEqual(differing.returncode, 0)
         self.assertIn("result: sandbox", differing.stderr)
         self.assertIn("::selected[direct] differs", differing.stderr)
+
+    def test_mcp_companions_preserve_each_invocation_and_execution(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.execution import Execution, executions
+                from support.records import McpTranscript, TranscriptWithCompanions
+
+
+                def handshake(tool):
+                    return [
+                        {
+                            "id": 1,
+                            "input": {"method": "initialize"},
+                            "result": {"protocolVersion": "test"},
+                        },
+                        {"notification": {"method": "notifications/initialized"}},
+                        {"id": 2, "input": {"method": "tools/list"}, "result": {"tools": [tool]}},
+                    ]
+
+
+                def test_initializes_and_lists_tools(binary):
+                    return TranscriptWithCompanions(
+                        handshake("sandbox"),
+                        {
+                            "direct.yaml": handshake("direct"),
+                            "sql-python.yaml": handshake("sql-python sandbox"),
+                            "sql-python.direct.yaml": handshake("sql-python direct"),
+                        },
+                    )
+
+
+                @executions(Execution("sandbox"), Execution("direct"))
+                def test_selected(binary, execution):
+                    primary = handshake(execution.name)
+                    companion = handshake("sql-python " + execution.name)
+                    send = [
+                        {
+                            "id": 4,
+                            "send": {"python": "print(42)"},
+                            "result": {"content": [{"type": "text", "text": "42"}]},
+                        }
+                    ]
+                    return TranscriptWithCompanions(
+                        [{"configuration": "default"}] + primary + send,
+                        {
+                            "sql-python.yaml": McpTranscript(
+                                [{"configuration": "sql-python"}] + companion + send
+                            ),
+                            "changed.yaml": McpTranscript(handshake("different") + send),
+                            "partial.yaml": McpTranscript(primary[:2]),
+                            "wire.yaml": handshake("direct") + send,
+                        },
+                    )
+                """),
+            encoding="utf-8",
+        )
+        updated = self.run_runner("--full", "--update", "--jobs", "1")
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        for suffix, reference in (
+            ("", "MCP initialization for this execution mode"),
+            (".sql-python", "sql-python MCP initialization for this execution mode"),
+        ):
+            snapshot = (self.snapshots / f"selected{suffix}.yaml").read_text()
+            self.assertEqual(snapshot.count("!same-as"), 1, snapshot)
+            self.assertIn(reference, snapshot)
+            self.assertLess(
+                snapshot.index("configuration:"), snapshot.index("!same-as")
+            )
+            self.assertLess(snapshot.index("!same-as"), snapshot.index("send:"))
+            self.assertNotIn("id:", snapshot)
+        for suffix in ("changed", "partial"):
+            snapshot = (self.snapshots / f"selected.{suffix}.yaml").read_text()
+            self.assertNotIn("!same-as", snapshot)
+            self.assertEqual(snapshot.count("method: initialize"), 1, snapshot)
+            self.assertNotIn("id:", snapshot)
+        changed = (self.snapshots / "selected.changed.yaml").read_text()
+        self.assertIn("different", changed)
+        wire = (self.snapshots / "selected.wire.yaml").read_text()
+        self.assertNotIn("!same-as", wire)
+        self.assertIn("id: 2", wire)
+        self.assertIn("id: 4", wire)
+        strict = self.run_runner("--full", "--jobs", "1")
+        self.assertEqual(strict.returncode, 0, strict.stderr)
+
+        # A second execution must compare its companions, including during updates.
+        self.suite.write_text(
+            self.suite.read_text().replace(
+                'handshake("sql-python " + execution.name)',
+                'handshake("sql-python sandbox")',
+            )
+        )
+        for arguments in (("--full",), ("--full", "--update")):
+            differing = self.run_runner(*arguments, "--jobs", "1")
+            self.assertNotEqual(differing.returncode, 0)
+            self.assertIn("selected.sql-python.yaml", differing.stderr)
+            self.assertIn("::selected[direct] differs", differing.stderr)
 
     def test_project_proxy_sessions_use_a_canonical_reference(self) -> None:
         references = ROOT / "tests/snapshots/client_server/server/test_tools"
@@ -2094,7 +1851,7 @@ runner: orphan
         self.assertIn("fixture failed before snapshot update", retried.stderr)
         self.assertNotIn("orphan snapshot:", retried.stderr)
 
-    def test_default_concurrency_runs_twice_the_cpu_count(self) -> None:
+    def test_default_concurrency_reserves_one_logical_cpu(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
             # fmt: python
@@ -2119,7 +1876,7 @@ runner: orphan
             (self.snapshots / f"{name}.yaml").write_text(
                 "---\nrunner: concurrent\n...\n", encoding="utf-8"
             )
-        launcher = self.root / "two_cpu_host.py"
+        launcher = self.root / "five_cpu_host.py"
         launcher.write_text(
             # fmt: python
             code("""
@@ -2128,7 +1885,7 @@ runner: orphan
                 from unittest.mock import patch
 
                 runner = sys.argv.pop(1)
-                with patch("os.cpu_count", return_value=2):
+                with patch("os.cpu_count", return_value=5):
                     runpy.run_path(runner, run_name="__main__")
                 """),
             encoding="utf-8",
@@ -2151,7 +1908,7 @@ runner: orphan
                 ready, _, _ = select.select([started], [], [], 10)
                 self.assertTrue(
                     ready,
-                    f"only {len(acknowledgements)} of four cases started on a two-CPU host",
+                    f"only {len(acknowledgements)} of four cases started on a five-CPU host",
                 )
                 acknowledgements += os.read(started, 4 - len(acknowledgements))
             self.assertEqual(os.write(release, b"1111"), 4)
@@ -2164,6 +1921,33 @@ runner: orphan
                 with suppress(ProcessLookupError):
                     os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
+
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("default concurrency fixture failed")
+                """),
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                launcher,
+                self.boundaries / "_run.py",
+                "--full",
+                "--update",
+                "--jobs",
+                "4",
+            ],
+            cwd=self.root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("rerun: scripts/test --full --update\n", result.stderr)
 
     def write_failure_collection_suite(self, failures: set[int]) -> list[str]:
         names = ["initializes_and_lists_tools", *[f"case_{i:02}" for i in range(1, 20)]]
@@ -2456,9 +2240,15 @@ class WindowsTranscriptTests(TranscriptDiscoveryTests):
         with patch.dict(os.environ, {"MCP_CONSOLE_TEST_TIMINGS": str(timing)}):
             result = self.run_runner("--full", "--jobs", "2")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        records = [json.loads(line) for line in timing.read_text().splitlines()]
+        self.assertEqual(len(records), 3, records)
         self.assertEqual(
-            {json.loads(line)["status"] for line in timing.read_text().splitlines()},
+            {record["status"] for record in records},
             {"passed"},
+        )
+        self.assertEqual(
+            {record["selector"].rsplit("::", 1)[1] for record in records},
+            {"initializes_and_lists_tools", "selected", "unselected"},
         )
         self.suite.write_text(
             PUBLIC_SUITE
@@ -2467,6 +2257,27 @@ class WindowsTranscriptTests(TranscriptDiscoveryTests):
         result = self.run_runner("client_server/server/test_tools::unselected")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("unselected: skipped; POSIX:", result.stdout)
+
+    def test_failed_shared_case_preserves_its_timing(self) -> None:
+        timing = self.root / "timings.jsonl"
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                def test_selected(binary):
+                    raise RuntimeError("timing fixture failure")
+                """)
+        )
+        with patch.dict(os.environ, {"MCP_CONSOLE_TEST_TIMINGS": str(timing)}):
+            result = self.run_runner("client_server/server/test_tools::selected")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("timing fixture failure", result.stderr)
+        records = [json.loads(line) for line in timing.read_text().splitlines()]
+        self.assertEqual(len(records), 1, records)
+        self.assertEqual(records[0]["status"], "failed")
+        self.assertEqual(
+            records[0]["selector"], "client_server/server/test_tools::selected"
+        )
 
     def test_deadline_runs_finally_blocks_before_reporting_timeout(self) -> None:
         # fmt: python

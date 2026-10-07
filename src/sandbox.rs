@@ -21,12 +21,8 @@ pub fn capture_settings(
     let crate::settings::Captured {
         source,
         policy: settings,
-        provider,
         ..
     } = crate::settings::discover(overrides, no_project_config)?;
-    if provider == crate::settings::Provider::Compute {
-        return Err("standalone sandbox is local and cannot use the resolved compute provider; use mcp-console serve for Docker Sandbox execution".into());
-    }
     capture_policy(source.as_deref(), settings, roots)
 }
 

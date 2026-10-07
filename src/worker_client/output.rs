@@ -23,7 +23,10 @@ pub(super) struct OutputTape(Arc<Mutex<OutputTapeState>>);
 
 /// An opaque boundary between sealed response intervals.
 #[derive(Clone, Copy)]
-pub(super) struct OutputCut(u64);
+pub(super) struct OutputCut {
+    sequence: u64,
+    pub(super) worker_revision: u64,
+}
 
 pub(super) struct DirectOutput {
     output: OutputTape,
@@ -236,6 +239,20 @@ impl Response {
     /// Adds a server notice and ends its line for any output appended later.
     pub(super) fn push_notice_line(&mut self, message: impl Into<String>) {
         self.with_builder(|builder| builder.notice_line(message));
+    }
+
+    pub(super) fn evaluation_progress(
+        &mut self,
+        elapsed: std::time::Duration,
+        no_new_output: bool,
+    ) {
+        self.with_builder(|builder| {
+            let silence = if no_new_output { "; no new output" } else { "" };
+            builder.state_banner(&format!(
+                "elapsed: {:.1}s since admission{silence}",
+                elapsed.as_secs_f64()
+            ));
+        });
     }
 
     pub(super) fn push_tool_error(&mut self, message: impl Into<String>) {

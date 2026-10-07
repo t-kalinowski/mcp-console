@@ -5,11 +5,12 @@ import re
 import sys
 import tempfile
 import time
-from contextlib import closing
+from contextlib import ExitStack, closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
@@ -370,7 +371,10 @@ def test_restart_skips_direct_stdin_boundary_callback(
             r='cat("direct stdin cell ran\\n")',
             timeout_ms=0,
         )
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         wait_for_worker_file(
             directory,
             "direct-stdin-boundary-checkpoint",
@@ -435,7 +439,7 @@ def test_times_out_and_polls_running_evaluation(
         """)
     client.send(r=r, timeout_ms=10)
     output = client.transcript[-1]["result"]["content"][0]["text"]
-    assert output == "\n[running; poll with an empty send]", output
+    assert without_elapsed(output) == "\n[running; poll with an empty send]", output
     client.send(timeout_ms=3_000)
     output = client.transcript[-1]["result"]["content"][0]["text"]
     assert output == "[1] 42\n", output
@@ -448,11 +452,19 @@ def test_times_out_and_polls_running_evaluation(
 def test_interrupts_running_r_evaluation(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as fixtures:
         temporary_path = Path(temporary_directory)
         environment, rscript = r_test_environment()
         environment["TMPDIR"] = temporary_directory
         build_r_input_handler(temporary_path, environment, rscript)
+        started = fixtures.enter_context(
+            closing(FifoCheckpoint.create(temporary_path / "r-interrupt-started"))
+        )
+        boundary_started = fixtures.enter_context(
+            closing(
+                FifoCheckpoint.create(temporary_path / "r-boundary-interrupt-started")
+            )
+        )
         # fmt: python
         launcher = code("""
             import os
@@ -463,9 +475,14 @@ def test_interrupts_running_r_evaluation(
             signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
             os.execv(sys.argv[1], sys.argv[1:])
             """)
+        arguments = (
+            execution.serve("--writable-root", temporary_directory)
+            if execution == SANDBOXED
+            else execution.serve()
+        )
         client = McpClient(
             Path(sys.executable),
-            ("-c", launcher, str(binary), *execution.serve()),
+            ("-c", launcher, str(binary), *arguments),
             environment,
             current_directory=temporary_path,
         )
@@ -474,24 +491,23 @@ def test_interrupts_running_r_evaluation(
             client.initialize_and_list_tools()
             client.send(requirements={"r": ["DBI"]})
             assert last_tool_text(client) == "[prepared]"
+            client.expect(r="invisible(NULL)")
             # fmt: r
             r = code(r"""
                 interrupt_state <- 41L
-                invisible(file.create(file.path(
-                  tempdir(),
-                  "r-interrupt-started"
-                )))
+                checkpoint <- fifo("r-interrupt-started", open = "wb")
+                writeBin(charToRaw("1"), checkpoint)
+                close(checkpoint)
                 repeat {
                   Sys.sleep(60)
                 }
                 """)
             client.send(r=r, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
-            wait_for_worker_file(
-                temporary_path,
-                "r-interrupt-started",
-                client,
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
             )
+            started.wait("R evaluation reached its interruptible wait")
 
             # An interrupt can leave R unwinding after the 100 ms grace.
             # Collect the interrupted evaluation before submitting another cell.
@@ -512,10 +528,9 @@ def test_interrupts_running_r_evaluation(
                   "mcp_test_register_input_handler",
                   file.path(tempdir(), "input-handler-fifo"),
                   function() {
-                    invisible(file.create(file.path(
-                      tempdir(),
-                      "r-boundary-interrupt-started"
-                    )))
+                    checkpoint <- fifo("r-boundary-interrupt-started", open = "wb")
+                    writeBin(charToRaw("1"), checkpoint)
+                    close(checkpoint)
                     on.exit(boundary_interrupt_cleanup <<- TRUE)
                     repeat {
                       Sys.sleep(60)
@@ -531,12 +546,11 @@ def test_interrupts_running_r_evaluation(
                 close(writer)
                 """)
             client.send(r=r, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
-            wait_for_worker_file(
-                temporary_path,
-                "r-boundary-interrupt-started",
-                client,
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
             )
+            boundary_started.wait("R input handler reached its interruptible wait")
 
             wait_for_evaluation_output(
                 client,

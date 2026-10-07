@@ -222,9 +222,14 @@ exec "{shutil.which("uv")}" "$@"
 """)
         uv.chmod(0o755)
         env = dict(
-            environment(workspace), UV_OFFLINE="1", RETICULATE_UV="unused-selection"
+            environment(workspace),
+            UV_TOOL_DIR=str(root),
+            UV_OFFLINE="1",
+            RETICULATE_UV="unused-selection",
         )
-        with McpClient(binary, execution.serve(), env, workspace) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, workspace
+        ) as client:
             client.initialize_and_list_tools()
             prepared = client.send(requirements={"action": "get"})
             assert not prepared.get("isError", False), prepared
@@ -247,7 +252,8 @@ def test_inspects_and_replaces_managed_requirements(
     with preparation_directory() as directory:
         root = Path(directory)
         expose_uv(root)
-        with McpClient(binary, execution.serve(), environment(root)) as client:
+        env = dict(environment(root), MCP_CONSOLE_LANGUAGES="python")
+        with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
 
             def declaration(extensions: tuple[str, ...] = ()) -> list[str]:
@@ -259,7 +265,8 @@ def test_inspects_and_replaces_managed_requirements(
                 assert snapshot["runtime_requirements"] == {"r": [], "python": []}
                 return snapshot["requirements"]["python"]
 
-            assert declaration(("sqlite",)) == ["numpy", "pandas", "duckdb"]
+            defaults = ["numpy", "pandas", "matplotlib", "plotnine", "duckdb"]
+            assert declaration(("sqlite",)) == defaults
             client.send(requirements={"action": "set", "python": ["six"]})
             assert declaration() == ["six"]
             client.expect("42\n", python="import six; retained = 42; retained")
@@ -269,15 +276,35 @@ def test_inspects_and_replaces_managed_requirements(
             client.send(
                 control="restart",
                 requirements={"action": "set"},
-                python="import importlib.util; importlib.util.find_spec('numpy') is None",
+                # fmt: python
+                python=code("""
+                    import importlib.util
+
+                    all(
+                        importlib.util.find_spec(package) is None
+                        for package in ("numpy", "pandas", "matplotlib", "plotnine")
+                    )
+                    """),
             )
             assert last_result_text(client).endswith("True\n[done]"), client.transcript[
                 -1
             ]
             assert declaration() == []
             client.send(control="restart", requirements={"action": "reset"})
-            assert declaration(("sqlite",)) == ["numpy", "pandas", "duckdb"]
-            client.expect("42\n", python="import numpy, pandas; 42")
+            assert declaration(("sqlite",)) == defaults
+            client.expect(
+                "42\n",
+                # fmt: python
+                python=code("""
+                    import importlib.metadata
+
+                    for package in ("numpy", "pandas", "matplotlib", "plotnine", "duckdb"):
+                        assert importlib.metadata.version(package)
+                    import numpy, pandas, matplotlib, plotnine
+
+                    42
+                    """),
+            )
             return client.finish()[3:]
 
 
@@ -744,7 +771,14 @@ def test_prepares_managed_python_at_startup_and_restart(
         assert "execute:\n  eval: false" not in quarto
         assert "\nknitr:" in quarto and "\nir:" in quarto
         assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
-        packages = ["numpy", "pandas", "py-yaml12", "more-itertools"]
+        packages = [
+            "numpy",
+            "pandas",
+            "matplotlib",
+            "plotnine",
+            "py-yaml12",
+            "more-itertools",
+        ]
         if SQL.available:
             packages.append("duckdb")
         for package in packages:
@@ -1107,7 +1141,15 @@ def test_retains_automatic_additions_after_import_errors(
         )
         for name in ("UV_FIND_LINKS", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL"):
             env.pop(name, None)
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        # The index is a host loopback fixture, so preparation must share its
+        # network namespace. Worker network policy remains independently selected.
+        with McpClient(
+            installed_console(binary),
+            execution.serve(
+                "-c", "resolver.network=enabled", "-c", "resolver.proxy=null"
+            ),
+            env,
+        ) as client:
             client.initialize_and_list_tools()
             client.send(
                 python="import os; worker_pid = os.getpid(); steps = []; identity = object()"
@@ -1821,6 +1863,8 @@ def test_failed_managed_preparation_preserves_worker_and_input(
             assert set(accepted[0]["packages"]) == {
                 "numpy",
                 "pandas",
+                "matplotlib",
+                "plotnine",
                 "duckdb",
                 "py-yaml12",
             }
@@ -2137,6 +2181,14 @@ def test_uses_selected_virtualenv(binary: Path, execution: Execution) -> Transcr
             capture_output=True,
         )
         env = selected_environment(selected.parent)
+        env["MPLCONFIGDIR"] = str(root / "matplotlib")
+        # Prepare this fixture's fonts before interpreting its path-only output.
+        subprocess.run(
+            [selected, "-I", "-c", "import matplotlib.font_manager"],
+            env=dict(os.environ, MPLCONFIGDIR=env["MPLCONFIGDIR"]),
+            check=True,
+            capture_output=True,
+        )
         with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
             client.send(
@@ -2307,7 +2359,9 @@ def test_cleans_temporary_storage_after_startup_failure(
             import os
             from pathlib import Path
 
-            if "MCP_CONSOLE_LOCAL_RUNTIME" in os.environ:
+            # Only the first worker fails; eager replacement must not overwrite
+            # the failed worker's recorded directory or fail a second time.
+            if "MCP_CONSOLE_LOCAL_RUNTIME" in os.environ and not Path("startup-temporary").exists():
                 Path("startup-temporary").write_text(os.environ["TMPDIR"])
                 Path(os.environ["TMPDIR"], "owned-before-failure").touch()
                 os._exit(47)
@@ -2327,14 +2381,11 @@ def test_cleans_temporary_storage_after_startup_failure(
             )
             assert result["isError"] and "status 47" in last_result_text(client), result
             temporary = Path((root / "startup-temporary").read_text())
-            assert not temporary.exists(), "failed worker storage remains"
+            assert not temporary.exists(), f"failed worker storage remains: {temporary}"
             assert selected.exists(), "startup failure deleted the environment"
-            # Python now starts on cell demand after worker readiness. The
-            # replacement is idle and has not entered the failing hook again.
-            (site / "sitecustomize.py").unlink()
             client.expect(
-                "replacement initializes on demand\n",
-                python="print('replacement initializes on demand')",
+                "replacement initializes successfully\n",
+                python="print('replacement initializes successfully')",
             )
             return client.finish()
 
@@ -2994,7 +3045,7 @@ def test_records_managed_python_defaults(
             records = client.finish()
         (session,) = (workspace / ".agents/console/sessions").iterdir()
         quarto = (session / "transcript.qmd").read_text()
-        defaults = ["numpy", "pandas"]
+        defaults = ["numpy", "pandas", "matplotlib", "plotnine"]
         if SQL.available:
             defaults.append("duckdb")
         assert (

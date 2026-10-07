@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -83,6 +84,7 @@ def before_resolver_spawn(
         config.write_text(
             json.dumps(
                 {
+                    "cache": "host",
                     "resolver": {
                         "environment": {
                             LOADER_VARIABLE: environment[
@@ -90,7 +92,7 @@ def before_resolver_spawn(
                             ],
                             "MCP_CONSOLE_TEST_SPAWN_OWNER": "1",
                         }
-                    }
+                    },
                 }
             )
         )
@@ -125,11 +127,11 @@ def test_interrupts_first_cell_before_resolver_registration(
         root,
     ):
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         started.wait("first resolver has not been spawned")
         assert not (root / "resolver.jsonl").exists()
         client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         (root / "armed").unlink()
         release.release()
         client.response_timeout = 600
@@ -153,7 +155,7 @@ def test_interrupts_first_cell_between_resolver_phases(
         root,
     ):
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         started.wait("default preparation has not been spawned")
         invocations = [
             json.loads(line)
@@ -163,7 +165,7 @@ def test_interrupts_first_cell_between_resolver_phases(
         assert invocations[0]["program"] == "uv", invocations
         assert invocations[0]["arguments"][:2] == ["python", "list"], invocations
         client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         (root / "armed").unlink()
         release.release()
         client.response_timeout = 600
@@ -192,9 +194,9 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         started.wait("stdin startup has not spawned its first resolver")
         assert not (root / "resolver.jsonl").exists()
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         client.send(control="interrupt", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         (root / "armed").unlink()
         release.release()
         client.response_timeout = 600

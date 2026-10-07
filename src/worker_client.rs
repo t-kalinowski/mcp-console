@@ -43,6 +43,7 @@ pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "arrow",
     "nanoarrow",
     "yyjsonr",
+    "ggplot2",
 ];
 
 #[cfg(not(windows))]
@@ -156,7 +157,6 @@ struct WorkerSpec<'a> {
     dynamic_resolution: bool,
     callbacks: WorkerCallbacks,
     local_runtime: Option<&'a crate::local_runtime::Selection>,
-    target: Option<&'a crate::target_session::Session>,
 }
 
 struct IdleResponseSnapshot {

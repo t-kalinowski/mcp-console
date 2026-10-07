@@ -211,7 +211,7 @@ cell before image
         for notice in notices:
             assert tail.count(notice) == 1, (notice, tail[-1_000:])
         omitted = assert_preview(cell_prefix + tail.removesuffix(suffix), raw)
-        assert f"raw cell log: {public_output}" in tail
+        assert f"raw log: {public_output}" in tail
         assert (
             sum(len(block.get("text", "").encode()) for block in result["content"])
             <= 8192

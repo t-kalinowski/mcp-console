@@ -1,0 +1,29 @@
+---
+languages:
+  - r
+  - python
+fields:
+  - r
+  - python
+  - control
+  - requirements
+  - stdin
+  - timeout_ms
+---
+languages:
+  - r
+fields:
+  - r
+  - control
+  - requirements
+  - stdin
+  - timeout_ms
+---
+languages:
+  - python
+fields:
+  - python
+  - control
+  - requirements
+  - stdin
+  - timeout_ms

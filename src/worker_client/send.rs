@@ -87,7 +87,7 @@ impl Client {
             if let Some(active) = self.current_evaluation()? {
                 let Some(claim) = active.evaluation.claim_for_interrupt()? else {
                     return Ok(output::render_response(SendResponse::Running(
-                        Response::default(),
+                        active.evaluation.unobserved_progress(),
                     )));
                 };
                 return Ok(output::render_response(send_response_from_wait(
@@ -452,9 +452,6 @@ impl Client {
         if self.0.python_only && matches!(language, crate::cell::Language::R) {
             return Err("R cells are unavailable in Python sessions without R".into());
         }
-        if !self.0.python_available() && matches!(language, crate::cell::Language::Python) {
-            return Err("Python cells are unavailable: the target has no Python runtime".into());
-        }
         Ok(())
     }
 
@@ -489,19 +486,6 @@ impl Client {
     }
 
     pub(super) fn validate_requirements(&self, requirements: &Requirements) -> Result<(), String> {
-        if let Some(target) = &self.0.target
-            && !target.is_ssh()
-        {
-            let source = if matches!(target, crate::target_session::Session::Docker(..)) {
-                "image"
-            } else {
-                "template"
-            };
-            return Err(format!(
-                "dynamic environment resolution is disabled for {} targets; install packages in the {source} and start a new server session",
-                target.protocol().0
-            ));
-        }
         if self.0.python_only {
             if !self.0.python_preparation {
                 if !requirements.duckdb.is_empty() {

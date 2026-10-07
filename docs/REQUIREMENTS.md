@@ -14,21 +14,20 @@ The retained environment combines an R library/declaration, a normalized Python 
 It lives in server memory, not across server processes.
 A plain restart reuses accepted requirements, including successful automatic additions, without resolving again.
 
-| Target/environment                    | Preparation                                                                                                  |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Local/SSH with R and resolver support | Managed R, Python when not explicitly selected, and R-backed DuckDB extensions.                              |
-| Local/SSH without R                   | Managed Python and extensions through execution-host uv, or an explicitly selected non-managed Python.       |
-| Bare R-capable runtime                | Preinstalled packages/adapters; inspection only.                                                             |
-| Docker/SBX                            | Preinstalled image/template; inspection only. No implicit resolver or installation.                          |
-| Custom worker                         | No built-in defaults; explicit R/DuckDB support, with worker receipts for live R changes. No managed Python. |
+| Environment                       | Preparation                                                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Local with R and resolver support | Managed R, Python when not explicitly selected, and R-backed DuckDB extensions.                              |
+| Local without R                   | Managed Python and extensions through execution-host uv, or an explicitly selected non-managed Python.       |
+| Bare R-capable runtime            | Preinstalled packages/adapters; inspection only.                                                             |
+| Custom worker                     | No built-in defaults; explicit R/DuckDB support, with worker receipts for live R changes. No managed Python. |
 
 The default optional declarations are:
 
-| Environment | Defaults                                                                    |
-| ----------- | --------------------------------------------------------------------------- |
-| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr` |
-| Python      | `numpy`, `pandas`; also `duckdb` without R                                  |
-| DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                          |
+| Environment | Defaults                                                                               |
+| ----------- | -------------------------------------------------------------------------------------- |
+| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
+| Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                   |
+| DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                                     |
 
 Mixed-runtime R infrastructure is separate: reticulate, jsonlite, DBI, DuckDB, Arrow/nanoarrow, pillar, tibble, and utf8 support the bridge and SQL.
 Clearing optional requirements does not remove that infrastructure, ambient libraries, preinstalled packages, or caches.
@@ -144,7 +143,7 @@ Even if the distribution lacks the module or later code fails, a successfully ac
 
 Resolution is restricted to the configuring worker thread and process, with a reentrancy guard.
 Prepare dependencies before starting other threads or fork children; missing imports there cannot invoke the resolver.
-Explicit Python, bare, and prepared targets disable managed resolution.
+Explicit Python and bare workers disable managed resolution.
 Already available imports still work.
 
 ## Live preparation
@@ -183,6 +182,7 @@ Successful activation is its own commit boundary: it survives later import/cell 
 ### DuckDB extension preparation
 
 The resolver uses DuckDB's installation API and normal repository/signature checks.
+Extensions built into the selected DuckDB library are already available and need no download.
 Under managed native networking, it explicitly supplies the runner's HTTP proxy to DuckDB.
 Loading happens later in the worker.
 No SQL catalog, user connection, or runtime object is replaced by an extension-only addition.
@@ -194,7 +194,6 @@ Combined Python and extension additions prepare everything before activation.
 Missing DuckDB in a replacement manifest makes extension preparation fail; include `duckdb` explicitly.
 
 Removing a declaration does not remove its cache entry.
-Prepared Docker/SBX connections can load preinstalled extensions but disable automatic installation.
 
 ## Restarting with requirements
 
@@ -211,7 +210,7 @@ An explicit selection disables managed Python from every request path.
 With R, R and its DuckDB preparation can remain available; without R, host extension preparation is disabled too.
 See [configuration](CONFIGURATION.md#python-environment-selection).
 
-Without R, local/SSH preparation uses startup PATH uv and ignores `RETICULATE_UV`; there is no PATH-Python fallback.
+Without R, preparation uses startup PATH uv and ignores `RETICULATE_UV`; there is no PATH-Python fallback.
 R-present preparation prefers PATH `ir`, then uv (`uv tool run --from r-lib-ir ir`), with reticulate bootstrap when needed.
 Selected broken tools fail rather than silently selecting alternatives.
 `ir` must be at least 0.4.0 and receives the exact selected Rscript.
@@ -232,7 +231,7 @@ When `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY` is set, pass it as DuckDB's `exten
 Local `mcp-console resolve` runs in a separate native resolver sandbox on macOS and Linux.
 Installation, builds, Python startup hooks, and cache warming can execute package code with that policy's host reads, cache writes, and proxy destinations.
 See [resolver configuration and expanded defaults](RESOLVER.md).
-SSH, `--no-sandbox`, and Windows preparation retain host permissions.
+`--no-sandbox` and Windows preparation retain host permissions.
 Use only trusted requirements, resolvers, configuration, and package sources.
 
 R references become separate `ir` arguments with `IR_NO_LOCAL_SOURCES=1`; Python requirements become validated uv arguments, and DuckDB names are data.

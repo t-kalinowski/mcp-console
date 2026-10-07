@@ -16,7 +16,9 @@ def wait(path: str) -> None:
         assert stream.read(1) == b"1"
 
 
-def report_interrupt(signum: int, _frame: object) -> None:
+def wait_for_interrupt() -> None:
+    signum = signal.sigwait({signal.SIGINT})
+    assert signum == signal.SIGINT
     notify(os.environ["MCP_CONSOLE_TEST_UV_INTERRUPTED"])
     wait(os.environ["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"])
     raise SystemExit(128 + signum)
@@ -34,11 +36,17 @@ def checkpoint() -> None:
         return
     os.close(descriptor)
 
-    if "MCP_CONSOLE_TEST_UV_INTERRUPTED" in os.environ:
-        signal.signal(signal.SIGINT, report_interrupt)
+    interruptible = "MCP_CONSOLE_TEST_UV_INTERRUPTED" in os.environ
+    if interruptible:
+        # Block before readiness so an early SIGINT stays pending for sigwait.
+        # A Python callback can remain deferred across a blocking FIFO read.
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+        assert signal.SIGINT not in previous
 
     notify(os.environ["MCP_CONSOLE_TEST_UV_STARTED"])
 
+    if interruptible:
+        wait_for_interrupt()
     wait(os.environ["MCP_CONSOLE_TEST_UV_RELEASE"])
 
 

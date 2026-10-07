@@ -5,22 +5,25 @@ import json
 import os
 import sys
 import tempfile
+from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.requirements import POSIX, PROCESS_EVENTS, requires
+from support.progress import normalize_elapsed, without_elapsed_result
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
 from support.assertions import last_result_text, last_tool_text
 from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.r import r_test_environment, startup_r_package
+from support.r import r_test_environment, reference_plots, startup_r_package
 from support.records import Transcript, TranscriptWithCompanions
-from support.resolvers import record_resolved_r_library
+from support.resolvers import bare_runtime_environment, record_resolved_r_library
 from support.suites import run_this_suite
-from support.ssh import configure, peer_environment
+from boundaries.client_server.server.test_startup import discovery_environment
 
 CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
 
@@ -30,6 +33,20 @@ PNG_1X1 = (
 )
 
 from boundaries.client_server._harness import wait_for_marker
+
+
+STARTUP_PLOT = (
+    # fmt: r
+    code("""
+        options(
+          console.plot.width_in = 4,
+          console.plot.height_in = 3,
+          console.plot.dpi = 100
+        )
+        graphics::plot(1:3)
+        grDevices::dev.off()
+        """)
+)
 
 
 @requires(POSIX)
@@ -338,7 +355,7 @@ def test_records_tool_calls_and_images(
         record_resolved_r_library(environment, workspace)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
             current_directory=workspace,
             umask=0,
@@ -397,7 +414,7 @@ def test_records_tool_calls_and_images(
         assert events[0]["session"] == "default", events[0]
         assert Path(events[0]["working_directory"]).samefile(workspace), events[0]
         assert all(event["run_id"] == run_id for event in events), events
-        assert all(event["schema_version"] == 2 for event in events), events
+        assert all("schema_version" not in event for event in events), events
         assert [event["sequence"] for event in events] == list(range(1, 10)), events
         assert events[1]["call_id"] == events[2]["call_id"] == 1, events
         assert events[3]["call_id"] == events[2]["call_id"], events
@@ -775,14 +792,15 @@ def test_flushes_calls_and_keeps_unpolled_images(
             r="emit image before completion",
             timeout_ms=0,
         )
-        assert client.transcript[-1]["result"] == {
+        assert without_elapsed_result(client.transcript[-1]["result"]) == {
             "content": [
                 {"type": "text", "text": "\n[running; poll with an empty send]"}
             ],
             "isError": False,
         }, client.transcript[-1]
-        client.transcript[-1]["result"]["content"][0]["text"] = (
-            "<leading newline>[running; poll with an empty send]"
+        block = client.transcript[-1]["result"]["content"][0]
+        block["text"] = normalize_elapsed(block["text"]).replace(
+            "\n", "<leading newline>", 1
         )
         image_started = wait_for_marker(
             temporary,
@@ -921,22 +939,46 @@ def test_flushes_calls_and_keeps_unpolled_images(
         return transcript
 
 
-@requires(PROCESS_EVENTS)
+@contextmanager
+def local_discovery(root: Path, *, image: bool = False, fail: bool = False):
+    environment, _ = r_test_environment()
+    home = Path(environment["R_HOME"])
+    with ExitStack() as resources:
+        if image:
+            environment = resources.enter_context(startup_r_package(root, STARTUP_PLOT))
+            # Image ordering does not require managed package preparation.
+            environment = bare_runtime_environment(
+                environment, root / "startup-library"
+            )
+        discovery, reached, release, alive = resources.enter_context(
+            discovery_environment(r_home=None if fail else home)
+        )
+        environment.pop("R_HOME", None)
+        environment["PATH"] = discovery["PATH"]
+        environment["RETICULATE_PYTHON"] = sys.executable
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(root, "discovery_diagnostic")
+        )
+        yield environment, reached, release, alive
+
+
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS, R)
 def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)
-        configure(root, root, [str(binary)])
-        reached = FifoCheckpoint.create(root / "discovery-started")
-        release = FifoCheckpoint.create(root / "discovery-release")
+        environment, reached, release, alive = resources.enter_context(
+            local_discovery(root)
+        )
         try:
             with McpClient(
                 binary,
                 DIRECT.serve(),
-                peer_environment(root, "discovery-diagnostics"),
+                environment,
                 root,
             ) as client:
                 client.initialize_and_list_tools()
                 reached.wait("discovery diagnostic emitted")
+                assert os.read(alive, 1) == b"1"
                 sessions = root / ".agents/console/sessions"
                 wait_for_checkpoint(
                     lambda: next(sessions.glob("*/outputs/session.log"), None),
@@ -964,6 +1006,7 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
             (discovered,) = [
                 event for event in events if event["event"] == "environment_discovered"
             ]
+            assert "schema_version" not in discovered, discovered
             assert [event["event"] for event in early] == [
                 "tool_call",
                 "tool_result",
@@ -981,26 +1024,36 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
             assert "eval: false" not in quarto, quarto
             return [{"early_call_and_result_precede_discovery": True}]
         finally:
-            reached.close()
-            release.close()
+            release.release()
 
 
-@requires(PROCESS_EVENTS)
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS, R)
 def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    reference_environment, rscript = r_test_environment()
+    (expected_image,) = reference_plots(
+        rscript,
+        reference_environment,
+        STARTUP_PLOT,
+        width=4,
+        height=3,
+        dpi=100,
+        pages=1,
+    )
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)
-        configure(root, root, [str(binary)])
-        reached = FifoCheckpoint.create(root / "discovery-started")
-        release = FifoCheckpoint.create(root / "discovery-release")
+        environment, reached, release, alive = resources.enter_context(
+            local_discovery(root, image=True)
+        )
         try:
             with McpClient(
                 binary,
                 DIRECT.serve(),
-                peer_environment(root, "discovery-image"),
+                environment,
                 root,
             ) as client:
                 client.initialize_and_list_tools()
                 reached.wait("discovery awaiting release")
+                assert os.read(alive, 1) == b"1"
                 client.expect(
                     "[worker starting]", requirements={"action": "get"}, timeout_ms=0
                 )
@@ -1035,33 +1088,33 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
             assert events[0]["event"] == "session_started", events
             assert all(events[0]["at"] <= event["at"] for event in events), events
             assert artifact["call_id"] is None, artifact
-            assert image.read_bytes() == base64.b64decode(PNG_1X1)
+            assert image.read_bytes() == expected_image
             markdown = (session / "transcript.md").read_text()
             assert markdown.index("## Call 1:") < markdown.index(
                 "## Artifact 1 for session"
             ), markdown
             return [{"early_call_and_result_precede_startup_artifact": True}]
         finally:
-            reached.close()
-            release.close()
+            release.release()
 
 
-@requires(POSIX)
+@requires(NATIVE_FIXTURES, R)
 def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)
-        configure(root, root, [str(binary)])
-        reached = FifoCheckpoint.create(root / "discovery-started")
-        release = FifoCheckpoint.create(root / "discovery-release")
+        environment, reached, release, alive = resources.enter_context(
+            local_discovery(root, fail=True)
+        )
         try:
             with McpClient(
                 binary,
                 DIRECT.serve(),
-                peer_environment(root, "discovery-failure"),
+                environment,
                 root,
             ) as client:
                 client.initialize_and_list_tools()
                 reached.wait("discovery awaiting failure release")
+                assert os.read(alive, 1) == b"1"
                 client.expect(
                     "[worker starting]",
                     requirements={"action": "get"},
@@ -1071,9 +1124,9 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
                 release.release()
                 response = client.send()
                 assert response["isError"], response
-                assert "synthetic discovery failure" in last_result_text(client)
+                assert "fixture R discovery failed" in last_result_text(client)
                 _, stderr = client.finish_with_standard_error(expected_exit_status=1)
-                assert stderr == "synthetic discovery failure\n", stderr
+                assert "fixture R discovery failed" in stderr, stderr
             (session,) = (root / ".agents/console/sessions").iterdir()
             events = [
                 json.loads(line)
@@ -1087,7 +1140,7 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
             assert [event["call_id"] for event in calls] == [1, 2, 3], calls
             assert [event["call_id"] for event in results] == [1, 2, 3], results
             assert results[-1]["result"]["isError"], results[-1]
-            assert "synthetic discovery failure" in str(results[-1]), results[-1]
+            assert "fixture R discovery failed" in str(results[-1]), results[-1]
             assert sum(event["event"] == "startup_failed" for event in events) == 1
             assert events[0]["dynamic_resolution"] is None, events[0]
             assert events[0]["python_preparation"] is None, events[0]
@@ -1099,8 +1152,7 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
             assert "stop('failed discovery ran the cell')" in quarto, quarto
             return [{"early_calls_recorded": 3, "startup_failure_recorded": True}]
         finally:
-            reached.close()
-            release.close()
+            release.release()
 
 
 @requires(POSIX)
@@ -1207,7 +1259,7 @@ def test_records_startup_without_a_tool_call(
                 ]
                 assert len(artifacts) == 2, artifacts
                 assert all(event["call_id"] is None for event in artifacts)
-                assert all(event["schema_version"] == 2 for event in events), events
+                assert all("schema_version" not in event for event in events), events
                 assert all(
                     (session / event["path"])
                     .read_bytes()

@@ -6,7 +6,6 @@ import re
 import signal
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -22,11 +21,102 @@ from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
 
 
+def test_rejects_invalid_preparation_frames(binary: Path) -> Transcript:
+    transcript: Transcript = []
+    with TemporaryDirectory() as temporary:
+        for name, frame, diagnostic in (
+            (
+                "versioned_open",
+                '{"Open":{"mode":"PythonOnly","version":1}}\n',
+                "invalid resolver JSON: unknown field `version`, expected `mode` at line 1 column 38",
+            ),
+            (
+                "malformed_json",
+                '{"Open":}\n',
+                "invalid resolver JSON: expected value at line 1 column 9",
+            ),
+            (
+                "unterminated_open",
+                '{"Open":{"mode":"PythonOnly"}}',
+                "resolver input closed",
+            ),
+            (
+                "oversized_line",
+                " " * (1024 * 1024 + 1) + "\n",
+                "resolver JSON line exceeds 1 MiB",
+            ),
+        ):
+            result = subprocess.run(
+                [binary, "resolve"],
+                input=frame,
+                text=True,
+                capture_output=True,
+                timeout=10,
+                cwd=temporary,
+                env={
+                    **os.environ,
+                    "MCP_CONSOLE_HOME": str(Path(temporary) / "console"),
+                },
+            )
+            assert result.returncode == 1, result
+            assert result.stdout == "", result.stdout
+            assert result.stderr == diagnostic + "\n", result.stderr
+            transcript.append(
+                {
+                    "case": name,
+                    "input_bytes": len(frame.encode("utf-8")),
+                    "exit": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                }
+            )
+    return transcript
+
+
+def test_opens_and_closes_with_batched_frames(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        environment = {
+            **os.environ,
+            "PATH": "",
+            "MCP_CONSOLE_HOME": str(Path(temporary) / "console"),
+        }
+        environment.pop("RETICULATE_PYTHON", None)
+        frames = '{"Open":{"mode":"PythonOnly"}}\n"Close"\n'
+        process = subprocess.Popen(
+            [binary, "resolve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+            cwd=temporary,
+        )
+        try:
+            assert process.stdin is not None
+            assert process.stdout is not None and process.stderr is not None
+            process.stdin.write(frames)
+            process.stdin.flush()
+            # Keep stdin open: Close must survive a read alongside Open.
+            assert process.wait(timeout=10) == 0
+            messages = [json.loads(line) for line in process.stdout]
+            assert len(messages) == 3, messages
+            assert messages[0] == "Hello" and messages[2] == "Closed", messages
+            assert messages[1]["Completed"]["id"] == 0, messages
+            assert messages[1]["Completed"]["confirmed"] is True, messages
+            errors = process.stderr.read()
+            assert errors == "", errors
+            return [{"input": frames, "stdout": messages, "stderr": errors, "exit": 0}]
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=10)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+
+
 @requires(POSIX)
 def test_resolves_python_version_over_json(binary: Path) -> Transcript:
-    root = Path(__file__).resolve().parents[3]
-    with (root / "Cargo.toml").open("rb") as source:
-        build = tomllib.load(source)["package"]["version"]
     with TemporaryDirectory() as temporary:
         uv = Path(temporary) / "uv"
         uv.write_text(
@@ -63,20 +153,10 @@ esac
             return json.loads(process.stdout.readline())
 
         try:
-            send(
-                {
-                    "Open": {
-                        "version": 6,
-                        "build": build,
-                        "workspace": "",
-                        "selections": {"r_home": None, "python": None},
-                        "mode": "PythonOnly",
-                    }
-                }
-            )
+            send({"Open": {"mode": "PythonOnly"}})
             hello = receive()
             discovery = receive()
-            assert hello == {"Hello": {"version": 6, "build": build}}, hello
+            assert hello == "Hello", hello
             assert discovery["Completed"]["id"] == 0, discovery
             assert discovery["Completed"]["confirmed"] is True, discovery
             send(
@@ -166,8 +246,6 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
         }
         if fail:
             environment["MCP_CONSOLE_TEST_OBSERVER_FAIL"] = "1"
-        with (Path(__file__).resolve().parents[3] / "Cargo.toml").open("rb") as source:
-            build = tomllib.load(source)["package"]["version"]
         process = subprocess.Popen(
             [binary, "resolve"],
             stdin=subprocess.PIPE,
@@ -179,26 +257,13 @@ def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
         )
         try:
             assert process.stdin is not None and process.stdout is not None
-            process.stdin.write(
-                json.dumps(
-                    {
-                        "Open": {
-                            "version": 6,
-                            "build": build,
-                            "workspace": "",
-                            "selections": {"r_home": None, "python": None},
-                            "mode": "PythonOnly",
-                        }
-                    }
-                )
-                + "\n"
-            )
+            process.stdin.write(json.dumps({"Open": {"mode": "PythonOnly"}}) + "\n")
             process.stdin.flush()
             opened = [
                 json.loads(line)
                 for line in read_lines(process.stdout, 2, "preparation open")
             ]
-            assert opened[0] == {"Hello": {"version": 6, "build": build}}, opened
+            assert opened[0] == "Hello", opened
             assert opened[1]["Completed"]["confirmed"] is True, opened
             process.stdin.write(
                 json.dumps(

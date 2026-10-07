@@ -1,0 +1,30 @@
+---
+send:
+  python: |
+    retained = 42
+    retained
+result:
+  content:
+    - type: text
+      text: |
+        42
+  isError: false
+---
+send:
+  requirements:
+    duckdb:
+      - json
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  python: sql_connection().execute('SELECT ?::JSON', [retained]).fetchone()
+result:
+  content:
+    - type: text
+      text: |
+        ('42',)
+  isError: false

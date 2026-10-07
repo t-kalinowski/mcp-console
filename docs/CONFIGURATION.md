@@ -21,21 +21,56 @@ mcp-console -c extends=:workspace serve -c sandbox.network=enabled
 mcp-console sandbox -c 'sandbox.environment={LABEL: analysis}' -- Rscript analysis.R
 ```
 
-See [resolver settings](RESOLVER.md), [sandbox settings](SANDBOX_CONFIGURATION.md), [SSH](SSH.md), [Docker](DOCKER.md), and [Docker Sandbox](DOCKER_SANDBOX.md) for available keys.
+See [resolver settings](RESOLVER.md) and [sandbox settings](SANDBOX_CONFIGURATION.md) for available keys.
+
+Console supports local-host execution only.
+Run the MCP client and Console together on the intended host; the client or deployment tooling owns remote connections, containers, and VMs.
 
 Local sandboxed sessions use Console-specific caches by default.
 The top-level `cache: host` setting or `-c cache=host` opts into host installations and cache locations.
 `--no-sandbox` defaults to host caches.
-See [cache locations](RESOLVER.md#cache-locations) for platform paths and execution-target limits.
+See [cache locations](RESOLVER.md#cache-locations) for platform paths.
 
 ## Console home
 
 The home Console directory is `~/.agents/console`.
-Set `MCP_CONSOLE_HOME` to an absolute directory to relocate fallback `config.yaml` and `sessions/` without changing `HOME` or R, Python, uv, and provider storage.
+Set `MCP_CONSOLE_HOME` to an absolute directory to relocate fallback `config.yaml` and `sessions/` without changing `HOME` or R, Python, or uv storage.
 Empty or relative values are errors when fallback is needed; `~` is not expanded.
 
 Project configuration and project recordings take precedence independently: configuration requires the project file, while recordings require only an existing project `.agents/console` directory.
 See [recording](RECORDING.md).
+
+## Model-visible languages
+
+Expose SQL alone, or SQL and Python, with a top-level list:
+
+```yaml
+languages: [sql]
+```
+
+```sh
+mcp-console serve -c 'languages=[sql,python]'
+```
+
+The list accepts a nonempty subset of `r`, `python`, and `sql`; SQL is not yet supported on Windows.
+An override replaces the entire list.
+Omitting `languages` preserves the standard full interface and the internal `MCP_CONSOLE_LANGUAGES` filter.
+An explicit list determines the public interface independently of that internal runtime setting.
+
+The selection is captured at server launch.
+Tool discovery, descriptions, and source-argument validation use the same selection, including before runtime discovery and after worker restart.
+Editing the configuration file requires a new server connection to change the interface.
+A hidden source field is rejected even when its value is `null`, before any same-call restart, dependency preparation, or input delivery.
+
+Visibility does not select or disable embedded runtimes or choose a SQL provider.
+SQL can use hidden R or Python without a model-facing setup cell.
+Runtime availability still determines whether an exposed language can execute.
+Polling, stdin, controls, and all supported requirements remain available, including R/Python requirements needed by SQL.
+For a missing managed provider, follow the SQL diagnostic's package requirements and restart; selected Python environments require preinstalled packages.
+Custom workers retain their own language, SQL, and preparation contracts; Console does not supply their SQL backend.
+
+This is a usability setting.
+It does not restrict what SQL can do or change the sandbox and dependency trust boundaries.
 
 ## Python environment selection
 
@@ -46,15 +81,13 @@ python: .venv/bin/python
 ```
 
 This overrides inherited `RETICULATE_PYTHON`, is retained across restarts, and is unavailable with custom workers.
-Paths, including bare filenames, are relative to the launch directory locally or `target.workspace` on an execution target.
-The controller does not resolve target paths.
+Paths, including bare filenames, are relative to the launch directory.
 
-For local selection, a leading `~` expands using the controller's absolute `HOME`, including in a quoted override such as `-c 'python=~/.venv/bin/python'`.
+A leading `~` expands using the server's absolute `HOME`, including in a quoted override such as `-c 'python=~/.venv/bin/python'`.
 Missing, empty, or relative `HOME` is an error when expansion is requested; `~user` and environment-variable references are not expanded.
 
 Explicit selection uses preinstalled Python packages and bypasses managed Python preparation.
-Without R or an explicit selection, local/SSH sessions use uv on the execution host.
-Prepared Docker/SBX targets always use preinstalled packages: their probe tries the explicit selection, then `RETICULATE_PYTHON`, then `python3` / `python` on the workload PATH.
+Without R or an explicit selection, Console uses uv on the local host.
 A broken selected interpreter is an error, not a reason to fall back.
 See [runtime selection](BUILTIN_RUNTIME.md).
 
@@ -89,7 +122,7 @@ These rules are schema-independent: changing `kind` or `extends` does not remove
 Defaults, profile expansion, application decoding, and native-policy validation happen afterward; `--writable-root` adds grants after layering.
 
 Settings are captured once and reused across worker generations.
-Execution hosts consume that captured input without rediscovering YAML.
+Worker and resolver launches consume that captured input without rediscovering YAML.
 Explicit native `--config-env` and internal `--settings-env` inputs are already complete and reject `-c` overrides and `--no-project-config`.
 
 The layering code is in [`src/config.rs`](../src/config.rs) and `src/config/`; application decoding belongs to [`src/settings.rs`](../src/settings.rs).

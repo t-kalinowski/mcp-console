@@ -1,6 +1,6 @@
 # Recordings and rendering
 
-Recordings live on the **controller**, even when cells run on SSH, Docker, or Docker Sandbox.
+Recordings live on the host running Console.
 They contain source, stdin, requirements, output, and artifacts without redaction.
 There is no aggregate quota or automatic cleanup.
 Shared paths can expose controller records to the workload; choose them deliberately.
@@ -21,10 +21,11 @@ Otherwise it uses `~/.agents/console/sessions/<run-id>/`, without creating a pro
 | `artifacts/`              | Retained image files                                                                            |
 
 Returned raw-log paths are launch-directory-relative for project recordings and absolute for fallback recordings.
+When a preview's location exceeds 512 UTF-8 bytes, it instead gives the exact `sessions/<run-id>/...` path, labelled relative to the Console recording directory selected above.
 Retrieving omitted text requires filesystem access there; Console has no log read/search tool.
 
-The journal uses schema version 2 for startup/session events and nullable metadata before discovery.
-In version 2, `artifact_created.call_id` is `null` for session-owned images and an integer for cell-owned images; consumers must select their decoder using `schema_version`.
+The journal schema is unversioned, with nullable runtime metadata before discovery.
+`artifact_created.call_id` is `null` for session-owned images and an integer for cell-owned images.
 
 The journal is flushed before derived projections.
 A `tool_result` is recorded before transport delivery, so it does not prove that the client received it.
@@ -69,7 +70,6 @@ uv tool run --from r-lib-ir ir render transcript.qmd
 With `ir` on `PATH`, use `ir render transcript.qmd`.
 Rendering requires R on the render host even when the original Console session had no R.
 SQL chunks need a user-supplied DBI connection.
-Remote/compute recordings identify their target but do not copy its files or reproduce its environment.
 
 Front matter supplies dependency declarations, not a lockfile.
 R-present sessions combine built-in defaults and recorded declarations, which need not match every successfully accepted or automatically inferred package.

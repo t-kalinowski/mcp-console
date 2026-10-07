@@ -6,13 +6,13 @@ import os
 from pathlib import Path
 from queue import Queue
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
 from threading import Thread
-import tomllib
 import unittest
+
+from windows_gate import Gate
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
@@ -38,18 +38,7 @@ class Resolver:
             self.messages.put(None)
 
         Thread(target=read, daemon=True).start()
-        build = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
-        self.send(
-            {
-                "Open": {
-                    "version": 6,
-                    "build": build,
-                    "workspace": "",
-                    "selections": {},
-                    "mode": mode,
-                }
-            }
-        )
+        self.send({"Open": {"mode": mode}})
 
     def send(self, message):
         self.process.stdin.write(json.dumps(message).encode() + b"\n")
@@ -62,7 +51,7 @@ class Resolver:
         return message
 
     def ready(self):
-        assert "Hello" in self.receive()
+        assert self.receive() == "Hello"
         discovery = self.receive()["Completed"]
         assert discovery["confirmed"], discovery
         assert "Ok" in discovery["result"], discovery
@@ -192,16 +181,11 @@ class WindowsResolver(unittest.TestCase):
         self.assertIn("fixture resolver failure", result["result"]["Err"])
 
     def blocked_resolver(
-        self, mode: str = "blocked"
+        self, mode: str = "blocked", *, release: bool = True
     ) -> tuple[Resolver, dict[int, int]]:
-        listener = socket.socket()
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        listener.settimeout(10)
-        self.addCleanup(listener.close)
-        self.environment["TEST_RESOLVER_GATE"] = (
-            f"127.0.0.1:{listener.getsockname()[1]}"
-        )
+        gate = Gate()
+        self.addCleanup(gate.close)
+        self.environment["TEST_RESOLVER_GATE"] = gate.name
         self.environment["TEST_RESOLVER_MODE"] = mode
         resolver = self.resolver()
         resolver.send(
@@ -214,9 +198,9 @@ class WindowsResolver(unittest.TestCase):
                 }
             }
         )
-        connection, _ = listener.accept()
-        with connection, connection.makefile() as input:
-            pids = [int(pid) for pid in input.readline().split()]
+        gate.accept(resolver.process)
+        try:
+            pids = [int(pid) for pid in gate.readline().split()]
             self.assertEqual(len(pids), 2)
             kernel = ctypes.WinDLL("kernel32", use_last_error=True)
             kernel.OpenProcess.argtypes = [
@@ -234,7 +218,11 @@ class WindowsResolver(unittest.TestCase):
                 processes[pid] = handle
             # Pin both identities before permitting normal exit or sending a
             # control. Reopening PIDs after retirement can observe their reuse.
-            connection.sendall(b"\x01")
+            if release:
+                gate.sendall(b"\x01")
+        finally:
+            if release:
+                gate.close()
         return resolver, processes
 
     def assert_retired(self, processes: dict[int, int]) -> None:
@@ -270,6 +258,27 @@ class WindowsResolver(unittest.TestCase):
         resolver.process.stdin.close()
         resolver.process.wait(timeout=10)
         self.assert_retired(processes)
+
+    def test_cancellation_before_gate_release_retires_resolver_and_descendants(self):
+        for action in ("Interrupted", "Close"):
+            with self.subTest(action=action):
+                # Pin both identities without releasing the fixture's pipe
+                # checkpoint. Cancellation must retire it and its descendant.
+                resolver, processes = self.blocked_resolver(release=False)
+                if action == "Close":
+                    resolver.process.stdin.close()
+                    resolver.process.wait(timeout=10)
+                else:
+                    resolver.send({"Control": {"id": 1, "control": action}})
+                    self.assertEqual(
+                        resolver.receive(),
+                        {"Controlled": {"id": 1, "result": {"Ok": True}}},
+                    )
+                    completed = resolver.receive()["Completed"]
+                    self.assertTrue(completed["confirmed"], completed)
+                    self.assertEqual(completed["control"], action)
+                    self.assertIn("Err", completed["result"])
+                self.assert_retired(processes)
 
     def test_delayed_exit_reports_unconfirmed_retirement(self) -> None:
         # A held EXIT_PROCESS_DEBUG_EVENT delays kernel shutdown and process
@@ -363,7 +372,7 @@ class WindowsResolver(unittest.TestCase):
                     # held. An observer join before that allowance hangs here.
                     self.assertNotEqual(resolver.process.wait(timeout=10), 0)
                     self.assertIn(
-                        "remote preparation retirement is unconfirmed",
+                        "preparation retirement is unconfirmed",
                         resolver.process.stderr.read().decode(errors="replace"),
                     )
                     self.assertEqual(kernel.WaitForSingleObject(handle, 0), 258)
@@ -437,7 +446,9 @@ class WindowsResolverMaterialization(unittest.TestCase):
     def test_uv_bootstraps_ir_and_materializes_r_library(self):
         r_home = os.environ.get("R_HOME")
         if not r_home:
-            r_home = subprocess.check_output(["R", "RHOME"], text=True).strip()
+            r_home = subprocess.check_output(
+                [shutil.which("R") or "R", "RHOME"], text=True
+            ).strip()
         self.environment["R_HOME"] = r_home
         resolver = self.resolver("R")
         self.assertEqual(

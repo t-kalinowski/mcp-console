@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
@@ -351,7 +352,10 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
         try:
             client.initialize_and_list_tools()
             client.send(r="stall accepted relay shutdown", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             helper_marker = wait_for_marker(
                 temporary_path,
                 "zod-relay-retirement-processes",
@@ -434,7 +438,10 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
         try:
             client.initialize_and_list_tools()
             client.send(r="stall with stopped relay", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             helper_marker = wait_for_marker(
                 temporary_path,
                 "zod-relay-stop-helper",
@@ -561,7 +568,10 @@ def test_restart_reports_stalled_sandbox_supervisor(binary: Path) -> Transcript:
         try:
             client.initialize_and_list_tools()
             client.send(r="stall with stopped relay", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             helper_marker = wait_for_marker(
                 temporary_path,
                 "zod-relay-stop-helper",
@@ -807,7 +817,10 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
             )
             submitted = client.transcript[-1]
             assert submitted["id"] == operation, submitted
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             submitted["send"]["r"] = "<stall with detached stdin>"
 
             control.wait_for(operation, "worker_operation_started")
@@ -834,7 +847,7 @@ def test_shutdown_is_bounded_with_detached_stdin_descendant(
                 client.send(stdin="x" * chunk_bytes, timeout_ms=0)
                 probe = client.transcript[-1]
                 assert probe["id"] == request, probe
-                assert last_tool_text(client) == (
+                assert without_elapsed(last_tool_text(client)) == (
                     "\n[running; poll with an empty send]"
                 )
                 expected_bytes += chunk_bytes

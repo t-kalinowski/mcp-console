@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run --script
-"""Configured presentation stays independent of interpreter/provider discovery."""
+"""Configured presentation stays independent of interpreter discovery."""
 
 import difflib
 import json
@@ -11,11 +11,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
-from support.docker import configure as configure_image
-from support.docker_sandbox import configure as configure_template
 from support.execution import DIRECT
 from support.records import Transcript
-from support.requirements import REMOTE_CONTROLLERS, SQL, requires
+from support.requirements import SQL
 from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
@@ -32,28 +30,12 @@ def test_builtin_configured_language_matrix(binary: Path) -> Transcript:
     return _configured_language_matrix(binary)
 
 
-@requires(REMOTE_CONTROLLERS)
-def test_prepared_configured_language_matrix(binary: Path) -> Transcript:
-    return [
-        {"source": source, "matrix": _configured_language_matrix(binary, source)}
-        for source in ("image", "template")
-    ]
-
-
-def _configured_language_matrix(binary: Path, source: str | None = None) -> Transcript:
+def _configured_language_matrix(binary: Path) -> Transcript:
     records: Transcript = []
     languages = LANGUAGES if SQL.available else ("r,python", "r", "python")
     for enabled in languages:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            if source == "image":
-                configure_image(root, "console-presentation:unavailable")
-            elif source == "template":
-                configure_template(
-                    root, template="docker.io/example/console@sha256:" + "a" * 64
-                )
-            # No runtime or provider is discoverable. Configured fields and text
-            # must still be present, without provisioning interpreters or targets.
             environment = dict(os.environ, PATH="", MCP_CONSOLE_LANGUAGES=enabled)
             for name in ("R_HOME", "RETICULATE_PYTHON", "RETICULATE_UV"):
                 environment.pop(name, None)
@@ -82,10 +64,6 @@ def _configured_language_matrix(binary: Path, source: str | None = None) -> Tran
                         assert (guidance in description) == (field in fields)
                 if enabled == languages[0]:
                     baseline = tool
-                    # Existing canonical snapshots own the managed field text.
-                    # Prepared fields have distinct text, pinned here in full.
-                    if source is not None:
-                        records.append({"tool": tool})
                 else:
                     expected = {
                         field: schema
@@ -108,21 +86,6 @@ def _configured_language_matrix(binary: Path, source: str | None = None) -> Tran
                             json.dumps(tool, indent=2).splitlines(),
                         )
                     )
-                if source is not None:
-                    requirements = properties["requirements"]
-                    assert requirements["properties"] == {
-                        "action": {"type": "string", "enum": ["get"]}
-                    }
-                    assert requirements["required"] == ["action"]
-                    assert (
-                        "Dependency preparation is unavailable on this target."
-                        in description
-                    )
-                    assert 'requirements={"action":"add"' not in description
-                    for field in fields:
-                        assert properties[field]["description"].endswith(
-                            f"Dependencies must be preinstalled in the {source}."
-                        )
                 # Pin the varying paragraph; compare every shared paragraph and
                 # field schema in full so the matrix does not repeat them.
                 if os.name == "nt":
@@ -144,14 +107,13 @@ def _configured_language_matrix(binary: Path, source: str | None = None) -> Tran
                 assert result["isError"] is True, result
                 assert client.request("tools/list")["result"]["tools"] == [tool]
                 _, stderr = client.finish_with_standard_error(expected_exit_status=1)
-                if source is None:
-                    assert result == {
-                        "content": [{"type": "text", "text": MISSING_UV}],
-                        "isError": True,
-                    }, result
-                    assert stderr == MISSING_UV + "\n", stderr
-                    if enabled == languages[0]:
-                        records[-1].update(preparation_error=result, stderr=stderr)
+                assert result == {
+                    "content": [{"type": "text", "text": MISSING_UV}],
+                    "isError": True,
+                }, result
+                assert stderr == MISSING_UV + "\n", stderr
+                if enabled == languages[0]:
+                    records[-1].update(preparation_error=result, stderr=stderr)
     return records
 
 

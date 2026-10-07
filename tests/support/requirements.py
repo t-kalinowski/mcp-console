@@ -11,7 +11,6 @@ from typing import TypeVar
 
 from support.linux_sandbox import (
     fresh_procfs_available,
-    landlock_available,
     nested_namespaces_available,
     process_events_available,
 )
@@ -37,8 +36,9 @@ R = Requirement(
     or (
         "PATH" in os.environ
         and any(
-            os.path.lexists(Path(directory) / ("R.exe" if os.name == "nt" else "R"))
+            os.path.lexists(Path(directory) / name)
             for directory in os.environ["PATH"].split(os.pathsep)
+            for name in (("R.exe", "R.bat", "R.cmd") if os.name == "nt" else ("R",))
         )
     ),
     "requires R_HOME or R on PATH",
@@ -107,15 +107,9 @@ SQL = Requirement(
 )
 R_EVENT_LOOP = Requirement(
     "R event loop",
-    POSIX.available,
-    "Windows idle R callback integration is deferred",
+    WORKER.available,
+    "requires a supported built-in worker host",
 )
-REMOTE_CONTROLLERS = Requirement(
-    "remote controllers",
-    sys.platform in {"darwin", "linux"},
-    "Windows SSH/Docker/SBX controllers are deferred",
-)
-
 SYSTEM_PYTHON = Path("/usr/bin/python3")
 FRAMEWORK_PYTHON = Path(
     "/Library/Frameworks/Python.framework/Versions/Current/bin/python3"
@@ -189,13 +183,6 @@ NON_UTF8_FILENAMES = Requirement(
     "non-UTF-8 filenames",
     sys.platform == "linux",
     "requires Linux; macOS rejects non-UTF-8 filenames",
-)
-
-
-LANDLOCK = Requirement(
-    "Landlock filesystem enforcement",
-    landlock_available(),
-    "requires Landlock with truncate enforcement (ABI 3 or later)",
 )
 
 

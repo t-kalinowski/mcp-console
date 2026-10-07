@@ -37,24 +37,39 @@ pub(crate) mod result_file;
 mod unsupported;
 
 pub(crate) fn find_path_entry(program: &str) -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    let native_program = if std::path::Path::new(program).extension().is_none() {
+        format!("{program}.exe")
+    } else {
+        program.to_string()
+    };
+    #[cfg(windows)]
+    let program = native_program.as_str();
+    find_path_entry_from_names(&[program])
+}
+
+pub(crate) fn find_r_path_entry() -> Option<std::path::PathBuf> {
+    #[cfg(windows)]
+    return find_path_entry_from_names(&["R.exe", "R.bat", "R.cmd"]);
+    #[cfg(not(windows))]
+    find_path_entry("R")
+}
+
+fn find_path_entry_from_names(programs: &[&str]) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     // A broken symlink or non-executable entry is a broken installation, not
     // permission to select a different resolver.
     std::env::split_paths(&path).find_map(|directory| {
-        let candidate = if directory.as_os_str().is_empty() {
-            std::path::PathBuf::from(".").join(program)
-        } else {
-            directory.join(program)
-        };
-        #[cfg(windows)]
-        let candidate = if candidate.extension().is_none() {
-            candidate.with_extension("exe")
-        } else {
-            candidate
-        };
-        std::fs::symlink_metadata(&candidate)
-            .is_ok()
-            .then_some(candidate)
+        programs.iter().find_map(|program| {
+            let candidate = if directory.as_os_str().is_empty() {
+                std::path::PathBuf::from(".").join(program)
+            } else {
+                directory.join(program)
+            };
+            std::fs::symlink_metadata(&candidate)
+                .is_ok()
+                .then_some(candidate)
+        })
     })
 }
 
@@ -68,9 +83,7 @@ pub(crate) use managed_duckdb_python::resolve_python_duckdb_extensions;
 #[cfg(all(test, unix))]
 use managed_python::resolve_python_manifest;
 #[cfg(any(unix, windows))]
-pub(crate) use managed_python::{
-    resolve_python_manifest_for_remote, resolve_python_version, resolve_python_version_for_remote,
-};
+pub(crate) use managed_python::{resolve_python_manifest_for_host, resolve_python_version};
 #[cfg(any(unix, windows))]
 pub(crate) use managed_r::{
     ManagedRBootstrap, ManagedRResolverConfiguration, discover, resolve_r, resolve_r_with,

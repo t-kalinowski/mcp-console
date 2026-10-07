@@ -495,8 +495,8 @@ def test_drains_standard_streams_while_evaluating(
     output = _tool_text(result)
     assert not result["isError"]
     assert len(output.encode()) <= 8 * 1024
-    assert "output preview: omitted" in output
-    assert "raw cell log:" in output
+    assert "output omitted:" in output
+    assert "raw log:" in output
 
     # The wire capture verifies every emitted byte independently of the preview.
     transcript = client.finish()

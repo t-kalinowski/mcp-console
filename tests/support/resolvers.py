@@ -153,6 +153,8 @@ def checkpoint_uv_environment(
 def record_resolved_r_library(environment: dict[str, str], directory: Path) -> None:
     real_ir = shutil.which("ir", path=environment.get("PATH"))
     assert real_ir is not None, "ir is required"
+    # Record the result inside an explicitly granted resolver cache.
+    environment["UV_TOOL_DIR"] = str(directory)
     identity = directory / "resolved-r-library"
     fake_bin = directory / "fixture-r-bin"
     fake_bin.mkdir()
@@ -355,6 +357,7 @@ def python_inventory_client(
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
     environment.pop("UV_PYTHON_PREFERENCE", None)
+    environment["UV_TOOL_DIR"] = str(directory)
     environment["RETICULATE_UV"] = str(FIXTURES / "record_uv_environment")
     environment["MCP_CONSOLE_TEST_REAL_UV"] = real_uv
     environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(directory / "uv.jsonl")

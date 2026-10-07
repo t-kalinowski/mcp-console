@@ -15,6 +15,7 @@ result:
               "DBI",
               "arrow",
               "duckdb",
+              "ggplot2",
               "nanoarrow",
               "reticulate",
               "tidyverse",
@@ -22,7 +23,9 @@ result:
             ],
             "python": [
               "numpy",
-              "pandas"
+              "pandas",
+              "matplotlib",
+              "plotnine"
             ],
             "duckdb": [],
             "python_version": [],
@@ -50,6 +53,7 @@ result:
         - DBI
         - arrow
         - duckdb
+        - ggplot2
         - nanoarrow
         - reticulate
         - tidyverse
@@ -57,6 +61,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
       duckdb: []
       python_version: []
       exclude_newer: ~
@@ -300,6 +306,7 @@ result:
               "DBI",
               "arrow",
               "duckdb",
+              "ggplot2",
               "nanoarrow",
               "reticulate",
               "tidyverse",
@@ -307,7 +314,9 @@ result:
             ],
             "python": [
               "numpy",
-              "pandas"
+              "pandas",
+              "matplotlib",
+              "plotnine"
             ],
             "duckdb": [],
             "python_version": [],
@@ -335,6 +344,7 @@ result:
         - DBI
         - arrow
         - duckdb
+        - ggplot2
         - nanoarrow
         - reticulate
         - tidyverse
@@ -342,6 +352,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
       duckdb: []
       python_version: []
       exclude_newer: ~

@@ -9,6 +9,7 @@ result:
     - type: text
       text: |-
 
+        [elapsed: <elapsed>s since admission; no new output]
         [running; poll with an empty send]
   isError: false
 ---
@@ -18,17 +19,17 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8050
+        text_bytes: 8162
         concat:
           - |
             zod stdin closed
           - repeat: x
-            count: 3823
+            count: 3951
           - |
 
-            [output preview: omitted 4186641 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/session.log (Console server recording workspace; controller for remote targets); 4194321 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 4186385 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/session.log]
           - repeat: y
-            count: 3840
+            count: 3968
           - |-
 
             [active evaluation stopped by session restart request]

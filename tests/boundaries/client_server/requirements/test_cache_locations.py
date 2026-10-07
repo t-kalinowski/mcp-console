@@ -65,6 +65,11 @@ def test_host_cache_opt_out(binary: Path) -> Transcript:
 
 
 @requires(SANDBOX)
+def test_host_matplotlib_cache_uses_platform_default(binary: Path) -> Transcript:
+    return cache_locations(binary, host=True, sources=("platform",))
+
+
+@requires(SANDBOX)
 def test_selected_python_preserves_user_site_packages(binary: Path) -> Transcript:
     with TemporaryDirectory(prefix="console-user-site-", dir=Path.home()) as directory:
         root = Path(directory).resolve()
@@ -116,6 +121,7 @@ def test_selected_python_preserves_user_site_packages(binary: Path) -> Transcrip
                             "preinstalled user-site package retained\n",
                             # fmt: python
                             python=code(f"""
+                                import errno
                                 import os
                                 import site
                                 from pathlib import Path
@@ -128,8 +134,8 @@ def test_selected_python_preserves_user_site_packages(binary: Path) -> Transcrip
                                 assert Path(os.environ["UV_CACHE_DIR"]) == Path({str(expected_cache)!r})
                                 try:
                                     Path(package.__file__).write_text("answer = -1\\n")
-                                except PermissionError:
-                                    pass
+                                except OSError as error:
+                                    assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
                                 else:
                                     raise AssertionError("worker wrote to the host user site")
                                 print("preinstalled user-site package retained")
@@ -272,8 +278,15 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
     ]
 
 
+@requires(SANDBOX)
+def test_resolvers_write_dependency_cache_metadata(binary: Path) -> Transcript:
+    for host, source in ((False, "environment"), (True, "config")):
+        cache_locations(binary, host=host, sources=(source,), metadata=True)
+    return [{"resolver_cache_metadata_writable": True}]
+
+
 def cache_locations(
-    binary: Path, *, host: bool, sources: tuple[str, ...]
+    binary: Path, *, host: bool, sources: tuple[str, ...], metadata: bool = False
 ) -> Transcript:
     for source in sources:
         # Host cache mode grants Darwin's user temp. Keep protected companion
@@ -316,6 +329,17 @@ def cache_locations(
                 env.pop("XDG_CACHE_HOME")
                 home = root / "account"
                 settings["resolver"] = {"environment": {"HOME": str(home)}}
+                if host:
+                    settings["cache"] = "host"
+                    env.pop("MPLCONFIGDIR", None)
+                    env["CACHE_TEST_MATPLOTLIB"] = str(
+                        home
+                        / (
+                            ".matplotlib"
+                            if sys.platform == "darwin"
+                            else ".cache/matplotlib"
+                        )
+                    )
                 console_base = home / (
                     "Library/Caches/mcp-console"
                     if sys.platform == "darwin"
@@ -379,6 +403,7 @@ def cache_locations(
             # The hook tests real cache permissions, without requiring downloads.
             # fmt: python
             probe = code(f"""
+                import errno
                 import json
                 import os
                 from pathlib import Path
@@ -393,8 +418,8 @@ def cache_locations(
                     if not {host!r}:
                         try:
                             Path(os.environ["CACHE_TEST_ROOT"]).joinpath("host-write").write_text("escaped")
-                        except PermissionError:
-                            pass
+                        except OSError as error:
+                            assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
                         else:
                             raise AssertionError("resolver wrote outside Console caches")
                     if {source != "direct"!r}:
@@ -403,11 +428,20 @@ def cache_locations(
                             assert file.read_text() == "trusted companion cache"
                             try:
                                 file.write_text("resolver overwrote companion cache")
-                            except PermissionError:
-                                pass
+                            except OSError as error:
+                                assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
                             else:
                                 raise AssertionError("resolver wrote to companion build cache")
                     cache.joinpath("resolver-probe").write_text("prepared")
+                    if {host and source == "platform"!r}:
+                        matplotlib = Path(os.environ["CACHE_TEST_MATPLOTLIB"])
+                        matplotlib.mkdir(parents=True, exist_ok=True)
+                        matplotlib.joinpath("resolver-probe").write_text("prepared")
+                    if {metadata!r}:
+                        for name in (".git", ".agents", ".codex"):
+                            directory = cache / name
+                            directory.mkdir(exist_ok=True)
+                            (directory / "resolver-metadata").write_text("prepared")
                 """)
             (site / "sitecustomize.py").write_text(probe)
             arguments = ["serve"]
@@ -438,11 +472,22 @@ def cache_locations(
                             actual = Path(os.environ[name])
                             assert actual == Path(value) if {host!r} else actual.is_relative_to(value), (name, actual, value)
                         assert Path(os.environ["UV_CACHE_DIR"]).joinpath("resolver-probe").read_text() == "prepared"
+                        if {metadata!r}:
+                            for name in (".git", ".agents", ".codex"):
+                                file = Path(os.environ["UV_CACHE_DIR"]) / name / "resolver-metadata"
+                                assert file.read_text() == "prepared"
                         print("cache selection retained")
                         """)
                     client.expect("cache selection retained\n", python=check)
                 client.finish()
             assert not (root / "host-write").exists()
+            if host and source == "platform":
+                assert (
+                    Path(env["CACHE_TEST_MATPLOTLIB"])
+                    .joinpath("resolver-probe")
+                    .read_text()
+                    == "prepared"
+                )
             for file in companion_files:
                 assert file.read_text() == "trusted companion cache", file
             if not host:

@@ -1,0 +1,18 @@
+---
+languages:
+  - r
+  - sql
+provider: Python
+---
+!same-as configured-r-sql MCP initialization for this execution mode
+---
+send:
+  sql: SELECT 42 AS answer
+result:
+  content:
+    - type: text
+      text: |
+        answer
+        ------
+        42
+  isError: false

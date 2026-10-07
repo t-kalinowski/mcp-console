@@ -19,6 +19,7 @@ from boundaries.client_server.python.test_startup import (
     isolated_python,
     selected_python,
 )
+from support.progress import elapsed_progress, without_elapsed
 from support.requirements import (
     NATIVE_FIXTURES,
     POSIX,
@@ -282,7 +283,7 @@ def test_invalid_early_cell_does_not_poison_default_startup(
                     requirements={"python": ["six"]},
                     timeout_ms=0,
                 )
-                assert last_result_text(client) == RUNNING
+                assert without_elapsed(last_result_text(client)) == RUNNING
                 release.release()
                 failure = client.send()
                 assert failure["isError"]
@@ -309,11 +310,13 @@ def test_accepts_zero_timeout_cell_during_discovery(binary: Path) -> Transcript:
         client.send(
             r='started <- get0("started", ifnotfound = 0L) + 1L; started', timeout_ms=0
         )
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         client.send(timeout_ms=0)
-        assert last_result_text(client) == RUNNING
-        client.send(timeout_ms=20)
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
+        client.send(timeout_ms=250)
+        assert without_elapsed(last_result_text(client)) == RUNNING
+        age, silent = elapsed_progress(last_result_text(client))
+        assert age >= 0.2 and silent
         client.send(r="stop('second cell must not execute')", timeout_ms=0)
         assert client.transcript[-1]["result"]["isError"]
         client.request("ping")
@@ -489,11 +492,11 @@ def test_early_replacement_requirements_withholds_cell_until_prepared(
             requirements={"action": "set"},
             timeout_ms=0,
         )
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         client.send(python="counter += 1", timeout_ms=20)
         assert client.transcript[-1]["result"]["isError"]
         client.send(timeout_ms=20)
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         fixture.release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
@@ -593,7 +596,7 @@ def early_requirements_with_pending_poll(
                     "running response is visible before its write settles"
                 )
                 client.receive(submitted)
-                assert last_result_text(client) == RUNNING
+                assert without_elapsed(last_result_text(client)) == RUNNING
                 release.release()
                 prepared.wait("initial polling does not block candidate preparation")
                 proceed.release()
@@ -674,10 +677,7 @@ def test_idle_stdin_preserves_used_worker_and_input(
             client.send(requirements={"action": "get"})["structuredContent"] == initial
         )
         client.transcript[-1]["result"] = "<unchanged default manifest>"
-        client.send(python="input()")
-        assert last_result_text(client) == (
-            "[input requested: \"\"]\n'retained input'\n"
-        ), last_result_text(client)
+        client.expect("[input requested: \"\"]\n'retained input'\n", python="input()")
         return client.finish()[3:]
 
 

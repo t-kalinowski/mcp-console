@@ -1,6 +1,6 @@
 ---
 stdout: |
-  {"version": 2, "filesystem": {"kind": "restricted", "entries": [{"path": {"type": "special", "value": {"kind": "root"}}, "access": "read"}, {"path": {"type": "path", "path": "<host directory>"}, "access": "write"}]}, "network": "enabled"}
+  {"filesystem": {"kind": "restricted", "entries": [{"path": {"type": "special", "value": {"kind": "root"}}, "access": "read"}, {"path": {"type": "path", "path": "<host directory>"}, "access": "write"}]}, "network": "enabled"}
   active policy still denies writes
   nested sandbox cannot grant host writes
 transcript_normalization:

@@ -2,10 +2,9 @@
 
 Console selects application policy and verifies the private native executable; the runner owns OS enforcement, signals/terminals, descendant retirement, and private storage.
 Console does not implement a second native supervisor or recovery monitor.
-[`sandbox-runner.json`](../sandbox-runner.json) pins the runner and its protocol; its executable contract/tests define native behavior.
+[`sandbox-runner.json`](../sandbox-runner.json) pins the runner revision; its unversioned protocol and executable contract/tests define native behavior.
 
-This page covers `sandbox.provider: native`, the default for local, SSH, and ordinary Docker targets.
-[Docker Sandbox](DOCKER_SANDBOX.md) instead uses compute provider enforcement and never invokes the native companion.
+Console uses native sandbox enforcement on the local host.
 
 ## Application policy and launch
 
@@ -33,10 +32,6 @@ Configuration is captured once, including absence of a file.
 Restarts cannot rediscover changed YAML.
 `:workspace` adds workspace writes with metadata protections; these are overridable defaults, not denial ceilings.
 See [configuration](SANDBOX_CONFIGURATION.md) for composition and complete policies.
-
-For SSH, the controller captures policy but the execution host materializes it, runs native preflight, and owns enforcement/proxy/storage.
-Docker materializes native policy in its owned container.
-Controller paths and proxy addresses must not be substituted for execution-host paths/addresses.
 
 The server owns one ordinary launcher child per generation.
 It requests relay shutdown and reaps the child before joining old I/O and allowing replacement.
@@ -76,19 +71,16 @@ Surviving processes retain native enforcement.
 A final forced launcher kill cannot establish successful cleanup.
 
 Cleanup failures are nonzero errors with diagnostics; unproven retirement retains private storage.
-SSH requires remote cleanup acknowledgment, not just SSH exit; undetected network partitions have no lease deadline.
-Provider removal has its own receipts.
 **Windows x64:** The elevated native backend uses Console-specific sandbox accounts, filesystem ACLs, network rules, and a non-breakaway Job.
 Account provisioning is an explicit interactive setup operation.
-Restricted-token execution is opt-in and requires enabled networking and host reads.
+Unelevated execution is opt-in and requires enabled networking and host reads.
 Both modes confirm Job retirement before returning, and private storage is removed only after confirmation.
 Forced frontend exit is not a cleanup receipt.
 See [Windows setup, validation, and limits](WINDOWS.md).
 Other operating systems are unsupported.
 
-Unrestricted, external, and explicit Landlock modes have different guarantees; read [enforcement modes](SANDBOX_CONFIGURATION.md#filesystem-and-enforcement-modes).
-Local/SSH `--no-sandbox` removes native enforcement and descendant cleanup; normal relay shutdown still reaps the direct worker.
-Docker/SBX outer resources remain.
+Unrestricted and external modes have different guarantees; read [enforcement modes](SANDBOX_CONFIGURATION.md#filesystem-and-enforcement-modes).
+`--no-sandbox` removes native enforcement and descendant cleanup; normal relay shutdown still reaps the direct worker.
 
 ## Policy extensions and compatibility
 

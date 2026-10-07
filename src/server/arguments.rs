@@ -3,6 +3,49 @@ use serde::Deserialize;
 
 const DEFAULT_TIMEOUT_MS: u64 = 60_000;
 
+impl SendArguments {
+    /// Inspect source keys before decoding nullable values or executing any same-call effects.
+    pub(super) fn validate_fields(
+        arguments: Option<&serde_json::Map<String, serde_json::Value>>,
+        languages: crate::cell::Languages,
+        setting: &str,
+    ) -> Result<(), String> {
+        let Some(arguments) = arguments else {
+            return Ok(());
+        };
+        for language in [
+            crate::cell::Language::R,
+            crate::cell::Language::Python,
+            crate::cell::Language::Sql,
+        ] {
+            let field = crate::cell::Languages::field(language);
+            if arguments.contains_key(field) && !languages.enables(language) {
+                return Err(if setting == crate::cell::LANGUAGES_ENV {
+                    format!("`{field}` cells are disabled by `{setting}`")
+                } else {
+                    format!("`{field}` source fields are hidden by `{setting}`")
+                });
+            }
+        }
+        let mut fields = languages.fields();
+        fields.extend(["control", "requirements", "stdin", "timeout_ms"]);
+        if let Some(unknown) = arguments
+            .keys()
+            .find(|field| !fields.contains(&field.as_str()))
+        {
+            let expected = fields
+                .iter()
+                .map(|field| format!("`{field}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "failed to deserialize parameters: unknown field `{unknown}`, expected one of {expected}"
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SendArguments {
@@ -10,21 +53,7 @@ pub(super) struct SendArguments {
     pub(super) r: Option<String>,
     #[schemars(description = super::presentation::python_description())]
     pub(super) python: Option<String>,
-    /// One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
-    /// used by default when its adapter and packages are available and keeps a persistent catalog.
-    /// A result with columns returns a bounded preview. With R-owned managed DuckDB, an unqualified
-    /// relation name can query a data frame in R global state, and a DuckDB table or view with the
-    /// same name takes precedence. A user-selected R connection receives cells through `DBI::dbSendQuery()`; a Python DB-API connection executes
-    /// them through its connection or cursor protocol. The selected driver supplies its own SQL
-    /// dialect and type mappings. Use DBI from an R cell for commands that require the statement
-    /// interface. Without R, managed DuckDB uses Python and requires explicit frame registration
-    /// through `sql_connection().register(name, frame)`; it does not scan Python globals.
-    /// Managed DuckDB conveniences and extension requirements apply only to the managed
-    /// backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
-    /// databases outside the sandbox's writable paths; the sandbox blocks DuckDB's
-    /// default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
-    /// for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
-    /// or stdin-only calls.
+    #[schemars(description = super::presentation::sql_description())]
     pub(super) sql: Option<String>,
     #[schemars(description = super::presentation::control_description())]
     pub(super) control: Option<SendControl>,
@@ -53,16 +82,7 @@ pub(super) struct SendArguments {
     /// further changes require restart. Resolution uses the execution host's resolver policy and may download
     /// packages or extensions or execute installation or build code. Use only trusted requirements.
     pub(super) requirements: Option<Requirements>,
-    /// Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
-    /// and SQL code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
-    /// Line-oriented input therefore normally needs a trailing `\n`. On a code-bearing call without
-    /// control, available requirements are prepared before nonempty stdin is queued. Standalone
-    /// preparation cannot queue nonempty stdin. After `interrupt`, nonempty stdin is queued before the
-    /// 100-millisecond grace and may be consumed while the earlier operation unwinds. After `restart`,
-    /// same-call stdin is sent only to the replacement. When sent with a cell, nonempty text is queued
-    /// before the code is run; an already waiting interactive read may consume it before the new cell
-    /// begins. Empty text queues nothing. If output ends in `[waiting for stdin]`, send the requested
-    /// input here. Unread text can satisfy later reads and is discarded by restart.
+    #[schemars(description = super::presentation::stdin_description())]
     pub(super) stdin: Option<String>,
     /// Omit for normal calls and polls. This limits how long the tool waits; it returns immediately
     /// when execution completes. Reaching the timeout does not cancel execution. Use `0` to start

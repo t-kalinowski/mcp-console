@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, SQL, command, requires
 from support.assertions import (
     collect_running_output,
@@ -28,6 +29,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
     ProcessIdentity,
     capture_process_identity,
+    host_process_id,
     kill_processes,
 )
 from support.normalization import code
@@ -52,7 +54,10 @@ class StartupFixture:
     def wait_for_resolver(self) -> None:
         self.started.wait("first-use resolver")
         identity = self.root / "identity"
-        pids = set(map(int, identity.read_text(encoding="utf-8").split()))
+        pids = {
+            host_process_id(int(pid), self.client.process.pid)
+            for pid in identity.read_text(encoding="utf-8").split()
+        }
         assert len(pids) == 2, pids
         self.identities = [capture_process_identity(pid) for pid in pids]
         for pid in pids:
@@ -202,7 +207,7 @@ def test_prepares_python_before_r_bootstrap_validation(
             cat("ready\n")
             """)
         client.send(r=r, timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         fixture.wait_for_resolver()
         assert fixture.invocations()[-1] == {
             "program": "ir",
@@ -241,15 +246,19 @@ def test_first_cell_prepares_defaults_after_running_response(
               "duckdb",
               "arrow",
               "nanoarrow",
-              "yyjsonr"
+              "yyjsonr",
+              "ggplot2"
             )
             managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             stopifnot(all(defaults %in% list.files(.libPaths()[[managed_index]])))
-            stopifnot(identical(reticulate::py_require()$packages, c("numpy", "pandas")))
+            stopifnot(identical(
+              reticulate::py_require()$packages,
+              c("numpy", "pandas", "matplotlib", "plotnine")
+            ))
             cat("scientific defaults ready\n")
             """)
         client.send(r=r, timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         fixture.wait_for_resolver()
         storage = list(fixture.root.glob("sandbox-*"))
         assert len(storage) == (1 if execution is SANDBOXED else 0), storage
@@ -272,13 +281,14 @@ def test_first_cell_prepares_defaults_after_running_response(
             "arrow",
             "nanoarrow",
             "yyjsonr",
+            "ggplot2",
             "jsonlite",
             "pillar",
             "tibble",
             "utf8",
         }, preparation
         client.send(timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         fixture.release.release()
         client.response_timeout = 600
         assert collect_running_output(client, "first cell", timeouts_ms=(600_000,)) == (
@@ -357,7 +367,7 @@ def test_cancels_resolver_discovery_when_stdin_closes(
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(r="42L", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         fixture.wait_for_resolver()
         client.stdin.close()
         exit_code = client.process.wait(timeout=5)
@@ -381,7 +391,7 @@ def test_cancels_default_preparation_when_stdin_closes(
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(r="42L", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         fixture.wait_for_resolver()
         client.stdin.close()
         exit_code = client.process.wait(timeout=5)
@@ -406,7 +416,7 @@ def test_interrupts_first_use_preparation_without_running_cell(
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         fixture.wait_for_resolver()
         client.send(control="interrupt", timeout_ms=30_000)
         fixture.wait_for_resolver_exit()
@@ -447,7 +457,7 @@ def test_restart_replaces_first_use_cell_and_stdin(
         client = fixture.client
         client.initialize_and_list_tools()
         client.send(python="startup_cell_ran = True", stdin="old input\n", timeout_ms=0)
-        assert last_tool_text(client) == RUNNING
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         fixture.wait_for_resolver()
         armed.touch()
         client.response_timeout = 600

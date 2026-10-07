@@ -77,25 +77,25 @@ case: top-level field
 command: serve
 stderr: >
   .agents/console/config.yaml: profile: unknown field `profile`, expected
-  one of `python`, `extends`, `sandbox`, `target`
+  one of `cache`, `python`, `languages`, `extends`, `sandbox`, `resolver`
 ---
 case: top-level field
 command: sandbox
 stderr: >
   .agents/console/config.yaml: profile: unknown field `profile`, expected
-  one of `python`, `extends`, `sandbox`, `target`
+  one of `cache`, `python`, `languages`, `extends`, `sandbox`, `resolver`
 ---
 case: tagged unknown field
 command: serve
 stderr: >
   .agents/console/config.yaml: profile: unknown field `profile`, expected
-  one of `python`, `extends`, `sandbox`, `target`
+  one of `cache`, `python`, `languages`, `extends`, `sandbox`, `resolver`
 ---
 case: tagged unknown field
 command: sandbox
 stderr: >
   .agents/console/config.yaml: profile: unknown field `profile`, expected
-  one of `python`, `extends`, `sandbox`, `target`
+  one of `cache`, `python`, `languages`, `extends`, `sandbox`, `resolver`
 ---
 case: sandbox type
 command: serve
@@ -123,15 +123,13 @@ stderr: >
 ---
 case: tagged nested sequence
 command: serve
-stderr: >
-  .agents/console/config.yaml: target.command[0]: invalid type: integer
-  `42`, expected a string
+stderr: |
+  .agents/console/config.yaml: sandbox: invalid type: sequence, expected a map
 ---
 case: tagged nested sequence
 command: sandbox
-stderr: >
-  .agents/console/config.yaml: target.command[0]: invalid type: integer
-  `42`, expected a string
+stderr: |
+  .agents/console/config.yaml: sandbox: invalid type: sequence, expected a map
 ---
 case: sandbox sequence
 command: serve

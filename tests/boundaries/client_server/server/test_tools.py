@@ -16,11 +16,11 @@ from support.client import McpClient
 from support.evidence import compact_text
 from support.previews import compact_previews
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
 from support.resolvers import bare_runtime_environment
 from support.sandbox_configuration import NATIVE_PROXY
-from support.ssh import configure, peer_environment
 from support.suites import run_this_suite
 from support.snapshots import platform_snapshots
 
@@ -111,7 +111,7 @@ def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
     if sys.platform == "win32":
-        # SSH/SQL companions need deferred runtimes. Initialization does not
+        # SQL companions need deferred runtimes. Initialization does not
         # launch the custom worker; its schema is a portable reference.
         return TranscriptWithCompanions(
             _initializes_and_lists_tools(binary, execution),
@@ -124,6 +124,9 @@ def test_initializes_and_lists_tools(
         )
     companions = {
         "custom.yaml": _initializes_and_lists_tools(binary, execution, custom=True),
+        "custom-sql.yaml": _initializes_and_lists_tools(
+            binary, execution, custom=True, languages=("sql",)
+        ),
         "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True),
         "python-only.yaml": _initializes_and_lists_tools(
             binary, execution, python_only=True
@@ -132,7 +135,14 @@ def test_initializes_and_lists_tools(
             binary, execution, python_only=True, python_managed=True
         ),
         "r-sql.yaml": _initializes_and_lists_tools(
-            binary, execution, languages="r,sql"
+            binary, execution, bootstrap_languages="r,sql"
+        ),
+        "sql.yaml": _initializes_and_lists_tools(binary, execution, languages=("sql",)),
+        "sql-python.yaml": _initializes_and_lists_tools(
+            binary, execution, languages=("sql", "python")
+        ),
+        "configured-r-sql.yaml": _initializes_and_lists_tools(
+            binary, execution, languages=("r", "sql")
         ),
     }
     if execution == SANDBOXED:
@@ -142,9 +152,6 @@ def test_initializes_and_lists_tools(
         companions["workspace.yaml"] = _initializes_and_lists_tools(
             binary, execution, workspace_profile=True
         )
-    companions["ssh.yaml"] = _initializes_and_lists_tools(
-        binary, execution, bare=True, workspace_profile=True, ssh=True
-    )
     baseline = _initializes_and_lists_tools(binary, execution)
     # Runtime discovery must not change the configured public interface.
     for name in ("bare.yaml", "python-only.yaml", "python-managed.yaml"):
@@ -164,19 +171,20 @@ def _initializes_and_lists_tools(
     python_managed: bool = False,
     proxy: bool = False,
     workspace_profile: bool = False,
-    ssh: bool = False,
-    languages: str | None = None,
+    bootstrap_languages: str | None = None,
+    languages: tuple[str, ...] | None = None,
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("MCP_CONSOLE_LANGUAGES", None)
-    if languages is not None:
-        environment["MCP_CONSOLE_LANGUAGES"] = languages
+    if bootstrap_languages is not None:
+        environment["MCP_CONSOLE_LANGUAGES"] = bootstrap_languages
     with tempfile.TemporaryDirectory() as library:
-        if bare and not ssh:
+        if bare:
             environment = bare_runtime_environment(environment, Path(library))
         if python_only:
             python_bin = Path(library) / "bin"
             python_bin.mkdir()
+            retain_system_bwrap(python_bin, environment.get("PATH"))
             if python_managed:
                 (python_bin / "uv").symlink_to(shutil.which("uv"))
             else:
@@ -194,16 +202,7 @@ def _initializes_and_lists_tools(
                 environment["RETICULATE_PYTHON"] = str(python_bin / "python3")
         workspace = Path(library) / "workspace"
         workspace.mkdir()
-        if ssh:
-            environment = peer_environment(Path(library), "resolver")
-            environment.pop("MCP_CONSOLE_LANGUAGES", None)
-            config = configure(
-                workspace,
-                Path(library).resolve() / "remote workspace",
-                [str(binary)],
-                extends=":workspace",
-            )
-        elif proxy or workspace_profile:
+        if proxy or workspace_profile:
             config = workspace / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
             config.write_text(
@@ -217,9 +216,15 @@ def _initializes_and_lists_tools(
         with McpClient(
             binary,
             execution.serve(
-                *("--worker", str(Path(__file__).resolve().parents[3] / "fixtures/zod"))
+                *(
+                    "--worker",
+                    str(Path(__file__).resolve().parents[3] / "fixtures/zod"),
+                )
                 if custom
-                else ()
+                else (),
+                *("-c", "languages=" + json.dumps(languages))
+                if languages is not None
+                else (),
             ),
             environment,
             workspace,
@@ -229,6 +234,14 @@ def _initializes_and_lists_tools(
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
             send = listed_tools[0]
+            if languages is not None:
+                assert set(send["inputSchema"]["properties"]) == {
+                    *languages,
+                    "control",
+                    "requirements",
+                    "stdin",
+                    "timeout_ms",
+                }, send
             description = send["description"]
             if custom:
                 assert "custom-worker" in description
@@ -246,7 +259,10 @@ def _initializes_and_lists_tools(
                 )
                 assert "attach the database read-only" in description
                 assert "managed defaults include SQLite when" in description
-                assert "Use R for vectorized data and string operations" in description
+                if "r" in send["inputSchema"]["properties"]:
+                    assert (
+                        "Use R for vectorized data and string operations" in description
+                    )
                 assert 'requirements={"action":"add","duckdb":["fts"]}' in description
             if proxy:
                 assert (
@@ -305,12 +321,6 @@ def _initializes_and_lists_tools(
             assert not prepared.get("isError", False), prepared
             assert client.request("tools/list")["result"] == transcript[2]["result"]
             client.finish()
-            if ssh:
-                transcript = json.loads(
-                    json.dumps(transcript).replace(
-                        str(Path(library).resolve()), "<ssh-test>"
-                    )
-                )
             return transcript
 
 

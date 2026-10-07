@@ -13,6 +13,21 @@ Examples:
   mcp-console sandbox -- Rscript analysis.R
   mcp-console sandbox -- python script.py";
 
+#[cfg(windows)]
+pub const SANDBOX_SETUP_DETAILS: &str = "\
+Setup resources (created or reused):
+  Local accounts: McpConsoleSandboxOff (restricted networking) and
+    McpConsoleSandboxOn (network enabled).
+  Local security group: ConsoleSandboxUsers.
+  Account-scoped Windows Firewall rules and WFP loopback filters for the
+    restricted-network account.
+  Protected state directories: .sandbox (setup records), .sandbox-secrets
+    (encrypted credentials), and .sandbox-bin (helper storage).
+
+Missing or outdated setup requests administrator approval through Windows UAC.
+An up-to-date setup is reused without changes.
+Use sandbox-setup --status to inspect readiness without provisioning.";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "mcp-console",
@@ -43,8 +58,9 @@ pub struct ConfigOverrides {
 pub enum Command {
     /// Provision the native Windows sandbox accounts and network rules
     #[cfg(windows)]
+    #[command(after_help = SANDBOX_SETUP_DETAILS)]
     SandboxSetup {
-        /// Persistent Windows sandbox state directory
+        /// Persistent Windows sandbox state directory [default: %LOCALAPPDATA%\mcp-console]
         #[arg(long, value_name = "PATH")]
         state_dir: Option<PathBuf>,
         /// Report setup readiness without provisioning
@@ -56,7 +72,7 @@ pub enum Command {
         #[command(flatten)]
         overrides: ConfigOverrides,
 
-        /// Skip inner native enforcement; retain any selected Docker container or Sandbox microVM and its provider policy
+        /// Run evaluated code and dependency resolution with host permissions
         #[arg(long)]
         no_sandbox: bool,
 
@@ -84,32 +100,6 @@ pub enum Command {
     /// Run the internal host resolver
     #[command(hide = true)]
     Resolve,
-
-    #[command(hide = true)]
-    DockerOwner,
-    #[command(hide = true)]
-    DockerLaunch,
-    #[command(hide = true)]
-    DockerProbe,
-    #[command(hide = true)]
-    ImageRuntimeProbe {
-        #[arg(long)]
-        python: Option<PathBuf>,
-    },
-    #[command(hide = true)]
-    DockerSandboxOwner,
-    #[command(hide = true)]
-    DockerSandboxLaunch,
-    #[command(hide = true)]
-    DockerSandboxProbe,
-
-    /// Launch the built-in runtime for an authenticated SSH controller
-    #[command(hide = true)]
-    SshLaunch,
-
-    /// Prepare dependencies for an authenticated SSH controller
-    #[command(hide = true)]
-    SshPrepare,
 
     /// Run the internal worker relay
     #[command(hide = true)]
