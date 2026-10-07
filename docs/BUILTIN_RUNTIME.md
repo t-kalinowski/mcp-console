@@ -108,6 +108,9 @@ See [output ownership](ARCHITECTURE.md#output-and-delivery) for cancellation rac
 
 ## R
 
+For fresh R state, send `control: "restart"` with the next cell; for background work, use `timeout_ms: 0` and poll with an empty `send`.
+Use a subprocess such as `callr` when the task needs separate process isolation, preserving the current session while running independently, or ordinary R behavior without Console's runtime hooks.
+
 Accepted cells run in persistent global state through R's native console semantics.
 Every visible top-level expression may autoprint.
 Parse errors reject the whole cell without running earlier expressions or changing `.Last.value`, `.Traceback`, history, task callbacks, or `options(error)`.

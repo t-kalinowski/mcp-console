@@ -24,55 +24,38 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent SQL workbench for exact computation, file and data
-        inspection, transformation, visualization, statistics, simulation, and
-        modeling. State persists across calls.
+        Persistent SQL workbench for calculations, data analysis, and plots.
+        Send one complete `sql` cell per call. Inspect its output and reuse
+        persistent objects. Results display automatically; supported plots
+        return as images.
 
 
-        For databases and structured files, consider DuckDB SQL first for schema
-        inspection, filtering, joins, aggregation, and nested JSON extraction.
+        For databases and structured files, consider DuckDB SQL first for
+        inspection, joins, and aggregation.
 
 
-        DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is
-        built in. Built-in managed defaults include SQLite when dependency
-        preparation is available; sessions without DuckDB preparation require
-        preinstalled extensions. For SQLite, use an available sqlite extension
-        and attach the database read-only with `ATTACH 'path' AS name (TYPE
-        sqlite, READ_ONLY)`. When preparation is supported, prepare additional
-        extensions with `requirements={"action":"add","duckdb":["fts"]}`. SQL
-        results include bounded table previews that abbreviate long text cells;
-        return focused queries and summaries for inspection.
+        DuckDB can query CSV, Parquet, JSON, and JSONL directly, including
+        nested JSON. Built-in managed defaults include SQLite when preparation
+        is available; otherwise extensions must be preinstalled. SQL uses its
+        configured provider without a setup cell. Provider choice is independent
+        of visible language fields; missing-provider notices identify required
+        preparation.
 
 
         Language fields describe the configured interface, not installed
-        runtimes. SQL uses its configured provider without a setup cell.
-        Provider choice is independent of visible language fields. A
-        missing-provider diagnostic identifies the requirements field, package,
-        and restart needed for preparation. Managed dependency preparation
-        requires resolver support on the execution host; bare runtimes require
-        preinstalled packages.
+        runtimes. Managed resolution needs execution-host resolver support; bare
+        runtimes use preinstalled packages.
 
 
-        Send one complete `sql` cell per call. Code-bearing calls must be
-        sequential; a control-only interrupt may overlap a pending `send`.
-        Inspect intermediate results before submitting dependent cells. Cells
-        are not transactional; changes made before an error may remain.
+        Code-bearing calls must be sequential; a control-only interrupt may
+        overlap a pending `send`. Cells are not transactional; effects before an
+        error may remain. Poll running work with an empty `send`; do not
+        resubmit the cell.
 
 
-        Omit code to poll, supply stdin, control the session, or prepare
-        requirements when available. If a response ends in `[running; poll with
-        an empty send]`, call `send` again without code or stdin; do not
-        resubmit the cell. Send `stdin` alone to answer an active prompt or
-        debugger. Field descriptions specify preparation, control, and timeout
-        ordering.
-
-
-        Each result has at most 8 KiB of UTF-8 text, including notices;
-        oversized output keeps its beginning and latest tail. Images have
-        separate limits. Retained raw-log paths are relative to the server's
-        launch directory for project recordings and absolute for home
-        recordings. Full retained text requires filesystem access there through
-        existing tools; Console provides no read/search interface.
+        Text results, including notices, have an 8 KiB limit, retaining the
+        beginning and latest tail; images have separate limits. Response notices
+        report state and omitted-output locations.
 
 
         Evaluated code runs without a sandbox, with the server's permissions,
@@ -85,82 +68,65 @@ result:
         type: object
         properties:
           sql:
-            description: |-
-              One complete SQL cell evaluated through the active connection. The managed DuckDB backend is
-              used by default when its adapter and packages are available and keeps a persistent catalog.
-              A result with columns returns a bounded preview. The selected driver supplies its own SQL
-              dialect and type mappings.
-              Managed DuckDB conveniences and extension requirements apply only to the managed
-              backend. With the sandbox enabled, use `ATTACH 'path' AS name (READ_ONLY)` for existing DuckDB
-              databases outside the sandbox's writable paths; the sandbox blocks DuckDB's
-              default writable mode for those paths. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, and `EXPLAIN`
-              for DuckDB discovery. DuckDB CLI dot commands are not supported. Omit this field for polling
-              or stdin-only calls.
+            description: >-
+              One complete SQL cell through the active connection. Managed DuckDB
+              keeps a persistent catalog. Results are bounded table previews that
+              abbreviate long text cells; query focused subsets or aggregates. The
+              selected driver supplies its own SQL dialect and types. Managed
+              conveniences/extensions apply only to DuckDB. For SQLite, use an
+              available sqlite extension with `ATTACH 'path' AS name (TYPE sqlite,
+              READ_ONLY)`. With a sandbox, attach existing DuckDB databases outside
+              writable paths using `ATTACH 'path' AS name (READ_ONLY)`. Use `SHOW
+              TABLES`, `DESCRIBE`, `SUMMARIZE`, or `EXPLAIN`; CLI dot commands are not
+              supported.
             type:
               - string
               - "null"
           control:
-            description: |-
-              Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
-              SIGINT from the active host resolver or live worker and preserves in-memory state. After
-              successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
-              earlier evaluation or attempting an optional following cell; the cell is not run if the
-              interrupted evaluation remains active. When `requirements` is available, restart resolves
-              same-call requirements before replacement. It then discards in-memory, debugger, and
-              unread-stdin state and sends same-call stdin and code only to the replacement.
+            description: >-
+              Apply control before same-call input/code. `interrupt` requests SIGINT
+              from the active host resolver or a cooperative interrupt from the
+              worker, preserving live state. A following cell runs only if prior work
+              stops. `restart` discards live state, including debugger and unread
+              input; same-call stdin/code go only to the replacement. Requirements
+              resolve before replacement; resolution failure preserves the current
+              worker.
             type: string
             enum:
               - interrupt
               - restart
           requirements:
             description: >-
-              Inspect or manage retained package and database-extension
-              requirements. action=get returns a read-only snapshot, including
-              runtime constraints and separate infrastructure. It cannot
-              accompany code, stdin, control, or payload fields. The complete
-              manifest is in structuredContent.requirements even when it exceeds
-              the text preview limit. action=add is the default; action=set
-              replaces the whole declaration without injecting defaults;
-              action=reset restores startup defaults. Changed replacements
-              require control="restart" with a live worker. Empty set means no
-              optional requirements; bare {} is invalid.
-
-
-              Requirements alone perform standalone preparation. With one cell,
-              they are preconditions of that cell. With control="restart", they
-              are part of the restart transaction, with or without a cell. Only
-              add can accompany interrupt, and only when a cell follows. When
-              the provider cannot prepare during interrupt, the call is rejected
-              before signaling or queuing input; prepare separately or use
-              restart. Preparation does not import, attach, or load
-              dependencies. On a code-bearing call without control, preparation
-              completes before same-call nonempty stdin is queued. Standalone
-              preparation cannot queue nonempty stdin. With restart, failure
-              leaves the current worker unchanged and sends neither stdin nor
-              code. With add, interrupt, and a following cell, signal delivery
-              and stdin enqueue happen before requirements are validated or
-              prepared and are not rolled back if that later work fails. SQL
-              does not trigger package discovery. Provider preparation may
-              require fields whose direct code language is hidden; follow the
-              missing-provider diagnostic. A cell is not run if explicit
-              preparation fails or further changes require restart. Resolution
-              uses the execution host's resolver policy and may download
-              packages or extensions or execute installation or build code. Use
-              only trusted requirements.
+              Inspect declarations or prepare dependencies on the execution host
+              without importing, attaching, or loading them. Alone, performs
+              standalone preparation. With a cell, preparation precedes code; without
+              control it also precedes bundled stdin. Failure or a required restart
+              withholds the cell. Compatible additions preserve live state on an idle
+              worker; other changes need restart. With restart, candidate resolution
+              precedes replacement; resolution failure preserves the current worker
+              and sends no stdin/code. Standalone preparation rejects nonempty stdin.
+              Only add can accompany interrupt, with a following cell; providers
+              without this preparation support reject the combination before signaling
+              or input. Otherwise interrupt and stdin precede deferred
+              validation/preparation and are not rolled back on failure. SQL does not
+              discover packages; follow missing-provider notices for preparation,
+              including requirements for hidden providers.
             type:
               - object
               - "null"
             properties:
               action:
                 description: >-
-                  get inspects the committed declaration without starting a worker or
-                  consuming output. add (default) accumulates requirements. set replaces
-                  all lists and runtime constraints; omitted fields are empty, including
-                  when only action is supplied. reset restores startup defaults. get and
-                  reset reject payload fields. Changed set/reset with a live worker
-                  require control="restart"; the complete candidate resolves before the
-                  old worker is retired. add accepts up to 64 entries per language per
-                  call; set accepts the complete accumulated manifest.
+                  get reads the retained declaration, not an installed-package inventory,
+                  without starting a worker or consuming output; use it alone, without
+                  code, stdin, control, or payload fields. The complete declaration is in
+                  structuredContent.requirements. add (default) accumulates up to 64
+                  entries per language per call; bare {} is invalid. set replaces the
+                  whole declaration without defaults; omitted lists/constraints are empty,
+                  even with only action supplied. reset restores startup defaults and
+                  rejects payload fields. Changed set/reset with a live worker require
+                  control="restart"; unchanged declarations are no-ops. set accepts the
+                  complete accumulated manifest without add's per-list limit.
                 type: string
                 enum:
                   - get
@@ -169,29 +135,25 @@ result:
                   - reset
               python_version:
                 description: >-
-                  Host-provider runtime version constraints, preserved by get and replaced
-                  as a whole by set. Add appends constraints; changing constraints with a
-                  live worker requires control="restart".
+                  Host-provider version numbers or ==, !=, <, <=, >, >= constraints (e.g.
+                  >=3.11). add appends; changes with a live worker require
+                  control="restart".
                 type: array
                 items:
                   type: string
               exclude_newer:
                 description: >-
-                  Registry package publication cutoff accepted by uv, for example
-                  "2026-01-01". set clears an omitted or null cutoff; add preserves an
-                  omitted cutoff and cannot replace an existing one.
+                  Package publication cutoff accepted by uv, e.g. "2026-01-01". set clears
+                  an omitted/null cutoff; add preserves omission and cannot replace an
+                  existing one.
                 type:
                   - string
                   - "null"
               duckdb:
                 description: |-
-                  DuckDB extension names for the managed DuckDB backend, for standalone preparation,
-                  preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
-                  JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
-                  letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
-                  uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
-                  native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
-                  later inside the worker.
+                  Managed DuckDB extension names, e.g. fts or spatial: lowercase ASCII letter first, then
+                  lowercase letters, digits, or underscores (at most 64 characters).
+                  Use DuckDB's LOAD or automatic loading after preparation.
                 type: array
                 items:
                   type: string
@@ -199,59 +161,45 @@ result:
                   maxLength: 64
               r:
                 description: >-
-                  Single-line ir package references for host-provider preparation, for
-                  example DBI or duckdb. Use this field when a provider diagnostic
-                  requests it, for standalone preparation, preparation before a cell, or a
-                  restart transaction. An idle worker with a compatible package adapter
-                  can add requirements without losing live state. Local package sources
-                  are rejected by the managed resolution contract.
+                  Single-line ir package references for host-provider preparation, e.g.
+                  DBI or duckdb, including supported remote references; local sources and
+                  NUL/line breaks are rejected. Use when a provider notice requests
+                  preparation.
                 type: array
                 items:
                   type: string
                   minLength: 1
               python:
                 description: >-
-                  Named PEP 508 registry requirements for host-provider preparation, for
-                  example duckdb>=1. Use this field when a provider diagnostic requests
-                  it, for standalone preparation, preparation before a cell, or a restart
-                  transaction. Paths, file URLs, editable requirements, direct references,
-                  local archives, and local projects are rejected. Preparation does not
-                  import the package. A server-managed worker may activate compatible
-                  additions without losing state. A user-selected environment disables
-                  managed registry requirements; a custom worker does not support them.
+                  Named PEP 508 registry requirements for host-provider preparation, e.g.
+                  duckdb>=1, with versions, extras, or markers. Paths, URLs, editable
+                  requirements, direct references, and local sources are rejected. Bare or
+                  user-selected environments and custom workers disable managed registry
+                  requirements.
                 type: array
                 items:
                   type: string
                   minLength: 1
             additionalProperties: false
           stdin:
-            description: |-
-              Input for an active read, prompt, or debugger. When responding to active input, omit code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
-              Line-oriented input therefore normally needs a trailing `\n`. On a code-bearing call without
-              control, available requirements are prepared before nonempty stdin is queued. Standalone
-              preparation cannot queue nonempty stdin. After `interrupt`, nonempty stdin is queued before the
-              100-millisecond grace and may be consumed while the earlier operation unwinds. After `restart`,
-              same-call stdin is sent only to the replacement. When sent with a cell, nonempty text is queued
-              before the code is run; an already waiting interactive read may consume it before the new cell
-              begins. Empty text queues nothing. If output ends in `[waiting for stdin]`, send the requested
-              input here. Unread text can satisfy later reads and is discarded by restart.
+            description: >-
+              Send stdin alone to answer an active read, prompt, or debugger. UTF-8
+              text is queued exactly; no newline is added, so line input normally
+              needs a trailing `\n`. Empty text queues nothing. With a cell, input
+              queues before code; an already waiting read may consume it first,
+              including while interrupted work unwinds. Unread input can satisfy later
+              reads; restart discards it.
             type:
               - string
               - "null"
           timeout_ms:
-            description: |-
-              Omit for normal calls and polls. This limits how long the tool waits; it returns immediately
-              when execution completes. Reaching the timeout does not cancel execution. Use `0` to start
-              background work, then poll with an empty `send`.
-
-              Defaults to 60,000 milliseconds. One deadline starts at call entry and includes initial
-              background startup, evaluation observation, and one automatic worker replacement attempt.
-              It does not cancel resolution or startup. Inline control, interrupt grace, restart, and explicit
-              requirement preparation happen before dispatch and may make the complete call take longer.
-              This value does not limit standalone preparation. Automatic dependency resolution is part of
-              the running evaluation and counts toward this wait. On expiry, the call returns available output
-              and a state marker, such as `[running; poll with an empty send]` or `[worker starting]`.
-              If evaluation remains active, poll with an empty `send` call; do not resubmit the cell.
+            description: >-
+              Wait budget in milliseconds (default 60,000); omit for ordinary calls.
+              `0` starts background work without waiting for completion. Expiry
+              returns available output without cancelling execution, startup, or
+              resolution. This is not a whole-call deadline: explicit preparation and
+              lifecycle control may exceed it; standalone preparation is not limited
+              by it.
             type: integer
             format: uint64
             minimum: 0

@@ -24,36 +24,27 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent custom-worker workbench. Language fields describe the
-        configured interface; supported languages, evaluation, display, SQL, and
-        cross-language sharing depend on the selected worker. Console does not
-        supply built-in runtime packages, automatic import hooks, or a default
-        SQL connection to custom workers. Managed requirements require
-        execution-host resolver support and compatible worker preparation
-        callbacks; Python requirements are unavailable with a custom worker.
-        Switch languages when useful, using capabilities supplied by the worker.
+        Persistent custom-worker workbench. Send one complete `r`, `python`, or
+        `sql` cell per call. Inspect its output and reuse persistent objects.
 
 
-        Send one complete `r`, `python`, or `sql` cell per call. Code-bearing
-        calls must be sequential; a control-only interrupt may overlap a pending
-        `send`. Inspect intermediate results before submitting dependent cells.
-        Cells are not transactional; changes made before an error may remain.
+        Language fields describe the configured interface; evaluation, display,
+        SQL, and sharing depend on the worker. Console does not supply built-in
+        runtime packages, import hooks, or a default SQL connection. Managed
+        requirements require host resolver support and compatible worker
+        callbacks; Python requirements are unavailable. Switch languages when
+        useful, using the worker's capabilities.
 
 
-        Omit code to poll, supply stdin, control the session, or prepare
-        requirements when available. If a response ends in `[running; poll with
-        an empty send]`, call `send` again without code or stdin; do not
-        resubmit the cell. Send `stdin` alone to answer an active prompt or
-        debugger. Field descriptions specify preparation, control, and timeout
-        ordering.
+        Code-bearing calls must be sequential; a control-only interrupt may
+        overlap a pending `send`. Cells are not transactional; effects before an
+        error may remain. Poll running work with an empty `send`; do not
+        resubmit the cell.
 
 
-        Each result has at most 8 KiB of UTF-8 text, including notices;
-        oversized output keeps its beginning and latest tail. Images have
-        separate limits. Retained raw-log paths are relative to the server's
-        launch directory for project recordings and absolute for home
-        recordings. Full retained text requires filesystem access there through
-        existing tools; Console provides no read/search interface.
+        Text results, including notices, have an 8 KiB limit, retaining the
+        beginning and latest tail; images have separate limits. Response notices
+        report state and omitted-output locations.
 
 
         Evaluated code runs without a sandbox, with the server's permissions,
@@ -66,72 +57,57 @@ result:
         type: object
         properties:
           r:
-            description: >-
-              One complete R cell, if supported by the custom worker. Evaluation,
-              display, packages, graphics, and bridges are supplied by that worker.
-              Omit for polling or stdin-only calls.
+            description: One complete R cell, if supported by the custom worker.
             type:
               - string
               - "null"
           python:
             description: >-
-              One complete Python cell, if supported by the custom worker. Evaluation,
-              display, packages, graphics, and bridges are supplied by that worker.
-              Omit for polling or stdin-only calls.
+              One complete Python cell, if supported by the custom worker.
             type:
               - string
               - "null"
           control:
-            description: |-
-              Applies lifecycle control alone or before compatible same-call fields. `interrupt` requests
-              termination of the active host resolver or a cooperative interrupt from the live worker and preserves in-memory state. After
-              successful delivery, stdin is queued and `send` waits 100 milliseconds before observing the
-              earlier evaluation or attempting an optional following cell; the cell is not run if the
-              interrupted evaluation remains active. When `requirements` is available, restart resolves
-              same-call requirements before replacement. It then discards R, Python, DuckDB, debugger,
-              and unread-stdin state and sends same-call stdin and code only to the replacement.
+            description: >-
+              Apply control before same-call input/code. `interrupt` requests
+              termination of the active host resolver or a cooperative interrupt from
+              the worker, preserving live state. A following cell runs only if prior
+              work stops. `restart` discards live interpreter, database, debugger, and
+              unread-input state; same-call stdin/code go only to the replacement.
+              Requirements resolve before replacement; resolution failure preserves
+              the current worker.
             type: string
             enum:
               - interrupt
               - restart
           requirements:
-            description: |-
-              Inspect or manage retained R packages, Python packages, and DuckDB extensions.
-              action=get returns a read-only snapshot, including Python constraints and separate runtime
-              infrastructure. It cannot accompany code, stdin, control, or payload fields. The complete
-              manifest is in structuredContent.requirements even when it exceeds the text preview limit.
-              action=add is the default; action=set replaces the whole declaration without injecting defaults;
-              action=reset restores startup defaults. Changed replacements require control="restart" with a
-              live worker. Empty set means no optional requirements; bare {} is invalid.
-              Requirements alone perform standalone preparation. With one cell, they are preconditions of
-              that cell. With `control = "restart"`, they are part of the restart transaction, with or
-              without a cell. Only add can accompany interrupt, and only when a cell follows; Python-only
-              sessions reject requirements with interrupt before signaling or queuing input.
-              Preparation does not import, attach, or load dependencies. On a code-bearing call without
-              control, preparation completes before same-call nonempty stdin is queued. Standalone
-              preparation cannot queue nonempty stdin. With restart, failure leaves the current worker
-              unchanged and sends neither stdin nor code. With add, interrupt, and a following cell, signal
-              delivery and stdin enqueue happen before requirements are validated or prepared and are not
-              rolled back if that later work fails. Ordinary CRAN packages used by the built-in R worker need
-              not be declared here; use `requirements.r` to stage packages ahead of evaluation or provide
-              explicit `ir` references. In the built-in managed Python environment, missing imports normally
-              resolve at runtime. Use `requirements.python` to stage a distribution before the cell, provide
-              a version, extra, or marker, or correct automatic inference. Python source is not pre-scanned,
-              and SQL does not trigger package discovery. A cell is not run if explicit preparation fails or
-              further changes require restart. Resolution uses the execution host's resolver policy and may download
-              packages or extensions or execute installation or build code. Use only trusted requirements.
+            description: >-
+              Inspect declarations or prepare dependencies on the execution host
+              without importing, attaching, or loading them. Alone, performs
+              standalone preparation. With a cell, preparation precedes code; without
+              control it also precedes bundled stdin. Failure or a required restart
+              withholds the cell. Compatible additions preserve live state on an idle
+              worker; other changes need restart. With restart, candidate resolution
+              precedes replacement; resolution failure preserves the current worker
+              and sends no stdin/code. Standalone preparation rejects nonempty stdin.
+              Only add can accompany interrupt, with a following cell; providers
+              without this preparation support reject the combination before signaling
+              or input. Otherwise interrupt and stdin precede deferred
+              validation/preparation and are not rolled back on failure.
             type:
               - object
               - "null"
             properties:
               action:
                 description: |-
-                  get inspects the committed declaration without starting a worker or consuming output.
-                  add (default) accumulates requirements. set replaces all lists and Python constraints;
-                  omitted fields are empty, including when only action is supplied. reset restores startup
-                  defaults. get and reset reject payload fields. Changed set/reset with a live worker require
-                  control="restart"; the complete candidate resolves before the old worker is retired.
-                  add accepts up to 64 entries per language per call; set accepts the complete accumulated manifest.
+                  get reads the retained declaration, not an installed-package inventory, without starting a
+                  worker or consuming output; use it alone, without code, stdin, control, or payload fields.
+                  The complete declaration is in structuredContent.requirements.
+                  add (default) accumulates up to 64 entries per language per call; bare {} is invalid.
+                  set replaces the whole declaration without defaults; omitted lists/constraints are empty,
+                  even with only action supplied. reset restores startup defaults and rejects payload fields.
+                  Changed set/reset with a live worker require control="restart"; unchanged declarations are
+                  no-ops. set accepts the complete accumulated manifest without add's per-list limit.
                 type: string
                 enum:
                   - get
@@ -140,55 +116,44 @@ result:
                   - reset
               python_version:
                 description: |-
-                  Python version constraints, preserved by get and replaced as a whole by set. Add appends
-                  constraints; changing constraints with a live worker requires control="restart".
+                  Python version numbers or ==, !=, <, <=, >, >= constraints (e.g. >=3.11).
+                  add appends; changes with a live worker require control="restart".
                 type: array
                 items:
                   type: string
               exclude_newer:
                 description: |-
-                  Python package publication cutoff accepted by uv, for example "2026-01-01". set clears an
-                  omitted or null cutoff; add preserves an omitted cutoff and cannot replace an existing one.
+                  Package publication cutoff accepted by uv, e.g. "2026-01-01".
+                  set clears an omitted/null cutoff; add preserves omission and cannot replace an existing one.
                 type:
                   - string
                   - "null"
               duckdb:
                 description: |-
-                  DuckDB extension names for the managed DuckDB backend, for standalone preparation,
-                  preparation before a cell, or a restart transaction, for example `fts`, `spatial`, or `excel`.
-                  JSON and ICU are included in built-in defaults. Names must start with a lowercase ASCII
-                  letter and contain only lowercase ASCII letters, digits, and underscores. The host resolver
-                  uses DuckDB's own `INSTALL`, with DuckDB's default extension repository and
-                  native cache. Preparation does not load extension code; `LOAD` and automatic loading happen
-                  later inside the worker.
+                  Managed DuckDB extension names, e.g. fts or spatial: lowercase ASCII letter first, then
+                  lowercase letters, digits, or underscores (at most 64 characters).
+                  Use DuckDB's LOAD or automatic loading after preparation.
                 type: array
                 items:
                   type: string
                   minLength: 1
                   maxLength: 64
               r:
-                description: |-
-                  Single-line `ir` package references for standalone preparation, preparation before a
-                  cell, or a restart transaction, for example `data.table`, `sf`, or `yaml12`. Use this field
-                  to stage packages ahead of evaluation or supply an explicit supported remote `ir` reference.
-                  Automatic R discovery accepts only plain package names. An idle worker that implements R
-                  preparation can add requirements without losing live state. Local package sources are
-                  rejected by the managed resolution contract.
+                description: >-
+                  Single-line ir package references for host-provider preparation, e.g.
+                  DBI or duckdb, including supported remote references; local sources and
+                  NUL/line breaks are rejected. Use when a provider notice requests
+                  preparation.
                 type: array
                 items:
                   type: string
                   minLength: 1
               python:
-                description: |-
-                  Named PEP 508 registry requirements for standalone preparation, preparation before a
-                  cell, or a restart transaction, for example `polars>=1`, `scikit-learn`, or
-                  `matplotlib; python_version >= '3.10'`. Use explicit requirements when automatic import
-                  inference needs a different distribution, a version, an extra, or an environment marker, or
-                  when the distribution should be prepared before the cell. Automatic imports infer bare
-                  distribution names only. Paths, file URLs, editable requirements, direct references, local
-                  archives, and local projects are rejected. Preparation does not import the package. An idle
-                  server-managed worker may activate compatible additions without losing state. A nonempty
-                  user-selected `RETICULATE_PYTHON` disables automatic resolution and managed Python
+                description: >-
+                  Named PEP 508 registry requirements for host-provider preparation, e.g.
+                  duckdb>=1, with versions, extras, or markers. Paths, URLs, editable
+                  requirements, direct references, and local sources are rejected. Bare or
+                  user-selected environments and custom workers disable managed registry
                   requirements.
                 type: array
                 items:
@@ -196,35 +161,22 @@ result:
                   minLength: 1
             additionalProperties: false
           stdin:
-            description: |-
-              Input for an active read, prompt, or debugger. When responding to active input, omit R, Python,
-              and SQL code and send stdin on its own. Its UTF-8 encoding is queued exactly; no newline is added.
-              Line-oriented input therefore normally needs a trailing `\n`. On a code-bearing call without
-              control, available requirements are prepared before nonempty stdin is queued. Standalone
-              preparation cannot queue nonempty stdin. After `interrupt`, nonempty stdin is queued before the
-              100-millisecond grace and may be consumed while the earlier operation unwinds. After `restart`,
-              same-call stdin is sent only to the replacement. When sent with a cell, nonempty text is queued
-              before the code is run; an already waiting interactive read may consume it before the new cell
-              begins. Empty text queues nothing. If output ends in `[waiting for stdin]`, send the requested
-              input here. Unread text can satisfy later reads and is discarded by restart.
+            description: >-
+              Send stdin alone to answer an active read, prompt, or debugger. UTF-8
+              text is queued exactly; no newline is added, so line input normally
+              needs a trailing `\n`. Empty text queues nothing. With a cell, input
+              queues before code; an already waiting read may consume it first,
+              including while interrupted work unwinds. Unread input can satisfy later
+              reads; restart discards it.
             type:
               - string
               - "null"
           timeout_ms:
             description: |-
-              Omit for normal calls and polls. This limits how long the tool waits; it returns immediately
-              when execution completes. Reaching the timeout does not cancel execution. Use `0` to start
-              background work, then poll with an empty `send`.
-
-              Defaults to 60,000 milliseconds. One deadline starts at call entry and includes initial
-              background startup, evaluation observation, and one automatic worker replacement attempt. It does not cancel resolution
-              or startup. Inline control, interrupt grace, restart, and explicit requirement preparation happen
-              before dispatch and may make the complete call take longer. This value does not limit standalone
-              preparation. Automatic R and Python import
-              resolution are part of the running evaluation and count toward this wait. On expiry, the call
-              returns available output and a state marker, such as
-              `[running; poll with an empty send]` or `[worker starting]`. If evaluation remains active, poll
-              with an empty `send` call; do not resubmit the cell.
+              Wait budget in milliseconds (default 60,000); omit for ordinary calls. `0` starts
+              background work without waiting for completion. Expiry returns available output without cancelling
+              execution, startup, or resolution. This is not a whole-call deadline: explicit preparation
+              and lifecycle control may exceed it; standalone preparation is not limited by it.
             type: integer
             format: uint64
             minimum: 0

@@ -71,7 +71,6 @@ def _assert_guidance(tool: dict, languages: set[str], *, custom: bool) -> None:
             assert "With R-owned managed DuckDB" in sql
             assert "DBI" in sql
         if "python" in languages:
-            assert "register(name, frame)" in sql
             python = properties["python"]["description"]
             assert "console_sql_connection(connection)" in python
             assert "register(name, frame)" in python

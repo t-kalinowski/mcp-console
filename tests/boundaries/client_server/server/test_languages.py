@@ -194,7 +194,9 @@ def test_sql_provider_guidance_is_independent_of_visibility(
                     if "python" in languages:
                         assert (
                             "available only when Python owns the provider"
-                            in description
+                            in tool["inputSchema"]["properties"]["python"][
+                                "description"
+                            ]
                         )
                         client.send(
                             # fmt: python

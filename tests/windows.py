@@ -1059,21 +1059,30 @@ class WindowsConsole(unittest.TestCase):
         tool = schema["tools"][0]
         properties = tool["inputSchema"]["properties"]
         self.assertNotIn("sql", properties)
-        self.assertIn("ir and uv", tool["description"])
+        self.assertIn("execution-host resolver support", tool["description"])
         self.assertIn("local execution on Windows", tool["description"])
         for language in ("r", "python"):
             with self.subTest(language=language):
                 description = properties[language]["description"].lower()
                 self.assertNotIn("sql", description)
                 self.assertNotIn("duckdb", description)
-                self.assertIn("resolution", description)
+                self.assertIn(
+                    "managed resolution" if language == "r" else "managed imports",
+                    description,
+                )
         self.assertEqual(
             schema["tools"][0]["inputSchema"]["properties"]["requirements"][
                 "properties"
             ]["action"]["enum"],
             ["get", "add", "set", "reset"],
         )
-        self.assertIn("initialize in the background", tool["description"])
+        self.assertIn(
+            "explicitly selected Python use preinstalled packages", tool["description"]
+        )
+        self.assertIn(
+            "explicitly selected Python environments",
+            properties["requirements"]["properties"]["python"]["description"],
+        )
         control = properties["control"]["description"]
         self.assertIn("cooperative interrupt", control)
         self.assertNotIn("SIGINT", control)

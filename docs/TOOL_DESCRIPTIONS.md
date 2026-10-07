@@ -30,14 +30,34 @@ Installing a runtime requires a new server session; worker restart retains captu
 
 ## Editorial rules
 
-Put scope, useful language-selection guidance, persistence, sequential execution, polling, interoperability, and the security boundary at tool level.
-Put field-specific input and ordering rules on the fields, without repeating them above.
+Start with a complete cell, automatic display, inspecting its output, and reusing persistent objects.
+Ordinary use does not require declaration inspection, preparation, language switching, or restart.
+Put concise language-selection guidance, sequential execution, polling, and the security boundary at tool level.
+Give each other fact one primary home: display, plots, bridges, and connection helpers on language fields; wait timing on timeout; queued input on stdin; lifecycle effects on control.
 Keep exact bridge/helper names when they enable a workflow.
 Preserve warnings about effects surviving errors and restart discarding state.
+
+Keep general preparation and its ordering/failure rules on requirements, action semantics on action, and accepted syntax on package fields.
+Inspection reads the retained declaration, not an installed-package inventory.
+Preserve omitted-field semantics, payload restrictions, hidden-provider preparation, and restrictions for custom workers and selected environments.
+Keep interrupt's partial effects explicit: supported interrupt-plus-cell preparation follows the signal and queued input, which are not rolled back on failure.
+
+Response notices own current state, omitted-output locations, and missing-provider preparation instructions.
+Keep the empty-send polling rule in the tool description; do not repeat the notices' detailed instructions or advertise a help API.
+Do not assume a client has this repository or remove a capability's only usable explanation in favor of an external guide.
 
 Prefer concrete choices: SQL for structured-file/database inspection and aggregation, R for vectorized/statistical work, Python when its libraries fit the task.
 Make cross-language guidance conditional on configured languages.
 Do not turn the description into a tutorial, package inventory, backend explanation, or transcript-format specification.
+Long recipes and implementation details belong in the existing guides: subprocess choices and plot behavior in [runtime behavior](BUILTIN_RUNTIME.md), resolver details in [requirements](REQUIREMENTS.md), deadlines and interrupt grace in [send ordering](SEND_OPERATIONS.md), and recording paths in [recordings](RECORDING.md).
+
+## Comparing the advertised definition
+
+Capture the canonical handshake and its companions before editing, then regenerate through `scripts/test --update client_server/server/test_tools::initializes_and_lists_tools`.
+Compare the top-level description, the sum of every schema description (including nested requirements), and the complete tool object from `result.tools[0]`.
+Use the same compact JSON serialization and tokenizer on both versions; report UTF-8 bytes as a reproducible count alongside tokens.
+Remove every `description` key recursively, including inside arrays, and require identical remaining tool objects for each profile.
+This comparison covers names, schema structure, constraints, defaults, enums, and other metadata without imposing a prose-size quota.
 
 ## Capability and security claims
 

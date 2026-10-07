@@ -248,22 +248,28 @@ def _initializes_and_lists_tools(
                 assert "does not supply built-in runtime packages" in description
                 assert "defaults include SQLite" not in description
             elif SQL.available:
-                assert description.index(
+                assert description.index("Send one complete") < description.index(
                     "consider DuckDB SQL first"
-                ) < description.index("Send one complete")
+                )
+                assert "Results display automatically" in description
                 assert "CSV, Parquet, JSON, and JSONL directly" in description
-                assert "JSON support is built in" in description
+                sql_description = send["inputSchema"]["properties"]["sql"][
+                    "description"
+                ]
                 assert (
                     "bounded table previews that abbreviate long text cells"
-                    in description
+                    in sql_description
                 )
-                assert "attach the database read-only" in description
+                assert "TYPE sqlite, READ_ONLY" in sql_description
                 assert "managed defaults include SQLite when" in description
                 if "r" in send["inputSchema"]["properties"]:
                     assert (
                         "Use R for vectorized data and string operations" in description
                     )
-                assert 'requirements={"action":"add","duckdb":["fts"]}' in description
+                extensions = send["inputSchema"]["properties"]["requirements"][
+                    "properties"
+                ]["duckdb"]
+                assert "fts" in extensions["description"]
             if proxy:
                 assert (
                     "network subject to the launcher's proxy settings"
