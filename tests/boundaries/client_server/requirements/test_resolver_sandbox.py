@@ -6,19 +6,22 @@ import shutil
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.requirements import R, SANDBOX, SQL, command, requires
+from support.requirements import POSIX, R, SANDBOX, SQL, command, requires
 from support.assertions import (
     last_result_text,
     last_tool_text,
     wait_for_evaluation_output,
 )
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.records import Transcript
+from support.progress import without_elapsed
+from support.records import ToolResult, Transcript
 from support.r import r_test_environment
 from support.resolvers import ir_cache_directory
 from boundaries.client_server.python.test_without_r import environment
@@ -118,6 +121,97 @@ def test_r_duckdb_uses_resolver_cache(binary: Path) -> Transcript:
     return duckdb_cache(binary, r=True)
 
 
+@requires(SQL, SANDBOX, POSIX)
+def test_duckdb_cache_waits_for_terminal_sql_results(binary: Path) -> Transcript:
+    class GatedSqlClient(McpClient):
+        """Return a real running SQL response before releasing its DuckDB UDF."""
+
+        checkpoints: tuple[FifoCheckpoint, ...] = ()
+        query_gated = False
+        sql_submissions = 0
+
+        def initialize_and_list_tools(self) -> None:
+            super().initialize_and_list_tools()
+            self.expect(
+                lambda text: Path(text.strip()).is_dir(),
+                python="import os; print(os.environ['TMPDIR'])",
+            )
+            temporary = Path(last_tool_text(self).strip())
+            self.checkpoints = tuple(
+                FifoCheckpoint.create(temporary / name)
+                for name in ("cache-query-started", "cache-query-release")
+            )
+            self.expect(
+                # fmt: python
+                python=code("""
+                    import os
+                    from pathlib import Path
+
+                    gate_calls = 0
+
+
+                    def resolver_cache_gate() -> bool:
+                        global gate_calls
+                        gate_calls += 1
+                        assert gate_calls == 1, "SQL query was replayed"
+                        temporary = Path(os.environ["TMPDIR"])
+                        with (temporary / "cache-query-started").open("wb", buffering=0) as started:
+                            assert started.write(b"1") == 1
+                        with (temporary / "cache-query-release").open("rb", buffering=0) as release:
+                            assert release.read(1) == b"1"
+                        return True
+
+
+                    _ = sql_connection().create_function(
+                        "resolver_cache_gate", resolver_cache_gate, [], "BOOLEAN", side_effects=True
+                    )
+                    """),
+            )
+
+        def send(self, **arguments: Any) -> ToolResult:
+            if "sql" in arguments:
+                self.sql_submissions += 1
+            if "sql" not in arguments or self.query_gated:
+                return super().send(**arguments)
+            self.query_gated = True
+            result = super().send(
+                **(
+                    arguments
+                    | {
+                        "sql": arguments["sql"] + " WHERE resolver_cache_gate()",
+                        "timeout_ms": 0,
+                    }
+                )
+            )
+            started, release = self.checkpoints
+            started.wait("managed DuckDB query entered its release gate")
+            assert without_elapsed(last_tool_text(self)) == (
+                "\n[running; poll with an empty send]"
+            ), last_tool_text(self)
+            release.release()
+            return result
+
+        def finish(self) -> Transcript:
+            assert self.sql_submissions == 4, "submit each SQL cell once"
+            return super().finish()
+
+        def close(self) -> None:
+            try:
+                super().close()
+            finally:
+                for checkpoint in self.checkpoints:
+                    checkpoint.close()
+
+    return [
+        *duckdb_cache(binary, r=False, client_type=GatedSqlClient),
+        {
+            "initial_sql_response": "running",
+            "query_executions_per_gate": 1,
+            "sql_submissions_per_cache": 4,
+        },
+    ]
+
+
 @requires(R, command("ir"))
 @executions(DIRECT, SANDBOXED)
 def test_custom_worker_captures_duckdb_cache_before_live_r(
@@ -188,7 +282,9 @@ def test_custom_worker_captures_duckdb_cache_before_live_r(
     return [{"custom_cache_captured_at_launch": True, "live_r_cache_matches": True}]
 
 
-def duckdb_cache(binary: Path, *, r: bool) -> Transcript:
+def duckdb_cache(
+    binary: Path, *, r: bool, client_type: type[McpClient] = McpClient
+) -> Transcript:
     for explicit in (False, True):
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -218,25 +314,44 @@ def duckdb_cache(binary: Path, *, r: bool) -> Transcript:
             config.write_text(
                 json.dumps({"cache": "host", "resolver": {"environment": resolver_env}})
             )
-            with McpClient(binary, ("serve",), env, root) as client:
+            with client_type(binary, ("serve",), env, root) as client:
                 client.initialize_and_list_tools()
-                result = client.send(
-                    sql="SELECT current_setting('extension_directory') AS directory"
+                wait_for_evaluation_output(
+                    client,
+                    None,
+                    "DuckDB resolver-cache directory query",
+                    completion_timeout_seconds=client.response_timeout,
+                    sql="SELECT current_setting('extension_directory') AS directory",
                 )
+                result = client.transcript[-1]["result"]
                 assert not result.get("isError"), result
                 assert str(cache) in last_tool_text(client), last_tool_text(client)
                 assert list(cache.glob("v*/**/sqlite_scanner.duckdb_extension"))
-                client.send(sql="LOAD sqlite")
-                client.send(
-                    sql="SELECT CASE WHEN loaded THEN 'loaded' ELSE 'missing' END AS state FROM duckdb_extensions() WHERE extension_name = 'sqlite_scanner'"
+                wait_for_evaluation_output(
+                    client,
+                    None,
+                    "DuckDB resolver-cache extension load",
+                    completion_timeout_seconds=client.response_timeout,
+                    sql="LOAD sqlite",
+                )
+                wait_for_evaluation_output(
+                    client,
+                    None,
+                    "DuckDB resolver-cache loaded-state query",
+                    completion_timeout_seconds=client.response_timeout,
+                    sql="SELECT CASE WHEN loaded THEN 'loaded' ELSE 'missing' END AS state FROM duckdb_extensions() WHERE extension_name = 'sqlite_scanner'",
                 )
                 assert "loaded" in last_tool_text(
                     client
                 ) and "missing" not in last_tool_text(client), last_tool_text(client)
                 config.write_text("resolver: {environment: {HOME: /missing}}\n")
                 client.send(control="restart")
-                client.send(
-                    sql="SELECT current_setting('extension_directory') AS directory"
+                wait_for_evaluation_output(
+                    client,
+                    None,
+                    "DuckDB resolver-cache directory query after restart",
+                    completion_timeout_seconds=client.response_timeout,
+                    sql="SELECT current_setting('extension_directory') AS directory",
                 )
                 assert str(cache) in last_tool_text(client), last_tool_text(client)
                 client.finish()
