@@ -89,7 +89,8 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
         with McpClient(binary, ("serve",), environment, host) as client:
             client.initialize_and_list_tools()
             description = client.transcript[-1]["result"]["tools"][0]["description"]
-            assert "paths explicitly allowed" in description, description
+            assert "Writable locations: private `TMPDIR`" in description, description
+            assert json.dumps(str(host)) in description, description
             # The trusted launch snapshot precedes even the first worker.
             config.write_text("sandbox: {}\n")
             for generation in range(4):
