@@ -13,16 +13,38 @@ from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
+from support.processes import capture_process_identity, child_process_identities
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, POSIX, UNPRIVILEGED, requires
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    UNPRIVILEGED,
+    requires,
+)
 
 
 @requires(POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
 def test_restart_preserves_overlapping_failed_retirement(
     binary: Path, execution: Execution
+) -> Transcript:
+    return _overlapping_failed_retirement(binary, execution, cleanup_failure=False)
+
+
+@requires(POSIX, NATIVE_FIXTURES, PROCESS_EVENTS)
+@executions(DIRECT, SANDBOXED)
+def test_restart_preserves_cleanup_and_io_failures(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return _overlapping_failed_retirement(binary, execution, cleanup_failure=True)
+
+
+def _overlapping_failed_retirement(
+    binary: Path, execution: Execution, *, cleanup_failure: bool
 ) -> Transcript:
     # fmt: python
     launcher = code("""
@@ -57,6 +79,8 @@ def test_restart_preserves_overlapping_failed_retirement(
             "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURNED": str(returned.path),
             "MCP_CONSOLE_TEST_GENERATION_FAILED": str(root / "failed"),
         }
+        if cleanup_failure:
+            environment["MCP_CONSOLE_TEST_RETIREMENT_EXIT_STATUS"] = "47"
         relay = (
             Path(__file__).resolve().parents[3]
             / "fixtures/server_relay/failed_retirement_restart.py"
@@ -88,6 +112,14 @@ def test_restart_preserves_overlapping_failed_retirement(
         blocked.wait(
             "failed-worker retirement reached native cleanup after the dispatcher barrier"
         )
+        if cleanup_failure:
+            launcher_exit = resources.enter_context(Events())
+            launchers = child_process_identities(
+                capture_process_identity(client.process.pid)
+            )
+            assert len(launchers) == 1, launchers
+            launcher_pid = launchers[0][0]
+            launcher_exit.watch_process(launcher_pid)
         (root / "failed").touch()
         restart = client.start_send(control="restart")
         # Public admission is the generation-change receipt. Intermediate
@@ -109,6 +141,10 @@ def test_restart_preserves_overlapping_failed_retirement(
         client.transcript[first_probe:] = client.transcript[-1:]
         fault_release.release()
         fault_sent.wait("old relay published Fatal during retirement")
+        if cleanup_failure:
+            # Observe the real launcher exit before sending SIGTERM. Otherwise
+            # native cleanup can supersede the relay's intended nonzero exit.
+            assert launcher_exit.wait(10) == {launcher_pid}, "launcher did not exit"
         release.release()
         returned.wait("native retirement signal completed")
         client.receive_many([failed, restart])
@@ -120,11 +156,24 @@ def test_restart_preserves_overlapping_failed_retirement(
         assert restart["result"]["isError"], (failed, restart, next_cell)
         restart_text = restart["result"]["content"][0]["text"]
         assert "scripted retirement failure" in restart_text, restart
+        if cleanup_failure:
+            for response in (failed, restart):
+                text = response["result"]["content"][0]["text"]
+                assert text.count("worker launcher exited with status 47") == 1, (
+                    response
+                )
+                assert text.count("scripted retirement failure") == 1, response
         assert "[starting new worker]" not in restart_text, restart
         assert next_cell["isError"], next_cell
         assert last_result_text(client) == "[worker is shutting down]", next_cell
         transcript, stderr = client.finish_with_standard_error(expected_exit_status=1)
-        assert stderr == "scripted retirement failure\n", stderr
+        expected_stderr = (
+            "worker launcher exited with status 47; additionally failed to retire "
+            "worker I/O: scripted retirement failure\n"
+            if cleanup_failure
+            else "scripted retirement failure\n"
+        )
+        assert stderr == expected_stderr, stderr
         return transcript + [{"exit_status": 1, "stderr": stderr}]
 
 

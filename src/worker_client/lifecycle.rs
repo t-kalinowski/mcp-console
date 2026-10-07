@@ -552,7 +552,16 @@ impl Client {
             self.resolve_and_begin_restart(requirements, grace, control)?
         };
         if let Err(mut error) = restart.processes.shutdown(restart.deadline) {
-            let retirement = self.finish_worker_retirement();
+            let retirement = self.finish_worker_retirement().and_then(|retirement| {
+                if matches!(retirement, WorkerRetirement::AlreadyStopped)
+                    && let Some(worker) = &restart.processes.worker
+                {
+                    // Failed-worker retirement may have stopped the logical
+                    // worker. Cleanup failure does not settle its retained I/O.
+                    worker.finish_retirement()?;
+                }
+                Ok(retirement)
+            });
             let retired_worker = matches!(retirement, Ok(WorkerRetirement::Stopped { .. }));
             let outcome = match retirement {
                 Ok(WorkerRetirement::Stopped {
