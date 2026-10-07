@@ -33,6 +33,9 @@ pub(crate) trait ResolverControl: Send + Sync {
     fn interrupt(&self) -> Result<bool, String>;
     fn control_outcome(&self) -> Option<super::ResolverControlOutcome>;
     fn cleanup_confirmed(&self) -> bool;
+    /// Confirm retirement of the owner, including a preparation connection's
+    /// protocol closure, child reaping and I/O joins, rather than one operation.
+    fn retirement_confirmed(&self) -> bool;
     /// Setup consumers must retain an independent operation failure even when
     /// a control and confirmed cleanup accompanied it.
     fn failure_is_controlled(&self) -> bool {
@@ -55,6 +58,9 @@ impl ResolverStopHandle {
     }
     pub(crate) fn cleanup_confirmed(&self) -> bool {
         self.0.cleanup_confirmed()
+    }
+    pub(crate) fn retirement_confirmed(&self) -> bool {
+        self.0.retirement_confirmed()
     }
     pub(crate) fn failure_is_controlled(&self) -> bool {
         self.0.failure_is_controlled()
@@ -310,6 +316,10 @@ impl ResolverControl for LocalControl {
 
     fn cleanup_confirmed(&self) -> bool {
         self.cleanup.load(Ordering::SeqCst)
+    }
+
+    fn retirement_confirmed(&self) -> bool {
+        self.cleanup_confirmed()
     }
 }
 

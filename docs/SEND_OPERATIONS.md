@@ -47,7 +47,23 @@ Cancellation after early admission releases the caller's wait, not the accepted 
 Timeout likewise cancels nothing.
 Closing MCP input cancels startup and follows normal retirement; outstanding response delivery after closure is unspecified.
 
-Discovery failure is retained and requires a new server after correcting setup; tool discovery remains usable.
+Discovery or initial preparation failure is retained by ordinary sends; tool discovery remains usable with the same schema.
+Closing the connection preserves completed setup failures in the server's exit status and stderr, including failures before a resolver is registered.
+Connection closure that refuses pending startup admission exits quietly; that refusal is separate from a completed setup error.
+After correcting setup, an explicit `control="restart"` retries that failed readiness attempt using the server's captured configuration and current filesystem/tool availability.
+Concurrent restart callers share an in-flight retry; request cancellation and timeout leave it running, while connection closure cancels and retires it.
+Cancelling a restart before its code or nonempty stdin is admitted leaves that work unaccepted, including stdin-only retries.
+If cancellation arrives during its bundled requirements preparation, preparation can commit, but that call's code and stdin stay unaccepted.
+If setup still fails, the retry reports and retains its new diagnostic.
+Previously rejected cells and their bundled stdin or requirements are not replayed; their diagnostics remain available for polling.
+A retry that succeeds accepts its environment once; joining restart callers do not replace that worker or discard state accepted meanwhile.
+A code-free retry routes its stdin through any cell admitted during shared readiness and observes that evaluation under ordinary polling ownership, including after preparation accepts unchanged requirements.
+After configuration is accepted, restart uses the retained environment and ordinary worker replacement.
+Same-call code, stdin, and requirements proceed only after readiness succeeds and retain their ordinary admission rules.
+A code-free retry with changed requirements starts the prepared replacement before returning readiness, even when preparation retired the unused prewarmed worker.
+Retries require confirmed cleanup of the failed preparation attempt.
+The preparation connection must also close and reap its child; a completed operation does not prove that retirement.
+An unconfirmed connection retirement blocks further retries in that session and retains its diagnostic.
 After discovery, a failed built-in worker prelaunch is reported once by the next idle poll, cell, or requirements inspection, with its diagnostics.
 The declaration remains available and ordinary worker recovery still applies.
 The first failure response includes captured startup diagnostics, including for requirements-only calls and restart.
