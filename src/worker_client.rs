@@ -383,9 +383,18 @@ impl Client {
 
     pub(crate) fn retry_failed_startup(&self) -> bool {
         assert!(!self.is_configured());
+        let active = self.0.evaluation.lock().expect("worker evaluation lock");
         let mut startup = self.0.startup.lock().expect("startup result lock");
         if !matches!(*startup.borrow(), Some(Err(_))) {
             return false;
+        }
+        // Match early admission's evaluation/startup lock order. Keep the failed
+        // cell pollable, but exclude its declaration from the new attempt.
+        if let Some(active) = active.as_ref() {
+            *active
+                .initial_requirements
+                .lock()
+                .expect("initial requirements lock") = None;
         }
         // Existing observers keep the failed attempt. A rejected cell must
         // never become runnable when a new attempt is installed.

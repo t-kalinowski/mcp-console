@@ -488,6 +488,64 @@ def test_restart_refreshes_failed_inspection_evidence(
             return transcript + [{"stderr": stderr, "inspection_attempts": 2}]
 
 
+@requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_retry_discards_failed_cell_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with discovery_environment() as (environment, reached, release, alive):
+        root = reached.path.parent
+        (root / "python3").symlink_to(FRAMEWORK_PYTHON)
+        expose_uv(root)
+        environment.update(
+            {
+                "UV_PYTHON_PREFERENCE": "only-system",
+                "UV_PYTHON_DOWNLOADS": "never",
+                "UV_TOOL_DIR": str(root),
+            }
+        )
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment, root
+        ) as client:
+            reached.wait("initial discovery is blocked before cell admission")
+            assert os.read(alive, 1) == b"1"
+            client.initialize_and_list_tools()
+            client.send(
+                python="rejected_cell = True",
+                requirements={"action": "set", "python": ["six"]},
+                timeout_ms=0,
+            )
+            assert without_elapsed(last_tool_text(client)) == (
+                "\n[running; poll with an empty send]"
+            )
+            release.release()
+            failure = client.send(requirements={"action": "get"})
+            assert failure.get("isError"), failure
+            assert "fixture R discovery failed" in str(failure), failure
+            (root / "R").unlink()
+            restarted = client.send(control="restart")
+            assert restarted.get("isError"), restarted
+            assert "fixture R discovery failed" in str(restarted), restarted
+            inspection = client.send(requirements={"action": "get"})
+            assert not inspection.get("isError"), inspection
+            retained = inspection["structuredContent"]["requirements"]
+            assert retained["python"] == [
+                "numpy",
+                "pandas",
+                "matplotlib",
+                "plotnine",
+                "duckdb",
+            ], retained
+            assert retained["duckdb"] == ["sqlite"], retained
+            client.expect(
+                "42\n",
+                python="assert 'rejected_cell' not in globals(); answer = 42; answer",
+            )
+            return json.loads(
+                json.dumps(client.finish()).replace(str(root), "<workspace>")
+            )
+
+
 @contextmanager
 def retry_inspection(
     binary: Path, execution: Execution, *, interruptible: bool = False

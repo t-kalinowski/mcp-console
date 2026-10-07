@@ -51,7 +51,7 @@ Discovery or initial preparation failure is retained by ordinary sends; tool dis
 After correcting setup, an explicit `control="restart"` retries that failed readiness attempt using the server's captured configuration and current filesystem/tool availability.
 Concurrent restart callers share an in-flight retry; request cancellation and timeout leave it running, while connection closure cancels and retires it.
 If setup still fails, the retry reports and retains its new diagnostic.
-Previously rejected cells and their bundled stdin are not replayed.
+Previously rejected cells and their bundled stdin or requirements are not replayed; their diagnostics remain available for polling.
 A retry that succeeds accepts its environment once; joining restart callers do not replace that worker or discard state accepted meanwhile.
 A code-free retry routes its stdin through any cell admitted during shared readiness and observes that evaluation under ordinary polling ownership.
 After configuration is accepted, restart uses the retained environment and ordinary worker replacement.
