@@ -35,6 +35,7 @@ from support.resolvers import (
 )
 from support.r import isolated_r_home, r_test_environment, reference_plots
 from support.python import virtualenv_python, write_test_wheel
+from support.snapshots import execution_snapshots
 
 
 # fmt: python
@@ -1135,6 +1136,7 @@ def test_late_r_startup_captures_package_plots(
 @requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_system_default_packages_survive_late_r_startup(
     binary: Path, execution: Execution
 ) -> Transcript:

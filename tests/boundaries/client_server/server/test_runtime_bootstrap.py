@@ -43,6 +43,7 @@ from support.processes import (
 )
 from support.r import install_r_startup, r_test_environment
 from support.suites import run_this_suite
+from support.snapshots import execution_snapshots
 
 RUNNING = "\n[running; poll with an empty send]"
 R_CHECKPOINT = (FIXTURES / "bootstrap_r/checkpoint.R").read_text()
@@ -790,6 +791,7 @@ def test_restart_during_bootstrap_inspection_is_quiet(
 
 @requires(POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_first_declaration_replaces_blocked_bootstrap(
     binary: Path, execution: Execution
 ) -> list:
@@ -843,6 +845,7 @@ def test_first_declaration_replaces_blocked_bootstrap(
 
 @requires(POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_failed_declaration_preserves_bootstrap_and_reset_remains_allowed(
     binary: Path, execution: Execution
 ) -> list:

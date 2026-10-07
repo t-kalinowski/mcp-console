@@ -86,10 +86,13 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
             "TEST_OUTSIDE": str(outside),
         }
         environment.pop("RETICULATE_PYTHON", None)
-        with McpClient(binary, ("serve",), environment, host) as client:
+        with McpClient(
+            binary, ("serve", "-c", "cache=host"), environment, host
+        ) as client:
             client.initialize_and_list_tools()
             description = client.transcript[-1]["result"]["tools"][0]["description"]
-            assert "paths explicitly allowed" in description, description
+            assert "Writable locations: private `TMPDIR`" in description, description
+            assert json.dumps(str(host)) in description, description
             # The trusted launch snapshot precedes even the first worker.
             config.write_text("sandbox: {}\n")
             for generation in range(4):
@@ -123,6 +126,12 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
             {"path": {"type": "path", "path": str(host / ".claude")}, "access": "read"},
             {"path": {"type": "path", "path": str(host)}, "access": "write"},
         ], policy
+        for entry in transcript:
+            if isinstance(result := entry.get("result"), dict):
+                for tool in result.get("tools", []):
+                    tool["description"] = tool["description"].replace(
+                        json.dumps(str(host)), '"<workspace>"'
+                    )
         return TranscriptWithCompanions(
             transcript,
             {
