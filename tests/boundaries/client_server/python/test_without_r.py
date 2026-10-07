@@ -29,7 +29,7 @@ from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.records import Transcript, TranscriptWithCompanions
-from support.snapshots import platform_snapshots
+from support.snapshots import execution_snapshots, platform_snapshots
 from support.python import virtualenv_python
 from support.resolvers import expose_uv
 from support.normalization import code, normalize_python_resolution_error
@@ -2074,7 +2074,11 @@ def test_resolves_default_python_without_r(
                 "duckdb"
                 in schema["inputSchema"]["properties"]["requirements"]["properties"]
             )
-            assert "without R" in schema["description"]
+            python_description = schema["inputSchema"]["properties"]["python"][
+                "description"
+            ]
+            assert "For Python-owned DuckDB" in python_description
+            assert "sql_connection().register(name, frame)" in python_description
             client.expect(
                 "42\n",
                 # fmt: python
@@ -2332,6 +2336,7 @@ def test_rejects_broken_r_instead_of_selecting_python(
             return [{"invalid_R_HOME": explicit}, {"broken_R": error}]
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 def test_cleans_temporary_storage_after_startup_failure(
     binary: Path, execution: Execution
@@ -2703,6 +2708,7 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             return records
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_startup_failure_restores_python_thread(
@@ -2715,6 +2721,7 @@ def test_startup_failure_restores_python_thread(
     return records
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_startup_failure_preserves_python_exception(

@@ -164,7 +164,10 @@ Failed optional R probes remain visible in the inventory without failing preflig
 `test` builds `target/debug/mcp-console.exe` unless `MCP_CONSOLE_TEST_BINARY` selects an installed executable; no selectors runs all native cases.
 Boundary selectors use the shared `BOUNDARY/SUITE::CASE` syntax and support `--update`, `--jobs`, and `--timeout`.
 Unscoped `test --full` adds all applicable shared cases.
-Shared concurrency defaults to at most six cases on Windows.
+Shared concurrency defaults to `max(2, 2 * N)` on all platforms, where `N` is the logical CPU count.
+An unavailable CPU count uses two cases.
+Explicit `--jobs N` overrides must be at least one.
+Boundary selectors also accept `-j N`; unscoped `test --full` runs require `--jobs N`.
 `check` validates embedded sources, architecture, Rust formatting, Clippy, Rust tests, and native acceptance.
 `--full` adds shared boundary cases, portable transcript-runner/MCP-client/release tooling regressions, wheel acceptance, and source-install acceptance in a temporary virtualenv.
 `format` runs ruff, yamark, rustfmt, and air, reports every failure, and only returns failure with `--strict`.
