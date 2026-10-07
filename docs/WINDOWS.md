@@ -62,6 +62,10 @@ Ordinary sandbox launches fail with setup guidance if provisioning is missing; t
 The native diagnostic names `mcp-console-sandbox setup`; installed Console users run its public equivalent, `mcp-console sandbox-setup`, with the same state directory.
 Setup uses Console accounts, separate from Codex accounts.
 Persistent state defaults to `%LOCALAPPDATA%\mcp-console`.
+Help and successful setup output describe the resources setup creates or reuses: the local accounts `McpConsoleSandboxOff` (restricted networking) and `McpConsoleSandboxOn` (network enabled), the `ConsoleSandboxUsers` security group, account-scoped Windows Firewall rules and WFP loopback filters, and protected state directories.
+Within the state directory, `.sandbox` holds setup records, `.sandbox-secrets` holds encrypted credentials, and `.sandbox-bin` stores helpers with sandbox read/execute access.
+An up-to-date setup is reused without changes; this summary describes provisioning resources, not a fresh audit of firewall policy.
+`--status` retains its read-only JSON readiness report.
 
 The default elevated backend enforces restricted networking and filesystem writes.
 `:workspace`, `:read-only`, and `--writable-root` use native policy composition.
