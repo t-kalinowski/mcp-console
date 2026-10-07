@@ -146,10 +146,15 @@ thread log
         == "thread stderr\nthread log\n"
     )
     assert all(
-        event["worker"]["kind"] in {"ready", "completed"}
+        event["worker"]["kind"] in {"ready", "r_initialization", "completed"}
         for event in transcript
         if "worker" in event
     )
+    assert [
+        event["worker"]["complete"]
+        for event in transcript
+        if event.get("worker", {}).get("kind") == "r_initialization"
+    ] == [False, True]
     return transcript
 
 
@@ -289,9 +294,19 @@ parent log
     assert "".join(event.get("stderr", "") for event in transcript) == stderr
     worker = [event["worker"] for event in transcript if "worker" in event]
     assert all(
-        event["kind"] in {"ready", "completed", "console_output", "console_diagnostic"}
+        event["kind"]
+        in {
+            "ready",
+            "r_initialization",
+            "completed",
+            "console_output",
+            "console_diagnostic",
+        }
         for event in worker
     ), worker
+    assert [
+        event["complete"] for event in worker if event["kind"] == "r_initialization"
+    ] == [False, True]
     for kind, expected in (
         ("console_output", "parent stdout\n[1] 42\n"),
         ("console_diagnostic", "parent stderr\nparent log\n"),

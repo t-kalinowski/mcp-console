@@ -11,6 +11,14 @@ relay:
     )
 ---
 worker:
+  kind: r_initialization
+  complete: false
+---
+worker:
+  kind: r_initialization
+  complete: true
+---
+worker:
   kind: completed
 ---
 relay:

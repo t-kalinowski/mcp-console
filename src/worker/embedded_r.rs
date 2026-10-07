@@ -214,7 +214,8 @@ fn evaluate_r_cell(r: String) -> Result<(), String> {
 
 pub(super) fn initialize_r(
     installation: &crate::local_runtime::RInstallation,
-) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
+    vanilla: bool,
+) -> Result<(), Box<dyn Error>> {
     let r_home = &installation.home;
     // Let the selected R launcher choose its configured default architecture
     // when users start subprocesses through commandArgs()[1].
@@ -225,15 +226,18 @@ pub(super) fn initialize_r(
     let libraries = harp::library::RLibraries::from_r_home_path(r_home);
     libraries.initialize_pre_setup_r();
 
-    let arguments = vec![
+    let mut arguments = vec![
         #[cfg(unix)]
         CString::new(executable.as_os_str().as_bytes())?,
         #[cfg(windows)]
         CString::new(executable.to_string_lossy().as_bytes())?,
         CString::new("--quiet")?,
         CString::new("--interactive")?,
-        CString::new("--vanilla")?,
+        CString::new("--no-save")?,
     ];
+    if vanilla {
+        arguments.push(CString::new("--vanilla")?);
+    }
     R_MAIN_ARGS
         .set(arguments)
         .map_err(|_| io::Error::other("R arguments were already initialized"))?;
@@ -247,7 +251,9 @@ pub(super) fn initialize_r(
     // Python cells and startup hooks can mutate these paths before late R
     // initialization. Restore the captured installation immediately before R starts.
     installation.configure_environment();
-    let deferred = native::initialize_r(r_home, &mut argument_pointers)?;
+    REPL_EVALUATING.store(true, Ordering::SeqCst);
+    initialize_r_console()?;
+    native::initialize_r(r_home, &mut argument_pointers)?;
 
     libraries.initialize_post_setup_r();
     unsafe {
@@ -255,12 +261,32 @@ pub(super) fn initialize_r(
     }
     harp::routines::r_register_routines();
     harp::initialize();
-    harp::parse_eval_base("base::options(width = 200L)")?;
     // Preserve R's fatal-signal diagnostics. Its bootstrap SIGINT handler only
     // records R's pending flag; attachment below retains that flag, transfers
     // any earlier Console request, and restores the process interrupt service.
     initialize_r_repl()?;
-    Ok(deferred)
+    Ok(())
+}
+
+fn initialize_r_console() -> Result<(), Box<dyn Error>> {
+    #[cfg(unix)]
+    let library = libloading::os::unix::Library::this();
+    #[cfg(windows)]
+    let library = libloading::os::windows::Library::open_already_loaded("R.dll")?;
+    let check_interrupt = unsafe { *library.get::<CheckUserInterrupt>(b"R_CheckUserInterrupt\0")? };
+    R_CHECK_USER_INTERRUPT
+        .set(check_interrupt)
+        .map_err(|_| io::Error::other("R interrupt checker was already initialized"))?;
+    unsafe {
+        mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending);
+    }
+    super::interrupt::attach_r(super::interrupt::State {
+        signal: mcp_r_record_interrupt,
+        requested: interrupt_pending,
+        pending: console_interrupt_pending,
+        acknowledge: acknowledge_console_interrupt,
+    })?;
+    Ok(())
 }
 
 fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
@@ -272,7 +298,6 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
     let do_one = unsafe { *library.get::<ReplDoOne>(b"R_ReplDLLdo1\0")? };
     let top_level_exec = unsafe { *library.get::<TopLevelExec>(b"R_ToplevelExec\0")? };
     let events = native::Events::load(&library, top_level_exec)?;
-    let check_interrupt = unsafe { *library.get::<CheckUserInterrupt>(b"R_CheckUserInterrupt\0")? };
     unsafe {
         mcp_r_repl_configure(&ReplApi {
             init,
@@ -287,18 +312,6 @@ fn initialize_r_repl() -> Result<(), Box<dyn Error>> {
         });
     }
     events.install()?;
-    R_CHECK_USER_INTERRUPT
-        .set(check_interrupt)
-        .map_err(|_| io::Error::other("R interrupt checker was already initialized"))?;
-    unsafe {
-        mcp_r_console_configure(r_read_console, check_interrupt, libr::R_interrupts_pending);
-    }
-    super::interrupt::attach_r(super::interrupt::State {
-        signal: mcp_r_record_interrupt,
-        requested: interrupt_pending,
-        pending: console_interrupt_pending,
-        acknowledge: acknowledge_console_interrupt,
-    })?;
     Ok(())
 }
 
@@ -422,6 +435,10 @@ extern "C-unwind" fn r_read_console(
     buflen: c_int,
     _add_history: c_int,
 ) -> c_int {
+    if let Err(error) = super::interrupt::reinstall() {
+        record_worker_failure(error.to_string());
+        return 0;
+    }
     if buf.is_null() || buflen <= 1 {
         return 0;
     }

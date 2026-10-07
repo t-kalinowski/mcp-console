@@ -35,6 +35,7 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
     let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
         crate::local_runtime::WorkerSelection {
             r: true,
+            r_settings: Default::default(),
             python: None,
         },
     );
@@ -56,7 +57,7 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
         std::env::var_os("TMPDIR").ok_or("worker launch did not supply temporary storage")?;
     crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
     core::initialize(reader, writer.clone())?;
-    let r = Integration::new(r_installation)?;
+    let r = Integration::new(r_installation, selection.r_settings)?;
     let python = crate::python::Runtime::new(selection)?;
     let sql = crate::sql::Bridge::new();
     writer.send(&WorkerMessage::Ready)?;

@@ -757,6 +757,10 @@ impl Worker {
         }
     }
 
+    pub(super) fn wait_for_bootstrap(&self) -> Result<(), String> {
+        self.operation.wait_for_bootstrap()
+    }
+
     pub(super) fn evaluate(
         &mut self,
         cell: crate::cell::Cell,

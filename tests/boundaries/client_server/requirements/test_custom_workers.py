@@ -105,13 +105,9 @@ def test_standalone_replacement_is_inspectable_before_worker_startup(
 def resolver_fixture_arguments(
     execution: Execution, *arguments: str
 ) -> tuple[str, ...]:
-    # Lifecycle fixtures write marker/FIFO state outside package caches. Their
-    # explicit resolver policy leaves native networking and cleanup in place.
-    if execution is DIRECT:
-        return execution.serve(*arguments)
-    return execution.serve(
-        *arguments, "-c", "resolver.sandbox.filesystem.read_write=[/]"
-    )
+    # Fixture records/checkpoints use UV_TOOL_DIR's default resolver write grant.
+    # Preserve those host-cache overrides in both execution modes.
+    return execution.serve(*arguments, "-c", "cache=host")
 
 
 def standalone_preparation(
@@ -141,6 +137,7 @@ def standalone_preparation(
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["TMPDIR"] = temporary_directory
+        environment["UV_TOOL_DIR"] = temporary_directory
         environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(resolver_counter)
         environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
@@ -332,6 +329,7 @@ def test_custom_worker_keeps_first_r_resolver_selection(
             (str(first), str(second), environment["PATH"])
         )
         environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(library)
+        environment["UV_TOOL_DIR"] = temporary
         unexpected = root / "unexpected-ir"
         environment["MCP_CONSOLE_TEST_UNEXPECTED_IR"] = str(unexpected)
         client = McpClient(
@@ -374,6 +372,7 @@ def test_custom_worker_keeps_selection_after_failed_first_manifest(
         )
         environment["MCP_CONSOLE_TEST_IR_LIBRARY"] = str(library)
         environment["MCP_CONSOLE_TEST_IR_FAIL_ONCE"] = str(root / "first-failed")
+        environment["UV_TOOL_DIR"] = temporary
         unexpected = root / "unexpected-ir"
         environment["MCP_CONSOLE_TEST_UNEXPECTED_IR"] = str(unexpected)
         client = McpClient(
@@ -426,6 +425,7 @@ def test_interrupt_after_local_resolver_exit_rejects_success(
         interposer = build_interposer(root, "child_exit_observation")
         environment, _ = r_test_environment()
         environment["PATH"] = os.pathsep.join((str(fake_bin), environment["PATH"]))
+        environment["UV_TOOL_DIR"] = str(root)
         environment.update(
             {
                 "MCP_CONSOLE_TEST_IR_LIBRARY": str(library),

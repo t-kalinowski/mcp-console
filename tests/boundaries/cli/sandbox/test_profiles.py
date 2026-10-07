@@ -325,6 +325,7 @@ def test_denied_workspace_keeps_metadata_unreadable(binary: Path) -> Transcript:
         for name in PROTECTED:
             (host / name).mkdir()
             (host / name / "keep").write_text("protected metadata")
+            assert (host / name / "keep").read_text() == "protected metadata"
         configure(
             host,
             json.dumps(
@@ -338,8 +339,8 @@ def test_denied_workspace_keeps_metadata_unreadable(binary: Path) -> Transcript:
                 }
             ),
         )
-        # Observe the denied reads in the workload. A runner setup failure or
-        # missing fixture cannot produce this output; errno differs by backend.
+        # Verify the host fixtures above before observing denied workload reads.
+        # Linux masks denied directories, so their children report ENOENT.
         exercise = (
             # fmt: python
             code(f"""
@@ -348,9 +349,9 @@ def test_denied_workspace_keeps_metadata_unreadable(binary: Path) -> Transcript:
 
                 for name in {PROTECTED!r}:
                     try:
-                        Path(name, "keep").read_text()
-                    except PermissionError as error:
-                        assert error.errno in (errno.EACCES, errno.EPERM), error
+                        Path({str(host)!r}, name, "keep").read_text()
+                    except OSError as error:
+                        assert error.errno in (errno.EACCES, errno.EPERM, errno.ENOENT), error
                         print(name + ": read denied")
                     else:
                         raise AssertionError(name + " was readable")

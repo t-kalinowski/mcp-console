@@ -159,6 +159,9 @@ pub(crate) enum WorkerMessage {
     RuntimeInitialized {
         interrupted: bool,
     },
+    RInitialization {
+        complete: bool,
+    },
     ConsoleOutput {
         data: String,
     },

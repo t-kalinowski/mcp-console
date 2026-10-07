@@ -7,15 +7,26 @@ config:
 ---
 !same-as MCP initialization for this execution mode
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: >-
+        Error: R is unavailable in this session; SQL withheld; explicit restart
+        required
+
+
+        [idle]
+  isError: false
+---
 send:
   sql: SELECT 42 AS answer
 result:
   content:
     - type: text
-      text: |
-        Error: R is unavailable in this session; SQL withheld; explicit restart required
-        [output produced while idle]
-        Error: SQL unavailable: R is unavailable in this session; explicit restart required
+      text: >
+        Error: SQL unavailable: R is unavailable in this session; explicit
+        restart required
   isError: false
 ---
 send:
@@ -36,7 +47,6 @@ result:
         restart required
   isError: false
 ---
-missing_runtime_withholds_sql: |
-  Error: R is unavailable in this session; SQL withheld; explicit restart required
-  [output produced while idle]
-  Error: SQL unavailable: R is unavailable in this session; explicit restart required
+missing_runtime_withholds_sql: >
+  Error: SQL unavailable: R is unavailable in this session; explicit
+  restart required

@@ -19,7 +19,8 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 def r_test_environment() -> tuple[dict[str, str], Path]:
     environment = os.environ.copy()
     # Keep personal startup code out of isolated fixture libraries.
-    environment["R_PROFILE_USER"] = os.devnull
+    for name in ("R_ENVIRON", "R_ENVIRON_USER", "R_PROFILE", "R_PROFILE_USER"):
+        environment[name] = os.devnull
     if r_home := environment.get("R_HOME"):
         home = Path(r_home)
     else:
@@ -227,7 +228,7 @@ def r_input_handler_client(
 
 @contextmanager
 def startup_r_package(directory: Path, source: str) -> Iterator[dict[str, str]]:
-    """Run a default package's .onLoad hook before ordinary Python startup."""
+    """Run a default package's .onLoad hook during native R startup."""
     environment, rscript = r_test_environment()
     package = directory / "startup-package"
     (package / "R").mkdir(parents=True)

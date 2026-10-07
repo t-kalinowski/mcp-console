@@ -50,7 +50,7 @@ unsafe extern "C" {
 pub(super) fn initialize_r(
     _r_home: &Path,
     arguments: &mut [*mut c_char],
-) -> Result<Option<Option<std::ffi::OsString>>, Box<dyn Error>> {
+) -> Result<(), Box<dyn Error>> {
     unsafe {
         libr::Rf_initialize_R(arguments.len() as c_int, arguments.as_mut_ptr());
         libr::set(libr::R_Interactive, libr::Rboolean_TRUE);
@@ -62,13 +62,30 @@ pub(super) fn initialize_r(
         libr::set(libr::ptr_R_ShowMessage, Some(r_show_message));
         libr::set(libr::ptr_R_Busy, Some(r_busy));
     }
-    // Rf_initialize_R has read the system Renviron. Defer its effective package
-    // selection before setup_Rmainloop runs the base profile and .First.sys().
-    let deferred = crate::python::defer_r_startup()?;
+    // setup_Rmainloop installs R's signal handlers before profiles run. Its
+    // event callback observes pending interrupts before R consumes them and
+    // restores Console's SIGINT wakeup while retaining R's fatal diagnostics.
+    let previous = unsafe { libr::get(libr::R_PolledEvents) };
     unsafe {
+        libr::set(libr::R_PolledEvents, Some(startup_events));
         libr::setup_Rmainloop();
+        if libr::get(libr::R_PolledEvents).is_some_and(|handler| {
+            std::ptr::fn_addr_eq(handler, startup_events as unsafe extern "C-unwind" fn())
+        }) {
+            libr::set(libr::R_PolledEvents, previous);
+        }
     }
-    Ok(deferred)
+    super::super::interrupt::reinstall()?;
+    Ok(())
+}
+
+unsafe extern "C-unwind" fn startup_events() {
+    if super::interrupt_pending() {
+        super::super::r_integration::record_initialization_interrupt();
+    }
+    if let Err(error) = super::super::interrupt::reinstall() {
+        super::record_worker_failure(error.to_string());
+    }
 }
 
 impl Events {

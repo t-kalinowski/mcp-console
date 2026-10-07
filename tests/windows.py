@@ -54,14 +54,16 @@ class Session:
         bare_r=False,
         defer_bootstrap=False,
         sandbox=False,
+        temporary_root=None,
         overrides=(),
+        use_r_startup_files=False,
     ):
         if sandbox:
             from windows_sandbox import workspace
 
             class Directory:
                 def __init__(self):
-                    self.context = workspace()
+                    self.context = workspace(temporary_root)
                     self.name = str(self.context.__enter__())
 
                 def cleanup(self):
@@ -69,7 +71,9 @@ class Session:
 
             self.directory = Directory()
         else:
-            self.directory = tempfile.TemporaryDirectory(prefix="console windows ")
+            self.directory = tempfile.TemporaryDirectory(
+                prefix="console windows ", dir=temporary_root
+            )
         (Path(self.directory.name) / ".agents/console").mkdir(parents=True)
         self.errors = tempfile.TemporaryFile()
         command = [str(BINARY), "serve"]
@@ -84,6 +88,9 @@ class Session:
         environment = dict(
             environment, MCP_CONSOLE_HOME=str(Path(self.directory.name) / "home")
         )
+        if not use_r_startup_files:
+            for name in ("R_ENVIRON", "R_ENVIRON_USER", "R_PROFILE", "R_PROFILE_USER"):
+                environment[name] = os.devnull
         if bare_r:
             # Hiding ir/uv on PATH is insufficient when ambient reticulate can
             # bootstrap uv. Isolate package libraries for preinstalled-R cases.
@@ -1441,6 +1448,99 @@ class WindowsConsole(unittest.TestCase):
                 )
                 self.assertFalse(result.get("isError"), result)
                 self.assertIn("startup paths intact", json.dumps(result))
+
+    def test_native_r_startup_and_captured_vanilla_override(self):
+        for vanilla in (False, True):
+            with (
+                self.subTest(vanilla=vanilla),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                home = Path(directory)
+                environ = home / ".Renviron"
+                profile = home / ".Rprofile"
+                environ.write_text(
+                    "CONSOLE_NATIVE_ENV=first\n"
+                    "CONSOLE_NATIVE_ENV_READS=${CONSOLE_NATIVE_ENV_READS}x\n"
+                    "R_DEFAULT_PACKAGES=utils\n"
+                )
+                profile.write_text(
+                    # fmt: r
+                    code("""
+                        native_value <- Sys.getenv("CONSOLE_NATIVE_ENV")
+                        options(width = 73L)
+                        .First <- function() native_first <<- TRUE
+                        """)
+                )
+                environment = dict(
+                    os.environ,
+                    HOME=str(home),
+                    R_USER=str(home),
+                    R_ENVIRON=os.devnull,
+                    R_PROFILE=os.devnull,
+                    R_ENVIRON_USER=str(environ),
+                    R_PROFILE_USER=str(profile),
+                    MCP_CONSOLE_LANGUAGES="r",
+                )
+                environment.pop("R_DEFAULT_PACKAGES", None)
+                environment.pop("CONSOLE_NATIVE_ENV_READS", None)
+                session = Session(
+                    environment,
+                    bare_r=True,
+                    overrides=(f"r.vanilla={str(vanilla).lower()}",),
+                    use_r_startup_files=True,
+                )
+                try:
+                    session.initialize()
+                    for value in ("first", "edited"):
+                        if value == "edited":
+                            config = (
+                                Path(session.directory.name)
+                                / ".agents/console/config.yaml"
+                            )
+                            config.write_text(
+                                f"r:\n  vanilla: {str(not vanilla).lower()}\n"
+                            )
+                            environ.write_text(
+                                "CONSOLE_NATIVE_ENV=edited\n"
+                                "CONSOLE_NATIVE_ENV_READS=${CONSOLE_NATIVE_ENV_READS}x\n"
+                                "R_DEFAULT_PACKAGES=utils\n"
+                            )
+                            session.send(control="restart")
+                        if vanilla:
+                            # fmt: r
+                            check = code("""
+                                stopifnot(
+                                  "--vanilla" %in% commandArgs(),
+                                  Sys.getenv("CONSOLE_NATIVE_ENV") == "",
+                                  Sys.getenv("CONSOLE_NATIVE_ENV_READS") == "",
+                                  !exists("native_value"),
+                                  !exists("native_first"),
+                                  "package:stats" %in% search()
+                                )
+                                cat("vanilla startup complete")
+                                """)
+                            expected = "vanilla startup complete"
+                        else:
+                            # fmt: r
+                            check = code(f"""
+                                stopifnot(
+                                  !("--vanilla" %in% commandArgs()),
+                                  "--no-save" %in% commandArgs(),
+                                  identical(native_value, "{value}"),
+                                  identical(Sys.getenv("CONSOLE_NATIVE_ENV_READS"), "x"),
+                                  native_first,
+                                  identical(getOption("width"), 73L),
+                                  "package:utils" %in% search(),
+                                  !("package:stats" %in% search())
+                                )
+                                cat("native startup complete")
+                                """)
+                            expected = "native startup complete"
+                        result = session.send(r=check)
+                        self.assertFalse(result.get("isError"), result)
+                        self.assertIn(expected, json.dumps(result))
+                finally:
+                    session.close()
 
     def test_python_errors_preserve_state(self):
         session = self.session()
