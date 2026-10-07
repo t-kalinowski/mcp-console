@@ -20,7 +20,8 @@ result:
   content:
     - type: text
       text: >-
-        HTTP Error: Failed to download extension "not_a_real_duckdb_extension"
+        DuckDB extension resolution failed with exit status: 1: fixture DuckDB
+        extension not_a_real_duckdb_extension is unavailable
   isError: true
 ---
 send:
