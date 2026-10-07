@@ -26,10 +26,12 @@ BINARY = Path(
 
 
 @contextmanager
-def workspace():
+def workspace(parent: Path | None = None):
     # Inherit the user's ordinary ACLs. Python 3.14's private temp directories
     # allow only owner/admin/system, which a restricted token cannot traverse.
-    root = Path(tempfile.gettempdir()) / f"console sandbox {uuid.uuid4().hex}"
+    root = (
+        parent or Path(tempfile.gettempdir())
+    ) / f"console sandbox {uuid.uuid4().hex}"
     root.mkdir()
     try:
         yield root
@@ -140,7 +142,7 @@ class WindowsSandbox(unittest.TestCase):
                 [sys.executable, "-m", "venv", "--without-pip", selected], check=True
             )
             # Hosted temp directories may exclude the sandbox account. Grant
-            # reads for the selected venv and later host-written cache probe.
+            # reads for the selected venv, session cwd, and host-written probe.
             status = json.loads(
                 subprocess.check_output(
                     [BINARY, "sandbox-setup", "--status"], text=True
@@ -190,10 +192,13 @@ class WindowsSandbox(unittest.TestCase):
                         cache.joinpath("resolver-probe").write_text("prepared")
                     """)
             )
+            # Keep the cwd under the explicit read grant too. The native
+            # runner's background read-ACL traversal can still be in progress.
             session = Session(
                 os.environ,
                 python=python,
                 sandbox=True,
+                temporary_root=root,
                 overrides=[
                     'sandbox.network="enabled"',
                     "inherit_environment=false",
