@@ -134,7 +134,10 @@ def test_control_only_interrupt_targets_blocked_controlled_restart_resolver(
                 "content": [
                     {
                         "type": "text",
-                        "text": "\n[running; poll with an empty send]",
+                        "text": (
+                            "\n[phase: dependency preparation]"
+                            "\n[running; poll with an empty send]"
+                        ),
                     }
                 ],
                 "isError": False,
