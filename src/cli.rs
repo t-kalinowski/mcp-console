@@ -45,6 +45,10 @@ pub struct Cli {
 
 #[derive(Debug, Args)]
 pub struct ConfigOverrides {
+    /// Skip launch-directory project configuration; still load home configuration and apply -c overrides
+    #[arg(long)]
+    pub no_project_config: bool,
+
     /// Override project configuration; repeat for multiple dotted KEY=VALUE assignments
     #[arg(short = 'c', long = "config", value_name = "KEY=VALUE")]
     pub values: Vec<String>,

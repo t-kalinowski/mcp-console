@@ -29,7 +29,7 @@ from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.records import Transcript, TranscriptWithCompanions
-from support.snapshots import platform_snapshots
+from support.snapshots import execution_snapshots, platform_snapshots
 from support.python import virtualenv_python
 from support.resolvers import expose_uv
 from support.normalization import code, normalize_python_resolution_error
@@ -73,21 +73,12 @@ def grant_resolver_cache(workspace: Path, cache: Path) -> None:
             {
                 "cache": "host",
                 "resolver": {
-                    "filesystem": {
-                        "entries": [
-                            {
-                                "path": {"type": "special", "value": {"kind": "root"}},
-                                "access": "read",
-                            },
-                            {
-                                "path": {"type": "path", "path": str(cache)},
-                                "access": "write",
-                            },
-                        ]
-                    },
                     "environment": {
                         "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY": str(cache / "duckdb"),
                         "MPLCONFIGDIR": str(cache / "matplotlib"),
+                    },
+                    "sandbox": {
+                        "filesystem": {"read_only": ["/"], "read_write": [str(cache)]}
                     },
                 },
             }
@@ -211,7 +202,11 @@ def test_trusts_host_resolver(binary: Path, execution: Execution) -> Transcript:
         config = workspace / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
         config.write_text(
-            json.dumps({"sandbox": {"filesystem": {"write": [str(workspace)]}}})
+            json.dumps(
+                {"sandbox": {"filesystem": {"read_write": [str(workspace)]}}}
+                if execution == SANDBOXED
+                else {}
+            )
         )
         uv = workspace / "uv"
         marker = root / "host-resolution"
@@ -577,13 +572,13 @@ def non_utf8_environment_preparation(binary: Path, execution: Execution) -> Tran
                 json.dumps(
                     {
                         "resolver": {
-                            "inherit_environment": False,
                             "environment": {
                                 "HOME": env["HOME"],
                                 "PATH": env["PATH"],
                                 "UV_CACHE_DIR": str(root / "uv-cache"),
                                 "UV_NO_CONFIG": "1",
                             },
+                            "inherit_environment": False,
                         }
                     }
                 )
@@ -623,7 +618,11 @@ def test_prepares_managed_python_at_startup_and_restart(
         uv = expose_uv(root)
         config = workspace / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
-        config.write_text('extends: ":workspace"\n')
+        config.write_text(
+            "sandbox: {filesystem: {read_write: [.]}}\n"
+            if execution == SANDBOXED
+            else "{}\n"
+        )
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
             client.send(
@@ -1146,7 +1145,11 @@ def test_retains_automatic_additions_after_import_errors(
         with McpClient(
             installed_console(binary),
             execution.serve(
-                "-c", "resolver.network=enabled", "-c", "resolver.proxy=null"
+                *(
+                    ("-c", "resolver.sandbox.network=enabled")
+                    if execution == SANDBOXED
+                    else ()
+                )
             ),
             env,
         ) as client:
@@ -2071,7 +2074,11 @@ def test_resolves_default_python_without_r(
                 "duckdb"
                 in schema["inputSchema"]["properties"]["requirements"]["properties"]
             )
-            assert "without R" in schema["description"]
+            python_description = schema["inputSchema"]["properties"]["python"][
+                "description"
+            ]
+            assert "For Python-owned DuckDB" in python_description
+            assert "sql_connection().register(name, frame)" in python_description
             client.expect(
                 "42\n",
                 # fmt: python
@@ -2329,6 +2336,7 @@ def test_rejects_broken_r_instead_of_selecting_python(
             return [{"invalid_R_HOME": explicit}, {"broken_R": error}]
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 def test_cleans_temporary_storage_after_startup_failure(
     binary: Path, execution: Execution
@@ -2546,19 +2554,19 @@ def test_preserves_explicit_selection_in_sandbox_environment(
             workspace = Path(directory)
             config = workspace / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
+            env = environment(workspace)
             config.write_text(
                 json.dumps(
                     {
-                        "sandbox": {
-                            "inherit_environment": inherit,
-                            "environment": {
-                                "RETICULATE_PYTHON": "/invalid/project/python"
-                            },
-                        }
+                        "environment": {
+                            "RETICULATE_PYTHON": "/invalid/project/python",
+                            "HOME": env["HOME"],
+                            "PATH": env["PATH"],
+                        },
+                        "inherit_environment": inherit,
                     }
                 )
             )
-            env = environment(workspace)
             env["RETICULATE_PYTHON"] = sys.executable
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
@@ -2700,6 +2708,7 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             return records
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_startup_failure_restores_python_thread(
@@ -2712,6 +2721,7 @@ def test_startup_failure_restores_python_thread(
     return records
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_startup_failure_preserves_python_exception(
@@ -2868,17 +2878,19 @@ def ignores_python_layout_override(
             )
             config = workspace / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
+            env = selected_environment(virtualenv_python(venv).parent)
             config.write_text(
                 json.dumps(
                     {
-                        "sandbox": {
-                            "inherit_environment": inherit,
-                            "environment": {variable: "unavailable-configured-layout"},
-                        }
+                        "environment": {
+                            variable: "unavailable-configured-layout",
+                            "HOME": env["HOME"],
+                            "PATH": env["PATH"],
+                        },
+                        "inherit_environment": inherit,
                     }
                 )
             )
-            env = selected_environment(virtualenv_python(venv).parent)
             env[variable] = "unavailable-inherited-layout"
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()

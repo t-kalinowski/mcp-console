@@ -53,6 +53,7 @@ mod worker_relay;
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let mut overrides = cli.overrides.values;
+    let no_project_config = cli.overrides.no_project_config;
     match cli.command {
         #[cfg(windows)]
         cli::Command::SandboxSetup { status, state_dir } => {
@@ -77,7 +78,14 @@ fn main() -> ExitCode {
             overrides: command_overrides,
         } => {
             overrides.extend(command_overrides.values);
-            match run_server(worker, relay, no_sandbox, writable_root, &overrides) {
+            match run_server(
+                worker,
+                relay,
+                no_sandbox,
+                writable_root,
+                &overrides,
+                no_project_config || command_overrides.no_project_config,
+            ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => exit_with_error(error),
             }
@@ -110,6 +118,7 @@ fn main() -> ExitCode {
                 settings_env.as_deref(),
                 writable_root,
                 &overrides,
+                no_project_config || command_overrides.no_project_config,
             ) {
                 Ok(exit_code) => exit_code,
                 Err(error) => exit_with_error(error),
@@ -124,6 +133,7 @@ fn run_server(
     no_sandbox: bool,
     writable_roots: Vec<std::path::PathBuf>,
     overrides: &[String],
+    no_project_config: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
         cache,
@@ -132,7 +142,12 @@ fn run_server(
         source: _,
         mut policy,
         mut resolver,
-    } = settings::discover(overrides)?;
+        sandbox_requested,
+        resolver_sandbox_requested,
+    } = settings::discover(overrides, no_project_config)?;
+    if no_sandbox && (sandbox_requested || resolver_sandbox_requested) {
+        return Err("explicit sandbox or resolver.sandbox permissions require sandboxing; remove them when using --no-sandbox".into());
+    }
     resolver::cache::configure(
         cache,
         no_sandbox,
@@ -144,7 +159,7 @@ fn run_server(
         return Err("python selection requires the built-in worker and relay".into());
     }
     let settings = if no_sandbox {
-        settings::SandboxSettings::default()
+        policy
     } else {
         // Native validation belongs to the owned background launch. Running a
         // preflight child here would precede MCP serving and EOF ownership.

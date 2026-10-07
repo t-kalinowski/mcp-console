@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.snapshots import execution_snapshots
 from support.progress import without_elapsed
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
@@ -447,6 +448,7 @@ def test_times_out_and_polls_running_evaluation(
     return client.finish()
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_running_r_evaluation(

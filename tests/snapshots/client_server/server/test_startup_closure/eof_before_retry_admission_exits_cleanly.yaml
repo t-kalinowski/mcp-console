@@ -1,0 +1,21 @@
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
+---
+send: {}
+result:
+  content:
+    - type: text
+      text: resolver sandbox requires HOME
+  isError: true
+---
+send:
+  control: restart
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[worker starting]"
+  isError: false
+---
+exit_status: 0
+stderr: ""

@@ -75,7 +75,9 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
             (host / name / "keep").write_text("readable")
         config = host / ".agents/console/config.yaml"
         config.parent.mkdir()
-        config.write_text('extends: ":workspace"\n')
+        config.write_text(
+            "sandbox: {filesystem: {read_write: [.], read_only: [.claude]}}\n"
+        )
         capture = root / "launches.jsonl"
         environment = os.environ | {
             LOADER_VARIABLE: str(build_interposer(root, "runner_configuration")),
@@ -87,17 +89,9 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
         with McpClient(binary, ("serve",), environment, host) as client:
             client.initialize_and_list_tools()
             description = client.transcript[-1]["result"]["tools"][0]["description"]
-            for name in (
-                ":workspace",
-                ".git",
-                ".agents",
-                ".codex",
-                ".claude",
-                "default",
-            ):
-                assert name in description, description
+            assert "paths explicitly allowed" in description, description
             # The trusted launch snapshot precedes even the first worker.
-            config.write_text('extends: ":read-only"\n')
+            config.write_text("sandbox: {}\n")
             for generation in range(4):
                 send_and_collect_runtime_python_resolution(client, python=exercise)
                 assert (
@@ -123,36 +117,22 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
         assert len(launches) == 4, launches
         assert all(policy == launches[0] for policy in launches), launches
         policy = launches[0]
-        assert policy["extends"] == ":workspace"
-        assert policy["workspace"] == str(host)
-        assert policy["workspace_options"] == {
-            "exclude_tmpdir_env_var": True,
-            "exclude_slash_tmp": True,
-        }
-        assert "network" not in policy, policy
-        assert policy["filesystem"] == {
-            "kind": "restricted",
-            "entries": [
-                {
-                    "path": {
-                        "type": "special",
-                        "value": {"kind": "project_roots", "subpath": ".claude"},
-                    },
-                    "access": "read",
-                }
-            ],
-        }, policy
+        assert policy["network"] == "restricted"
+        assert policy["filesystem"]["kind"] == "restricted"
+        assert policy["filesystem"]["entries"][1:] == [
+            {"path": {"type": "path", "path": str(host / ".claude")}, "access": "read"},
+            {"path": {"type": "path", "path": str(host)}, "access": "write"},
+        ], policy
         return TranscriptWithCompanions(
             transcript,
             {
                 "profile.yaml": [
                     {
-                        "native_profile": ":workspace",
+                        "read_write": ["."],
                         "fixed_workspace": True,
                         "identical_launches": len(launches),
-                        "network_inherited": True,
-                        "workspace_options": policy["workspace_options"],
-                        "console_read_adjustment": ".claude",
+                        "network": "restricted",
+                        "read_only": [".claude"],
                     }
                 ]
             },

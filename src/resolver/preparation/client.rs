@@ -25,6 +25,7 @@ struct Connection {
     owner: Mutex<Option<thread::JoinHandle<Result<(), String>>>>,
     unconfirmed: Arc<Mutex<Option<UnconfirmedChild>>>,
     blocked: Arc<Mutex<Option<String>>>,
+    retired: Arc<AtomicBool>,
 }
 
 struct UnconfirmedChild {
@@ -105,6 +106,7 @@ struct Control {
     events: mpsc::Sender<Event>,
     state: Arc<State>,
     blocked: Arc<Mutex<Option<String>>>,
+    retired: Arc<AtomicBool>,
 }
 
 impl ResolverControl for Control {
@@ -145,6 +147,9 @@ impl ResolverControl for Control {
     }
     fn cleanup_confirmed(&self) -> bool {
         self.state.confirmed.load(Ordering::SeqCst)
+    }
+    fn retirement_confirmed(&self) -> bool {
+        self.retired.load(Ordering::SeqCst)
     }
     fn failure_is_controlled(&self) -> bool {
         // Cancellation cannot account for a separate connection-close failure.
@@ -201,12 +206,13 @@ impl Preparation {
 
     pub(crate) fn open_local(
         mode: Mode,
-        resolver: Option<crate::settings::SandboxSettings>,
+        mut settings: crate::settings::SandboxSettings,
+        no_sandbox: bool,
         python: Option<&std::ffi::OsStr>,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let mut command = if let Some(mut settings) = resolver {
+        let mut command = if !no_sandbox {
             // Preparation and the retained worker must agree on whether Python
             // is managed, including with an isolated resolver environment.
             crate::settings::preserve_environment(
@@ -222,20 +228,16 @@ impl Preparation {
                 let mut command = std::process::Command::new(
                     std::env::current_exe().map_err(|error| error.to_string())?,
                 );
-                if settings.get("inherit_environment") == Some(&serde_json::Value::Bool(false)) {
-                    command.env_clear();
-                }
-                if let Some(environment) = settings.get("environment") {
-                    let values: std::collections::BTreeMap<String, String> =
-                        serde_json::from_value(environment.clone())
-                            .map_err(|error| error.to_string())?;
-                    command.envs(values);
-                }
+                crate::settings::configure_environment(&mut command, &settings);
                 command
             };
             command
         } else {
-            std::process::Command::new(std::env::current_exe().map_err(|error| error.to_string())?)
+            let mut command = std::process::Command::new(
+                std::env::current_exe().map_err(|error| error.to_string())?,
+            );
+            crate::settings::configure_environment(&mut command, &settings);
+            command
         };
         if let Some(python) = python {
             command.env("RETICULATE_PYTHON", python);
@@ -371,6 +373,8 @@ impl Preparation {
         let owner_blocked = blocked.clone();
         let unconfirmed = Arc::new(Mutex::new(None));
         let owner_unconfirmed = unconfirmed.clone();
+        let retired = Arc::new(AtomicBool::new(false));
+        let owner_retired = retired.clone();
         let owner = thread::spawn(move || {
             let result = run(received, &outgoing, pending, open, &owner_blocked);
             drop(outgoing);
@@ -440,6 +444,9 @@ impl Preparation {
                     LABEL
                 ));
             }
+            // Operation receipts precede connection closure. Publish this
+            // separate receipt only after successful retirement and I/O joins.
+            owner_retired.store(result.is_ok(), Ordering::SeqCst);
             result
         });
         let connection = Self(Arc::new(Connection {
@@ -448,12 +455,14 @@ impl Preparation {
             owner: Mutex::new(Some(owner)),
             unconfirmed,
             blocked,
+            retired,
         }));
         let handle = ResolverStopHandle::new(Control {
             id: 0,
             events,
             state,
             blocked: connection.0.blocked.clone(),
+            retired: connection.0.retired.clone(),
         });
         if let Err(error) = on_started(handle.clone()) {
             let _ = handle.stop();
@@ -501,6 +510,7 @@ impl Preparation {
             events: self.0.events.clone(),
             state: state.clone(),
             blocked: self.0.blocked.clone(),
+            retired: self.0.retired.clone(),
         });
         let (reply, response) = mpsc::channel();
         self.0

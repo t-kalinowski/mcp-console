@@ -81,10 +81,8 @@ parser.add_argument(
     "-j",
     "--jobs",
     type=int,
-    default=min(6, max(1, (os.cpu_count() or 2) - 1))
-    if os.name == "nt"
-    else max(1, (os.cpu_count() or 2) - 1),
-    help="concurrent transcript cases (default: logical CPU count minus one, at least 1; capped at 6 on Windows)",
+    default=max(2, 2 * (os.cpu_count() or 1)),
+    help="concurrent transcript cases (default: %(default)s; twice the logical CPU count, at least 2)",
 )
 parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
@@ -264,14 +262,23 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
                 suite_name,
                 case_name,
                 recorded,
-                update=update and (index == 0 or initialization),
+                update=update
+                and (
+                    index == 0
+                    or initialization
+                    or getattr(case, "execution_snapshots", False)
+                ),
                 execution=execution.name if execution is not None else None,
                 platform_specific=sys.platform
                 in getattr(case, "snapshot_platforms", ()),
+                execution_specific=getattr(case, "execution_snapshots", False),
             )
-            assert initialization or index == 0 or mode_snapshots == checked, (
-                "execution modes produced different companion snapshots"
-            )
+            assert (
+                initialization
+                or index == 0
+                or getattr(case, "execution_snapshots", False)
+                or mode_snapshots == checked
+            ), "execution modes produced different companion snapshots"
             checked.update(mode_snapshots)
             status = "passed"
         except BaseException as error:

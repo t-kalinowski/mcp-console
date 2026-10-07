@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.snapshots import execution_snapshots
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient
@@ -77,6 +78,7 @@ def test_silent_polls_retain_admission_age(
             return client.finish()
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_worker_activity_survives_preview_projection(

@@ -151,6 +151,15 @@ class McpClient:
         if current_directory is None:
             assert self.temporary_directory is not None
             current_directory = Path(self.temporary_directory.name)
+        # Retain CLI fixture paths only for snapshot normalization after assertions.
+        workspace = current_directory.resolve()
+        self.writable_roots = [
+            json.dumps(
+                os.path.abspath(workspace / arguments[index + 1]), ensure_ascii=False
+            )[1:-1]
+            for index, argument in enumerate(arguments)
+            if argument == "--writable-root"
+        ]
         self.console_home: tempfile.TemporaryDirectory[str] | None = None
         if not use_home_configuration:
             self.console_home = tempfile.TemporaryDirectory()
@@ -377,6 +386,18 @@ class McpClient:
             standard_error = self.stderr.read()
             assert self.process.returncode == expected_exit_status, standard_error
             assert extra_output == "", f"unexpected extra output: {extra_output}"
+            for entry in self.transcript:
+                if isinstance(result := entry.get("result"), dict):
+                    for tool in result.get("tools", []):
+                        for index, root in enumerate(self.writable_roots):
+                            label = (
+                                "<writable-root>"
+                                if index == 0
+                                else f"<writable-root {index + 1}>"
+                            )
+                            tool["description"] = tool["description"].replace(
+                                f'`"{root}"`', f'`"{label}"`'
+                            )
             return self.transcript, standard_error
         finally:
             self._dispose(deadline)

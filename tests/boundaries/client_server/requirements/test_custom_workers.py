@@ -107,7 +107,11 @@ def resolver_fixture_arguments(
 ) -> tuple[str, ...]:
     # Lifecycle fixtures write marker/FIFO state outside package caches. Their
     # explicit resolver policy leaves native networking and cleanup in place.
-    return execution.serve(*arguments, "-c", "resolver.filesystem.kind=unrestricted")
+    if execution is DIRECT:
+        return execution.serve(*arguments)
+    return execution.serve(
+        *arguments, "-c", "resolver.sandbox.filesystem.read_write=[/]"
+    )
 
 
 def standalone_preparation(

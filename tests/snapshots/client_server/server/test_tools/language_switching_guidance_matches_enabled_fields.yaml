@@ -1,263 +1,193 @@
 ---
 languages: r
 description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker.
+  Persistent custom-worker workbench. Send one complete `r`, `python`, or `sql`
+  cell per call. Inspect its output and reuse persistent objects.
 
 
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
+  Language fields describe the configured interface; evaluation, display, SQL,
+  and sharing depend on the worker. Console does not supply built-in runtime
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable.
 
 
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings. Full retained text
-  requires filesystem access there through existing tools; Console provides no
-  read/search interface.
+  Text results, including notices, have an 8 KiB limit, retaining the beginning
+  and latest tail; images have separate limits. Response notices report state
+  and omitted-output locations.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
 ---
 languages: python
 description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker.
+  Persistent custom-worker workbench. Send one complete `r`, `python`, or `sql`
+  cell per call. Inspect its output and reuse persistent objects.
 
 
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
+  Language fields describe the configured interface; evaluation, display, SQL,
+  and sharing depend on the worker. Console does not supply built-in runtime
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable.
 
 
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings. Full retained text
-  requires filesystem access there through existing tools; Console provides no
-  read/search interface.
+  Text results, including notices, have an 8 KiB limit, retaining the beginning
+  and latest tail; images have separate limits. Response notices report state
+  and omitted-output locations.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
 ---
 languages: sql
 description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker.
+  Persistent custom-worker workbench. Send one complete `r`, `python`, or `sql`
+  cell per call. Inspect its output and reuse persistent objects.
 
 
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
+  Language fields describe the configured interface; evaluation, display, SQL,
+  and sharing depend on the worker. Console does not supply built-in runtime
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable.
 
 
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings. Full retained text
-  requires filesystem access there through existing tools; Console provides no
-  read/search interface.
+  Text results, including notices, have an 8 KiB limit, retaining the beginning
+  and latest tail; images have separate limits. Response notices report state
+  and omitted-output locations.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
 ---
 languages: r,python
 description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker. Switch languages when useful, using
-  capabilities supplied by the worker.
+  Persistent custom-worker workbench. Send one complete `r`, `python`, or `sql`
+  cell per call. Inspect its output and reuse persistent objects.
 
 
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
+  Language fields describe the configured interface; evaluation, display, SQL,
+  and sharing depend on the worker. Console does not supply built-in runtime
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings. Full retained text
-  requires filesystem access there through existing tools; Console provides no
-  read/search interface.
+  Text results, including notices, have an 8 KiB limit, retaining the beginning
+  and latest tail; images have separate limits. Response notices report state
+  and omitted-output locations.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
 ---
 languages: r,sql
 description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker. Switch languages when useful, using
-  capabilities supplied by the worker.
+  Persistent custom-worker workbench. Send one complete `r`, `python`, or `sql`
+  cell per call. Inspect its output and reuse persistent objects.
 
 
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
+  Language fields describe the configured interface; evaluation, display, SQL,
+  and sharing depend on the worker. Console does not supply built-in runtime
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings. Full retained text
-  requires filesystem access there through existing tools; Console provides no
-  read/search interface.
+  Text results, including notices, have an 8 KiB limit, retaining the beginning
+  and latest tail; images have separate limits. Response notices report state
+  and omitted-output locations.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
 ---
 languages: python,sql
 description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker. Switch languages when useful, using
-  capabilities supplied by the worker.
+  Persistent custom-worker workbench. Send one complete `r`, `python`, or `sql`
+  cell per call. Inspect its output and reuse persistent objects.
 
 
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
+  Language fields describe the configured interface; evaluation, display, SQL,
+  and sharing depend on the worker. Console does not supply built-in runtime
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings. Full retained text
-  requires filesystem access there through existing tools; Console provides no
-  read/search interface.
+  Text results, including notices, have an 8 KiB limit, retaining the beginning
+  and latest tail; images have separate limits. Response notices report state
+  and omitted-output locations.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
 ---
 languages: r,python,sql
 description: >-
-  Persistent custom-worker workbench. Language fields describe the configured
-  interface; supported languages, evaluation, display, SQL, and cross-language
-  sharing depend on the selected worker. Console does not supply built-in
-  runtime packages, automatic import hooks, or a default SQL connection to
-  custom workers. Managed requirements require execution-host resolver support
-  and compatible worker preparation callbacks; Python requirements are
-  unavailable with a custom worker. Switch languages when useful, using
-  capabilities supplied by the worker.
+  Persistent custom-worker workbench. Send one complete `r`, `python`, or `sql`
+  cell per call. Inspect its output and reuse persistent objects.
 
 
-  Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls
-  must be sequential; a control-only interrupt may overlap a pending `send`.
-  Inspect intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
+  Language fields describe the configured interface; evaluation, display, SQL,
+  and sharing depend on the worker. Console does not supply built-in runtime
+  packages, import hooks, or a default SQL connection. Managed requirements need
+  compatible worker callbacks; Python requirements are unavailable. Switch
+  languages when useful, using the worker's capabilities.
 
 
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings. Full retained text
-  requires filesystem access there through existing tools; Console provides no
-  read/search interface.
+  Text results, including notices, have an 8 KiB limit, retaining the beginning
+  and latest tail; images have separate limits. Response notices report state
+  and omitted-output locations.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
