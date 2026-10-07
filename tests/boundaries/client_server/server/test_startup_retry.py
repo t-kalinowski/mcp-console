@@ -28,6 +28,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.previews import assert_preview, compact_previews
 from support.progress import without_elapsed
+from support.snapshots import execution_snapshots
 from support.processes import (
     capture_process_identity,
     child_process_identities,
@@ -200,6 +201,7 @@ def test_retry_retains_preparation_startup_and_idle_output(
 
 @requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_code_free_retry_starts_prepared_replacement(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -786,6 +788,7 @@ def test_cancelled_restart_shares_retry_and_preserves_next_cell(
 
 @requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_cancelled_retry_preparation_withholds_bundled_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -794,6 +797,7 @@ def test_cancelled_retry_preparation_withholds_bundled_cell(
 
 @requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_cancelled_retry_preparation_withholds_stdin_only(
     binary: Path, execution: Execution
 ) -> Transcript:

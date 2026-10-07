@@ -155,6 +155,7 @@ struct WorkerSpec<'a> {
     relay: Option<&'a std::path::Path>,
     no_sandbox: bool,
     sandbox_settings: &'a crate::settings::SandboxSettings,
+    startup_source: Option<&'a crate::settings::startup::Startup>,
     duckdb_extension_directory: Option<&'a std::path::Path>,
     resolver_matplotlib_cache: Option<&'a str>,
     python: Option<&'a PythonEnvironment>,
@@ -321,12 +322,13 @@ impl Client {
     pub(crate) fn configure(&self, configuration: ClientConfiguration) {
         assert!(self.0.configuration.set(configuration).is_ok());
         self.0.unused_default.store(
-            self.0.environment.as_ref().is_some_and(|environment| {
-                !environment
-                    .lock()
-                    .expect("worker environment lock")
-                    .custom_worker
-            }),
+            self.0.startup_source.is_none()
+                && self.0.environment.as_ref().is_some_and(|environment| {
+                    !environment
+                        .lock()
+                        .expect("worker environment lock")
+                        .custom_worker
+                }),
             Ordering::Release,
         );
     }

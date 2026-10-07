@@ -12,6 +12,7 @@ _RESPONSE_BYTES = 12 * 1024
 _PROVIDER_R = 0
 _PROVIDER_MANAGED = 1
 _PROVIDER_HANDLED = 2
+_r_selected = False
 
 try:
     _connection
@@ -33,21 +34,25 @@ def _validate_connection(connection):
 
 
 def console_sql_connection(connection=None):
-    global _connection, _restore_managed
+    global _connection, _restore_managed, _r_selected
 
     if connection is None:
+        _r_selected = False
         _connection = None
         _restore_managed = True
         return None
 
     _validate_connection(connection)
+    _r_selected = False
     _connection = connection
     _restore_managed = False
     return None
 
 
 def use_r():
-    global _connection, _restore_managed
+    global _connection, _restore_managed, _r_selected
+
+    _r_selected = True
 
     _connection = None
     _restore_managed = False
@@ -242,6 +247,8 @@ def _evaluate(source):
 
 
 def _dispatch(source):
+    if _r_selected:
+        return _PROVIDER_R
     if _connection is not None or _select_native_connection():
         _evaluate(source)
         return _PROVIDER_HANDLED
@@ -276,7 +283,7 @@ _native_extension_directory = None
 _managed_connection = None
 
 
-def enable_native():
+def enable_native() -> None:
     global _native_storage, _native_extension_directory
 
     _native_storage = _Path(_os.environ["TMPDIR"]) / "mcp-console-duckdb"
@@ -306,7 +313,14 @@ def _ensure_managed_connection():
             "python_enable_replacements": "false",
         }
         connection = duckdb.connect(":memory:", config=config)
-        connection.execute("SET enable_progress_bar = false")
+        try:
+            connection.execute("SET enable_progress_bar = false")
+        except BaseException:
+            try:
+                connection.close()
+            except BaseException:
+                _traceback.print_exc()
+            raise
         _managed_connection = connection
     return _managed_connection
 
@@ -357,3 +371,34 @@ def sql_connection():
     if _connection is None:
         _connection = _ensure_managed_connection()
     return _connection
+
+
+def initialize_connection(source: str) -> int:
+    import __main__
+
+    try:
+        exec(compile(source, "<console startup>", "exec"), __main__.__dict__)
+        if _connection is None or _connection is _managed_connection or _r_selected:
+            raise RuntimeError(
+                "startup must select a native connection with console_sql_connection(connection)"
+            )
+        # DB-API has no common is-open predicate. Probe without executing a query,
+        # and close only cursors distinct from the user-owned connection.
+        cursor = _connection.cursor()
+        if cursor is not _connection:
+            cursor.close()
+        return 1
+    except BaseException as error:
+        rendered = _traceback.TracebackException.from_exception(error)
+        if isinstance(error, SyntaxError):
+            # Configuration is not a model-visible cell. Keep the syntax location
+            # and diagnosis without echoing a potentially credential-bearing line.
+            rendered.text = None
+        print("".join(rendered.format()), end="", file=__import__("sys").stderr)
+        return -1 if isinstance(error, KeyboardInterrupt) else 0
+    finally:
+        _runtime.finalize_plots()
+
+
+def r_connection_selected() -> bool:
+    return _r_selected and not _restore_managed

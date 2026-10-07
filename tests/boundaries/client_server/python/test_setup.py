@@ -58,11 +58,36 @@ def startup_client(
 
 
 @contextmanager
-def deferred_selection_client(binary: Path, serve: tuple[str, ...]):
+def deferred_selection_client(
+    binary: Path, serve: tuple[str, ...], *, r_requirements: tuple[str, ...] = ()
+):
     """Arrange the public retryable, uninitialized state for selection tests."""
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
-        environment, _ = r_test_environment()
+        environment, rscript = r_test_environment()
+        if r_requirements:
+            # Resolve fixture dependencies before deliberately disabling resolution.
+            libraries = subprocess.check_output(
+                [
+                    "ir",
+                    "run",
+                    "--rscript",
+                    str(rscript),
+                    *(
+                        argument
+                        for package in r_requirements
+                        for argument in ("--with", package)
+                    ),
+                    "--isolated",
+                    "--vanilla",
+                    "-e",
+                    "writeLines(.libPaths())",
+                ],
+                env=environment,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            environment["R_LIBS"] = os.pathsep.join(libraries.splitlines())
         library = install_r_startup(
             directory,
             environment,

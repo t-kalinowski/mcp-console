@@ -168,6 +168,7 @@ impl WorkerRuntime {
             relay,
             no_sandbox,
             sandbox_settings,
+            startup_source,
             duckdb_extension_directory,
             resolver_matplotlib_cache,
             python,
@@ -204,6 +205,14 @@ impl WorkerRuntime {
         if let Some(temporary) = &temporary {
             command.env("TMPDIR", temporary.path());
         }
+        command.env_remove(crate::settings::startup::ENVIRONMENT);
+        // Retain the private file through worker readiness; failures also drop
+        // its owner. The worker consumes it before any interpreter can run.
+        let startup_transport = if builtin && let Some(startup) = startup_source {
+            Some(startup.configure(&mut command)?)
+        } else {
+            None
+        };
         command.env_remove("MCP_CONSOLE_MATPLOTLIB_CACHE");
         if !no_sandbox
             && cfg!(unix)
@@ -240,6 +249,9 @@ impl WorkerRuntime {
         }
         if !no_sandbox {
             let mut settings = sandbox_settings.clone();
+            if let Some(transport) = &startup_transport {
+                transport.preserve_access(&mut settings)?;
+            }
             crate::settings::preserve_environment(&mut settings, command.get_envs())?;
             command.env(
                 crate::settings::ENVIRONMENT,

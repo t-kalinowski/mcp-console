@@ -436,6 +436,7 @@ impl Client {
                 relay: self.0.relay.as_deref(),
                 no_sandbox: self.0.no_sandbox,
                 sandbox_settings: &self.0.sandbox_settings,
+                startup_source: self.0.startup_source.as_ref(),
                 duckdb_extension_directory: self.0.duckdb_extension_directory.as_deref(),
                 resolver_matplotlib_cache: self
                     .0
@@ -455,6 +456,15 @@ impl Client {
                 self.0
                     .output
                     .push_notice_line(output::WORKER_STARTING_NOTICE);
+            }
+            // A launched initializer may already have produced external effects.
+            // Only explicit restart grants another attempt after confirmed retirement.
+            if self.0.startup_source.is_some()
+                && !self.0.startup_permitted.swap(false, Ordering::AcqRel)
+            {
+                return Err("startup may have executed; explicit restart required"
+                    .to_string()
+                    .into());
             }
             let running = self
                 .0

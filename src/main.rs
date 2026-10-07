@@ -136,6 +136,7 @@ fn run_server(
     no_project_config: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
+        startup,
         cache,
         python,
         languages,
@@ -155,6 +156,14 @@ fn run_server(
         &mut resolver,
         &mut policy,
     )?;
+    if startup.is_some() {
+        if worker.is_some() || relay.is_some() {
+            return Err("startup requires the built-in worker and relay".into());
+        }
+        if cfg!(windows) {
+            return Err("configured startup is not supported on Windows".into());
+        }
+    }
     if python.is_some() && (worker.is_some() || relay.is_some()) {
         return Err("python selection requires the built-in worker and relay".into());
     }
@@ -169,7 +178,7 @@ fn run_server(
         .enable_all()
         .build()?;
     let result = runtime.block_on(server::run(
-        worker, relay, no_sandbox, settings, python, resolver, languages,
+        worker, relay, no_sandbox, settings, python, resolver, startup, languages,
     ));
     // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client

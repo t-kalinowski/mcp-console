@@ -12,6 +12,8 @@ pub(crate) struct ClientConfiguration {
     pub(super) relay: Option<PathBuf>,
     pub(super) no_sandbox: bool,
     pub(super) sandbox_settings: crate::settings::SandboxSettings,
+    pub(super) startup_source: Option<crate::settings::startup::Startup>,
+    pub(super) startup_permitted: AtomicBool,
     pub(super) resolver_settings: crate::settings::SandboxSettings,
     pub(super) duckdb_extension_directory: Option<PathBuf>,
     pub(super) worker: Mutex<WorkerState>,
@@ -44,6 +46,14 @@ pub(super) struct BuiltinSetup {
 }
 
 impl ClientConfiguration {
+    pub(crate) fn with_startup(
+        mut self,
+        startup: Option<crate::settings::startup::Startup>,
+    ) -> Self {
+        self.startup_source = startup;
+        self
+    }
+
     pub(crate) fn with_resolver_settings(
         mut self,
         settings: crate::settings::SandboxSettings,
@@ -283,6 +293,8 @@ impl ClientConfiguration {
             relay,
             no_sandbox,
             sandbox_settings,
+            startup_source: None,
+            startup_permitted: AtomicBool::new(true),
             resolver_settings: Default::default(),
             duckdb_extension_directory: None,
             worker: Mutex::new(WorkerState::Initial),

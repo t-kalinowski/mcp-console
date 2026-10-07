@@ -20,13 +20,13 @@ stderr: >
 override: target.command=[far, faz]
 stderr: >
   configuration with CLI overrides: target: unknown field `target`,
-  expected one of `cache`, `python`, `languages`, `inherit_environment`,
-  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
-  public format
+  expected one of `startup`, `cache`, `python`, `languages`,
+  `inherit_environment`, `environment`, `sandbox`, `resolver`; see
+  docs/CONFIGURATION.md for the public format
 ---
 override: "unknown={baz: [far, faz]}"
 stderr: >
   configuration with CLI overrides: unknown: unknown field `unknown`,
-  expected one of `cache`, `python`, `languages`, `inherit_environment`,
-  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
-  public format
+  expected one of `startup`, `cache`, `python`, `languages`,
+  `inherit_environment`, `environment`, `sandbox`, `resolver`; see
+  docs/CONFIGURATION.md for the public format

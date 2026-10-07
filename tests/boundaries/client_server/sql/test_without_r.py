@@ -172,7 +172,9 @@ def test_managed_python_requires_home_for_default_extensions(
             failure = client.send(sql="SELECT 42 AS answer")
             assert failure.get("isError"), failure
             diagnostic = (
-                "resolver sandbox requires HOME"
+                "resolver.environment: preparation requires an absolute HOME or "
+                "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY; configure one when "
+                "inherit_environment is false"
                 if execution is SANDBOXED
                 else "DuckDB extension preparation requires an absolute HOME at server startup"
             )

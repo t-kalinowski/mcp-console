@@ -15,11 +15,7 @@ use crate::relay_protocol::RelayEvent;
 use crate::worker_protocol::ServerMessage;
 
 const RETIREMENT_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
-pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
-    let (program, arguments) = command_line
-        .split_first()
-        .ok_or_else(|| "worker relay command must include an executable".to_string())?;
-
+pub(super) fn run(mut command: Command) -> Result<(), String> {
     let (controls, control_receiver) = mpsc::channel();
     let writer_controls = controls.clone();
     let (events, mut event_writer) = event_writer::start(move |message| {
@@ -38,9 +34,7 @@ pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
             );
         }
     };
-    let mut command = Command::new(program);
     command
-        .args(arguments)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -55,6 +49,7 @@ pub(super) fn run(command_line: &[std::ffi::OsString]) -> Result<(), String> {
             );
         }
     };
+    drop(command);
     drop(child_endpoints);
 
     let mut worker = WorkerLifecycle::new(child, sideband_reader);

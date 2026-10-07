@@ -532,5 +532,109 @@ def test_overrides_do_not_bypass_file_errors_or_explicit_inputs(
     return records
 
 
+@requires(POSIX)
+def test_rejects_oversized_startup_before_launch(binary: Path) -> Transcript:
+    limit = 32 * 1024
+
+    def encoded_bytes(language: str, source: str) -> int:
+        payload = json.dumps(
+            {"language": language, "code": source},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return len(payload.encode("utf-8"))
+
+    cases = []
+    for language, padding in (
+        ("r", "a"),
+        ("python", "\n"),
+        ("python", "\x01"),
+        ("python", "雪"),
+    ):
+        remaining = limit + 1 - encoded_bytes(language, "#\npass")
+        unit_bytes = encoded_bytes(language, padding) - encoded_bytes(language, "")
+        count, remainder = divmod(remaining, unit_bytes)
+        source = "#" + padding * count + "a" * remainder + "\npass"
+        assert encoded_bytes(language, source) == limit + 1
+        cases.append((language, repr(padding), source))
+    cases.append(("python", "70,000 leading newlines", "\n" * 70_000 + "pass"))
+
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        for language, description, source in cases:
+            configured_language = "r" if description == repr("\n") else language
+            configure(
+                workspace,
+                {"startup": {"language": configured_language, "code": source}},
+            )
+            # Override after loading: validation must use the effective source.
+            arguments = [binary, "serve", "--no-sandbox"]
+            if configured_language != language:
+                arguments.extend(["-c", "startup.language=python"])
+            result = subprocess.run(
+                arguments,
+                cwd=workspace,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            expected = (
+                f"startup encoded source is {encoded_bytes(language, source)} bytes; "
+                f"maximum is {limit} bytes"
+            )
+            assert expected in result.stderr, result.stderr
+            records.append(
+                {
+                    "source": description,
+                    "error": result.stderr.replace(str(workspace), "<workspace>"),
+                }
+            )
+    return records
+
+
+@requires(POSIX)
+def test_rejects_invalid_startup(binary: Path) -> Transcript:
+    cases = (
+        ("startup.language=sql", "startup.language"),
+        ("startup.language=unknown", "startup.language"),
+        ("startup.code=''", "startup.code must be nonempty"),
+        ("startup.code=42", "startup.code"),
+        ("startup.code=null", "startup.code"),
+        ("startup.extra=true", "unknown field `extra`"),
+        ("sql.provider=python", "unknown field `sql`"),
+    )
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        configure(workspace, {"startup": {"language": "python", "code": "pass"}})
+        for override, expected in cases:
+            result = subprocess.run(
+                [binary, "serve", "--no-sandbox", "-c", override],
+                cwd=workspace,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            assert expected in result.stderr, result.stderr
+            records.append({"override": override, "error": result.stderr})
+        result = subprocess.run(
+            [binary, "serve", "--no-sandbox", "--worker", "unused"],
+            cwd=workspace,
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 1 and result.stdout == "", result
+        assert "startup requires the built-in worker" in result.stderr, result.stderr
+        records.append({"custom_worker_error": result.stderr})
+    return records
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

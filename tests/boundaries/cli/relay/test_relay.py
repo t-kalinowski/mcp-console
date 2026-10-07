@@ -27,8 +27,69 @@ from support.processes import (
 )
 from support.native import SHARED_LIBRARY_FLAG
 from support.native import LOADER_VARIABLE
+from support.native import build_interposer
+from support.normalization import code
 from support.records import Transcript
 from support.suites import run_this_suite
+
+
+@requires(WORKER, NATIVE_FIXTURES)
+def test_consumes_startup_environment_before_forwarding(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        observations = root / "relay-environment"
+        payload = json.dumps(
+            {"language": "python", "code": "password = 'startup-token'"}
+        )
+        transport = root / "startup.json"
+        transport.write_text(payload)
+        transport.chmod(0o600)
+        environment = os.environ | {
+            "TMPDIR": str(root),
+            "MCP_CONSOLE_STARTUP_FILE": str(transport),
+            "MCP_CONSOLE_TEST_STARTUP_ENVIRONMENT": str(observations),
+            LOADER_VARIABLE: str(build_interposer(root, "relay_startup_environment")),
+        }
+        # The independent child consumes the file passed at the launch seam.
+        # fmt: python
+        source = code("""
+            import os
+            import stat
+            from pathlib import Path
+
+            transport = Path(os.environ.pop("MCP_CONSOLE_STARTUP_FILE"))
+            assert stat.S_IMODE(transport.stat().st_mode) == 0o600
+            Path(os.environ["TMPDIR"]).joinpath("forwarded").write_text(transport.read_text())
+            transport.unlink()
+            """)
+        process = subprocess.Popen(
+            [binary, "worker-relay", sys.executable, "-c", source],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+        )
+        # Keep command input live until natural worker exit retires the relay.
+        command_input = process.stdin
+        process.stdin = None
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+            assert process.returncode == 0, (stdout, stderr)
+            assert stderr == "", stderr
+            events = [json.loads(line) for line in stdout.splitlines()]
+            assert {"kind": "worker_exited", "code": 0} in events, events
+            assert (root / "forwarded").read_text() == payload
+            assert not transport.exists()
+            observed = observations.read_bytes()
+            assert observed and set(observed) == {ord("0")}, observed
+        finally:
+            assert command_input is not None
+            command_input.close()
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=10)
+    return [{"relay_environment_consumed": True, "worker_payload_preserved": True}]
 
 
 @requires(WORKER, PROCESS_EVENTS, NATIVE_FIXTURES)

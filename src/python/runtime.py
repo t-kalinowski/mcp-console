@@ -543,6 +543,20 @@ def _mcp_console_collect_plots(
     return tuple(images)
 
 
+def _mcp_console_finalize_plots(
+    _collect_plots=_mcp_console_collect_plots,
+    _publish_plot=_services.publish_plot,
+    _BaseException=_builtins.BaseException,
+    _print_exception=_mcp_console_print_exception,
+):
+    try:
+        for image in _collect_plots():
+            _publish_plot(image)
+    except _BaseException as error:
+        _print_exception(error)
+    return None
+
+
 def _mcp_console_eval_cell(
     source,
     filename,
@@ -556,8 +570,7 @@ def _mcp_console_eval_cell(
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
     _SystemExit=_builtins.SystemExit,
-    _collect_plots=_mcp_console_collect_plots,
-    _publish_plot=_services.publish_plot,
+    _finalize_plots=_mcp_console_finalize_plots,
     _sys=_sys,
     _print_exception=_mcp_console_print_exception,
     _ValueError=_builtins.ValueError,
@@ -589,11 +602,7 @@ def _mcp_console_eval_cell(
             if _isinstance(error, _SystemExit):
                 raise
             _print_exception(error)
-    try:
-        for image in _collect_plots():
-            _publish_plot(image)
-    except _BaseException as error:
-        _print_exception(error)
+    _finalize_plots()
     return None
 
 
@@ -719,6 +728,7 @@ _mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
 _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.without_automatic_resolution = _mcp_console_without_automatic_resolution
 _mcp_console.eval_cell = _mcp_console_eval_cell
+_mcp_console.finalize_plots = _mcp_console_finalize_plots
 _sys.modules[_mcp_console.__name__] = _mcp_console
 # Native startup calls this module directly instead of using a dispatcher.
 _mcp_console_configure_psutil()
