@@ -354,6 +354,13 @@ class WindowsRelay(unittest.TestCase):
             b'{"kind":"evaluate","language":"r","source":"retained <- 0L"}\n'
         )
         process.stdin.flush()
+        self.assertEqual(
+            [events.get(timeout=15) for _ in range(2)],
+            [
+                {"kind": "r_initialization", "complete": False},
+                {"kind": "r_initialization", "complete": True},
+            ],
+        )
         self.assertEqual(events.get(timeout=15), {"kind": "completed"})
         command = {
             "kind": "evaluate",
@@ -427,6 +434,13 @@ class WindowsRelay(unittest.TestCase):
             + b"\n"
         )
         process.stdin.flush()
+        self.assertEqual(
+            [events.get(timeout=15) for _ in range(2)],
+            [
+                {"kind": "r_initialization", "complete": False},
+                {"kind": "r_initialization", "complete": True},
+            ],
+        )
         self.assertEqual(events.get(timeout=15), {"kind": "completed"})
         command = {
             "kind": "evaluate",
