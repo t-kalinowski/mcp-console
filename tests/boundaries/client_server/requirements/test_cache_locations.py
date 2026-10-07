@@ -360,28 +360,16 @@ def cache_locations(
             if source == "config":
                 settings["cache"] = "host"
             if source == "isolated":
-                settings = {
-                    policy: {
-                        "inherit_environment": False,
-                        "environment": dict(env),
-                    }
-                    for policy in ("resolver", "sandbox")
-                }
+                settings = {"inherit_environment": False, "environment": dict(env)}
             if source == "xdg_without_home":
                 env.pop("HOME", None)
             if source == "explicit_entries":
                 settings["resolver"] = {
-                    "filesystem": {
-                        "entries": [
-                            {
-                                "path": {"type": "special", "value": {"kind": "root"}},
-                                "access": "read",
-                            },
-                            {
-                                "path": {"type": "path", "path": str(console_root)},
-                                "access": "write",
-                            },
-                        ]
+                    "sandbox": {
+                        "filesystem": {
+                            "read_only": ["/"],
+                            "read_write": [str(console_root)],
+                        }
                     }
                 }
                 assert not console_root.exists()
@@ -394,10 +382,9 @@ def cache_locations(
             }
             env["CACHE_TEST_EXPECTED"] = json.dumps(expected)
             if source == "isolated":
-                for policy in ("resolver", "sandbox"):
-                    settings[policy]["environment"]["CACHE_TEST_EXPECTED"] = env[
-                        "CACHE_TEST_EXPECTED"
-                    ]
+                settings["environment"]["CACHE_TEST_EXPECTED"] = env[
+                    "CACHE_TEST_EXPECTED"
+                ]
                 config.write_text(json.dumps(settings))
             # Selected Python inspection runs in the resolver before the worker.
             # The hook tests real cache permissions, without requiring downloads.

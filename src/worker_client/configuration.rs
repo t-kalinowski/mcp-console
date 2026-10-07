@@ -48,13 +48,8 @@ impl ClientConfiguration {
         mut self,
         settings: crate::settings::SandboxSettings,
     ) -> Result<Self, String> {
-        let host_policy = Default::default();
         self.duckdb_extension_directory =
-            crate::resolver::cache::duckdb_extension_directory(if !self.no_sandbox {
-                &settings
-            } else {
-                &host_policy
-            })?;
+            crate::resolver::cache::duckdb_extension_directory(&settings)?;
         self.resolver_settings = settings;
         Ok(self)
     }
@@ -93,13 +88,8 @@ impl ClientConfiguration {
     ) -> Result<Self, String> {
         #[cfg(windows)]
         let _ = &diagnostics;
-        let host_policy = Default::default();
         let duckdb_extension_directory =
-            crate::resolver::cache::duckdb_extension_directory(if !no_sandbox {
-                &resolver_settings
-            } else {
-                &host_policy
-            })?;
+            crate::resolver::cache::duckdb_extension_directory(&resolver_settings)?;
         let languages = crate::cell::Languages::from_environment()?;
         let configured_python = python
             .map(PathBuf::into_os_string)
@@ -112,7 +102,8 @@ impl ClientConfiguration {
         #[cfg(any(unix, windows))]
         let (preparation, discovery) = crate::resolver::preparation::Preparation::open_local(
             crate::resolver::preparation::Mode::Auto,
-            (!no_sandbox).then(|| resolver_settings.clone()),
+            resolver_settings.clone(),
+            no_sandbox,
             configured_python.as_deref(),
             diagnostics.clone(),
             on_started,

@@ -347,56 +347,21 @@ fn control_description_for(full: bool) -> String {
 }
 
 fn description_for_launch(policy: &SandboxSettings, no_sandbox: bool) -> String {
-    let profile = policy.get("extends").and_then(serde_json::Value::as_str);
-    let filesystem = policy
-        .get("filesystem")
-        .and_then(|filesystem| filesystem.get("kind"))
-        .and_then(crate::settings::native_variant_name)
-        .or_else(|| {
-            (!policy.contains_key("filesystem") && profile.is_some()).then_some("restricted")
-        });
-    let network = policy
-        .get("network")
-        .and_then(crate::settings::native_variant_name)
-        .or_else(|| (!policy.contains_key("network") && profile.is_some()).then_some("restricted"));
-    let network_access = match (filesystem, network, policy.get("proxy")) {
-        // The pinned runner enforces managed proxy routing even with network enabled.
-        (_, _, Some(proxy)) if !proxy.is_null() => {
-            "can access the network subject to the launcher's proxy settings"
-        }
-        (Some("restricted" | "unrestricted"), Some("enabled"), _) => {
-            "can directly access the network"
-        }
-        (Some("restricted" | "unrestricted"), Some("restricted"), _) => {
-            "cannot directly access the network"
-        }
-        _ => "has network access governed by the launcher's sandbox settings",
-    };
-    let sandbox_access = match filesystem {
-        Some("restricted") if profile == Some(":workspace") => format!(
-            "uses the native \":workspace\" profile: it can edit files beneath the fixed launch workspace, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}. The workspace's .git, .agents, .codex, and .claude paths are readable and protected from writes by default. Explicit native rules can override these defaults or restrict reads"
-        ),
-        Some("restricted") if profile == Some(":read-only") => format!(
-            "uses the native \":read-only\" profile: it can read host files subject to configured read restrictions, write in the worker's private temporary directory and to explicitly allowed paths, and {network_access}"
-        ),
-        Some("restricted") => format!(
-            "can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher"
-        ),
-        Some("unrestricted") => {
-            format!("has unrestricted filesystem access and {network_access}")
-        }
-        _ => format!(
-            "has filesystem access governed by the launcher's sandbox settings and {network_access}"
-        ),
-    };
-
     if no_sandbox {
-        "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.".into()
-    } else {
-        format!(
-            "Evaluated code {sandbox_access}. Dependency resolution, when available, uses a separate native resolver sandbox on macOS and Linux with configurable host reads, cache writes, and proxy destinations. Installation or build code may run there; use only trusted dependencies."
-        )
+        return "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Dependency resolution, when available, may execute installation or build code; use only trusted dependencies.".into();
     }
+    let network_access = if policy.contains_key("proxy") {
+        "can access the network subject to the launcher's proxy settings"
+    } else {
+        match policy.get("network").and_then(serde_json::Value::as_str) {
+            Some("enabled") => "can directly access the network",
+            Some("restricted") => "cannot directly access the network",
+            _ => unreachable!("normalized worker network choice"),
+        }
+    };
+    format!(
+        "Evaluated code can read host files, {network_access}, and can write in the worker's private temporary directory and to paths explicitly allowed by the launcher. Dependency resolution, when available, uses a separate native resolver sandbox on macOS and Linux with configurable host reads, cache writes, and proxy destinations. Installation or build code may run there; use only trusted dependencies."
+    )
 }
 
 pub(super) fn stdin_description() -> String {

@@ -82,16 +82,12 @@ result:
         existing tools; Console provides no read/search interface.
 
 
-        Evaluated code uses the native ":workspace" profile: it can edit files
-        beneath the fixed launch workspace, write in the worker's private
-        temporary directory and to explicitly allowed paths, and cannot directly
-        access the network. The workspace's .git, .agents, .codex, and .claude
-        paths are readable and protected from writes by default. Explicit native
-        rules can override these defaults or restrict reads. Dependency
-        resolution, when available, uses a separate native resolver sandbox on
-        macOS and Linux with configurable host reads, cache writes, and proxy
-        destinations. Installation or build code may run there; use only trusted
-        dependencies.
+        Evaluated code can read host files, cannot directly access the network,
+        and can write in the worker's private temporary directory and to paths
+        explicitly allowed by the launcher. Dependency resolution, when
+        available, uses a separate native resolver sandbox on macOS and Linux
+        with configurable host reads, cache writes, and proxy destinations.
+        Installation or build code may run there; use only trusted dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false

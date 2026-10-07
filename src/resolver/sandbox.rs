@@ -75,43 +75,6 @@ fn materialize(mut settings: SandboxSettings) -> Result<SandboxSettings, String>
         }
     }
     settings.entry("network").or_insert("restricted".into());
-    let default_proxy = {
-        let domains = [
-            "pypi.org",
-            "files.pythonhosted.org",
-            "astral.sh",
-            "releases.astral.sh",
-            "github.com",
-            "api.github.com",
-            "codeload.github.com",
-            "raw.githubusercontent.com",
-            "objects.githubusercontent.com",
-            "release-assets.githubusercontent.com",
-            "r-lib.github.io",
-            "packagemanager.posit.co",
-            "rspm-sync.rstudio.com",
-            "bioconductor.posit.co",
-            "bioconductor.org",
-            "cran.r-project.org",
-            "cloud.r-project.org",
-            "cran.rstudio.com",
-            "extensions.duckdb.org",
-        ]
-        .into_iter()
-        .map(|host| (host.to_owned(), "allow".into()))
-        .collect::<SandboxSettings>();
-        json!({
-            "enabled": true, "enableSocks5": true, "enableSocks5Udp": false,
-            "allowUpstreamProxy": false, "dangerouslyAllowAllUnixSockets": false,
-            "mode": "full", "domains": domains, "allowLocalBinding": true,
-        })
-    };
-    let proxy = settings.entry("proxy").or_insert_with(|| json!({}));
-    if let Value::Object(proxy) = proxy {
-        for (name, value) in default_proxy.as_object().unwrap() {
-            proxy.entry(name.clone()).or_insert_with(|| value.clone());
-        }
-    }
     if cfg!(target_os = "macos") {
         settings
             .entry("macos_seatbelt_profile_extension")

@@ -40,12 +40,7 @@ def _managed_environment(binary: Path, inherit: bool) -> Transcript:
         config.parent.mkdir(parents=True)
         config.write_text(
             json.dumps(
-                {
-                    "sandbox": {
-                        "inherit_environment": inherit,
-                        "environment": target_environment,
-                    }
-                }
+                {"environment": target_environment, "inherit_environment": inherit}
             ),
             encoding="utf-8",
         )
@@ -120,12 +115,10 @@ def test_preserves_caller_selected_python_over_project_environment(
         config.write_text(
             json.dumps(
                 {
-                    "sandbox": {
-                        "environment": {
-                            "RETICULATE_PYTHON": "/invalid/project/python",
-                            "MCP_CONSOLE_MANAGED_PYTHON": "invalid project manifest",
-                            "MCP_CONSOLE_TEST_SELECTED_PYTHON": sys.executable,
-                        }
+                    "environment": {
+                        "RETICULATE_PYTHON": "/invalid/project/python",
+                        "MCP_CONSOLE_MANAGED_PYTHON": "invalid project manifest",
+                        "MCP_CONSOLE_TEST_SELECTED_PYTHON": sys.executable,
                     }
                 }
             ),

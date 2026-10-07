@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
-from support.sandbox_configuration import NATIVE_PROXY, host_tcp_ports
+from support.requirements import MACOS_SANDBOX, NATIVE_FIXTURES, SANDBOX, requires
+from support.sandbox_configuration import host_tcp_ports
 from support.suites import run_this_suite
 
 
@@ -33,7 +33,7 @@ class Origin(BaseHTTPRequestHandler):
         pass
 
 
-def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
+def _enforces_native_proxy_settings(binary: Path) -> Transcript:
     # fmt: python
     script = code(r"""
         import errno
@@ -74,55 +74,47 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
         print(f"native proxy returned {response.status}")
         """)
     cases = (
-        ("omitted domains", {}, "GET", 403),
-        ("null domains", {"domains": None}, "GET", 403),
-        ("empty domains", {"domains": {}}, "GET", 403),
-        ("omitted domains with local binding", {"allowLocalBinding": True}, "GET", 403),
+        ("omitted domains", {"proxy": {}}, "GET", 403),
+        ("empty domains", {"proxy": {"domains": {}}}, "GET", 403),
         (
-            "empty domains with local binding",
-            {"allowLocalBinding": True, "domains": {}},
-            "GET",
-            403,
-        ),
-        (
-            "native wildcard",
-            {"allowLocalBinding": True, "domains": {"*": "allow"}},
-            "GET",
+            "allow literal",
+            {"proxy": {"domains": {"allow": ["127.0.0.1"]}}},
+            "POST",
             200,
         ),
-        ("allow literal", {"domains": {"127.0.0.1": "allow"}}, "POST", 200),
         (
-            "deny overrides wildcard",
-            {"allowLocalBinding": True, "domains": {"*": "allow", "127.0.0.1": "deny"}},
+            "deny overrides allow",
+            {"proxy": {"domains": {"allow": ["127.0.0.1"], "deny": ["127.0.0.1"]}}},
             "GET",
             403,
         ),
         (
-            "none grants nothing",
-            {"allowLocalBinding": True, "domains": {"127.0.0.1": "none"}},
+            "native deny pattern overrides exact allow",
+            {"proxy": {"domains": {"allow": ["127.0.0.1"], "deny": ["127.*"]}}},
             "GET",
             403,
         ),
         (
-            "limited read",
-            {"mode": "limited", "domains": {"127.0.0.1": "allow"}},
+            "limited GET",
+            {"proxy": {"mode": "limited", "domains": {"allow": ["127.0.0.1"]}}},
             "GET",
             200,
         ),
         (
-            "limited write",
-            {"mode": "limited", "domains": {"127.0.0.1": "allow"}},
+            "limited POST",
+            {"proxy": {"mode": "limited", "domains": {"allow": ["127.0.0.1"]}}},
             "POST",
             403,
         ),
         (
-            "exposed switches",
-            {
-                "enableSocks5": False,
-                "allowUpstreamProxy": True,
-                "allowLocalBinding": True,
-                "domains": {"127.0.0.1": "allow"},
-            },
+            "limited CONNECT",
+            {"proxy": {"mode": "limited", "domains": {"allow": ["127.0.0.1"]}}},
+            "CONNECT",
+            403,
+        ),
+        (
+            "HTTP transport",
+            {"proxy": {"socks5": "disabled", "domains": {"allow": ["127.0.0.1"]}}},
             "GET",
             200,
         ),
@@ -156,14 +148,7 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
             )
             for name, options, method, status in cases:
                 config.write_text(
-                    json.dumps(
-                        {
-                            "sandbox": {
-                                "network": network,
-                                "proxy": {**NATIVE_PROXY, **options},
-                            }
-                        }
-                    ),
+                    json.dumps({"sandbox": {"network": options}}),
                     encoding="utf-8",
                 )
                 result = subprocess.run(
@@ -174,10 +159,15 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
                         sys.executable,
                         "-c",
                         script,
-                        f"http://127.0.0.1:{origin.server_port}/",
+                        f"127.0.0.1:{origin.server_port}"
+                        if method == "CONNECT"
+                        else f"http://127.0.0.1:{origin.server_port}/",
                         method,
                         str(status),
-                        "http:" if options.get("enableSocks5") is False else "socks5h:",
+                        "http:"
+                        if options["proxy"].get("socks5") == "disabled"
+                        or options["proxy"].get("mode") == "limited"
+                        else "socks5h:",
                         json.dumps(ports),
                     ],
                     cwd=host,
@@ -187,8 +177,7 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
                 )
                 assert result.returncode == 0 and result.stderr == "", (name, result)
                 payload = json.loads(capture.read_text().splitlines()[-1])
-                assert payload["network"] == network, payload
-                assert payload["proxy"] == {**NATIVE_PROXY, **options}, payload
+                assert payload["network"] == "restricted", payload
                 transcript.append(
                     {
                         "case": name,
@@ -205,22 +194,25 @@ def _enforces_native_proxy_settings(binary: Path, network: str) -> Transcript:
 
 @requires(SANDBOX, NATIVE_FIXTURES)
 def test_normalizes_and_enforces_native_proxy_settings(binary: Path) -> Transcript:
-    return _enforces_native_proxy_settings(binary, "restricted")
-
-
-@requires(SANDBOX, NATIVE_FIXTURES)
-def test_proxy_enforcement_with_network_enabled(binary: Path) -> Transcript:
-    return _enforces_native_proxy_settings(binary, "enabled")
+    return _enforces_native_proxy_settings(binary)
 
 
 @requires(SANDBOX)
 def test_project_network_enabled_allows_direct_connection(binary: Path) -> Transcript:
     # fmt: python
     script = code("""
+        import errno
         import socket
         import sys
+        from pathlib import Path
 
         socket.create_connection(("127.0.0.1", int(sys.argv[1])))
+        try:
+            Path("still-read-only").write_text("denied")
+        except OSError as error:
+            assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS), error
+        else:
+            raise AssertionError("network selection granted filesystem writes")
         print("network allowed")
         """)
     with TemporaryDirectory() as directory, socket.socket() as listener:
@@ -246,6 +238,252 @@ def test_project_network_enabled_allows_direct_connection(binary: Path) -> Trans
         )
         assert result.returncode == 0 and result.stderr == "", result
         return [{"stdout": result.stdout}]
+
+
+@requires(SANDBOX)
+def test_socket_allow_all_is_independent_of_limited_methods(binary: Path) -> Transcript:
+    transcript = []
+    with TemporaryDirectory() as temporary, socket.socket(socket.AF_UNIX) as listener:
+        root = Path(temporary).resolve()
+        path = str(root / "service.sock")
+        listener.bind(path)
+        listener.listen()
+        listener.settimeout(5)
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        for selector in ([], "dangerously_allow_all"):
+            config.write_text(
+                json.dumps(
+                    {
+                        "sandbox": {
+                            "network": {
+                                "proxy": {"mode": "limited"},
+                                "sockets": {"unix_sockets": selector},
+                            }
+                        }
+                    }
+                )
+            )
+            result = subprocess.run(
+                [
+                    binary,
+                    "sandbox",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    # fmt: python
+                    code("""
+                    import errno
+                    import socket
+                    import sys
+
+                    allowed = sys.argv[2] == "allowed"
+                    try:
+                        with socket.socket(socket.AF_UNIX) as peer:
+                            peer.connect(sys.argv[1])
+                            peer.sendall(b"arbitrary socket payload")
+                    except OSError as error:
+                        assert not allowed and error.errno in (errno.EPERM, errno.EACCES), error
+                        print("Unix connection denied")
+                    else:
+                        assert allowed
+                        print("Unix payload sent")
+                    """),
+                    path,
+                    "allowed" if selector else "denied",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            assert result.returncode == 0 and result.stderr == "", result
+            if selector:
+                with listener.accept()[0] as peer:
+                    assert peer.recv(256) == b"arbitrary socket payload"
+            else:
+                listener.setblocking(False)
+                try:
+                    listener.accept()
+                except BlockingIOError:
+                    pass
+                else:
+                    raise AssertionError("denied socket connection reached listener")
+                listener.settimeout(5)
+            transcript.append({"unix_sockets": selector, "stdout": result.stdout})
+    return transcript
+
+
+@requires(MACOS_SANDBOX)
+def test_limited_local_and_socket_grants_allow_direct_connections(
+    binary: Path,
+) -> Transcript:
+    with (
+        TemporaryDirectory() as temporary,
+        socket.socket() as tcp,
+        socket.socket(socket.AF_UNIX) as unix,
+    ):
+        root = Path(temporary).resolve()
+        tcp.bind(("127.0.0.1", 0))
+        tcp.listen()
+        path = str(root / "service.sock")
+        unix.bind(path)
+        unix.listen()
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps(
+                {
+                    "sandbox": {
+                        "network": {
+                            "proxy": {"mode": "limited"},
+                            "allow_local_binding": True,
+                            "sockets": {"unix_sockets": [path]},
+                        }
+                    }
+                }
+            )
+        )
+        result = subprocess.run(
+            [
+                binary,
+                "sandbox",
+                "--",
+                sys.executable,
+                "-c",
+                code("""
+            import socket
+            import sys
+
+            with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5):
+                pass
+            with socket.socket(socket.AF_UNIX) as peer:
+                peer.connect(sys.argv[2])
+            print("direct local and Unix connections allowed independently of limited proxy")
+            """),
+                str(tcp.getsockname()[1]),
+                path,
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert result.returncode == 0 and result.stderr == "", result
+        return [{"stdout": result.stdout}]
+
+
+@requires(MACOS_SANDBOX)
+def test_pinned_native_udp_reply_returns_to_origin(binary: Path) -> Transcript:
+    # Exercise the unchanged complete-native-policy transport to record why
+    # the public tcp_udp request is unsupported on the current pin.
+    from support.sandbox_configuration import NATIVE_PROXY
+
+    with (
+        TemporaryDirectory() as temporary,
+        socket.socket(type=socket.SOCK_DGRAM) as origin,
+    ):
+        root = Path(temporary).resolve()
+        origin.bind(("127.0.0.1", 0))
+        origin.settimeout(5)
+        native = {
+            "filesystem": {
+                "kind": "restricted",
+                "entries": [
+                    {
+                        "path": {"type": "special", "value": {"kind": "root"}},
+                        "access": "read",
+                    }
+                ],
+            },
+            "network": "restricted",
+            "proxy": {
+                **NATIVE_PROXY,
+                "enableSocks5Udp": True,
+                "allowLocalBinding": True,
+                "domains": {"127.0.0.1": "allow"},
+            },
+        }
+        # fmt: python
+        script = code(r"""
+            import os
+            import socket
+            import struct
+            import sys
+            from urllib.parse import urlsplit
+
+            proxy = urlsplit(os.environ["ALL_PROXY"])
+            with socket.socket(type=socket.SOCK_DGRAM) as peer:
+                peer.bind(("127.0.0.1", 0))
+                with socket.create_connection((proxy.hostname, proxy.port), timeout=5) as control:
+                    stream = control.makefile("rb")
+                    control.sendall(b"\x05\x01\x00")
+                    assert stream.read(2) == b"\x05\x00"
+                    control.sendall(
+                        b"\x05\x03\x00\x01"
+                        + socket.inet_aton("127.0.0.1")
+                        + struct.pack("!H", peer.getsockname()[1])
+                    )
+                    head = stream.read(4)
+                    assert head[:3] == b"\x05\x00\x00" and head[3] == 1, head
+                    relay = socket.inet_ntoa(stream.read(4))
+                    port = struct.unpack("!H", stream.read(2))[0]
+                    assert relay in ("0.0.0.0", proxy.hostname), relay
+                    packet = (
+                        b"\x00\x00\x00\x01"
+                        + socket.inet_aton("127.0.0.1")
+                        + struct.pack("!H", int(sys.argv[1]))
+                        + b"request"
+                    )
+                    peer.sendto(packet, (proxy.hostname, port))
+                    assert sys.stdin.readline() == "reply returned to origin\n"
+                    peer.setblocking(False)
+                    try:
+                        peer.recvfrom(1024)
+                    except BlockingIOError:
+                        print("native UDP reply returned to origin, not client")
+                    else:
+                        raise AssertionError("unexpected client reply")
+                    stream.close()
+            """)
+        with subprocess.Popen(
+            [
+                binary,
+                "sandbox",
+                "--config-env",
+                "NATIVE_UDP_POLICY",
+                "--",
+                sys.executable,
+                "-c",
+                script,
+                str(origin.getsockname()[1]),
+            ],
+            cwd=root,
+            env={**os.environ, "NATIVE_UDP_POLICY": json.dumps(native)},
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        ) as process:
+            first, sender = origin.recvfrom(1024)
+            assert first == b"request", first
+            origin.sendto(b"reply", sender)
+            second, second_sender = origin.recvfrom(1024)
+            assert second == b"reply" and second_sender == sender, (
+                second,
+                second_sender,
+            )
+            stdout, stderr = process.communicate(
+                "reply returned to origin\n", timeout=10
+            )
+            assert process.returncode == 0 and stderr == "", (stdout, stderr)
+        return [
+            {
+                "native_proxy": native["proxy"],
+                "origin_received": [first.decode(), second.decode()],
+                "stdout": stdout,
+            }
+        ]
 
 
 if __name__ == "__main__":

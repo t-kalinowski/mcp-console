@@ -1,0 +1,20 @@
+---
+path: .git
+stderr: |
+  cat: <workspace>/.git/keep: Operation not permitted
+---
+path: .agents
+stderr: |
+  cat: <workspace>/.agents/keep: Operation not permitted
+---
+path: .codex
+stderr: |
+  cat: <workspace>/.codex/keep: Operation not permitted
+---
+path: .aws
+stderr: |
+  cat: <workspace>/.aws/keep: Operation not permitted
+---
+path: .claude
+stderr: |
+  cat: <workspace>/.claude/keep: Operation not permitted
