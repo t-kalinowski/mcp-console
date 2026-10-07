@@ -11,6 +11,8 @@ from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from pathlib import Path
 
+from yaml12 import format_yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.progress import normalize_elapsed, without_elapsed_result
@@ -949,45 +951,51 @@ def test_flushes_calls_and_keeps_unpolled_images(
         return transcript
 
 
+def configure_r_startup(
+    root: Path, environment: dict[str, str], rscript: Path, source: str
+) -> None:
+    libraries = subprocess.check_output(
+        [
+            shutil.which("ir"),
+            "run",
+            "--rscript",
+            str(rscript),
+            "--vanilla",
+            "--isolated",
+            "--with",
+            "DBI",
+            "--with",
+            "duckdb",
+            "--with",
+            "reticulate",
+            "-e",
+            "writeLines(.libPaths())",
+        ],
+        env=environment,
+        cwd=root,
+        text=True,
+    ).splitlines()
+    environment["R_LIBS"] = os.pathsep.join(libraries)
+    # Configured Console startup runs after the runtime and plot device attach.
+    # Its existing contract includes selecting the SQL connection.
+    # fmt: r
+    connection = code("""
+        console_sql_connection(DBI::dbConnect(duckdb::duckdb()))
+        """)
+    configuration = root / ".agents/console/config.yaml"
+    configuration.parent.mkdir(parents=True)
+    configuration.write_text(
+        format_yaml({"startup": {"language": "r", "code": connection + source}})
+    )
+
+
 @contextmanager
 def local_discovery(root: Path, *, image: bool = False, fail: bool = False):
     environment, rscript = r_test_environment()
     home = Path(environment["R_HOME"])
     with ExitStack() as resources:
         if image:
-            # Console's configured source runs after attachment of the managed
-            # device; native R startup uses its own earlier graphics device.
-            libraries = subprocess.check_output(
-                [
-                    shutil.which("ir"),
-                    "run",
-                    "--rscript",
-                    str(rscript),
-                    "--vanilla",
-                    "--isolated",
-                    "--with",
-                    "DBI",
-                    "--with",
-                    "duckdb",
-                    "--with",
-                    "reticulate",
-                    "-e",
-                    "writeLines(.libPaths())",
-                ],
-                env=environment,
-                cwd=root,
-                text=True,
-            ).splitlines()
-            environment["R_LIBS"] = os.pathsep.join(libraries)
-            source = (
-                "console_sql_connection(DBI::dbConnect(duckdb::duckdb()))\n"
-                + STARTUP_PLOT
-            )
-            configuration = root / ".agents/console/config.yaml"
-            configuration.parent.mkdir(parents=True)
-            configuration.write_text(
-                json.dumps({"startup": {"language": "r", "code": source}})
-            )
+            configure_r_startup(root, environment, rscript, STARTUP_PLOT)
         discovery, reached, release, alive = resources.enter_context(
             discovery_environment(r_home=None if fail else home)
         )
@@ -1213,19 +1221,32 @@ def test_reports_startup_recording_failure_without_a_tool_call(
         root = Path(directory)
         reached = FifoCheckpoint.create(root / "startup-output")
         release = FifoCheckpoint.create(root / "startup-release")
-        source = code(f"""
-            cat("unrecorded startup text\\n")
-            ready <- fifo({json.dumps(str(reached.path))}, "wb", blocking = TRUE)
+        # fmt: r
+        source = code(r"""
+            cat("unrecorded startup text\n")
+            ready <- fifo(
+              Sys.getenv("MCP_CONSOLE_TEST_STARTUP_OUTPUT"),
+              "wb",
+              blocking = TRUE
+            )
             writeBin(charToRaw("1"), ready)
             close(ready)
-            gate <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
+            gate <- fifo(
+              Sys.getenv("MCP_CONSOLE_TEST_STARTUP_RELEASE"),
+              "rb",
+              blocking = TRUE
+            )
             readBin(gate, "raw", 1L)
             """)
         try:
             (root / ".agents/console").mkdir(parents=True)
             (root / ".agents/console/sessions").write_text("occupied")
             with startup_r_package(root, source) as env:
-                env["RETICULATE_PYTHON"] = sys.executable
+                env.update(
+                    RETICULATE_PYTHON=sys.executable,
+                    MCP_CONSOLE_TEST_STARTUP_OUTPUT=str(reached.path),
+                    MCP_CONSOLE_TEST_STARTUP_RELEASE=str(release.path),
+                )
                 args = (
                     execution.serve("--writable-root", str(root))
                     if execution == SANDBOXED
@@ -1251,7 +1272,7 @@ def test_reports_startup_recording_failure_without_a_tool_call(
             release.close()
 
 
-@requires(POSIX)
+@requires(POSIX, R, SQL, command("ir"))
 @executions(DIRECT, SANDBOXED)
 def test_records_startup_without_a_tool_call(
     binary: Path, execution: Execution
@@ -1260,71 +1281,87 @@ def test_records_startup_without_a_tool_call(
         root = Path(directory)
         reached = FifoCheckpoint.create(root / "startup-output")
         release = FifoCheckpoint.create(root / "startup-release")
-        source = code(f"""
-            cat(paste0(rep("startup text\\n", 20000L), collapse = ""))
-            grDevices::pdf("native-startup.pdf")
+        # fmt: r
+        source = code(r"""
+            cat(paste0(rep("startup text\n", 20000L), collapse = ""))
             graphics::plot(1:3)
             graphics::plot(3:1)
             grDevices::dev.off()
-            ready <- fifo({json.dumps(str(reached.path))}, "wb", blocking = TRUE)
+            ready <- fifo(
+              Sys.getenv("MCP_CONSOLE_TEST_STARTUP_OUTPUT"),
+              "wb",
+              blocking = TRUE
+            )
             writeBin(charToRaw("1"), ready)
             close(ready)
-            gate <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
+            gate <- fifo(
+              Sys.getenv("MCP_CONSOLE_TEST_STARTUP_RELEASE"),
+              "rb",
+              blocking = TRUE
+            )
             readBin(gate, "raw", 1L)
             """)
+        env, rscript = r_test_environment()
+        configure_r_startup(root, env, rscript, source)
+        env.update(
+            RETICULATE_PYTHON=sys.executable,
+            MCP_CONSOLE_TEST_STARTUP_OUTPUT=str(reached.path),
+            MCP_CONSOLE_TEST_STARTUP_RELEASE=str(release.path),
+        )
+        # fmt: r
+        plots = code("""
+            graphics::plot(1:3)
+            graphics::plot(3:1)
+            """)
+        expected_images = reference_plots(
+            rscript, env, plots, width=800 / 96, height=600 / 96, dpi=96, pages=2
+        )
         try:
-            with startup_r_package(root, source) as env:
-                env["RETICULATE_PYTHON"] = sys.executable
-                args = (
-                    execution.serve("--writable-root", str(root))
-                    if execution == SANDBOXED
-                    else execution.serve()
-                )
-                with McpClient(binary, args, env, root) as client:
-                    client.initialize_and_list_tools()
-                    reached.wait(
-                        "startup output drained without a tool call", timeout=60
-                    )
-                    client.request("ping")
-                    client.stdin.close()
-                    assert client.process.wait(timeout=12) == 0
-                    assert client.stdout.read() == ""
-                    assert client.stderr.read() == ""
-                (session,) = (root / ".agents/console/sessions").iterdir()
-                assert (
-                    session / "outputs/session.log"
-                ).read_text() == "startup text\n" * 20000
-                events = [
-                    json.loads(line)
-                    for line in (session / "internal/events.jsonl")
-                    .read_text()
-                    .splitlines()
-                ]
-                assert not any(
-                    event["event"] in ("tool_call", "tool_result", "cell_output")
-                    for event in events
-                ), events
-                artifacts = [
-                    event for event in events if event["event"] == "artifact_created"
-                ]
-                # Native package startup precedes Console's plot device.
-                assert artifacts == [], artifacts
-                assert (root / "native-startup.pdf").read_bytes().startswith(b"%PDF-")
-                assert all("schema_version" not in event for event in events), events
-                assert any(
-                    event["event"] == "session_output"
-                    and event["retained_bytes"] == 260000
-                    for event in events
-                )
-                return [
-                    {
-                        "startup_text_retained_bytes": 260000,
-                        "startup_images": 0,
-                        "native_startup_pdf": True,
-                        "tool_calls": 0,
-                        "eof_retired_startup": True,
-                    }
-                ]
+            args = (
+                execution.serve("--writable-root", str(root))
+                if execution == SANDBOXED
+                else execution.serve()
+            )
+            with McpClient(binary, args, env, root) as client:
+                client.initialize_and_list_tools()
+                reached.wait("startup output drained without a tool call", timeout=60)
+                client.request("ping")
+                client.stdin.close()
+                assert client.process.wait(timeout=12) == 0
+                assert client.stdout.read() == ""
+                assert client.stderr.read() == ""
+            (session,) = (root / ".agents/console/sessions").iterdir()
+            assert (
+                session / "outputs/session.log"
+            ).read_text() == "startup text\n" * 20000
+            events = [
+                json.loads(line)
+                for line in (session / "internal/events.jsonl").read_text().splitlines()
+            ]
+            assert not any(
+                event["event"] in ("tool_call", "tool_result", "cell_output")
+                for event in events
+            ), events
+            artifacts = [
+                event for event in events if event["event"] == "artifact_created"
+            ]
+            assert len(artifacts) == 2, artifacts
+            for artifact, expected_image in zip(artifacts, expected_images):
+                assert artifact["call_id"] is None, artifact
+                assert (session / artifact["path"]).read_bytes() == expected_image
+            assert all("schema_version" not in event for event in events), events
+            assert any(
+                event["event"] == "session_output" and event["retained_bytes"] == 260000
+                for event in events
+            )
+            return [
+                {
+                    "startup_text_retained_bytes": 260000,
+                    "startup_images": 2,
+                    "tool_calls": 0,
+                    "eof_retired_startup": True,
+                }
+            ]
         finally:
             reached.close()
             release.close()

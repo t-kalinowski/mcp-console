@@ -17,19 +17,11 @@
     "early_child = json.loads(subprocess.check_output([sys.executable, '-c', early_child_program], text=True))",
     sep = "\n"
   ))
-  if (identical(Sys.getenv("MCP_CONSOLE_TEST_STARTUP_PLOTS"), "1")) {
-    grDevices::pdf("startup-plots.pdf")
-    graphics::plot(1:3)
-  }
 }
 
 .onAttach <- function(libname, pkgname) {
   if (!interactive()) {
     return(invisible(NULL))
-  }
-  if (identical(Sys.getenv("MCP_CONSOLE_TEST_STARTUP_PLOTS"), "1")) {
-    graphics::plot(3:1)
-    invisible(grDevices::dev.off())
   }
   ready <- Sys.getenv("MCP_CONSOLE_TEST_STARTUP_READY")
   if (interactive() && nzchar(ready)) {

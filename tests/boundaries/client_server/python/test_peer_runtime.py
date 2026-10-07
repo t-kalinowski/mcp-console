@@ -18,6 +18,7 @@ from boundaries.client_server.python.test_setup import deferred_selection_client
 from support.progress import without_elapsed
 from support.requirements import NATIVE_FIXTURES, POSIX, R, SQL, command, requires
 from support.assertions import (
+    assert_result_content,
     last_result_text,
     wait_for_evaluation_output,
 )
@@ -28,12 +29,17 @@ from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.native import build_interposer
 from support.snapshots import execution_snapshots
-from support.records import ToolResult, Transcript
+from support.records import (
+    McpTranscript,
+    ToolResult,
+    Transcript,
+    TranscriptWithCompanions,
+)
 from support.resolvers import (
     checkpoint_uv_environment,
     send_and_collect_runtime_python_resolution,
 )
-from support.r import isolated_r_home, r_test_environment
+from support.r import isolated_r_home, r_test_environment, reference_plots
 from support.python import virtualenv_python, write_test_wheel
 
 
@@ -1114,23 +1120,23 @@ def test_late_r_startup_uses_running_python(
 @requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
-def test_late_r_startup_uses_native_package_device(
+def test_late_r_startup_preserves_plot_capture(
     binary: Path, execution: Execution
-) -> Transcript:
-    records = []
-    for trigger in ("r-cell", "python-access"):
-        records.extend(
-            r_startup_with_python(
-                binary,
-                execution,
-                managed=False,
-                python_first=True,
-                startup_plots=True,
-                trigger=trigger,
-            )
+) -> TranscriptWithCompanions:
+    def startup(trigger: str) -> Transcript:
+        return r_startup_with_python(
+            binary,
+            execution,
+            managed=False,
+            python_first=True,
+            plot_after_startup=True,
+            trigger=trigger,
         )
-    return records
+
+    return TranscriptWithCompanions(
+        startup("r-cell"),
+        {"python-access.yaml": McpTranscript(startup("python-access"))},
+    )
 
 
 @requires(POSIX)
@@ -1139,17 +1145,23 @@ def test_late_r_startup_uses_native_package_device(
 @execution_snapshots
 def test_system_default_packages_survive_late_r_startup(
     binary: Path, execution: Execution
-) -> Transcript:
-    records = []
-    for python_first in (False, True):
-        records += r_startup_with_python(
-            binary,
-            execution,
-            managed=False,
-            python_first=python_first,
-            system_default_packages=True,
-        )
-    return records
+) -> TranscriptWithCompanions:
+    return TranscriptWithCompanions(
+        r_startup_with_python(
+            binary, execution, managed=False, system_default_packages=True
+        ),
+        {
+            "python-first.yaml": McpTranscript(
+                r_startup_with_python(
+                    binary,
+                    execution,
+                    managed=False,
+                    python_first=True,
+                    system_default_packages=True,
+                )
+            )
+        },
+    )
 
 
 @requires(R)
@@ -1485,7 +1497,7 @@ def r_startup_with_python(
     *,
     managed: bool,
     python_first: bool = False,
-    startup_plots: bool = False,
+    plot_after_startup: bool = False,
     system_default_packages: bool = False,
     trigger: str = "r-cell",
 ) -> Transcript:
@@ -1493,6 +1505,24 @@ def r_startup_with_python(
         root = Path(directory)
         _, library = installed_early_python_library()
         environment, rscript = r_test_environment()
+        # fmt: r
+        plots = code("""
+            graphics::plot(1:3)
+            graphics::plot(3:1)
+            """)
+        expected_plots = (
+            reference_plots(
+                rscript,
+                environment,
+                plots,
+                width=800 / 96,
+                height=600 / 96,
+                dpi=96,
+                pages=2,
+            )
+            if plot_after_startup
+            else []
+        )
         environment.update(
             R_LIBS=os.pathsep.join(
                 filter(None, (str(library), environment.get("R_LIBS")))
@@ -1501,7 +1531,6 @@ def r_startup_with_python(
             RETICULATE_PYTHON=sys.executable,
             MCP_CONSOLE_TEST_PYTHON=sys.executable,
             MCP_CONSOLE_TEST_PYTHON_PREFIX=sys.prefix,
-            MCP_CONSOLE_TEST_STARTUP_PLOTS="1" if startup_plots else "0",
         )
         if system_default_packages:
             home = isolated_r_home(root, environment)
@@ -1528,7 +1557,7 @@ def r_startup_with_python(
             environment["RETICULATE_PYTHONPATH"] = str(modules)
         serve = (
             execution.serve("--writable-root", str(root))
-            if (system_default_packages or startup_plots) and execution == SANDBOXED
+            if system_default_packages and execution == SANDBOXED
             else execution.serve()
         )
         with McpClient(binary, serve, environment, root) as client:
@@ -1572,22 +1601,23 @@ def r_startup_with_python(
             else:
                 client.send(r="invisible(NULL)")
             assert last_result_text(client) == "[done]", client.transcript[-1]
-            if startup_plots:
-                # Native startup runs before Console's graphics bridge exists.
-                # Its ordinary R device writes into this explicitly granted cwd.
-                assert (root / "startup-plots.pdf").read_bytes().startswith(b"%PDF-")
-            # fmt: r
+            if plot_after_startup:
+                # Native R startup owns package loading. Once runtime setup is
+                # complete, Console must still deliver both managed PNGs.
+                client.send(r=plots)
+                assert_result_content(client, expected_plots)
             client.expect(
+                # fmt: r
                 r=code("""
-                stopifnot(
-                  "mcpconsoleearlypython" %in% getOption("defaultPackages"),
-                  identical(isTRUE(reticulate::py_config()$ephemeral), MANAGED_PYTHON),
-                  identical(search()[[2L]], "tools:mcp-console"),
-                  identical(find("py")[[1L]], "tools:mcp-console"),
-                  identical(find("sql_connection")[[1L]], "tools:mcp-console"),
-                  identical(find("console_sql_connection")[[1L]], "tools:mcp-console")
-                )
-                """).replace("MANAGED_PYTHON", "TRUE" if managed else "FALSE"),
+                    stopifnot(
+                      "mcpconsoleearlypython" %in% getOption("defaultPackages"),
+                      identical(isTRUE(reticulate::py_config()$ephemeral), MANAGED_PYTHON),
+                      identical(search()[[2L]], "tools:mcp-console"),
+                      identical(find("py")[[1L]], "tools:mcp-console"),
+                      identical(find("sql_connection")[[1L]], "tools:mcp-console"),
+                      identical(find("console_sql_connection")[[1L]], "tools:mcp-console")
+                    )
+                    """).replace("MANAGED_PYTHON", "TRUE" if managed else "FALSE"),
             )
             if python_first:
                 client.expect(
@@ -1595,13 +1625,17 @@ def r_startup_with_python(
                     python="assert id(before_r) == before_r_identity; assert early_executable == sys.executable; print('startup package attached to running Python')",
                 )
                 client.expect(
+                    # fmt: r
                     r=code("""
-                    incompatible <- tryCatch(
-                        reticulate::use_python("/incompatible-python", required = TRUE),
-                        error = conditionMessage
-                    )
-                    stopifnot(identical(incompatible, "Python is already initialized with another selection; restart required"))
-                    """),
+                        incompatible <- tryCatch(
+                          reticulate::use_python("/incompatible-python", required = TRUE),
+                          error = conditionMessage
+                        )
+                        stopifnot(identical(
+                          incompatible,
+                          "Python is already initialized with another selection; restart required"
+                        ))
+                        """),
                 )
             client.expect(
                 "attached to the existing interpreter\n",
@@ -1654,7 +1688,7 @@ def r_startup_with_python(
                 ]["requirements"]
                 assert retained == accepted, (retained, accepted)
             records = client.finish()
-            if not system_default_packages:
+            if not (system_default_packages or plot_after_startup):
                 records = records[3:]
             if managed:
                 records = json.loads(

@@ -2,80 +2,11 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  requirements:
-    action: get
+  python: before_r = object(); before_r_identity = id(before_r)
 result:
   content:
     - type: text
-      text: |-
-        {
-          "requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "ggplot2",
-              "nanoarrow",
-              "reticulate",
-              "tidyverse",
-              "yyjsonr"
-            ],
-            "python": [],
-            "duckdb": [
-              "icu",
-              "json",
-              "sqlite"
-            ],
-            "python_version": [],
-            "exclude_newer": null
-          },
-          "prepared": true,
-          "runtime_requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "jsonlite",
-              "nanoarrow",
-              "pillar",
-              "reticulate",
-              "tibble",
-              "utf8"
-            ],
-            "python": []
-          }
-        }
-  structuredContent:
-    requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - ggplot2
-        - nanoarrow
-        - reticulate
-        - tidyverse
-        - yyjsonr
-      python: []
-      duckdb:
-        - icu
-        - json
-        - sqlite
-      python_version: []
-      exclude_newer: ~
-    prepared: true
-    runtime_requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - jsonlite
-        - nanoarrow
-        - pillar
-        - reticulate
-        - tibble
-        - utf8
-      python: []
+      text: "[done]"
   isError: false
 ---
 send:
@@ -107,6 +38,33 @@ send:
       identical(find("sql_connection")[[1L]], "tools:mcp-console"),
       identical(find("console_sql_connection")[[1L]], "tools:mcp-console")
     )
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: >-
+    assert id(before_r) == before_r_identity; assert early_executable ==
+    sys.executable; print('startup package attached to running Python')
+result:
+  content:
+    - type: text
+      text: |
+        startup package attached to running Python
+  isError: false
+---
+send:
+  r: |
+    incompatible <- tryCatch(
+      reticulate::use_python("/incompatible-python", required = TRUE),
+      error = conditionMessage
+    )
+    stopifnot(identical(
+      incompatible,
+      "Python is already initialized with another selection; restart required"
+    ))
 result:
   content:
     - type: text

@@ -9,6 +9,8 @@ import time
 from contextlib import ExitStack, closing, contextmanager
 from pathlib import Path
 
+from yaml12 import format_yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.client_server.python.test_startup import (
@@ -532,28 +534,28 @@ def test_console_startup_resolves_python_version_and_import(
         install_r_startup(root, environment, R_CHECKPOINT)
         # fmt: r
         source = code("""
-                version <- reticulate:::resolve_python_version(">=3.13")
-                stopifnot(grepl("^[0-9]+[.][0-9]+[.][0-9]+$", version))
-                cat("Python version resolved\\n")
-                module <- reticulate::import("yaml12", convert = FALSE)
-                stopifnot(identical(reticulate::py_to_r(module$`__name__`), "yaml12"))
-                cat("Python import resolved\\n")
-                stopifnot(!"duckdb" %in% loadedNamespaces())
-                stopifnot(!reticulate::py_eval("'duckdb' in __import__('sys').modules"))
-                bootstrap_value <- 42L
-                completed <- fifo(
-                  Sys.getenv("MCP_CONSOLE_TEST_BOOTSTRAP_COMPLETE"),
-                  "wb",
-                  blocking = TRUE
-                )
-                writeBin(charToRaw("1"), completed)
-                close(completed)
-                console_sql_connection(DBI::dbConnect(duckdb::duckdb()))
-                """)
+            version <- reticulate:::resolve_python_version(">=3.13")
+            stopifnot(grepl("^[0-9]+[.][0-9]+[.][0-9]+$", version))
+            cat("Python version resolved\\n")
+            module <- reticulate::import("yaml12", convert = FALSE)
+            stopifnot(identical(reticulate::py_to_r(module$`__name__`), "yaml12"))
+            cat("Python import resolved\\n")
+            stopifnot(!"duckdb" %in% loadedNamespaces())
+            stopifnot(!reticulate::py_eval("'duckdb' in __import__('sys').modules"))
+            bootstrap_value <- 42L
+            completed <- fifo(
+              Sys.getenv("MCP_CONSOLE_TEST_BOOTSTRAP_COMPLETE"),
+              "wb",
+              blocking = TRUE
+            )
+            writeBin(charToRaw("1"), completed)
+            close(completed)
+            console_sql_connection(DBI::dbConnect(duckdb::duckdb()))
+            """)
         configuration = root / ".agents/console/config.yaml"
         configuration.parent.mkdir(parents=True)
         configuration.write_text(
-            json.dumps({"startup": {"language": "r", "code": source}})
+            format_yaml({"startup": {"language": "r", "code": source}})
         )
         environment.update(
             MCP_CONSOLE_LANGUAGES="r",
