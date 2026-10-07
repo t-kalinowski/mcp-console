@@ -243,8 +243,8 @@ fn perform<T>(
     });
     let handles = handles.into_inner().expect("preparation handles lock");
     let confirmed = handles.iter().all(ResolverStopHandle::cleanup_confirmed);
-    // A control acknowledged after collection cannot change that invocation's
-    // captured terminal cause, including failure in its result interpretation.
+    // Retain control consumed during collection or subsequent preparation.
+    // A later acknowledgment alone cannot relabel an independent setup failure.
     let control = handles
         .iter()
         .find_map(|handle| handle.terminal_report().and_then(|report| report.control));

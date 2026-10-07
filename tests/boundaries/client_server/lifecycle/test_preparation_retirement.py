@@ -16,6 +16,52 @@ from support.requirements import NATIVE_FIXTURES, POSIX, requires
 
 
 @requires(POSIX, NATIVE_FIXTURES)
+def test_eof_cancels_preparation_after_inventory_collection(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
+        root = Path(temporary)
+        collected, controlled, release = [
+            resources.enter_context(closing(FifoCheckpoint.create(root / name)))
+            for name in ("collected", "controlled", "release")
+        ]
+        uv = root / "uv"
+        uv.write_text("#!/bin/sh\nprintf '[]\\n'\n")
+        uv.chmod(0o755)
+        environment = dict(os.environ, PATH=str(root), RETICULATE_PYTHON="managed")
+        environment.pop("R_HOME", None)
+        environment.update(
+            {
+                LOADER_VARIABLE: str(
+                    build_interposer(root, "preparation_collected_cancellation")
+                ),
+                "MCP_CONSOLE_TEST_INVENTORY_COLLECTED": str(collected.path),
+                "MCP_CONSOLE_TEST_INVENTORY_CONTROLLED": str(controlled.path),
+                "MCP_CONSOLE_TEST_INVENTORY_RELEASE": str(release.path),
+            }
+        )
+        with McpClient(binary, ("serve", "--no-sandbox"), environment, root) as client:
+            try:
+                client.initialize_and_list_tools()
+                collected.wait(
+                    "successful Python inventory collected before control check"
+                )
+                client.stdin.close()
+                controlled.wait("EOF cancellation acknowledged after collection")
+                release.release()
+                exit_status = client.process.wait(timeout=10)
+                transcript, stderr = client.finish_with_standard_error(
+                    expected_exit_status=exit_status
+                )
+                assert exit_status == 0, {
+                    "exit_status": exit_status,
+                    "stderr": stderr,
+                }
+                assert stderr == "", stderr
+                return transcript + [{"exit_status": exit_status, "stderr": stderr}]
+            finally:
+                release.release()
+
+
+@requires(POSIX, NATIVE_FIXTURES)
 def test_setup_failure_survives_later_eof_cancellation(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
         root = Path(temporary)

@@ -200,6 +200,7 @@ Connection closure that refuses the next preparation stage is separate from cont
 It permits a quiet exit only after the refused stage's cleanup is confirmed.
 Preparation retains the operation's terminal result, control cause and cleanup confirmation.
 The subprocess owner captures its cause when collection finishes; a later control acknowledgment cannot replace an independent setup failure.
+Preparation that consumes control after successful collection retains that cause before publishing its terminal result.
 Errors closing the preparation connection remain visible.
 Cancellation of a preparation operation does not suppress an independent failure of the preparation connection's close handshake.
 

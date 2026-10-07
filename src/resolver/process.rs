@@ -145,6 +145,25 @@ impl ResolverProcess {
         })
     }
 
+    pub(crate) fn check_control(&self, operation: &str) -> Result<(), String> {
+        let control = self.stop_handle().control_outcome();
+        let error = match control {
+            Some(super::ResolverControlOutcome::Interrupted) => format!("{operation} interrupted"),
+            Some(super::ResolverControlOutcome::Cancelled) => format!("{operation} cancelled"),
+            None => return Ok(()),
+        };
+        // Preparation can consume control after successful collection. Retain
+        // that cause here, where it becomes the operation's error; a later
+        // acknowledgment alone must not relabel an independent setup failure.
+        let mut terminal = self.terminal.lock().expect("resolver terminal report lock");
+        let report = terminal
+            .as_mut()
+            .expect("collected resolver terminal report");
+        report.result = Err(error.clone());
+        report.control = control;
+        Err(error)
+    }
+
     pub(crate) fn spawn(
         &self,
         command: &mut Command,
