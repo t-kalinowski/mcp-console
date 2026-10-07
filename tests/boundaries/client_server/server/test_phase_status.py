@@ -148,7 +148,7 @@ def test_shared_startup_phase_has_no_future_cell_clock(binary: Path) -> Transcri
         return [*transcript, {"stderr": stderr}]
 
 
-@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@requires(POSIX, PROCESS_EVENTS, command("ir"), command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_admitted_cell_keeps_shared_preparation_phase(
     binary: Path, execution: Execution

@@ -57,11 +57,10 @@ impl Source {
                     .and_then(|handle| handle.phase_observation().phase())
                 {
                     Some(phase)
-                } else if !client.startup_observation_complete.load(Ordering::Acquire)
-                    && self.generation.is(&client.startup_generation)
+                } else if (!client.startup_observation_complete.load(Ordering::Acquire)
+                    && self.generation.is(&client.startup_generation))
+                    || lifecycle.starting()
                 {
-                    Some("startup")
-                } else if lifecycle.starting() {
                     Some("startup")
                 } else {
                     None
