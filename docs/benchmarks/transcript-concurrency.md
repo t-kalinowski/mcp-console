@@ -76,12 +76,13 @@ The memory column is the indicator reported by `memory_pressure -Q`; the process
 
 ## Decision
 
-Use `max(1, N - 1)` on macOS, Linux, and Windows, without an OS-specific cap.
-The unavailable-CPU fallback is one case; explicit `--jobs N` overrides remain available.
+Use `max(2, 2 * N)` on macOS, Linux, and Windows, without an OS-specific cap.
+The unavailable-CPU fallback is two cases; explicit `--jobs N` overrides remain available.
 The shared boundary runner also accepts `-j N`; unscoped Windows `--full` runs require `--jobs N`.
 
 The 31-job candidate finished sooner in each adjacent pair, but its advantage shrank from 350.10 to 16.48 to 1.46 seconds (67.50%, 9.97%, and 1.15%).
 The nominal median difference is 9.97%; the ranges overlap, canonical initialization alone varied from 35.69 to 142.06 seconds, and host load/background compiler activity changed during the comparison.
 This bounded comparison is inconclusive about a repeatable benefit from doubling concurrency.
-Retain the lower candidate, which uses fewer concurrent cases, and apply it consistently across platforms by removing the Windows-only cap of six.
+Default to twice the logical CPU count in the absence of conclusive results.
+On this 16-CPU host, the default is 32 jobs; the measured higher candidate used 31 jobs.
 These measurements do not establish an optimal default for Linux or Windows.

@@ -152,11 +152,11 @@ Focused updates preserve unselected snapshots.
 
 Set `MCP_CONSOLE_TEST_BINARY` to an absolute installed executable to skip the checkout build for transcripts; sandboxed cases still need its companion bundle.
 Use `--jobs N` and `--timeout SECONDS` to control case concurrency and deadlines.
-The default concurrency is `max(1, N - 1)` on all platforms, where `N` is the logical CPU count.
-An unavailable CPU count uses one case.
+The default concurrency is `max(2, 2 * N)` on all platforms, where `N` is the logical CPU count.
+An unavailable CPU count uses two cases.
 Explicit `--jobs N` overrides must be at least one.
 The shared boundary runner also accepts `-j N`; unscoped Windows `--full` runs require `--jobs N`.
-See the [timing comparison](benchmarks/transcript-concurrency.md) for the choice of default and its coverage limits.
+See the [timing comparison](benchmarks/transcript-concurrency.md) for the measurements and their coverage limits.
 
 ## Find the public test
 
