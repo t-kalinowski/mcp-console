@@ -7,59 +7,59 @@ fields:
   - r
   - python
   - sql
-  - control
-  - requirements
-  - stdin
   - timeout_ms
+  - control
+  - stdin
+  - requirements
 ---
 languages:
   - r
 fields:
   - r
-  - control
-  - requirements
-  - stdin
   - timeout_ms
+  - control
+  - stdin
+  - requirements
 ---
 languages:
   - python
 fields:
   - python
-  - control
-  - requirements
-  - stdin
   - timeout_ms
+  - control
+  - stdin
+  - requirements
 ---
 languages:
   - sql
 fields:
   - sql
-  - control
-  - requirements
-  - stdin
   - timeout_ms
----
-languages:
-  - r
-  - python
-fields:
-  - r
-  - python
   - control
-  - requirements
   - stdin
-  - timeout_ms
+  - requirements
 ---
 languages:
   - r
+  - python
+fields:
+  - r
+  - python
+  - timeout_ms
+  - control
+  - stdin
+  - requirements
+---
+languages:
+  - r
   - sql
 fields:
   - r
   - sql
-  - control
-  - requirements
-  - stdin
   - timeout_ms
+  - control
+  - stdin
+  - requirements
 ---
 languages:
   - python
@@ -67,7 +67,7 @@ languages:
 fields:
   - python
   - sql
-  - control
-  - requirements
-  - stdin
   - timeout_ms
+  - control
+  - stdin
+  - requirements

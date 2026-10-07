@@ -131,7 +131,7 @@ def test_builtin_guidance_matches_visible_languages(
                     + " workbench"
                     in tool["description"]
                 )
-                assert "without a setup cell" in tool["description"]
+                assert "CSV, Parquet, JSON, and JSONL directly" in tool["description"]
                 if "r" not in languages:
                     assert "`r`" not in tool["description"]
                 properties = tool["inputSchema"]["properties"]
@@ -143,7 +143,9 @@ def test_builtin_guidance_matches_visible_languages(
                     assert "from an R cell" not in sql_guidance
                 if "python" in languages:
                     python_guidance = properties["python"]["description"]
-                    assert "only when Python owns" in " ".join(python_guidance.split())
+                    assert "requires Python-owned DuckDB" in " ".join(
+                        python_guidance.split()
+                    )
                     assert "`r.name`" not in python_guidance
                     assert "R plot rules" not in properties["python"]["description"]
                 else:
@@ -183,18 +185,17 @@ def test_sql_provider_guidance_is_independent_of_visibility(
                     client.initialize_and_list_tools()
                     tool = _tool(client)
                     description = tool["description"]
-                    assert (
-                        "Provider choice is independent of visible language fields"
-                        in description
-                    )
+                    assert "provider" not in description.lower()
                     if advertised is None:
                         advertised = tool
                     else:
                         assert tool == advertised
                     if "python" in languages:
                         assert (
-                            "available only when Python owns the provider"
-                            in description
+                            "requires Python-owned DuckDB"
+                            in tool["inputSchema"]["properties"]["python"][
+                                "description"
+                            ]
                         )
                         client.send(
                             # fmt: python

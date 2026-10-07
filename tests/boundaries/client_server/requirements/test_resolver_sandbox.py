@@ -18,6 +18,7 @@ from support.assertions import (
 )
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.progress import without_elapsed
 from support.records import ToolResult, Transcript
@@ -211,8 +212,11 @@ def test_duckdb_cache_waits_for_terminal_sql_results(binary: Path) -> Transcript
     ]
 
 
-@requires(SANDBOX, R, command("ir"))
-def test_custom_worker_captures_duckdb_cache_before_live_r(binary: Path) -> Transcript:
+@requires(R, command("ir"))
+@executions(DIRECT, SANDBOXED)
+def test_custom_worker_captures_duckdb_cache_before_live_r(
+    binary: Path, execution: Execution
+) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures/zod"
     for explicit in (False, True):
         with TemporaryDirectory() as directory:
@@ -245,7 +249,11 @@ def test_custom_worker_captures_duckdb_cache_before_live_r(binary: Path) -> Tran
             )
             with McpClient(
                 binary,
-                ("serve", "--writable-root", str(root), "--worker", str(zod)),
+                execution.serve(
+                    *(("--writable-root", str(root)) if execution is SANDBOXED else ()),
+                    "--worker",
+                    str(zod),
+                ),
                 env,
                 root,
             ) as client:
@@ -447,13 +455,13 @@ def test_discovers_r_from_resolver_environment(binary: Path) -> Transcript:
         config.write_text(
             json.dumps(
                 {
-                    "sandbox": {"environment": {"PATH": r_env["PATH"]}},
                     "resolver": {
                         "environment": {
                             "R_HOME": r_env["R_HOME"],
                             "PATH": r_env["PATH"],
                         }
                     },
+                    "environment": {"PATH": r_env["PATH"]},
                 }
             )
         )
@@ -479,12 +487,12 @@ def test_omits_r_removed_by_resolver_environment(binary: Path) -> Transcript:
             json.dumps(
                 {
                     "resolver": {
-                        "inherit_environment": False,
                         "environment": {
                             "HOME": env["HOME"],
                             "PATH": without_r["PATH"],
                             "UV_CACHE_DIR": str(root / "uv-cache"),
                         },
+                        "inherit_environment": False,
                     }
                 }
             )
@@ -728,33 +736,24 @@ def permissions(binary: Path, *, tailored: bool) -> Transcript:
                 json.dumps(
                     {
                         "resolver": {
-                            "filesystem": {
-                                "entries": [
-                                    {
-                                        "path": {
-                                            "type": "special",
-                                            "value": {"kind": "root"},
-                                        },
-                                        "access": "read",
-                                    },
-                                    {
-                                        "path": {"type": "path", "path": "uv-cache"},
-                                        "access": "write",
-                                    },
-                                    {
-                                        "path": {"type": "path", "path": "approved"},
-                                        "access": "write",
-                                    },
-                                ]
-                            },
-                            "proxy": {
-                                "domains": {
-                                    "pypi.org": "allow",
-                                    "files.pythonhosted.org": "allow",
-                                    "www.python.org": "allow",
-                                }
-                            },
                             "environment": {"RESOLVER_TEST_APPROVED": str(approved)},
+                            "sandbox": {
+                                "filesystem": {
+                                    "read_only": ["/"],
+                                    "read_write": ["uv-cache", "approved"],
+                                },
+                                "network": {
+                                    "proxy": {
+                                        "domains": {
+                                            "allow": [
+                                                "pypi.org",
+                                                "files.pythonhosted.org",
+                                                "www.python.org",
+                                            ]
+                                        }
+                                    }
+                                },
+                            },
                         }
                     }
                 )

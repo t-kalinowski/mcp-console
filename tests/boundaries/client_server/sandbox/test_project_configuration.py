@@ -68,16 +68,13 @@ def _snapshot_survives_replacement(
         config.parent.mkdir(parents=True)
         if configured:
             config.write_text(
-                code("""
-                sandbox:
-                  filesystem:
-                    entries:
-                      - path: {type: path, path: ./output café 雪}
-                        access: write
-                  proxy: PROXY_CONFIGURATION
-                """).replace(
-                    "PROXY_CONFIGURATION",
-                    json.dumps({**NATIVE_PROXY, "domains": {"127.0.0.1": "allow"}}),
+                json.dumps(
+                    {
+                        "sandbox": {
+                            "filesystem": {"read_write": ["./output café 雪"]},
+                            "network": {"proxy": {"domains": {"allow": ["127.0.0.1"]}}},
+                        }
+                    }
                 ),
                 encoding="utf-8",
             )
@@ -126,7 +123,16 @@ def _snapshot_survives_replacement(
             assert last_tool_text(client).endswith(expected), last_tool_text(client)
             client.send(python="import yaml12; print(yaml12.__name__)")
             assert last_tool_text(client) == "yaml12\n", last_tool_text(client)
+            tool = client.transcript[2]["result"]["tools"][0]
+            if configured:
+                assert (
+                    json.dumps(str(host / "output café 雪"), ensure_ascii=False)
+                    in tool["description"]
+                )
             transcript = client.finish()
+            tool["description"] = tool["description"].replace(
+                json.dumps(str(host), ensure_ascii=False)[1:-1], "<workspace>"
+            )
 
         payloads = [json.loads(line) for line in capture.read_text().splitlines()]
         assert len(payloads) == 4, len(payloads)

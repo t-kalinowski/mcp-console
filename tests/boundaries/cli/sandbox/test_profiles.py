@@ -15,7 +15,7 @@ from support.requirements import SANDBOX, requires
 from support.suites import run_this_suite
 
 CONFIG = ".agents/console/config.yaml"
-PROTECTED = (".git", ".agents", ".codex", ".claude")
+PROTECTED = (".git", ".agents", ".codex", ".aws", ".claude")
 
 
 def configure(host: Path, source: str) -> None:
@@ -140,17 +140,11 @@ def test_workspace_yaml_forms_protect_metadata_and_private_temporary_storage(
             for name in PROTECTED:
                 (host / name / "empty").mkdir(parents=True)
                 (host / name / "keep").write_text("readable")
-            source = 'extends: ":workspace"\n' if quoted else "extends: :workspace\n"
-            # Both existing writable-root interfaces must preserve exclusions.
+            source = "sandbox: {filesystem: {read_write: [.], read_only: [.git, .agents, .codex, .aws, .claude]}}\n"
+            # Explicit fixed-workspace guards survive broader writable roots.
             options = ("--writable-root", "..") if quoted else ()
             if not quoted:
-                source += code("""
-                    sandbox:
-                      filesystem:
-                        entries:
-                          - path: {type: path, path: ..}
-                            access: write
-                    """)
+                source = "sandbox: {filesystem: {read_write: [..], read_only: [.git, .agents, .codex, .aws, .claude]}}\n"
             configure(host, source)
             result = run(
                 binary,
@@ -176,7 +170,9 @@ def test_absent_metadata_stays_absent_and_git_worktree_indirection_is_native(
 ) -> Transcript:
     with TemporaryDirectory() as directory:
         host = Path(directory).resolve()
-        configure(host, 'extends: ":workspace"\n')
+        configure(
+            host, "sandbox: {filesystem: {read_write: [.], read_only: [.claude]}}\n"
+        )
         absent = run(
             binary,
             host,
@@ -237,22 +233,7 @@ def test_profile_adjustments_keep_native_write_exceptions_and_read_denials(
         for name in PROTECTED:
             (host / name / "allowed").mkdir(parents=True)
             (host / name / "keep").write_text("readable")
-        source = code("""
-            extends: ":workspace"
-            sandbox:
-              filesystem:
-                kind: {restricted: null}
-                future_native_field: true
-                entries:
-                  - path: {type: path, path: .claude}
-                    access: write
-                  - path: {type: path, path: .agents/allowed}
-                    access: write
-                  - path: {type: path, path: .git/keep}
-                    access: deny
-                  - path: {type: special, value: {kind: unknown, path: ":future"}}
-                    access: read
-            """)
+        source = "sandbox: {filesystem: {read_write: [., .claude, .agents/allowed], deny: [.git/keep]}}"
         configure(host, source)
         result = run(
             binary,
@@ -272,7 +253,7 @@ def test_profile_adjustments_keep_native_write_exceptions_and_read_denials(
                     raise AssertionError("read denial ignored")
                 assert Path(".agents/keep").read_text() == "readable"
                 print(
-                    "equal-path and descendant write exceptions, native field forwarding and read denial verified"
+                    "equal-path and descendant write exceptions, group translation and read denial verified"
                 )
                 """),
             "--writable-root",
@@ -289,7 +270,7 @@ def test_read_only_and_explicit_filesystem_kinds_preserve_their_meaning(
     for selector in ('":read-only"', ":read-only"):
         with TemporaryDirectory() as directory:
             host = Path(directory).resolve()
-            configure(host, f"extends: {selector}\n")
+            configure(host, "sandbox: {}\n")
             transcript.append(
                 run(
                     binary,
@@ -311,29 +292,6 @@ def test_read_only_and_explicit_filesystem_kinds_preserve_their_meaning(
                         """),
                 )
             )
-    for kind in ("unrestricted", "external-sandbox"):
-        with TemporaryDirectory() as directory:
-            host = Path(directory).resolve()
-            source = (
-                f'extends: ":workspace"\nsandbox:\n  filesystem: {{kind: {kind}}}\n'
-            )
-            configure(host, source)
-            transcript.append(
-                {
-                    "configuration": source,
-                    **run(
-                        binary,
-                        host,
-                        # fmt: python
-                        code(r"""
-                            from pathlib import Path
-
-                            _ = Path(".agents/console/explicit").write_text("full filesystem access")
-                            print("explicit filesystem kind replaced the profile restrictions")
-                            """),
-                    ),
-                }
-            )
     return transcript
 
 
@@ -351,12 +309,64 @@ def test_unsupported_profile_names_use_native_diagnostics(binary: Path) -> Trans
                 text=True,
             )
             assert result.returncode == 1 and result.stdout == "", result
-            assert (
-                f'unsupported built-in profile {json.dumps(name)}; expected ":workspace" or ":read-only"'
-                in result.stderr
-            ), result
+            assert "unknown field `extends`" in result.stderr, result
             transcript.append({"selector": name, "stderr": result.stderr})
     return transcript
+
+
+@requires(SANDBOX)
+def test_denied_workspace_keeps_metadata_unreadable(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        host = root / "workspace"
+        host.mkdir()
+        cache = root / "cache"
+        cache.mkdir()
+        for name in PROTECTED:
+            (host / name).mkdir()
+            (host / name / "keep").write_text("protected metadata")
+        configure(
+            host,
+            json.dumps(
+                {
+                    "sandbox": {
+                        "filesystem": {
+                            "read_write": [str(cache)],
+                            "deny": ["."],
+                        }
+                    }
+                }
+            ),
+        )
+        # Observe the denied reads in the workload. A runner setup failure or
+        # missing fixture cannot produce this output; errno differs by backend.
+        exercise = (
+            # fmt: python
+            code(f"""
+                import errno
+                from pathlib import Path
+
+                for name in {PROTECTED!r}:
+                    try:
+                        Path(name, "keep").read_text()
+                    except PermissionError as error:
+                        assert error.errno in (errno.EACCES, errno.EPERM), error
+                        print(name + ": read denied")
+                    else:
+                        raise AssertionError(name + " was readable")
+                """)
+        )
+        result = subprocess.run(
+            [binary, "sandbox", "--", sys.executable, "-I", "-c", exercise],
+            cwd=host,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0 and result.stderr == "", result
+        assert result.stdout == "".join(
+            name + ": read denied\n" for name in PROTECTED
+        ), result
+        return [{"stdout": result.stdout, "stderr": result.stderr}]
 
 
 @requires(SANDBOX)
@@ -365,7 +375,9 @@ def test_empty_protected_directories_cannot_be_removed_or_replaced(
 ) -> Transcript:
     with TemporaryDirectory() as directory:
         host = Path(directory).resolve()
-        configure(host, 'extends: ":workspace"\n')
+        configure(
+            host, "sandbox: {filesystem: {read_write: [.], read_only: [.claude]}}\n"
+        )
         for name in (".git", ".codex", ".claude"):
             (host / name).mkdir()
         return [
@@ -457,9 +469,9 @@ def test_workspace_options_preserve_explicit_native_values(binary: Path) -> Tran
             host = Path(directory).resolve()
             configuration = {
                 "extends": ":workspace",
-                "sandbox": {"workspace_options": options},
+                "workspace_options": options,
             }
-            configure(host, json.dumps(configuration))
+            configure(host, "{}")
             result = run(
                 binary,
                 host,
@@ -483,7 +495,12 @@ def test_workspace_options_preserve_explicit_native_values(binary: Path) -> Tran
                             assert allowed, key
                     print("explicit native temporary-directory options preserved")
                     """),
+                "--config-env",
+                "TEST_POLICY",
                 environment={
+                    "TEST_POLICY": json.dumps(
+                        {"extends": ":workspace", "workspace_options": options}
+                    ),
                     "TMPDIR": inherited,
                     "INHERITED_TEMP": inherited,
                     "SHARED_TEMP": shared,

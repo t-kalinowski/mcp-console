@@ -31,6 +31,12 @@ initialization_reference = (
 )
 
 
+def execution_snapshots(case):
+    """Keep distinct direct/sandbox transcripts when their captured policy differs."""
+    case.execution_snapshots = True
+    return case
+
+
 def platform_snapshots(*platforms: str):
     """Declare observable platform differences without duplicating shared records."""
 
@@ -254,11 +260,16 @@ def check_recording(
     update: bool,
     execution: str | None = None,
     platform_specific: bool = False,
+    execution_specific: bool = False,
 ) -> set[Path]:
     snapshot = snapshot_path(suite_name, case_name)
     initialization = snapshot == root / initialization_reference
     mode_suffix = (f".{sys.platform}" if platform_specific else "") + (
-        ".direct" if initialization and execution == "direct" else ""
+        ".direct"
+        if initialization and execution == "direct"
+        else ".sandbox"
+        if execution_specific and execution == "sandbox"
+        else ""
     )
     primary = snapshot.with_suffix(f"{mode_suffix}.yaml")
     case = f"{suite_name}::{case_name}"

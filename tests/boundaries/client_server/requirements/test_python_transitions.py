@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.snapshots import execution_snapshots
 from support.requirements import POSIX, requires
 from support.assertions import (
     last_tool_text,
@@ -112,6 +113,7 @@ def test_owns_managed_python_transitions(
         return client.finish()[3:]
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(

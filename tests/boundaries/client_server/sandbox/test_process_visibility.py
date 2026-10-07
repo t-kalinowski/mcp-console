@@ -103,13 +103,11 @@ def test_inspects_child_processes_without_environment_inheritance(
         config.write_text(
             json.dumps(
                 {
-                    "sandbox": {
-                        "inherit_environment": False,
-                        "environment": {
-                            name: environment[name]
-                            for name in ("R_HOME", "R_PROFILE_USER", "HOME", "PATH")
-                        },
-                    }
+                    "inherit_environment": False,
+                    "environment": {
+                        name: environment[name]
+                        for name in ("R_HOME", "R_PROFILE_USER", "HOME", "PATH")
+                    },
                 }
             ),
             encoding="utf-8",

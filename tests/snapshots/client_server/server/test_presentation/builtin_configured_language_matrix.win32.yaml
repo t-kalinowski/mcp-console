@@ -1,40 +1,26 @@
 ---
 languages: r,python
 language_guidance: >-
-  Persistent R and Python workbench for local execution on Windows. State
-  persists across calls. Enabled runtimes initialize in the background and can
-  run without the other installed. With both runtimes and reticulate available,
-  Python reads R globals through r.name and R can use reticulate to access
-  Python. Managed R and Python requirements are prepared by ir and uv on the
-  host. Explicit Python selections use preinstalled packages. SQL is not yet
-  supported.
+  Persistent R and Python workbench for local execution on Windows. SQL is not
+  yet supported. Send one complete `r` or `python` cell per call. Inspect its
+  output and reuse persistent objects. Results display automatically; supported
+  plots return as images.
 
 
-  Send one complete `r` or `python` cell per call. Code-bearing calls must be
-  sequential; a control-only interrupt may overlap a pending `send`. Inspect
-  intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
-
-
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings. Full retained text
-  requires filesystem access there through existing tools; Console provides no
-  read/search interface.
+  Text results, including notices, have an 8 KiB limit, retaining the beginning
+  and latest tail; images have separate limits. Response notices report state
+  and omitted-output locations.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
 preparation_error:
   content:
     - type: text
@@ -48,74 +34,46 @@ stderr: >
 ---
 languages: r
 language_guidance: >-
-  Persistent R and Python workbench for local execution on Windows. State
-  persists across calls. Enabled runtimes initialize in the background and can
-  run without the other installed. With both runtimes and reticulate available,
-  Python reads R globals through r.name and R can use reticulate to access
-  Python. Managed R and Python requirements are prepared by ir and uv on the
-  host. Explicit Python selections use preinstalled packages. SQL is not yet
-  supported.
+  Persistent R and Python workbench for local execution on Windows. SQL is not
+  yet supported. Send one complete `r` or `python` cell per call. Inspect its
+  output and reuse persistent objects. Results display automatically; supported
+  plots return as images.
 
 
-  Send one complete `r` or `python` cell per call. Code-bearing calls must be
-  sequential; a control-only interrupt may overlap a pending `send`. Inspect
-  intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
-
-
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings. Full retained text
-  requires filesystem access there through existing tools; Console provides no
-  read/search interface.
+  Text results, including notices, have an 8 KiB limit, retaining the beginning
+  and latest tail; images have separate limits. Response notices report state
+  and omitted-output locations.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
 ---
 languages: python
 language_guidance: >-
-  Persistent R and Python workbench for local execution on Windows. State
-  persists across calls. Enabled runtimes initialize in the background and can
-  run without the other installed. With both runtimes and reticulate available,
-  Python reads R globals through r.name and R can use reticulate to access
-  Python. Managed R and Python requirements are prepared by ir and uv on the
-  host. Explicit Python selections use preinstalled packages. SQL is not yet
-  supported.
+  Persistent R and Python workbench for local execution on Windows. SQL is not
+  yet supported. Send one complete `r` or `python` cell per call. Inspect its
+  output and reuse persistent objects. Results display automatically; supported
+  plots return as images.
 
 
-  Send one complete `r` or `python` cell per call. Code-bearing calls must be
-  sequential; a control-only interrupt may overlap a pending `send`. Inspect
-  intermediate results before submitting dependent cells. Cells are not
-  transactional; changes made before an error may remain.
+  Run one cell at a time. Wait for its `send` to return before another call with
+  code. You can interrupt a pending call with `send(control="interrupt")`. An
+  error can leave earlier changes in place. If work is still running, poll with
+  an empty `send` until it finishes; do not resubmit the cell.
 
 
-  Omit code to poll, supply stdin, control the session, or prepare requirements
-  when available. If a response ends in `[running; poll with an empty send]`,
-  call `send` again without code or stdin; do not resubmit the cell. Send
-  `stdin` alone to answer an active prompt or debugger. Field descriptions
-  specify preparation, control, and timeout ordering.
-
-
-  Each result has at most 8 KiB of UTF-8 text, including notices; oversized
-  output keeps its beginning and latest tail. Images have separate limits.
-  Retained raw-log paths are relative to the server's launch directory for
-  project recordings and absolute for home recordings. Full retained text
-  requires filesystem access there through existing tools; Console provides no
-  read/search interface.
+  Text results, including notices, have an 8 KiB limit, retaining the beginning
+  and latest tail; images have separate limits. Response notices report state
+  and omitted-output locations.
 
 
   Evaluated code runs without a sandbox, with the server's permissions,
-  including filesystem and network access. Dependency resolution, when
-  available, may execute installation or build code; use only trusted
-  dependencies.
+  including filesystem and network access. Package preparation may execute
+  installation or build code; use only trusted dependencies.
