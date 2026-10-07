@@ -66,6 +66,13 @@ def test_lazy_worker_startup_phase_lasts_until_transport_ready(
         resources.callback(release.touch)
         client.initialize_and_list_tools()
         client.send(r="complete after release", timeout_ms=0)
+        text = last_result_text(client)
+        elapsed_progress(text)
+        assert without_elapsed(text) == "\n[running; poll with an empty send]"
+        # Before the checkpoint, registration may contend with optional status.
+        client.transcript[-1]["result"]["content"][0]["text"] = text.replace(
+            "; phase: startup", ""
+        )
         # The process is registered, but the worker has not sent ready.
         wait_for_path(started, "custom worker is waiting before ready", client=client)
         for _ in range(2):
