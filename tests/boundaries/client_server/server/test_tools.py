@@ -243,6 +243,9 @@ def _initializes_and_lists_tools(
                     "timeout_ms",
                 }, send
             description = send["description"]
+            assert ("ir run script.R" in description) == (
+                not custom and "r" in send["inputSchema"]["properties"]
+            ), description
             if custom:
                 assert "custom-worker" in description
                 assert "does not supply built-in runtime packages" in description

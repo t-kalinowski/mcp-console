@@ -37,6 +37,7 @@ Preserve warnings about effects surviving errors and restart discarding state.
 
 Prefer concrete choices: SQL for structured-file/database inspection and aggregation, R for vectorized/statistical work, Python when its libraries fit the task.
 Make cross-language guidance conditional on configured languages.
+Built-in R guidance includes a compact bridge to [saved scripts](REQUIREMENTS.md#saving-an-r-script); omit it when R is hidden or the worker is custom.
 Do not turn the description into a tutorial, package inventory, backend explanation, or transcript-format specification.
 
 ## Capability and security claims

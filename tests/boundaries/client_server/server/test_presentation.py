@@ -23,6 +23,11 @@ MISSING_UV = (
     "Python sessions without R require `uv` on PATH; "
     "set python in .agents/console/config.yaml to use an existing environment"
 )
+R_SCRIPT_GUIDANCE = (
+    "For a reusable R script, include imports, data inputs, and "
+    "`#| packages:`/`#| r-version:` metadata for `ir run script.R`, "
+    "which starts without live Console objects."
+)
 
 
 @platform_snapshots("win32")
@@ -49,6 +54,7 @@ def _configured_language_matrix(binary: Path) -> Transcript:
                 fields = set(properties) & {"r", "python", "sql"}
                 assert fields == set(enabled.split(",")), fields
                 description = tool["description"]
+                assert (R_SCRIPT_GUIDANCE in description) == ("r" in fields)
                 if os.name == "nt":
                     assert "local execution on Windows" in description, description
                     assert "SQL is not yet supported" in description, description
@@ -89,7 +95,12 @@ def _configured_language_matrix(binary: Path) -> Transcript:
                 # Pin the varying paragraph; compare every shared paragraph and
                 # field schema in full so the matrix does not repeat them.
                 if os.name == "nt":
-                    assert description == baseline["description"]
+                    expected_description = baseline["description"]
+                    if "r" not in fields:
+                        expected_description = expected_description.replace(
+                            " " + R_SCRIPT_GUIDANCE, ""
+                        )
+                    assert description == expected_description
                     guidance = description
                 else:
                     paragraphs = description.split("\n\n")

@@ -32,7 +32,10 @@ result:
         For databases and structured files, consider DuckDB SQL first for schema
         inspection, filtering, joins, aggregation, and nested JSON extraction.
         Use R for vectorized data and string operations, statistics, and plots.
-        Switch languages when useful, reusing persistent state.
+        For a reusable R script, include imports, data inputs, and `#|
+        packages:`/`#| r-version:` metadata for `ir run script.R`, which starts
+        without live Console objects. Switch languages when useful, reusing
+        persistent state.
 
 
         DuckDB can query CSV, Parquet, JSON, and JSONL directly; JSON support is

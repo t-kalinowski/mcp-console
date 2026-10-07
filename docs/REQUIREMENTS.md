@@ -85,6 +85,33 @@ One environment transition covers preparation through admission, so another call
 Standalone preparation rejects nonempty stdin and returns `[prepared]` on success; bundled preparation adds no marker.
 See [operations](SEND_OPERATIONS.md#operations) for partial effects after interrupt and for wait timing.
 
+## Saving an R script
+
+After exploring in Console, save the analysis as a self-describing R script with [ir frontmatter](https://r-lib.github.io/ir/run.html).
+Include package requirements, R runtime metadata, imports, and data inputs: a fresh script run does not inherit Console's live objects or retained requirements.
+For example, save this as `script.R` for a CSV with `group` and `value` columns:
+
+```r
+#| packages:
+#|   - dplyr
+#| r-version: "4.6.1"
+library(dplyr)
+
+args <- commandArgs(trailingOnly = TRUE)
+stopifnot(length(args) == 1L)
+data <- read.csv(args[[1]])
+summary <- data |>
+  group_by(group) |>
+  summarise(mean_value = mean(value), .groups = "drop")
+print(summary)
+```
+
+Run it explicitly from the shell with `ir run script.R data.csv`.
+`packages` is a YAML sequence of ir package references; `r-version` selects a matching installed R version through rig.
+Change `r-version` to the installed R version you tested and declare the packages the script uses.
+Continue to use Console's `send(requirements=...)` for in-session preparation; script frontmatter is for the separate ir invocation.
+The [journal QMD](RECORDING.md) records calls and results; it is not an executed, reproducible script export.
+
 ## Accepted requirement input
 
 Add accepts at most 64 entries per language per call.

@@ -112,7 +112,12 @@ impl Profile {
             }
             scope
         } else if cfg!(windows) && !self.configured_visibility {
-            sections::WINDOWS_SCOPE.to_string()
+            let mut scope = sections::WINDOWS_SCOPE.to_string();
+            if self.languages.r {
+                scope.push(' ');
+                scope.push_str(sections::R_SCRIPT.trim_end());
+            }
+            scope
         } else {
             let mut scope = if described_languages.r
                 && described_languages.python
@@ -194,6 +199,7 @@ impl Profile {
         for (enabled, section) in [
             (self.languages.sql, sections::SQL_SELECTION),
             (self.languages.r, sections::R_SELECTION),
+            (self.languages.r, sections::R_SCRIPT),
             (self.languages.python, sections::PYTHON_SELECTION),
         ] {
             if enabled {
