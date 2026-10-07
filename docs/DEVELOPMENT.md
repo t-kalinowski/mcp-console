@@ -139,7 +139,7 @@ Windows also runs portable transcript-runner, MCP-client, and release-manifest r
 Unix release-staging fixtures retain their declared platform requirements.
 Installation checks run last because Unix checks temporarily replace the application `target` directory.
 Windows builds a wheel and exercises wheel and source installs in a temporary virtualenv without installing into the caller's Python environment.
-CI runs the full profiles and is the comprehensive merge gate.
+CI runs the full profiles and, on macOS/Linux, the allocation stress profile; it is the comprehensive merge gate.
 Run the owning focused tests when changing tooling; the default gate does not cover all tooling regressions.
 
 On macOS/Linux, `scripts/test` without selectors runs the smoke profile in [`_profiles.py`](../tests/boundaries/_profiles.py); `--full` runs all applicable functional cases.
