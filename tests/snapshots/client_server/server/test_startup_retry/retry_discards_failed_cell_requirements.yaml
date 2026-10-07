@@ -28,8 +28,7 @@ result:
         failed
   isError: true
 ---
-send:
-  control: restart
+send: {}
 result:
   content:
     - type: text
@@ -37,6 +36,16 @@ result:
         worker R home discovery failed with exit status: 17: fixture R discovery
         failed
   isError: true
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
 ---
 send:
   requirements:

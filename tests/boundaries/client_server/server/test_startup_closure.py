@@ -22,6 +22,12 @@ from support.requirements import (
 )
 from support.suites import run_this_suite
 
+SETUP_FAILURE = (
+    "resolver.environment: preparation requires an absolute HOME or "
+    "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY; configure one when "
+    "inherit_environment is false"
+)
+
 
 @requires(POSIX, NATIVE_FIXTURES, PTHREAD_RUNTIME_PARKING)
 def test_eof_before_retry_admission_exits_cleanly(binary: Path) -> Transcript:
@@ -57,7 +63,7 @@ def test_eof_before_retry_admission_exits_cleanly(binary: Path) -> Transcript:
                 client.initialize_and_list_tools()
                 failure = client.send()
                 assert failure["isError"] is True, failure
-                assert "resolver sandbox requires HOME" in str(failure), failure
+                assert SETUP_FAILURE in str(failure), failure
                 restart = client.start_send(control="restart", timeout_ms=0)
                 reached.wait("retry started before worker/resolver admission")
                 client.receive(restart)
@@ -83,11 +89,11 @@ def test_eof_preserves_completed_setup_failure_without_resolver(
         client.initialize_and_list_tools()
         failure = client.send(python="raise AssertionError('must not execute')")
         assert failure["isError"] is True, failure
-        assert "resolver sandbox requires HOME" in str(failure), failure
+        assert SETUP_FAILURE in str(failure), failure
         assert client.request("tools/list")["result"] == client.transcript[2]["result"]
         client.transcript[-1] = {"tools_schema_unchanged": True}
         transcript, stderr = client.finish_with_standard_error(expected_exit_status=1)
-        assert stderr == "resolver sandbox requires HOME\n", stderr
+        assert stderr == SETUP_FAILURE + "\n", stderr
         return transcript + [{"exit_status": 1, "stderr": stderr}]
 
 

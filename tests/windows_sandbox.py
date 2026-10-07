@@ -70,6 +70,24 @@ class WindowsSandbox(unittest.TestCase):
             subprocess.run(
                 [sys.executable, "-m", "venv", "--without-pip", selected], check=True
             )
+            # Hosted temp directories may exclude the sandbox account. Grant
+            # reads for the selected venv and later host-written cache probe.
+            status = json.loads(
+                subprocess.check_output(
+                    [BINARY, "sandbox-setup", "--status"], text=True
+                )
+            )
+            self.assertTrue(status["configured"], status)
+            subprocess.run(
+                [
+                    "icacls",
+                    str(root),
+                    "/grant",
+                    f"{status['online_account']}:(OI)(CI)RX",
+                ],
+                check=True,
+                capture_output=True,
+            )
             python = selected / "Scripts/python.exe"
             local = (
                 root / "account/AppData/Local" if profile_fallback else root / "local"

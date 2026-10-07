@@ -524,10 +524,11 @@ def test_retry_discards_failed_cell_requirements(
             failure = client.send(requirements={"action": "get"})
             assert failure.get("isError"), failure
             assert "fixture R discovery failed" in str(failure), failure
+            # Inspection observes readiness without collecting the accepted
+            # cell's failure. Consume it before observing a code-free retry.
+            assert client.send() == failure
             (root / "R").unlink()
-            restarted = client.send(control="restart")
-            assert restarted.get("isError"), restarted
-            assert "fixture R discovery failed" in str(restarted), restarted
+            client.expect("\n[idle]", control="restart")
             inspection = client.send(requirements={"action": "get"})
             assert not inspection.get("isError"), inspection
             retained = inspection["structuredContent"]["requirements"]
