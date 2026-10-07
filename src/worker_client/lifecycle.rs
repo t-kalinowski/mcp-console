@@ -78,6 +78,7 @@ impl LifecycleControl {
     ) -> (ProcessStopHandles, Instant, WorkerGeneration) {
         let deadline = Instant::now() + grace;
         let stop_handles = self.processes.clone();
+        stop_handles.reserve_shutdown(deadline);
         self.retiring_generation = Some(RetiringGeneration {
             generation: self.generation.clone(),
             disposition,
@@ -264,44 +265,36 @@ pub(super) struct ProcessStopHandles {
 }
 
 impl ProcessStopHandles {
+    fn reserve_shutdown(&self, deadline: Instant) {
+        if let Some(worker) = &self.worker {
+            worker.reserve_shutdown(deadline, deadline);
+        }
+    }
     fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        let (allowance, errors) = self.request_shutdown(deadline);
-        self.finish_shutdown(deadline, allowance, errors)
+        let errors = self.request_shutdown(deadline);
+        self.finish_shutdown(errors)
     }
 
-    fn request_shutdown(
-        &self,
-        deadline: Instant,
-    ) -> (Option<platform::RelayRetirementAllowance>, Vec<String>) {
+    fn request_shutdown(&self, deadline: Instant) -> Vec<String> {
         let mut errors = Vec::new();
-        let mut worker_allowance = None;
         // Queue worker shutdown before resolver cancellation can release a
         // response command onto the retiring relay connection.
-        if let Some(worker) = self.worker.as_ref() {
-            let (allowance, requested) = worker.request_shutdown(deadline, deadline);
-            worker_allowance = Some(allowance);
-            if let Err(error) = requested {
-                errors.push(error);
-            }
+        if let Some(worker) = &self.worker {
+            worker.request_shutdown(deadline, deadline);
         }
         if let Some(resolver) = self.resolver.as_ref()
             && let Err(error) = resolver.stop()
         {
             errors.push(error);
         }
-        (worker_allowance, errors)
+        errors
     }
 
-    fn finish_shutdown(
-        &self,
-        deadline: Instant,
-        worker_allowance: Option<platform::RelayRetirementAllowance>,
-        mut errors: Vec<String>,
-    ) -> Result<(), String> {
+    fn finish_shutdown(&self, mut errors: Vec<String>) -> Result<(), String> {
         // The barrier lets the ordered consumer apply failures and finish a
         // cancelled resolver callback before relay retirement is enforced.
-        if let (Some(worker), Some(allowance)) = (self.worker.as_ref(), worker_allowance)
-            && let Err(error) = worker.finish_shutdown(deadline, allowance)
+        if let Some(worker) = &self.worker
+            && let Err(error) = worker.finish_shutdown()
         {
             errors.push(error);
         }
@@ -380,8 +373,8 @@ impl Client {
     pub(crate) async fn cancel_startup(&self, deadline: Instant) -> Result<(), String> {
         let processes = self.close_lifecycle(deadline)?.unwrap_or_default();
         tokio::task::spawn_blocking(move || {
-            let (allowance, errors) = processes.request_shutdown(deadline);
-            processes.finish_shutdown(deadline, allowance, errors)
+            let errors = processes.request_shutdown(deadline);
+            processes.finish_shutdown(errors)
         })
         .await
         .map_err(|error| format!("startup shutdown task failed: {error}"))?
@@ -1183,7 +1176,7 @@ impl Client {
         worker: &mut WorkerState,
         expected: &WorkerGeneration,
     ) -> Result<FailedWorkerStop, WorkerRetirementFailure> {
-        let mut lifecycle = self.0.lifecycle.lock().map_err(|_| {
+        let lifecycle = self.0.lifecycle.lock().map_err(|_| {
             WorkerRetirementFailure::from("worker lifecycle lock poisoned".to_string())
         })?;
         if lifecycle.state != LifecycleState::Ready || !lifecycle.generation.is(expected) {
@@ -1194,7 +1187,27 @@ impl Client {
                 "failed worker was not running".to_string(),
             ));
         }
-        let outcome = match worker.stop_failed() {
+        let processes = lifecycle.processes.clone();
+        let deadline = Instant::now();
+        // The failed-worker path retains its unconditional relay drainage
+        // allowance. Reserve before releasing admission, then cancel the real
+        // callback outside lifecycle before joining its dispatcher.
+        if let Some(handle) = &processes.worker {
+            handle.reserve_failed_shutdown(deadline);
+        }
+        drop(lifecycle);
+        let requested = processes.request_shutdown(deadline);
+        let retirement = worker.stop_failed();
+        let mut lifecycle = self.0.lifecycle.lock().map_err(|_| {
+            WorkerRetirementFailure::from("worker lifecycle lock poisoned".to_string())
+        })?;
+        // Restart/EOF may now have joined the same operation. They own the
+        // transition if generation/admission changed during teardown.
+        let current = lifecycle.generation.is(expected) && lifecycle.state == LifecycleState::Ready;
+        if !current {
+            return retirement.map(|_| FailedWorkerStop::RestartOwnsWorker);
+        }
+        let outcome = match retirement {
             Ok(WorkerRetirement::Stopped { outcome, .. }) => outcome,
             Ok(WorkerRetirement::NeverStarted | WorkerRetirement::AlreadyStopped) => {
                 unreachable!("a running failed worker should retire")
@@ -1213,6 +1226,12 @@ impl Client {
             }
         };
         lifecycle.processes.worker = None;
+        if !requested.is_empty() {
+            return Err(WorkerRetirementFailure::new(
+                requested.join("; additionally "),
+                outcome,
+            ));
+        }
         Ok(FailedWorkerStop::Stopped(outcome))
     }
 
@@ -1385,7 +1404,12 @@ impl Client {
         if !matches!(lifecycle.state, LifecycleState::ShuttingDown { .. }) {
             lifecycle.state = LifecycleState::ShuttingDown { deadline };
         }
-        let handles = std::mem::take(&mut lifecycle.processes);
+        let handles = lifecycle.processes.clone();
+        let deadline = match lifecycle.state {
+            LifecycleState::ShuttingDown { deadline } => deadline,
+            _ => unreachable!("closed lifecycle"),
+        };
+        handles.reserve_shutdown(deadline);
         Ok(
             (handles.worker.is_some() || handles.resolver.is_some() || lifecycle.startup.is_some())
                 .then_some(handles),
@@ -1405,13 +1429,13 @@ impl Client {
                 .clone();
             // Queue relay shutdown and resolver cancellation before Close can
             // retire the preparation host and its control-input pipe.
-            let (allowance, errors) = stop_handles.request_shutdown(deadline);
+            let errors = stop_handles.request_shutdown(deadline);
             let preparation = preparation.map(|preparation| {
                 // Resolver and worker retirement run together. A lost
                 // preparation connection must not extend worker shutdown.
                 std::thread::spawn(move || preparation.close())
             });
-            let stopped = stop_handles.finish_shutdown(deadline, allowance, errors);
+            let stopped = stop_handles.finish_shutdown(errors);
             let retired = client.finish_worker_retirement().map(|_| ());
             let preparation = preparation.map_or(Ok(()), |task| {
                 task.join()

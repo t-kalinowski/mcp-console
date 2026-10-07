@@ -89,6 +89,13 @@ impl Worker {
 pub(super) struct WorkerShutdownHandle;
 
 impl WorkerShutdownHandle {
+    pub(super) fn reserve_failed_shutdown(&self, _deadline: std::time::Instant) {}
+    pub(super) fn reserve_shutdown(
+        &self,
+        _deadline: std::time::Instant,
+        _completion_deadline: std::time::Instant,
+    ) {
+    }
     pub(super) fn interrupt(&self, _evaluation: Option<&super::Evaluation>) -> Result<(), String> {
         Err("worker interrupts are supported only on macOS".to_string())
     }
@@ -101,18 +108,10 @@ impl WorkerShutdownHandle {
         &self,
         _worker_deadline: std::time::Instant,
         _completion_deadline: std::time::Instant,
-    ) -> (RelayRetirementAllowance, Result<(), String>) {
-        (RelayRetirementAllowance, Ok(()))
+    ) {
     }
 
-    pub(super) fn finish_shutdown(
-        &self,
-        _deadline: std::time::Instant,
-        _allowance: RelayRetirementAllowance,
-    ) -> Result<(), String> {
+    pub(super) fn finish_shutdown(&self) -> Result<(), String> {
         Ok(())
     }
 }
-
-#[derive(Clone, Copy)]
-pub(super) struct RelayRetirementAllowance;

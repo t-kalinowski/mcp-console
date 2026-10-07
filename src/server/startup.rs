@@ -173,7 +173,7 @@ impl Startup {
         self.runtime.clone()
     }
 
-    pub async fn cancel(&self) -> Result<(), String> {
+    pub async fn cancel(&self, deadline: std::time::Instant) -> Result<(), String> {
         {
             let mut control = self.cancellation.lock().expect("startup cancellation lock");
             control.closed = true;
@@ -181,10 +181,7 @@ impl Startup {
                 return Ok(());
             }
         }
-        self.runtime
-            .worker
-            .cancel_startup(std::time::Instant::now() + crate::worker_client::WORKER_SHUTDOWN_GRACE)
-            .await
+        self.runtime.worker.cancel_startup(deadline).await
     }
 
     pub fn finish_failed_preparation(&self, error: String) -> Result<(), String> {

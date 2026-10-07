@@ -160,6 +160,20 @@ Its default host reads and Console-specific writable caches still require truste
 
 ## Retirement and cancellation
 
+Each worker launch owns one retained retirement operation.
+Lifecycle reserves its original budgets while holding admission, then releases that mutex before command writes, preparation cancellation, process observation or task joins.
+Restart, EOF, startup failure and failed-worker recovery observe the same request and terminal cleanup/I/O result.
+They send Shutdown once and join every owned transport task once; a late startup registration retires through its launch's owner before startup completion permits connection shutdown to finish.
+Publishing a failed-worker transition checks that its generation still owns it.
+
+The operation keeps normal command/barrier failure separate from physical cleanup and the dispatcher outcome.
+Confirmed physical cleanup and joined tasks can supersede a failed normal barrier; failed native cleanup still blocks replacement.
+Process and worker consumers read their cleanup and I/O outcomes from that retained result, so an I/O failure is reported once.
+Available output is drained even when cleanup fails.
+The existing worker, relay, launcher and force-stop allowances are captured once.
+Relay drain eligibility uses when the local dispatcher processes ShutdownStarted.
+Connection closure passes its original worker deadline into startup cancellation.
+
 The relay bounds shutdown and reaps its direct worker.
 Its stream draining must not wait forever for descendants retaining descriptors or for a blocked output consumer.
 It does not infer process-tree membership from a process group.
