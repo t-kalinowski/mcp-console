@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.snapshots import execution_snapshots
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -189,6 +190,7 @@ def test_preserves_broken_pipe_errors_after_r_startup(
             return [{"broken_pipe_errors_survive_r_startup": True}]
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 def test_processes_initial_site_directories_once(
     binary: Path, execution: Execution
@@ -414,16 +416,19 @@ def interrupted_initialization(
             return json.loads(transcript)
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_embedded_sitecustomize(binary: Path, execution: Execution) -> list:
     return interrupted_initialization(binary, execution)
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_embedded_pth(binary: Path, execution: Execution) -> list:
     return interrupted_initialization(binary, execution, hook="console_startup")
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_interrupts_embedded_startup_after_r(
@@ -432,6 +437,7 @@ def test_interrupts_embedded_startup_after_r(
     return interrupted_initialization(binary, execution, r_first=True)
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(SQL)
 def test_interrupts_sql_first_embedded_startup(

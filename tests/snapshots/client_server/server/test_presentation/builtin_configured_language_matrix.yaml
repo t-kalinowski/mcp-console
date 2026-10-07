@@ -1,11 +1,10 @@
 ---
 languages: r,python,sql
 language_guidance: >-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction.
-  Use R for vectorized data and string operations, statistics, and plots.
-  Use Python when its libraries or format-specific parsing simplify the
-  task. Switch languages when useful, reusing persistent state.
+  For databases and structured files, consider DuckDB SQL first for
+  inspection, joins, and aggregation. Use R for vectorized data and string
+  operations, statistics, and plots. Use Python when its libraries or
+  format-specific parsing simplify the task. Switch languages when useful.
 preparation_error:
   content:
     - type: text
@@ -28,25 +27,23 @@ language_guidance: >-
 ---
 languages: sql
 language_guidance: >-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction.
+  For databases and structured files, consider DuckDB SQL first for
+  inspection, joins, and aggregation.
 ---
 languages: r,python
 language_guidance: >-
   Use R for vectorized data and string operations, statistics, and plots.
   Use Python when its libraries or format-specific parsing simplify the
-  task. Switch languages when useful, reusing persistent state.
+  task. Switch languages when useful.
 ---
 languages: r,sql
 language_guidance: >-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction.
-  Use R for vectorized data and string operations, statistics, and plots.
-  Switch languages when useful, reusing persistent state.
+  For databases and structured files, consider DuckDB SQL first for
+  inspection, joins, and aggregation. Use R for vectorized data and string
+  operations, statistics, and plots. Switch languages when useful.
 ---
 languages: python,sql
 language_guidance: >-
-  For databases and structured files, consider DuckDB SQL first for schema
-  inspection, filtering, joins, aggregation, and nested JSON extraction.
-  Use Python when its libraries or format-specific parsing simplify the
-  task. Switch languages when useful, reusing persistent state.
+  For databases and structured files, consider DuckDB SQL first for
+  inspection, joins, and aggregation. Use Python when its libraries or
+  format-specific parsing simplify the task. Switch languages when useful.

@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.snapshots import execution_snapshots
 from support.progress import without_elapsed
 from support.assertions import last_result_text
 from support.client import McpClient
@@ -789,6 +790,7 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
             return client.finish()[3:]
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retries_interrupted_startup_with_prepared_candidate_without_r(

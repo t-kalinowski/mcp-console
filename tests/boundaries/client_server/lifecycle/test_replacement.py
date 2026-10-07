@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.snapshots import execution_snapshots
 from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import large_output, last_tool_text
 from support.checkpoints import (
@@ -70,6 +71,7 @@ def test_reports_missing_worker_launch_failure(
     return transcript
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_reports_replacement_startup_failure_and_retry(
@@ -386,6 +388,7 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
         return client.finish()
 
 
+@execution_snapshots
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_preserves_idle_worker_startup_failure(
