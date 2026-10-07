@@ -328,7 +328,6 @@ fn validate_domain(host: &str) -> Result<(), &'static str> {
         .and_then(|host| host.strip_suffix(']'))
         .unwrap_or(host);
     let ip = if let Some((address, zone)) = literal.split_once('%') {
-        let zone = zone.strip_prefix("25").unwrap_or(zone);
         address.parse::<std::net::Ipv6Addr>().is_ok()
             && !zone.is_empty()
             && zone

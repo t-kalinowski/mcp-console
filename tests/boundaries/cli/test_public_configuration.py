@@ -422,6 +422,7 @@ def test_native_domain_literals(binary: Path) -> Transcript:
             "fe80::1%lo0",
             "[fe80::1%25lo0]",
             "fe80::1%3",
+            "fe80::1%25",
             "[fe80::1%253]",
             "api[0-9].example.org",
         ]
