@@ -490,18 +490,18 @@ def test_restart_refreshes_failed_inspection_evidence(
             return transcript + [{"stderr": stderr, "inspection_attempts": 2}]
 
 
-@requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
+@requires(POSIX, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_retry_discards_failed_cell_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
     with discovery_environment() as (environment, reached, release, alive):
         root = reached.path.parent
-        (root / "python3").symlink_to(FRAMEWORK_PYTHON)
+        (root / "python3").symlink_to(sys.executable)
         expose_uv(root)
         environment.update(
             {
-                "UV_PYTHON_PREFERENCE": "only-system",
+                "UV_PYTHON_PREFERENCE": "system",
                 "UV_PYTHON_DOWNLOADS": "never",
                 "UV_TOOL_DIR": str(root),
             }
@@ -633,14 +633,14 @@ def test_retry_stdin_reaches_early_input_cell(
         )
 
 
-@requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
+@requires(POSIX, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_requirements_retry_stdin_reaches_early_input_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory).resolve()
-        (root / "python3").symlink_to(FRAMEWORK_PYTHON)
+        (root / "python3").symlink_to(sys.executable)
         fixture, reached, release = checkpoint_uv_environment(root, "run")
         environment = without_r(root)
         environment.update(
@@ -651,7 +651,7 @@ def test_requirements_retry_stdin_reaches_early_input_cell(
             }
         )
         environment.update(
-            {"UV_PYTHON_PREFERENCE": "only-system", "UV_PYTHON_DOWNLOADS": "never"}
+            {"UV_PYTHON_PREFERENCE": "system", "UV_PYTHON_DOWNLOADS": "never"}
         )
         with (
             closing(reached),
@@ -711,7 +711,10 @@ def test_cancelled_restart_shares_retry_and_preserves_next_cell(
         for _ in range(2):
             result = client.send(control="restart", timeout_ms=0)
             assert result["content"] == [
-                {"type": "text", "text": "[worker starting]"}
+                {
+                    "type": "text",
+                    "text": "\n[phase: dependency preparation]\n[worker starting]",
+                }
             ], result
         timed_out = client.send(
             control="restart", python="timed_out_cell = True", timeout_ms=0
@@ -720,7 +723,10 @@ def test_cancelled_restart_shares_retry_and_preserves_next_cell(
             "content": [
                 {
                     "type": "text",
-                    "text": "[worker starting]\nstartup is pending; control was not applied and cell was not run",
+                    "text": (
+                        "[worker starting]\n[phase: dependency preparation]\n"
+                        "startup is pending; control was not applied and cell was not run"
+                    ),
                 }
             ],
             "isError": True,

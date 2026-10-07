@@ -21,7 +21,10 @@ send:
 result:
   content:
     - type: text
-      text: "[worker starting]"
+      text: |-
+
+        [phase: dependency preparation]
+        [worker starting]
   isError: false
 ---
 send:
@@ -30,7 +33,10 @@ send:
 result:
   content:
     - type: text
-      text: "[worker starting]"
+      text: |-
+
+        [phase: dependency preparation]
+        [worker starting]
   isError: false
 ---
 send:
@@ -42,6 +48,7 @@ result:
     - type: text
       text: |-
         [worker starting]
+        [phase: dependency preparation]
         startup is pending; control was not applied and cell was not run
   isError: true
 ---

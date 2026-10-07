@@ -33,9 +33,11 @@ from support.requirements import (
     requires,
 )
 from support.resolvers import checkpoint_uv_environment
+from support.snapshots import execution_snapshots
 from support.suites import run_this_suite
 
 
+@execution_snapshots
 @requires(POSIX, PROCESS_EVENTS)
 @executions(DIRECT, SANDBOXED)
 def test_lazy_worker_startup_phase_lasts_until_transport_ready(
@@ -101,6 +103,7 @@ def test_lazy_worker_startup_phase_lasts_until_transport_ready(
         return client.finish()
 
 
+@execution_snapshots
 @requires(NATIVE_FIXTURES, POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_phase_observation_does_not_wait_for_failed_worker_retirement(
