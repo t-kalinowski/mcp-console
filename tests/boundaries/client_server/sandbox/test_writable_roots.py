@@ -16,6 +16,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import TranscriptWithCompanions
 from support.requirements import LINUX_SANDBOX, MACOS_SANDBOX, NATIVE_FIXTURES, requires
+from support.resolvers import send_and_collect_runtime_python_resolution
 from support.suites import run_this_suite
 
 
@@ -101,7 +102,9 @@ def _writable_roots_reach_every_runner_launch(
             binary, SANDBOXED.serve("-c", "cache=host", *options), environment, host
         ) as client:
             client.initialize_and_list_tools()
-            client.send(python=exercise)
+            send_and_collect_runtime_python_resolution(
+                client, python=exercise, timeout_ms=600_000
+            )
             assert last_tool_text(client).endswith(
                 "both grants and subprocess writes verified; neighboring and symlink writes denied\n"
             ), last_tool_text(client)
@@ -124,7 +127,9 @@ def _writable_roots_reach_every_runner_launch(
             client.send(control="restart")
             assert not temporary.exists(), "restart retained private storage"
             assert (roots[0] / "persistent").read_text() == "user data"
-            client.send(python=exercise)
+            send_and_collect_runtime_python_resolution(
+                client, python=exercise, timeout_ms=600_000
+            )
             assert last_tool_text(client).endswith(
                 "both grants and subprocess writes verified; neighboring and symlink writes denied\n"
             ), last_tool_text(client)
@@ -135,7 +140,9 @@ def _writable_roots_reach_every_runner_launch(
             assert not temporary.exists(), "replacement retained private storage"
             for root in roots:
                 assert (root / "persistent").read_text() == "user data"
-            client.send(python=exercise)
+            send_and_collect_runtime_python_resolution(
+                client, python=exercise, timeout_ms=600_000
+            )
             assert last_tool_text(client).endswith(
                 "both grants and subprocess writes verified; neighboring and symlink writes denied\n"
             ), last_tool_text(client)

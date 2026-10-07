@@ -1,6 +1,7 @@
 ---
 scenario: sandbox defaults
 runner_configuration:
+  network: restricted
   filesystem:
     kind: restricted
     entries:
@@ -9,7 +10,6 @@ runner_configuration:
           value:
             kind: root
         access: read
-  network: restricted
   lifecycle:
     private_tmp:
       environment:
@@ -20,6 +20,7 @@ transcript_normalization:
 ---
 scenario: sandbox with roots
 runner_configuration:
+  network: restricted
   filesystem:
     kind: restricted
     entries:
@@ -40,7 +41,6 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
-  network: restricted
   lifecycle:
     private_tmp:
       environment:
@@ -51,6 +51,7 @@ transcript_normalization:
 ---
 scenario: serve initial worker
 runner_configuration:
+  network: restricted
   filesystem:
     kind: restricted
     entries:
@@ -71,7 +72,6 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
-  network: restricted
   lifecycle:
     private_tmp:
       environment:
@@ -84,6 +84,7 @@ transcript_normalization:
 ---
 scenario: serve restart
 runner_configuration:
+  network: restricted
   filesystem:
     kind: restricted
     entries:
@@ -104,7 +105,6 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
-  network: restricted
   lifecycle:
     private_tmp:
       environment:
@@ -117,6 +117,7 @@ transcript_normalization:
 ---
 scenario: serve failure replacement
 runner_configuration:
+  network: restricted
   filesystem:
     kind: restricted
     entries:
@@ -137,7 +138,6 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
-  network: restricted
   lifecycle:
     private_tmp:
       environment:

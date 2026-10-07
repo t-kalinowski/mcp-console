@@ -91,7 +91,7 @@ def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript
         ) as client:
             client.initialize_and_list_tools()
             # Complete silent setup before timing the library-loading cell.
-            ready = client.send(r="NULL", timeout_ms=600_000)
+            ready = client.send(r="invisible(NULL)", timeout_ms=600_000)
             assert tool_text(ready) == "[done]", ready
             client.transcript.pop()
             result = client.send(

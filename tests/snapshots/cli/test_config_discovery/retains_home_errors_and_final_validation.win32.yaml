@@ -25,17 +25,17 @@ command: serve
 home: invalid
 stderr: >
   <root>\console-home\config.yaml: unknown: unknown field `unknown`,
-  expected one of `cache`, `python`, `languages`, `inherit_environment`,
-  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
-  public format
+  expected one of `startup`, `cache`, `python`, `languages`,
+  `inherit_environment`, `environment`, `sandbox`, `resolver`; see
+  docs/CONFIGURATION.md for the public format
 ---
 command: sandbox
 home: invalid
 stderr: >
   <root>\console-home\config.yaml: unknown: unknown field `unknown`,
-  expected one of `cache`, `python`, `languages`, `inherit_environment`,
-  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
-  public format
+  expected one of `startup`, `cache`, `python`, `languages`,
+  `inherit_environment`, `environment`, `sandbox`, `resolver`; see
+  docs/CONFIGURATION.md for the public format
 ---
 command: serve
 home: invalid override

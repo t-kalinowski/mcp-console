@@ -420,7 +420,6 @@ class SocketGateMcpClient(McpClient):
 
         self.temporary_directory = None
         self.console_home = None
-        assert "--writable-root" not in arguments
         self.writable_roots = []
         self.process = process
         self.stdin = input_stream

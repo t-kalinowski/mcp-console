@@ -28,7 +28,6 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.native import build_interposer
-from support.snapshots import execution_snapshots
 from support.records import (
     McpTranscript,
     ToolResult,
@@ -41,6 +40,7 @@ from support.resolvers import (
 )
 from support.r import isolated_r_home, r_test_environment, reference_plots
 from support.python import virtualenv_python, write_test_wheel
+from support.snapshots import execution_snapshots
 
 
 # fmt: python
