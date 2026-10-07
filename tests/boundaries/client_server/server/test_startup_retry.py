@@ -46,7 +46,7 @@ from support.requirements import (
     command,
     requires,
 )
-from support.resolvers import expose_uv
+from support.resolvers import checkpoint_uv_environment, expose_uv
 from support.suites import run_this_suite
 
 
@@ -629,6 +629,71 @@ def test_retry_stdin_reaches_early_input_cell(
         return json.loads(
             json.dumps(client.finish()).replace(str(attempts.parent), "<workspace>")
         )
+
+
+@requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_requirements_retry_stdin_reaches_early_input_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        (root / "python3").symlink_to(FRAMEWORK_PYTHON)
+        fixture, reached, release = checkpoint_uv_environment(root, "run")
+        environment = without_r(root)
+        environment.update(
+            {
+                name: value
+                for name, value in fixture.items()
+                if name.startswith("MCP_CONSOLE_TEST_") or name == "UV_TOOL_DIR"
+            }
+        )
+        environment.update(
+            {"UV_PYTHON_PREFERENCE": "only-system", "UV_PYTHON_DOWNLOADS": "never"}
+        )
+        with (
+            closing(reached),
+            closing(release),
+            McpClient(
+                binary, execution.serve("-c", "cache=host"), environment, root
+            ) as client,
+        ):
+            client.initialize_and_list_tools()
+            failure = client.send()
+            assert failure.get("isError"), failure
+            assert "require `uv` on PATH" in str(failure), failure
+            (root / "uv").symlink_to(fixture["RETICULATE_UV"])
+            pending = client.start_send(
+                control="restart",
+                requirements={"action": "reset"},
+                stdin="repaired input\n",
+                timeout_ms=10_000,
+            )
+            reached.wait("requirements-bearing restart owns the shared retry")
+            client.send(python="answer = input('retry> '); print(answer)", timeout_ms=0)
+            assert without_elapsed(last_tool_text(client)) == (
+                "\n[running; poll with an empty send]"
+            )
+            release.release()
+            client.response_timeout = 15
+            try:
+                client.receive(pending)
+            except TimeoutError:
+                # Release the blocked evaluation before reporting the regression.
+                interrupt = client.start_send(control="interrupt")
+                client.receive_many([pending, interrupt])
+                raise
+            assert pending["result"]["content"] == [
+                {
+                    "type": "text",
+                    "text": '[input requested: "retry> "]\nrepaired input\n',
+                }
+            ], pending
+            assert not pending["result"].get("isError"), pending
+            client.expect("'repaired input'\n", python="answer")
+            return json.loads(
+                json.dumps(client.finish()).replace(str(root), "<workspace>")
+            )
 
 
 @requires(POSIX)

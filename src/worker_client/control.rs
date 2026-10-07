@@ -413,6 +413,25 @@ impl Client {
                     }
                 }
             }
+            if cell.is_none()
+                && let Some(active) = self.current_evaluation()?
+            {
+                // No-op preparation preserves the accepted cell. Its input
+                // and observation must not wait for its worker lock.
+                self.ensure_controlled_generation(control, &generation)?;
+                if !active.generation.is(&generation) {
+                    return Err("session restarted before the operation began".into());
+                }
+                let wait_claim = active.evaluation.claim()?;
+                if let Some(stdin) = stdin {
+                    active.evaluation.submit_stdin(stdin)?;
+                }
+                return Ok(ControlledEvaluation::Observe {
+                    evaluation: active.evaluation,
+                    wait_claim,
+                    cell_not_run: false,
+                });
+            }
             // Cell admission owns its idle output cut. Do not consume output
             // from an evaluation accepted by another caller during readiness.
             let mut response = Response::default();

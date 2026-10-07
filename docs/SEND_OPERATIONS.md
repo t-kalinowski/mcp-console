@@ -54,7 +54,7 @@ Concurrent restart callers share an in-flight retry; request cancellation and ti
 If setup still fails, the retry reports and retains its new diagnostic.
 Previously rejected cells and their bundled stdin or requirements are not replayed; their diagnostics remain available for polling.
 A retry that succeeds accepts its environment once; joining restart callers do not replace that worker or discard state accepted meanwhile.
-A code-free retry routes its stdin through any cell admitted during shared readiness and observes that evaluation under ordinary polling ownership.
+A code-free retry routes its stdin through any cell admitted during shared readiness and observes that evaluation under ordinary polling ownership, including after preparation accepts unchanged requirements.
 After configuration is accepted, restart uses the retained environment and ordinary worker replacement.
 Same-call code, stdin, and requirements proceed only after readiness succeeds and retain their ordinary admission rules.
 A code-free retry with changed requirements starts the prepared replacement before returning readiness, even when preparation retired the unused prewarmed worker.
