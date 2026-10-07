@@ -94,7 +94,10 @@ def _snapshot_survives_replacement(
         environment["MCP_CONSOLE_TEST_PORTS"] = json.dumps(ports)
         expected = "captured grants, proxy selection, and restricted network verified\n"
         with McpClient(
-            binary, ("serve", "--writable-root", "CLI cache"), environment, host
+            binary,
+            ("serve", "--writable-root", "CLI cache", "-c", "cache=host"),
+            environment,
+            host,
         ) as client:
             client.initialize_and_list_tools()
             # Even the first worker uses the snapshot taken before MCP readiness.

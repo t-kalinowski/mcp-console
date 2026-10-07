@@ -86,7 +86,9 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
             "TEST_OUTSIDE": str(outside),
         }
         environment.pop("RETICULATE_PYTHON", None)
-        with McpClient(binary, ("serve",), environment, host) as client:
+        with McpClient(
+            binary, ("serve", "-c", "cache=host"), environment, host
+        ) as client:
             client.initialize_and_list_tools()
             description = client.transcript[-1]["result"]["tools"][0]["description"]
             assert "Writable locations: private `TMPDIR`" in description, description
