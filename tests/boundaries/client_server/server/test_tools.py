@@ -271,6 +271,9 @@ def _initializes_and_lists_tools(
                         "Evaluate one complete"
                     )
             description = send["description"]
+            assert ("ir run script.R" in description) == (
+                not custom and "r" in send["inputSchema"]["properties"]
+            ), description
             assert "Run one cell at a time" in description
             assert "An error can leave earlier changes in place" in description
             assert "active host resolver" not in properties["control"]["description"]

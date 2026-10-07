@@ -46,6 +46,15 @@ def _assert_guidance(tool: dict, languages: set[str], *, custom: bool) -> None:
                 rf"(?<![a-z]){language}(?![a-z])", description, re.I
             ), (language, path, description)
     description = tool["description"]
+    script_guidance = not custom and "r" in languages
+    for instruction in (
+        "ir run script.R",
+        "#| packages:",
+        "#| r-version:",
+        "imports, data inputs",
+        "without live Console objects",
+    ):
+        assert (instruction in description) == script_guidance, (languages, description)
     assert "An error can leave earlier changes in place" in description
     assert "do not resubmit the cell" in description
     assert "use only trusted dependencies" in description

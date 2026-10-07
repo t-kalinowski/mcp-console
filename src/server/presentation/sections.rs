@@ -32,6 +32,8 @@ pub(super) const SQL_SELECTION: &str = "For databases and structured files, cons
 pub(super) const R_SELECTION: &str =
     "Use R for vectorized data and string operations, statistics, and plots. ";
 
+pub(super) const R_SCRIPT: &str = r#"For a reusable R script, include imports, data inputs, and `#| packages:`/`#| r-version:` metadata for `ir run script.R`, which starts without live Console objects. "#;
+
 pub(super) const PYTHON_SELECTION: &str =
     "Use Python when its libraries or format-specific parsing simplify the task. ";
 

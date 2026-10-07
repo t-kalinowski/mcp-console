@@ -50,6 +50,7 @@ Do not assume a client has this repository or remove a capability's only usable 
 
 Prefer concrete choices: SQL for structured-file/database inspection and aggregation, R for vectorized/statistical work, Python when its libraries fit the task.
 Make cross-language guidance conditional on configured languages.
+Built-in R guidance includes a compact bridge to [saved scripts](REQUIREMENTS.md#saving-an-r-script); omit it when R is hidden or the worker is custom.
 Do not turn the description into a tutorial, package inventory, backend explanation, or transcript-format specification.
 Long recipes and implementation details belong in the existing guides: subprocess choices and plot behavior in [runtime behavior](BUILTIN_RUNTIME.md), resolver details in [requirements](REQUIREMENTS.md), deadlines and interrupt grace in [send ordering](SEND_OPERATIONS.md), and recording paths in [recordings](RECORDING.md).
 

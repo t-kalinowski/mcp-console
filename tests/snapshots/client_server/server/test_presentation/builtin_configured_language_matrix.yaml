@@ -3,8 +3,11 @@ languages: r,python,sql
 language_guidance: >-
   For databases and structured files, consider DuckDB SQL first for
   inspection, joins, and aggregation. Use R for vectorized data and string
-  operations, statistics, and plots. Use Python when its libraries or
-  format-specific parsing simplify the task. Switch languages when useful.
+  operations, statistics, and plots. For a reusable R script, include
+  imports, data inputs, and `#| packages:`/`#| r-version:` metadata for
+  `ir run script.R`, which starts without live Console objects. Use Python
+  when its libraries or format-specific parsing simplify the task. Switch
+  languages when useful.
 preparation_error:
   content:
     - type: text
@@ -19,6 +22,9 @@ stderr: >
 languages: r
 language_guidance: >-
   Use R for vectorized data and string operations, statistics, and plots.
+  For a reusable R script, include imports, data inputs, and `#|
+  packages:`/`#| r-version:` metadata for `ir run script.R`, which starts
+  without live Console objects.
 ---
 languages: python
 language_guidance: >-
@@ -33,14 +39,19 @@ language_guidance: >-
 languages: r,python
 language_guidance: >-
   Use R for vectorized data and string operations, statistics, and plots.
-  Use Python when its libraries or format-specific parsing simplify the
-  task. Switch languages when useful.
+  For a reusable R script, include imports, data inputs, and `#|
+  packages:`/`#| r-version:` metadata for `ir run script.R`, which starts
+  without live Console objects. Use Python when its libraries or
+  format-specific parsing simplify the task. Switch languages when useful.
 ---
 languages: r,sql
 language_guidance: >-
   For databases and structured files, consider DuckDB SQL first for
   inspection, joins, and aggregation. Use R for vectorized data and string
-  operations, statistics, and plots. Switch languages when useful.
+  operations, statistics, and plots. For a reusable R script, include
+  imports, data inputs, and `#| packages:`/`#| r-version:` metadata for
+  `ir run script.R`, which starts without live Console objects. Switch
+  languages when useful.
 ---
 languages: python,sql
 language_guidance: >-
