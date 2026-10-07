@@ -1023,6 +1023,12 @@ runner: different
 
     def test_full_update_preserves_other_platform_companions(self) -> None:
         other_platform = "linux" if sys.platform == "darwin" else "darwin"
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + "\nfrom support.snapshots import platform_snapshots\n"
+            + f"test_selected = platform_snapshots('{other_platform}', reason='fixture OS contract')(test_selected)\n",
+            encoding="utf-8",
+        )
         companion = self.snapshots / f"selected.{other_platform}.yaml"
         companion.write_text("other platform output\n", encoding="utf-8")
         stale = self.snapshots / f"selected.{sys.platform}.yaml"
@@ -1332,6 +1338,7 @@ runner: different
                 "client_server/server/test_tools::initializes_and_lists_tools",
             ),
             ("--update",),
+            ("--full", "--update"),
             (
                 "--update",
                 "client_server/server/test_tools::initializes_and_lists_tools",
@@ -1989,6 +1996,70 @@ runner: orphan
 
 
 class TranscriptDiscoveryTests(TranscriptRunnerFixture):
+    def test_platform_snapshot_requires_contract_reason(self) -> None:
+        for declaration in (
+            "platform_snapshots('win32')",
+            "platform_snapshots('win32', reason=' ')",
+        ):
+            with self.subTest(declaration=declaration):
+                self.suite.write_text(
+                    PUBLIC_SUITE
+                    + "\nfrom support.snapshots import platform_snapshots\n"
+                    + f"test_selected = {declaration}(test_selected)\n",
+                    encoding="utf-8",
+                )
+                result = self.run_runner("--list")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("reason", result.stderr)
+
+    def test_focused_update_retires_local_platform_variant(self) -> None:
+        stale = self.snapshots / f"selected.{sys.platform}.yaml"
+        stale.write_text("obsolete local output\n", encoding="utf-8")
+        other_platform = "linux" if sys.platform == "darwin" else "darwin"
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + "\nfrom support.snapshots import platform_snapshots\n"
+            + f"test_selected = platform_snapshots('{other_platform}', reason='fixture OS contract')(test_selected)\n",
+            encoding="utf-8",
+        )
+        companion = self.snapshots / f"selected.{other_platform}.yaml"
+        companion.write_text("other platform output\n", encoding="utf-8")
+        unselected = self.snapshots / f"unselected.{sys.platform}.yaml"
+        unselected.write_text("unselected output\n", encoding="utf-8")
+        result = self.run_runner(
+            "--update", "client_server/server/test_tools::selected", "--jobs", "1"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(stale.exists(), result.stdout)
+        self.assertEqual(companion.read_text(), "other platform output\n")
+        self.assertEqual(unselected.read_text(), "unselected output\n")
+
+    def test_focused_update_retires_undeclared_other_platform_variant(self) -> None:
+        other_platform = "linux" if sys.platform == "darwin" else "darwin"
+        stale = self.snapshots / f"selected.{other_platform}.yaml"
+        stale.write_text("retired platform output\n", encoding="utf-8")
+        result = self.run_runner(
+            "--update", "client_server/server/test_tools::selected", "--jobs", "1"
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(stale.exists(), result.stdout)
+
+    def test_failed_focused_update_preserves_platform_snapshots(self) -> None:
+        stale = self.snapshots / f"selected.{sys.platform}.yaml"
+        stale.write_text("retained platform output\n", encoding="utf-8")
+        self.suite.write_text(
+            PUBLIC_SUITE.replace(
+                'return record(binary, "selected")',
+                'raise RuntimeError("fixture failed")',
+            ),
+            encoding="utf-8",
+        )
+        result = self.run_runner(
+            "--update", "client_server/server/test_tools::selected", "--jobs", "1"
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(stale.read_text(), "retained platform output\n")
+
     def run_runner(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, self.boundaries / "_run.py", *arguments],
@@ -2100,7 +2171,7 @@ class WindowsTranscriptTests(TranscriptDiscoveryTests):
         shared = (self.snapshots / "selected.yaml").read_bytes()
         self.suite.write_text(
             PUBLIC_SUITE
-            + "\nfrom support.snapshots import platform_snapshots\ntest_selected = platform_snapshots('win32')(test_selected)\n"
+            + "\nfrom support.snapshots import platform_snapshots\ntest_selected = platform_snapshots('win32', reason='fixture Windows contract')(test_selected)\n"
         )
         stale = self.snapshots / "selected.win32.stale.yaml"
         stale.write_text("---\nold: companion\n...\n")

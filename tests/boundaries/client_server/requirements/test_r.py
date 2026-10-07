@@ -17,7 +17,7 @@ from support.assertions import (
 )
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.normalization import code
+from support.normalization import code, normalize_process_diagnostic
 from support.r import r_test_environment
 from support.records import Transcript
 from support.snapshots import platform_snapshots
@@ -92,7 +92,6 @@ def test_rejects_unsupported_ir_version(
 
 
 @executions(DIRECT, SANDBOXED)
-@platform_snapshots("win32")
 def test_rejects_local_r_installation(binary: Path, execution: Execution) -> Transcript:
     environment, _ = r_test_environment()
     environment["RETICULATE_PYTHON"] = ""
@@ -142,7 +141,7 @@ def test_rejects_local_r_installation(binary: Path, execution: Execution) -> Tra
         client.transcript[-1]["send"]["requirements"]["r"] = [
             reference.replace(str(package), "<absolute package path>")
         ]
-        result["content"][0]["text"] = error.replace(
+        result["content"][0]["text"] = normalize_process_diagnostic(error).replace(
             str(package), "<absolute package path>"
         )
         client.transcript[-1]["transcript_normalization"] = {
@@ -304,7 +303,10 @@ def test_prepares_r_requirements_after_worker_startup(
 
 @requires(R_EVENT_LOOP)
 @executions(DIRECT, SANDBOXED)
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32",
+    reason="Forced worker retirement reports a Windows exit status or Unix signal",
+)
 def test_stops_live_preparation_for_idle_callback_input(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -600,7 +602,6 @@ def test_evaluates_with_default_managed_r(
 
 
 @executions(DIRECT, SANDBOXED)
-@platform_snapshots("win32")
 def test_prepares_initial_r_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -673,8 +674,11 @@ def test_prepares_initial_r_requirements(
                 if line.startswith("3. pak::pkg_deps(")
             )
             assert error.count(pak_call) == 1, error
-            result["content"][0]["text"] = error.replace(
-                pak_call, "3. pak::pkg_deps(<ir-version-dependent arguments>)"
+            result["content"][0]["text"] = (
+                normalize_process_diagnostic(error)
+                .replace(pak_call, "3. pak::pkg_deps(<ir-version-dependent arguments>)")
+                .replace("ℹ See", "i See")
+                .replace("…", "...")
             )
             client.transcript[-1]["transcript_normalization"] = {
                 "target": "result.content[0].text",

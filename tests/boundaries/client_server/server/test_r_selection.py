@@ -38,7 +38,9 @@ def rejected_selection(binary: Path, root: Path, environment: dict[str, str]) ->
         return [{"stderr": error.replace(str(root), "<workspace>")}]
 
 
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32", reason="Invalid R_HOME reports the native Rscript installation layout"
+)
 def test_rejects_invalid_local_r_home(binary: Path) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -130,11 +132,15 @@ def test_retains_r_absence_across_generations(
             return client.finish()
 
 
-@platform_snapshots("win32")
-def test_removes_managed_sql_storage_on_restart_and_shutdown(binary: Path) -> list:
+@executions(DIRECT)
+def test_removes_managed_sql_storage_on_restart_and_shutdown(
+    binary: Path, execution: Execution
+) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
-        with McpClient(binary, DIRECT.serve(), no_r_environment(root), root) as client:
+        with McpClient(
+            binary, execution.serve(), no_r_environment(root), root
+        ) as client:
             client.initialize_and_list_tools()
             for restart in (False, True):
                 if restart:

@@ -31,11 +31,13 @@ initialization_reference = (
 )
 
 
-def platform_snapshots(*platforms: str):
-    """Declare observable platform differences without duplicating shared records."""
+def platform_snapshots(*platforms: str, reason: str):
+    """Reserve variants for the platform contract this case explicitly tests."""
+    assert reason.strip(), "platform snapshots require a nonempty contract reason"
 
     def decorate(case):
         case.snapshot_platforms = platforms
+        case.snapshot_platform_reason = reason
         return case
 
     return decorate

@@ -285,7 +285,10 @@ def test_uses_selected_r_launcher_default_architecture(
             return client.finish()
 
 
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32",
+    reason="Native R executable identity and launcher arguments differ on Windows",
+)
 @executions(DIRECT, SANDBOXED)
 def test_shows_interactive_interpreter_identity(
     binary: Path, execution: Execution
@@ -348,7 +351,9 @@ def test_shows_interactive_interpreter_identity(
         return client.finish()
 
 
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32", reason="Native R child launchers and argument escaping differ on Windows"
+)
 @executions(DIRECT, SANDBOXED)
 def test_launches_r_children_from_interpreter_identity(
     binary: Path, execution: Execution

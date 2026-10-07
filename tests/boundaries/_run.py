@@ -471,23 +471,43 @@ def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> 
         if sys.platform in snapshot.name.split(".")[1:]
     }
     orphans = set(orphans)
+    declared_platforms = {}
+    suites = {}
+    for owner in checked_cases:
+        suite = owner.parent.relative_to(snapshot_root)
+        if suite not in suites:
+            suites[suite] = load_suite(
+                root / "tests" / "boundaries" / suite.with_suffix(".py")
+            )
+        declared_platforms[owner] = set(
+            getattr(suites[suite][owner.name], "snapshot_platforms", ())
+        )
 
     for snapshot in snapshot_root.rglob("*"):
         if not snapshot.is_file() or snapshot.suffix not in {".yaml", ".md", ".qmd"}:
             continue
         owner = snapshot.parent / snapshot.name.split(".", 1)[0]
         other_platform = bool(
-            ({"darwin", "linux", "win32"} - {sys.platform})
+            (declared_platforms.get(owner, set()) - {sys.platform})
             & set(snapshot.name.split(".")[1:])
         )
         shared_reference = (
             owner in platform_cases and sys.platform not in snapshot.name.split(".")[1:]
+        )
+        unavailable_initialization_mode = owner == snapshot_path(
+            initialization_suite, initialization_case
+        ).with_suffix("") and not any(
+            ("direct" in snapshot.name.split(".")[1:])
+            == ("direct" in checked.name.split(".")[1:])
+            for checked in checked_snapshots
+            if checked.parent / checked.name.split(".", 1)[0] == owner
         )
         stale = snapshot in orphans or (
             owner in checked_cases
             and snapshot not in checked_snapshots
             and not other_platform
             and not shared_reference
+            and not unavailable_initialization_mode
         )
 
         if stale:
@@ -764,7 +784,7 @@ def main() -> None:
             reporter=reporter,
             initialize_first=initialize_first,
         )
-        if full_update:
+        if options.update:
             prune_stale_snapshots(checked_snapshots, orphans)
     finally:
         reporter.close()
