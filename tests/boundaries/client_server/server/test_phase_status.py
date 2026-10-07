@@ -8,6 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from boundaries.client_server.lifecycle.test_startup import startup_fixture
 from boundaries.client_server.server.test_startup import gated_discovery
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
@@ -24,7 +25,13 @@ from support.previews import (
     normalize_preview_paths,
 )
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, POSIX, requires
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    command,
+    requires,
+)
 from support.resolvers import checkpoint_uv_environment
 from support.suites import run_this_suite
 
@@ -139,6 +146,45 @@ def test_shared_startup_phase_has_no_future_cell_clock(binary: Path) -> Transcri
         assert "phase:" not in last_result_text(client)
         transcript, stderr = client.finish_with_standard_error(expected_exit_status=1)
         return [*transcript, {"stderr": stderr}]
+
+
+@requires(PROCESS_EVENTS, command("ir"), command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_admitted_cell_keeps_shared_preparation_phase(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with startup_fixture(binary, execution, phase="preparation") as fixture:
+        client = fixture.client
+        fixture.wait_for_resolver()
+        client.initialize_and_list_tools()
+        client.send(timeout_ms=0)
+        assert last_result_text(client) == (
+            "\n[phase: dependency preparation]\n[worker starting]"
+        )
+        assert "elapsed:" not in last_result_text(client)
+        client.send(r="cat('cell completed\\n')", timeout_ms=0)
+        assert without_elapsed(last_result_text(client)) == (
+            "\n[running; poll with an empty send]"
+        )
+        assert phase_progress(last_result_text(client)) == "dependency preparation", (
+            last_result_text(client)
+        )
+        elapsed_progress(last_result_text(client))
+        client.send(timeout_ms=0)
+        assert without_elapsed(last_result_text(client)) == (
+            "\n[running; poll with an empty send]"
+        )
+        assert phase_progress(last_result_text(client)) == "dependency preparation", (
+            last_result_text(client)
+        )
+        elapsed_progress(last_result_text(client))
+        client.response_timeout = 600
+        fixture.release.release()
+        client.send(timeout_ms=600_000)
+        assert last_result_text(client) == "cell completed\n"
+        client.send()
+        assert last_result_text(client) == "\n[idle]"
+        return client.finish()
 
 
 @requires(POSIX)

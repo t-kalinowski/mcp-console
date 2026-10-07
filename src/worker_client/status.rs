@@ -50,10 +50,6 @@ impl Source {
             Owner::Evaluation(_) => {
                 if replacing {
                     Some("replacement")
-                } else if !client.startup_observation_complete.load(Ordering::Acquire)
-                    && self.generation.is(&client.startup_generation)
-                {
-                    Some("startup")
                 } else if let Some(phase) = lifecycle
                     .processes
                     .resolver
@@ -61,6 +57,10 @@ impl Source {
                     .and_then(|handle| handle.phase_observation().phase())
                 {
                     Some(phase)
+                } else if !client.startup_observation_complete.load(Ordering::Acquire)
+                    && self.generation.is(&client.startup_generation)
+                {
+                    Some("startup")
                 } else if lifecycle.starting() {
                     Some("startup")
                 } else {
