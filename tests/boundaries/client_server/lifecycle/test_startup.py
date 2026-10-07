@@ -377,9 +377,13 @@ def test_cancels_resolver_discovery_when_stdin_closes(
     with startup_fixture(binary, execution, phase="discovery") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        # Bootstrap discovery is held inside the default preparation operation.
+        fixture.wait_for_resolver()
         client.send(r="42L", timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         client.stdin.close()
         exit_code = client.process.wait(timeout=5)
         fixture.wait_for_resolver_exit()
@@ -401,9 +405,13 @@ def test_cancels_default_preparation_when_stdin_closes(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        # Hold preparation before admission so the observed phase is fixed.
+        fixture.wait_for_resolver()
         client.send(r="42L", timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         client.stdin.close()
         exit_code = client.process.wait(timeout=5)
         fixture.wait_for_resolver_exit()
@@ -426,9 +434,13 @@ def test_interrupts_first_use_preparation_without_running_cell(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        # Hold preparation before admission so the observed phase is fixed.
+        fixture.wait_for_resolver()
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         client.send(control="interrupt", timeout_ms=30_000)
         fixture.wait_for_resolver_exit()
         client.response_timeout = 600
