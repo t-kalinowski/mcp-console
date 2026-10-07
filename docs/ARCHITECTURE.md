@@ -165,6 +165,7 @@ Lifecycle reserves its original budgets while holding admission, then releases t
 Restart, EOF, startup failure and failed-worker recovery observe the same request and terminal cleanup/I/O result.
 They send Shutdown once and join every owned transport task once; a late startup registration retires through its launch's owner before startup completion permits connection shutdown to finish.
 Publishing a failed-worker transition checks that its generation still owns it.
+If restart takes over during failed-worker retirement, the retiring caller keeps the captured process outcome in the old generation's output region for response settlement.
 
 The operation keeps normal command/barrier failure separate from physical cleanup and the dispatcher outcome.
 Confirmed physical cleanup and joined tasks can supersede a failed normal barrier; failed native cleanup still blocks replacement.

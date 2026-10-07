@@ -289,6 +289,77 @@ def test_failed_storage_retirement_blocks_replacement(binary: Path) -> Transcrip
 
 
 @requires(POSIX, NATIVE_FIXTURES)
+def test_restart_retains_failed_worker_exit_outcome(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+        root = Path(directory)
+        reaped, shutdown, retired, relay_release, signal_release = [
+            resources.enter_context(closing(FifoCheckpoint.create(root / name)))
+            for name in (
+                "worker-reaped",
+                "shutdown-written",
+                "launcher-retiring",
+                "relay-release",
+                "signal-release",
+            )
+        ]
+        environment = {
+            **os.environ,
+            "TMPDIR": str(root),
+            "MCP_CONSOLE_TEST_STORAGE_RETIREMENT_ROOT": str(root),
+            LOADER_VARIABLE: str(build_interposer(root, "storage_retirement")),
+        }
+        client = resources.enter_context(
+            McpClient(binary, DIRECT.serve(), environment, root)
+        )
+        resources.callback(relay_release.release)
+        resources.callback(signal_release.release)
+        client.initialize_and_list_tools()
+        client.send(python="import os")
+        failed = client.start_send(python="os._exit(47)")
+        reaped.wait("real relay reaped the worker that exited with status 47")
+        shutdown.wait("server wrote the generation's complete Shutdown command")
+        retired.wait("failed-worker retirement crossed its dispatcher barrier")
+        restart = client.start_send(control="restart")
+        first_probe = len(client.transcript)
+        deadline = time.monotonic() + 10
+        while True:
+            probe = client.send(python="must not run during retirement", timeout_ms=0)
+            assert probe["isError"], probe
+            text = last_result_text(client)
+            if text == "[worker is restarting]":
+                break
+            assert text in (
+                "[session control is in progress]",
+                "[worker is already evaluating a cell; poll without a code field]",
+            ), probe
+            assert time.monotonic() < deadline, client.transcript
+        client.transcript[first_probe:] = client.transcript[-1:]
+        relay_release.release()
+        signal_release.release()
+        client.receive_many([failed, restart])
+        assert failed["result"]["isError"], failed
+        assert not restart["result"].get("isError", False), restart
+        responses = [
+            response["result"]["content"][0]["text"] for response in (failed, restart)
+        ]
+        assert (
+            sum(text.count("[worker exited with status 47]") for text in responses) == 1
+        ), (
+            failed,
+            restart,
+        )
+        replacement = client.send(python="print('replacement ran')")
+        assert not replacement.get("isError", False), replacement
+        assert last_result_text(client) == "replacement ran\n", replacement
+        # The same observer also gates EOF of the successfully replaced worker.
+        relay_release.release()
+        signal_release.release()
+        transcript, stderr = client.finish_with_standard_error()
+        assert not stderr, stderr
+        return transcript
+
+
+@requires(POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
 def test_eof_preserves_completed_failed_retirement(
     binary: Path, execution: Execution

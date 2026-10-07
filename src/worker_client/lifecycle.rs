@@ -1230,7 +1230,19 @@ impl Client {
         // transition if generation/admission changed during teardown.
         let current = lifecycle.generation.is(expected) && lifecycle.state == LifecycleState::Ready;
         if !current {
-            return retirement.map(|_| FailedWorkerStop::RestartOwnsWorker);
+            return retirement.map(|retirement| {
+                // This caller consumed the outcome before marking the worker
+                // Stopped. Retain it in the old output region before restart
+                // settles that region; its worker view is now AlreadyStopped.
+                if let WorkerRetirement::Stopped {
+                    outcome: Some(outcome),
+                    ..
+                } = retirement
+                {
+                    self.0.output.push_notice_line(outcome.diagnostic());
+                }
+                FailedWorkerStop::RestartOwnsWorker
+            });
         }
         let outcome = match retirement {
             Ok(WorkerRetirement::Stopped { outcome, .. }) => outcome,
