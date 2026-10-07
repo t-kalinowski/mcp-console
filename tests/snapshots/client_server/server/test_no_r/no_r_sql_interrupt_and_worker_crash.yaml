@@ -68,10 +68,10 @@ result:
         At:
           <string>(50): _console_input
           <mcp-console:python:e1>(2): sql_gate
-          <string>(216): _evaluate
-          <string>(246): _dispatch
-          <string>(712): _mcp_console_without_automatic_resolution
-          <string>(255): dispatch
+          <string>(221): _evaluate
+          <string>(253): _dispatch
+          <string>(721): _mcp_console_without_automatic_resolution
+          <string>(262): dispatch
 
   isError: false
 ---

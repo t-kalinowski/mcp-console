@@ -15,6 +15,7 @@ struct Coordinator {
     r: Integration,
     python: crate::python::Runtime,
     sql: crate::sql::Bridge,
+    startup: Option<crate::settings::startup::Startup>,
 }
 
 pub(crate) fn run(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
@@ -26,6 +27,9 @@ pub(crate) fn run(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
 }
 
 fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
+    // SAFETY: worker entry is single-threaded. Consume before native setup,
+    // interpreter hooks, or the R installation probe can inherit this path.
+    let startup_path = unsafe { crate::settings::startup::take_environment() };
     bootstrap::configure_stdio()?;
     let (reader, writer) = crate::sideband::connect_from_env()?;
     let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
@@ -39,7 +43,13 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
         .r
         .then(crate::local_runtime::r_installation)
         .transpose()?;
-    bootstrap::prepare_r_library_path(r_installation.as_ref(), &reader, &writer)?;
+    bootstrap::prepare_r_library_path(
+        r_installation.as_ref(),
+        &reader,
+        &writer,
+        startup_path.as_deref(),
+    )?;
+    let startup = crate::settings::startup::Startup::from_file(startup_path.as_deref())?;
     // The launcher owns this directory through confirmed worker retirement.
     // R's session tempdir is a child, never the owner of Python/SQL storage.
     let temporary =
@@ -55,6 +65,7 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
         r,
         python,
         sql,
+        startup,
     };
     coordinator.run(bootstrap_runtimes)
 }
@@ -81,15 +92,21 @@ impl Coordinator {
         // serialized interpreter thread and never enters a user evaluation.
         let languages = crate::cell::Languages::from_environment()?;
         core::set_bootstrapping(true);
-        let complete = if languages.enables(Language::Python) {
+        let startup_configured = self.startup.is_some();
+        let startup_complete = self.initialize_startup();
+        let complete = if startup_complete && languages.enables(Language::Python) {
             crate::python::ensure_initialized().map_err(io::Error::other)?
         } else {
             true
         };
-        if complete && languages.enables(Language::R) && super::r_available() {
+        if startup_complete && complete && languages.enables(Language::R) && super::r_available() {
             super::ensure_r().map_err(io::Error::other)?;
         }
-        if complete && languages.enables(Language::Sql) && !core::bootstrap_interrupted() {
+        if !startup_configured
+            && complete
+            && languages.enables(Language::Sql)
+            && !core::bootstrap_interrupted()
+        {
             self.sql.initialize().map_err(io::Error::other)?;
         }
         self.r.finish_graphics().map_err(io::Error::other)?;
@@ -107,6 +124,41 @@ impl Coordinator {
         self.writer
             .send(&WorkerMessage::RuntimeInitialized { interrupted })?;
         Ok(())
+    }
+
+    fn initialize_startup(&mut self) -> bool {
+        let Some(startup) = self.startup.take() else {
+            return true;
+        };
+        // Consume before interpreter setup or source execution. Neither partial
+        // setup nor partially executed user source is automatically replayable.
+        self.sql
+            .withhold_startup(Some("configured startup did not complete".into()));
+        let result = match startup.language {
+            crate::settings::startup::Language::R => self.sql.initialize_r_source(&startup.code),
+            crate::settings::startup::Language::Python => {
+                crate::python::initialize_sql_source(&startup.code)
+            }
+        };
+        match result {
+            Ok(true) if !core::bootstrap_interrupted() => {
+                self.sql.withhold_startup(None);
+                true
+            }
+            result => {
+                let message = match result {
+                    Err(message) => message,
+                    _ => "configured startup did not complete".into(),
+                };
+                emit_output(
+                    ConsoleChannel::Diagnostic,
+                    format!("Error: {message}; SQL withheld; explicit restart required\n")
+                        .as_bytes(),
+                );
+                self.sql.withhold_startup(Some(message));
+                false
+            }
+        }
     }
 
     fn handle(&mut self, message: ServerMessage) -> Result<bool, Box<dyn Error>> {

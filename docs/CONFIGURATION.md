@@ -109,6 +109,67 @@ Without R or an explicit selection, Console uses uv on the local host.
 A broken selected interpreter is an error, not a reason to fall back.
 See [runtime selection](BUILTIN_RUNTIME.md).
 
+## Session startup source
+
+The built-in worker can run one captured R or Python program after its interpreter and session helpers are ready, before the first SQL cell:
+
+```yaml
+startup:
+  language: python
+  code: |
+    import sqlite3
+    connection = sqlite3.connect("analysis.sqlite")
+    console_sql_connection(connection)
+```
+
+For R, set `language: r` and construct a normal DBI connection:
+
+```yaml
+startup:
+  language: r
+  code: |
+    connection <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
+    console_sql_connection(connection)
+```
+
+Use normal driver arguments for database paths, read-only access, threads, memory, and other engine settings.
+The connection remains a native object on its owning interpreter; Console does not proxy it or commit its transactions.
+Source uses the existing YAML/CLI layering, for example `-c startup.language=python`.
+It is captured once at server launch, including across explicit worker restarts; edits to the file require a new server to be captured.
+The encoded startup source is limited to 32 KiB (32,768 bytes), including the JSON language/code fields, UTF-8 source, and JSON escaping.
+Oversized effective configuration is rejected before spawning, with its encoded byte count and the limit; newline and other escape-heavy source can reach the limit before its source file does.
+Source is not included in the tool schema or automatically echoed as a submitted cell.
+Each generation receives source through a private temporary file; process-launch environments carry only its path.
+The worker reads and unlinks the file before interpreter setup, including after Linux's R-loader re-exec, and consumes the path from its environment.
+The launch owner removes temporary storage if startup fails before consumption.
+The transport leaves no source payload in runtime environments, child inheritance, or OS process-environment snapshots.
+Sandboxed launch grants access only to this private transport directory, which is removed after worker readiness; it grants no access to other host paths.
+Output explicitly emitted by the program and runtime errors remain visible.
+Python figures are finalized and published before startup completes, including when the program fails; the first cell response or idle poll can collect them without running a Python cell.
+
+The program must finish by leaving a usable connection selected through the existing `console_sql_connection(connection)` helper.
+It must be a user-created native connection; selecting or retrieving Console's managed default does not satisfy startup.
+The final selection must remain on the startup interpreter; a reset or provider switch from the other interpreter does not satisfy startup.
+It runs once per worker generation, on the serialized interpreter thread with the ordinary resolver, input, output, and interrupt services.
+MCP initialization, discovery, and ping remain available while it runs; early cells wait behind startup.
+Dependencies should be installed or prepared normally; startup source does not run inside the trusted host resolver.
+DuckDB extension preparation still follows the automatic managed provider; a user-selected driver owns its own extension configuration.
+
+Failure, missing runtime, invalid connection, or interruption withholds SQL for that generation.
+Console neither selects a managed fallback nor retries partially executed source when runtime setup resumes or the worker crashes.
+Explicit restart authorizes one new attempt after confirmed retirement; it does not undo earlier side effects.
+Startup code is ordinary user code, not a transaction, and may already have changed files or external systems.
+A worker launched with configured startup no longer qualifies for automatic unused-worker replacement on a changed requirements declaration; use explicit restart.
+
+With no startup source, the automatic managed DuckDB default is unchanged.
+After successful startup, ordinary connection selection and reset apply: reset restores the automatic managed default, does not rerun source, and leaves user connections and transactions open.
+A failed startup receipt cannot be cleared by resetting the connection helper.
+See [native connection selection](BUILTIN_RUNTIME.md#sql-and-duckdb).
+
+Startup requires the built-in worker and relay and is currently supported on macOS and Linux.
+It does not grant access to databases or other host paths, or add network permissions; persistent writable databases still need an existing sandbox write grant.
+SQL remains unsupported on Windows.
+
 ## Keys and values
 
 Dotted assignment keys address nested mappings, not list indexes.

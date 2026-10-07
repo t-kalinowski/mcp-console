@@ -9,6 +9,12 @@ mod services;
 // invoking Python so Python-to-R callbacks can re-enter library access.
 static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
 
+thread_local! {
+    // R can select a native connection before CPython exists. Retain that
+    // choice on the interpreter thread until the SQL adapter can own it.
+    static PENDING_R_SQL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 type PyIsInitialized = unsafe extern "C" fn() -> libc::c_int;
 type PySetProgramName = unsafe extern "C" fn(*const libc::wchar_t);
 type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
@@ -443,10 +449,23 @@ pub(super) fn install_sql_runtime(source: &str) -> Result<bool, String> {
         let result = api.run_module_result(c"_mcp_console_sql", &source)?;
         api.finish_setup(result)
     })?;
-    if installed {
-        PYTHON_LIBRARY.lock().unwrap().as_mut().unwrap().setup.sql = true;
+    if !installed {
+        return Ok(false);
     }
-    Ok(installed)
+    if PENDING_R_SQL.with(|selected| selected.get()) {
+        // Replay is part of setup: retain its exception and the pending
+        // selection on interruption, so retry preserves live worker state.
+        let selected = api.with_gil(|api| unsafe {
+            let function = api.function(c"_mcp_console_sql", c"use_r")?;
+            api.finish_setup((api.call_no_args)(function))
+        })?;
+        if !selected {
+            return Ok(false);
+        }
+        PENDING_R_SQL.with(|selected| selected.set(false));
+    }
+    PYTHON_LIBRARY.lock().unwrap().as_mut().unwrap().setup.sql = true;
+    Ok(true)
 }
 
 fn api() -> Result<PythonApi, String> {
@@ -736,11 +755,62 @@ pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
     api.with_gil(|api| api.call_sql_dispatch(source))
 }
 
+pub(super) fn initialize_sql_source(source: &str) -> Result<bool, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console_sql", c"initialize_connection")?;
+        let argument =
+            (api.unicode_from_string_and_size)(source.as_ptr().cast(), source.len() as isize);
+        if argument.is_null() {
+            return Err("cannot encode startup source".into());
+        }
+        let result =
+            (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(argument);
+        if result.is_null() {
+            api.display_pending_exception();
+            return Err("Python startup did not complete".into());
+        }
+        let complete = (api.long_as_long)(result);
+        (api.dec_ref)(result);
+        if complete == -1 {
+            crate::worker::record_bootstrap_interrupt();
+        }
+        Ok(complete == 1)
+    })
+}
+
 pub(super) fn use_r_sql() -> Result<(), String> {
     let Some(api) = installed_sql_api()? else {
+        PENDING_R_SQL.with(|selected| selected.set(true));
         return Ok(());
     };
     api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
+}
+
+pub(super) fn r_sql_connection_selected() -> Result<bool, String> {
+    let Some(api) = installed_sql_api()? else {
+        // SQL dispatch also defaults to R until the Python adapter is installed.
+        // Inspecting selection must not initialize Python or consume a reset.
+        return Ok(true);
+    };
+    api.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console_sql", c"r_connection_selected")?;
+        let result = (api.call_no_args)(function);
+        if result.is_null() {
+            api.display_pending_exception();
+            return Err(python_function_error(
+                c"_mcp_console_sql",
+                c"r_connection_selected",
+            ));
+        }
+        let selected = (api.long_as_long)(result);
+        (api.dec_ref)(result);
+        match selected {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err("Python SQL selection returned an invalid value".into()),
+        }
+    })
 }
 
 pub(super) fn initialize_managed_sql() -> Result<(), String> {

@@ -4,7 +4,10 @@ send:
 result:
   content:
     - type: text
-      text: resolver sandbox requires HOME
+      text: >-
+        resolver.environment: preparation requires an absolute HOME or
+        MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY; configure one when
+        inherit_environment is false
   isError: true
 ---
 send:
@@ -13,12 +16,17 @@ send:
 result:
   content:
     - type: text
-      text: resolver sandbox requires HOME
+      text: >-
+        resolver.environment: preparation requires an absolute HOME or
+        MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY; configure one when
+        inherit_environment is false
   isError: true
 ---
 input:
   method: ping
 result: {}
 ---
-stderr: |
-  resolver sandbox requires HOME
+stderr: >
+  resolver.environment: preparation requires an absolute HOME or
+  MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY; configure one when
+  inherit_environment is false

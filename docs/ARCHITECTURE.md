@@ -113,6 +113,8 @@ Do not split evaluators across threads without a new ownership design.
 
 SQL routes to an R DBI or Python DB-API provider.
 R capability selects the default managed provider independently of initialization order; without R, Python owns the managed DuckDB connection.
+An optional captured startup source runs on its owning interpreter after helpers and runtime setup, before cell dispatch; it selects a native connection without managed warmup.
+The worker retains failed startup admission, and the server refuses automatic replay after a configured launch; only explicit restart authorizes another attempt after confirmed retirement.
 Explicitly selected connections remain user-owned.
 The [runtime guide](BUILTIN_RUNTIME.md) owns connection and interoperability rules.
 

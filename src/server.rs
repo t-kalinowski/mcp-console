@@ -46,6 +46,7 @@ impl ConsoleServer {
         sandbox_settings: crate::settings::SandboxSettings,
         python: Option<PathBuf>,
         resolver: crate::settings::SandboxSettings,
+        startup: Option<crate::settings::startup::Startup>,
         visibility: Option<Languages>,
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
@@ -97,6 +98,7 @@ impl ConsoleServer {
                         started,
                     )?
                 };
+                let configuration = configuration.with_startup(startup.clone());
                 let transcript = crate::transcript::Transcript::configured(
                     recording_directory
                         .as_ref()
@@ -455,6 +457,7 @@ impl ServerHandler for ConsoleServer {
 /// Runs the MCP stdio server and owns the selected worker.
 ///
 /// Closing MCP input also stops a worker whose evaluation is still running.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     worker: Option<PathBuf>,
     relay: Option<PathBuf>,
@@ -462,6 +465,7 @@ pub async fn run(
     sandbox_settings: crate::settings::SandboxSettings,
     python: Option<PathBuf>,
     resolver: crate::settings::SandboxSettings,
+    startup: Option<crate::settings::startup::Startup>,
     visibility: Option<Languages>,
 ) -> Result<(), Box<dyn Error>> {
     let (input_closed, wait_for_input_close) = oneshot::channel();
@@ -476,6 +480,7 @@ pub async fn run(
         sandbox_settings,
         python,
         resolver,
+        startup,
         visibility,
     )
     .map_err(std::io::Error::other)?;

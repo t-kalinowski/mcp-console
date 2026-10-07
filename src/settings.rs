@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 mod sandbox;
+pub(crate) mod startup;
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
 
@@ -87,6 +88,7 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Project {
+    startup: Option<startup::Startup>,
     cache: Option<Cache>,
     python: Option<std::path::PathBuf>,
     languages: Option<Vec<crate::cell::Language>>,
@@ -133,6 +135,7 @@ fn environment<'de, D: serde::Deserializer<'de>>(
 
 #[derive(Default)]
 pub(crate) struct Captured {
+    pub startup: Option<startup::Startup>,
     pub cache: Option<Cache>,
     pub python: Option<std::path::PathBuf>,
     pub languages: Option<crate::cell::Languages>,
@@ -180,6 +183,11 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
         value.unwrap_or_else(|| serde_json::json!({})),
     )
     .map_err(|error| format!("{name}: {error}; see docs/CONFIGURATION.md for the public format"))?;
+    if let Some(startup) = &project.startup {
+        startup
+            .validate()
+            .map_err(|error| format!("{name}: {error}"))?;
+    }
     let languages = project
         .languages
         .map(|selected| {
@@ -252,6 +260,7 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
         }
     }
     Ok(Captured {
+        startup: project.startup,
         cache: project.cache,
         languages,
         python: project
