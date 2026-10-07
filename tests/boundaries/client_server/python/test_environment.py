@@ -418,10 +418,16 @@ def test_compacts_native_duckdb_progress_bar(
             Events() as events,
         ):
             client.initialize_and_list_tools()
+            # Finish startup and preparation before observing native progress.
+            client.send(
+                python="pass",
+                requirements={"python": ["duckdb==1.5.5"]},
+                timeout_ms=600_000,
+            )
+            assert last_result_text(client) == "[done]"
             try:
                 initial = client.start_send(
                     python=python,
-                    requirements={"python": ["duckdb==1.5.5"]},
                     timeout_ms=0,
                 )
                 ready.wait(
@@ -435,7 +441,7 @@ def test_compacts_native_duckdb_progress_bar(
 
                 progress = (root / "progress.bin").read_bytes()
                 session = next((root / ".agents/console/sessions").iterdir())
-                raw = session / "outputs/call-000001.log"
+                raw = session / "outputs/call-000002.log"
                 events.watch_file(raw)
                 response = client.start_send(timeout_ms=220_000)
                 release.release()

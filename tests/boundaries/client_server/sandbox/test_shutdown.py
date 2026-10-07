@@ -59,6 +59,9 @@ def test_restart_cancels_partial_sideband_frame(binary: Path) -> Transcript:
         passed = False
         try:
             client.initialize_and_list_tools()
+            # Observe partial frames from a worker with completed public readiness.
+            client.send(r="echo ready")
+            assert last_tool_text(client) == "zod: ready\n"
             client.send(r="start partial sideband descendant", timeout_ms=0)
             assert (
                 without_elapsed(last_tool_text(client))
@@ -338,6 +341,9 @@ def test_shutdown_cancels_partial_sideband_frame(binary: Path) -> Transcript:
         passed = False
         try:
             client.initialize_and_list_tools()
+            # Observe partial frames from a worker with completed public readiness.
+            client.send(r="echo ready")
+            assert last_tool_text(client) == "zod: ready\n"
             client.send(r="start partial sideband descendant", timeout_ms=0)
             assert (
                 without_elapsed(last_tool_text(client))

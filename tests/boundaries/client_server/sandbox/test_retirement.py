@@ -351,6 +351,9 @@ def test_restart_allows_accepted_relay_shutdown_to_finish(
         passed = False
         try:
             client.initialize_and_list_tools()
+            # Establish transport readiness before testing accepted relay shutdown.
+            client.send(r="echo ready")
+            assert last_tool_text(client) == "zod: ready\n"
             client.send(r="stall accepted relay shutdown", timeout_ms=0)
             assert (
                 without_elapsed(last_tool_text(client))
@@ -437,6 +440,9 @@ def test_restart_outer_force_stops_unresponsive_relay(binary: Path) -> Transcrip
         passed = False
         try:
             client.initialize_and_list_tools()
+            # Establish transport readiness before stopping the relay.
+            client.send(r="echo ready")
+            assert last_tool_text(client) == "zod: ready\n"
             client.send(r="stall with stopped relay", timeout_ms=0)
             assert (
                 without_elapsed(last_tool_text(client))
@@ -567,6 +573,9 @@ def test_restart_reports_stalled_sandbox_supervisor(binary: Path) -> Transcript:
         identities = ()
         try:
             client.initialize_and_list_tools()
+            # Establish transport readiness before stopping the relay.
+            client.send(r="echo ready")
+            assert last_tool_text(client) == "zod: ready\n"
             client.send(r="stall with stopped relay", timeout_ms=0)
             assert (
                 without_elapsed(last_tool_text(client))
