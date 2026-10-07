@@ -54,6 +54,7 @@ class Session:
         bare_r=False,
         defer_bootstrap=False,
         sandbox=False,
+        temporary_root=None,
         overrides=(),
     ):
         if sandbox:
@@ -61,7 +62,7 @@ class Session:
 
             class Directory:
                 def __init__(self):
-                    self.context = workspace()
+                    self.context = workspace(temporary_root)
                     self.name = str(self.context.__enter__())
 
                 def cleanup(self):
@@ -69,7 +70,9 @@ class Session:
 
             self.directory = Directory()
         else:
-            self.directory = tempfile.TemporaryDirectory(prefix="console windows ")
+            self.directory = tempfile.TemporaryDirectory(
+                prefix="console windows ", dir=temporary_root
+            )
         (Path(self.directory.name) / ".agents/console").mkdir(parents=True)
         self.errors = tempfile.TemporaryFile()
         command = [str(BINARY), "serve"]
