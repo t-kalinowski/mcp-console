@@ -787,6 +787,32 @@ pub(super) fn use_r_sql() -> Result<(), String> {
     api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
 }
 
+pub(super) fn r_sql_connection_selected() -> Result<bool, String> {
+    let Some(api) = installed_sql_api()? else {
+        // SQL dispatch also defaults to R until the Python adapter is installed.
+        // Inspecting selection must not initialize Python or consume a reset.
+        return Ok(true);
+    };
+    api.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console_sql", c"r_connection_selected")?;
+        let result = (api.call_no_args)(function);
+        if result.is_null() {
+            api.display_pending_exception();
+            return Err(python_function_error(
+                c"_mcp_console_sql",
+                c"r_connection_selected",
+            ));
+        }
+        let selected = (api.long_as_long)(result);
+        (api.dec_ref)(result);
+        match selected {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err("Python SQL selection returned an invalid value".into()),
+        }
+    })
+}
+
 pub(super) fn initialize_managed_sql() -> Result<(), String> {
     api()?.with_gil(|api| {
         // The GIL covers the call, exception inspection, and reference release.

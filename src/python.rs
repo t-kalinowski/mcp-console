@@ -205,6 +205,10 @@ pub(crate) fn use_r_sql() -> Result<(), String> {
     library::use_r_sql()
 }
 
+pub(crate) fn r_sql_connection_selected() -> Result<bool, String> {
+    library::r_sql_connection_selected()
+}
+
 pub(crate) fn initialize_managed_sql() -> Result<(), String> {
     if ensure_initialized()? && library::runtime_configured()? {
         library::initialize_managed_sql()?;

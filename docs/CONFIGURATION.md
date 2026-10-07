@@ -126,6 +126,7 @@ Python figures are finalized and published before startup completes, including w
 
 The program must finish by leaving a usable connection selected through the existing `console_sql_connection(connection)` helper.
 It must be a user-created native connection; selecting or retrieving Console's managed default does not satisfy startup.
+The final selection must remain on the startup interpreter; a reset or provider switch from the other interpreter does not satisfy startup.
 It runs once per worker generation, on the serialized interpreter thread with the ordinary resolver, input, output, and interrupt services.
 MCP initialization, discovery, and ping remain available while it runs; early cells wait behind startup.
 Dependencies should be installed or prepared normally; startup source does not run inside the trusted host resolver.

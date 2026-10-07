@@ -398,3 +398,7 @@ def initialize_connection(source: str) -> int:
         return -1 if isinstance(error, KeyboardInterrupt) else 0
     finally:
         _runtime.finalize_plots()
+
+
+def r_connection_selected() -> bool:
+    return _r_selected and not _restore_managed

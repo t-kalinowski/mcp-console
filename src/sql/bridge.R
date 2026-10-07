@@ -158,7 +158,8 @@ base::local(
         {
           eval(program, envir = globalenv())
           if (
-            is.null(selected_connection) ||
+            !.Call("mcp_console_sql_r_connection_selected") ||
+              is.null(selected_connection) ||
               identical(selected_connection, managed_connection) ||
               !isTRUE(DBI::dbIsValid(selected_connection))
           ) {

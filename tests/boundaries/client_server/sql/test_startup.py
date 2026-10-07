@@ -698,6 +698,90 @@ def test_python_startup_rejects_managed_connection_without_r(
 
 @requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
+def test_r_startup_validates_active_provider(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
+    # fmt: r
+    setup = code("""
+        startup_count <- 1L
+        native <- DBI::dbConnect(duckdb::duckdb())
+        invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
+        DBI::dbBegin(native)
+        console_sql_connection(native)
+        invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
+        """)
+    reset = 'reticulate::py_run_string("console_sql_connection(None)")'
+    selections = {
+        "reset": reset,
+        "consumed-reset": reset + "\ninvisible(sql_connection())",
+        # fmt: r
+        "python-native": code(r"""
+            reticulate::py_run_string(paste(
+              "import sqlite3",
+              "py_native = sqlite3.connect(':memory:')",
+              "console_sql_connection(py_native)",
+              sep = "\n"
+            ))
+            """),
+        "reselected": reset + "\nconsole_sql_connection(native)",
+    }
+    transcripts = {}
+    for name, selection in selections.items():
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            config = configure(workspace, "r", setup + "\n" + selection)
+            configuration = captured_configuration(config)
+            with McpClient(binary, execution.serve(), os.environ, workspace) as client:
+                client.initialize_and_list_tools()
+                wait_for_evaluation_output(
+                    client,
+                    None,
+                    "R startup final provider validation",
+                    sql="SELECT answer FROM selected",
+                    completion_timeout_seconds=client.response_timeout,
+                )
+                first = last_tool_text(client)
+                ready = name == "reselected"
+                if ready:
+                    assert (
+                        first == "# A tibble: 1 × 1\n   answer\n  <int32>\n1      42\n"
+                    ), first
+                else:
+                    assert (
+                        "startup must select" in first and "SQL unavailable" in first
+                    ), first
+                client.expect(
+                    # fmt: r
+                    r=code("""
+                        stopifnot(startup_count == 1L, DBI::dbIsValid(native))
+                        stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 42)
+                        """),
+                )
+                client.expect(
+                    # fmt: r
+                    r=code("""
+                        DBI::dbRollback(native)
+                        stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
+                        console_sql_connection(native)
+                        stopifnot(identical(sql_connection(), native))
+                        """),
+                )
+                client.send(sql="SELECT 42 AS answer")
+                later = last_tool_text(client)
+                if ready:
+                    assert "42" in later and "SQL unavailable" not in later, later
+                else:
+                    assert "SQL unavailable" in later and "42" not in later, later
+                transcripts[f"{name}.yaml"] = McpTranscript(
+                    [configuration] + client.finish()
+                )
+    return TranscriptWithCompanions(
+        transcripts.pop("reset.yaml").transcript, transcripts
+    )
+
+
+@requires(R, SQL)
+@executions(DIRECT, SANDBOXED)
 def test_failed_startup_withholds_sql_and_preserves_partial_effects(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
