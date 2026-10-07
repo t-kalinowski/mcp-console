@@ -20,6 +20,7 @@ EXACT_HANDLERS: dict[str, Callable[[WorkerContext, str], LoopAction | None]] = {
     "preview same producer": output.preview_producer_suffix,
     "preview unicode suffix": output.preview_producer_suffix,
     "preview unicode replacement": output.preview_producer_suffix,
+    "preview unicode lines": output.preview_unicode_lines,
     "preview huge line": output.preview_large_output,
     "preview tiny events": output.preview_large_output,
     "preview many tiny events": output.preview_large_output,

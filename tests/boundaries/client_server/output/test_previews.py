@@ -16,7 +16,6 @@ from support.previews import (
     CONTROL_OMISSION,
     OMISSION,
     assert_preview,
-    compact_previews,
     normalize_preview_paths,
     session_directory,
 )
@@ -66,11 +65,15 @@ def check_preview(binary: Path, execution: Execution, scenario: str) -> Transcri
         assert not result.get("isError", False), result
         session = next((Path(temporary) / ".agents/console/sessions").iterdir())
         raw = (session / "outputs/call-000001.log").read_bytes()
-        assert raw.startswith(b"preview head\n")
-        assert raw.endswith(b"""
-preview tail: final diagnostic
-after final image
-""")
+        if scenario == "preview huge line":
+            body = "x" * (16 * 1024 * 1024)
+        elif scenario == "preview tiny events":
+            body = "ab" * 12000
+        else:
+            assert scenario == "preview redraw", scenario
+            body = ("\r" + "x" * 2048) * 5000 + "\rprogress final"
+        emitted = "preview head\n" + body + "\npreview tail: final diagnostic\n"
+        assert raw == (emitted + "after final image\n").encode("utf-8")
         if scenario == "preview redraw":
             assert (
                 text
@@ -81,8 +84,7 @@ after final image
 """
             )
         else:
-            assert "omitted" in text
-            assert "UTF-8 bytes" in text
+            assert_preview(result["content"][0]["text"], emitted)
             assert (
                 f"raw log: .agents/console/sessions/{session.name}/outputs/call-000001.log"
                 in text
@@ -94,7 +96,6 @@ after final image
         assert last_tool_text(client) == "\n[idle]"
         client.send(r="echo fresh")
         assert last_tool_text(client) == "zod: fresh\n"
-        compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()
 
 
@@ -221,13 +222,12 @@ def test_bounds_metadata_for_alternating_tiny_events(binary: Path) -> Transcript
         # This fits the text budget. Retaining one part per event would allocate
         # a large vector and repeatedly scan it before any text is omitted.
         assert largest <= 128 * 1024, largest
-        compact_previews(client, "ab")
         return client.finish()
 
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-def test_edits_unicode_after_same_producer_overflow(
+def test_edits_mcp_unicode_preview_without_changing_raw_stream(
     binary: Path, execution: Execution
 ) -> Transcript:
     worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
@@ -269,7 +269,39 @@ def test_edits_unicode_after_same_producer_overflow(
             ).read_bytes() == raw
             assert client.send()["content"] == [{"type": "text", "text": "\n[idle]"}]
         normalize_preview_paths(client)
-        compact_previews(client, "a€🙂b")
+        return client.finish()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_records_raw_unicode_newlines_and_literal_mcp_preview(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with McpClient(binary, execution.serve("--worker", str(worker))) as client:
+        client.initialize_and_list_tools()
+        result = client.send(r="preview unicode lines")
+        assert not result["isError"], result
+        assert len(result["content"]) == 1, result
+        text = result["content"][0]["text"]
+        line = "line €🙂 " + "x" * 48 + "\r\n"
+        raw = "preview head\n" + line * 512 + "preview tail 🙂\r\n"
+        session = session_directory(client)
+        recorded_raw = (session / "outputs/call-000001.log").read_bytes()
+        assert recorded_raw == raw.encode("utf-8")
+        assert len(recorded_raw) == 32288
+        assert recorded_raw.count(b"\r\n") == 513
+        assert recorded_raw.count(b"\n") == 514
+        assert_preview(text, raw)
+        assert text.endswith("preview tail 🙂\r\n"), repr(text[-100:])
+        assert "�" not in text
+        assert text.count("\r\n") > 1
+        assert (
+            f"raw log: .agents/console/sessions/{session.name}/outputs/call-000001.log"
+            in text
+        )
+        normalize_preview_paths(client)
+        assert result["content"][0]["text"] == text.replace(session.name, "<run ID>")
         return client.finish()
 
 
@@ -363,7 +395,6 @@ def test_reports_raw_and_rendered_counts_for_invalid_utf8(
         )
         assert (session / "outputs/call-000001.log").read_bytes() == raw
         normalize_preview_paths(client)
-        compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()
 
 
@@ -395,7 +426,6 @@ def test_keeps_tail_when_recording_is_disabled(
             assert text.endswith("preview tail: final diagnostic\nafter final image\n")
             assert "no retained log" in text and "omitted text unavailable" in text
             assert "outputs/call-" not in text
-            compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
             transcript, stderr = client.finish_with_standard_error()
             assert stderr.count("transcript recording disabled:") == 1, stderr
             return transcript
@@ -437,7 +467,6 @@ def test_preserves_active_prompt_and_state_after_text_flood(
         control.wait_for(0, "preview_input_processed")
         client.send()
         assert last_tool_text(client) == "received answer\n", last_tool_text(client)
-        compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()
 
 
@@ -465,7 +494,6 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
             ).iterdir()
         )
         assert len(list((session / "artifacts").iterdir())) == 1
-        compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()
 
 
@@ -550,7 +578,6 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
         normalize_preview_paths(client)
         client.send()
         assert last_tool_text(client) == "\n[idle]"
-        compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()
 
 
@@ -602,7 +629,6 @@ def test_keeps_partial_idle_utf8_out_of_cell_omission_counts(
         cell_summaries = [event for event in events if event["event"] == "cell_output"]
         assert cell_summaries[-1]["inline_omitted_bytes"] == cell_omitted
         normalize_preview_paths(client)
-        compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()
 
 
