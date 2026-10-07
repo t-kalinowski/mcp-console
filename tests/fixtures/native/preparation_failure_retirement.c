@@ -9,11 +9,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef __APPLE__
+#include <malloc/malloc.h>
+#else
+#include <malloc.h>
+#endif
 
 static bool owner;
 static atomic_bool captured;
 static int controlled = -1;
-static const char failure[] = "selected Python inspection failed (exit status: 23): captured setup failure\n";
+static const char *executable;
 
 __attribute__((constructor)) static void initialize(void) {
     const char *server = getenv("MCP_CONSOLE_TEST_FAILURE_SERVER");
@@ -23,6 +28,7 @@ __attribute__((constructor)) static void initialize(void) {
         setenv("MCP_CONSOLE_TEST_FAILURE_SERVER", pid, 1);
     } else {
         owner = getppid() == (pid_t)strtol(server, NULL, 10);
+        executable = getenv("MCP_CONSOLE_TEST_FAILURE_EXECUTABLE");
         unsetenv("DYLD_INSERT_LIBRARIES");
         unsetenv("LD_PRELOAD");
     }
@@ -34,16 +40,21 @@ static void notify(const char *name) {
     close(fd);
 }
 
-static void *capture_failure(size_t size) {
+static void capture_failure(void *allocation) {
 #ifdef __APPLE__
-    void *result = malloc(size);
+    size_t size = owner && allocation ? malloc_size(allocation) : 0;
 #else
-    void *result = ((void *(*)(size_t))dlsym(RTLD_NEXT, "malloc"))(size);
+    size_t size = owner && allocation ? malloc_usable_size(allocation) : 0;
 #endif
-    // Hold formatting of the real inspection failure after subprocess collection.
+    // inspect_native drops its Command after constructing the inspection error.
+    // Match that Command's exact executable, whose CString destructor clears
+    // its first byte. Allocation size alone cannot identify a captured failure.
     // A later cancellation can be acknowledged while the failed operation still
     // owns host admission; it must not replace the captured terminal cause.
-    if (owner && size == strlen(failure) && !atomic_exchange(&captured, true)) {
+    if (size > 0 && executable != NULL && size > strlen(executable) &&
+        ((char *)allocation)[0] == '\0' &&
+        memcmp((char *)allocation + 1, executable + 1, strlen(executable)) == 0 &&
+        !atomic_exchange(&captured, true)) {
         notify("MCP_CONSOLE_TEST_FAILURE_CAPTURED");
         int fd = open(getenv("MCP_CONSOLE_TEST_FAILURE_RELEASE"), O_RDONLY);
         char token;
@@ -52,7 +63,11 @@ static void *capture_failure(size_t size) {
         if (count != 1 || token != '1') _exit(125);
         close(fd);
     }
-    return result;
+#ifdef __APPLE__
+    free(allocation);
+#else
+    ((void (*)(void *))dlsym(RTLD_NEXT, "free"))(allocation);
+#endif
 }
 
 static ssize_t observe_control(int fd, const void *buffer, size_t count) {
@@ -77,9 +92,9 @@ static ssize_t observe_control(int fd, const void *buffer, size_t count) {
     interpose_##original __attribute__((section("__DATA,__interpose"))) = { \
         (const void *)(uintptr_t)&replacement, (const void *)(uintptr_t)&original \
     };
-INTERPOSE(capture_failure, malloc)
+INTERPOSE(capture_failure, free)
 INTERPOSE(observe_control, write)
 #else
-void *malloc(size_t size) { return capture_failure(size); }
+void free(void *allocation) { capture_failure(allocation); }
 ssize_t write(int fd, const void *buffer, size_t count) { return observe_control(fd, buffer, count); }
 #endif

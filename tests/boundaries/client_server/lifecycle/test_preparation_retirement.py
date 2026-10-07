@@ -82,6 +82,7 @@ def test_setup_failure_survives_later_eof_cancellation(binary: Path) -> Transcri
                     build_interposer(root, "preparation_failure_retirement")
                 ),
                 "MCP_CONSOLE_TEST_FAILURE_CAPTURED": str(captured.path),
+                "MCP_CONSOLE_TEST_FAILURE_EXECUTABLE": str(selected),
                 "MCP_CONSOLE_TEST_FAILURE_CONTROLLED": str(controlled.path),
                 "MCP_CONSOLE_TEST_FAILURE_RELEASE": str(release.path),
             }
