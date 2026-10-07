@@ -26,7 +26,7 @@ from support.assertions import (
 from support.installation import installed_console
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.records import Transcript, TranscriptWithCompanions
 from support.snapshots import execution_snapshots
@@ -240,7 +240,7 @@ exec "{shutil.which("uv")}" "$@"
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_inspects_and_replaces_managed_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -792,7 +792,7 @@ def test_prepares_managed_python_at_startup_and_restart(
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_adds_python_packages_to_idle_managed_worker(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1422,7 +1422,7 @@ def test_automatic_imports_stay_on_main_worker_thread_and_process(
 
 
 @requires(POSIX, SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_limits_live_python_additions_to_new_idle_distributions(
     binary: Path, execution: Execution
 ) -> Transcript:

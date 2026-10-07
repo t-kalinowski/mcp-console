@@ -13,7 +13,7 @@ from support.assertions import (
     wait_for_idle_output,
 )
 from support.client import McpClient
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
@@ -71,7 +71,7 @@ def test_routes_input_to_idle_later_callback(
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
@@ -153,7 +153,7 @@ def test_returns_cell_scoped_plots(binary: Path, execution: Execution) -> Transc
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_preserves_large_plot_dimensions(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -202,7 +202,7 @@ def test_preserves_large_plot_dimensions(
         return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_emits_managed_plots_when_pages_finalize(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -243,7 +243,7 @@ def test_emits_managed_plots_when_pages_finalize(
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_returns_plots_after_r_errors(binary: Path, execution: Execution) -> Transcript:
     environment, rscript = r_test_environment()
     client = McpClient(binary, execution.serve(), environment)

@@ -13,7 +13,7 @@ from support.assertions import (
 )
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_input_handler_client
 from support.records import Transcript
@@ -258,7 +258,7 @@ def test_preserves_fd0_order_between_readers(
 
 
 @requires(POSIX)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_preserves_utf8_across_console_reads(
     binary: Path, execution: Execution
 ) -> Transcript:

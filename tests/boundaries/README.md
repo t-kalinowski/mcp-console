@@ -76,6 +76,11 @@ def test_persistent_state(binary: Path, execution: Execution) -> Transcript:
 ```
 
 `DIRECT.serve()` supplies `--no-sandbox`; `SANDBOXED.serve()` uses the default sandbox.
+Use one mode for ordinary language and representation assertions.
+`RUNTIME` selects the sandbox on macOS/Linux and direct execution for shared Windows cases; native Windows acceptance covers its sandbox policy.
+Keep both modes for permissions, inherited environment, cache placement, executable selection, process cleanup, and other mode-dependent contracts.
+Keep representative direct conformance for each runtime, plots, input, restart, and recording.
+Real-library sandbox workloads, including sklearn/joblib, retain their distinct APIs and initial/live activation scenarios.
 There is no runner `--execution` flag.
 Keep sandbox-only arguments in sandbox fixtures and policy contracts in the owning boundary's `sandbox/` directory.
 Ordinary runtime cases stay with their subject even when sandboxed.
