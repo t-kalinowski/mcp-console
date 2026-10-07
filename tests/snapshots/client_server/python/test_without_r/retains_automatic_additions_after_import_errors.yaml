@@ -41,53 +41,14 @@ send:
   requirements:
     action: get
 result:
-  content:
-    - type: text
-      text: |-
-        {
-          "requirements": {
-            "r": [],
-            "python": [
-              "numpy",
-              "pandas",
-              "matplotlib",
-              "plotnine",
-              "duckdb",
-              "mcp_console_test_empty_pkg",
-              "mcp_console_test_raises_pkg"
-            ],
-            "duckdb": [
-              "sqlite"
-            ],
-            "python_version": [],
-            "exclude_newer": null
-          },
-          "prepared": true,
-          "runtime_requirements": {
-            "r": [],
-            "python": []
-          }
-        }
-  structuredContent:
-    requirements:
-      r: []
-      python:
-        - numpy
-        - pandas
-        - matplotlib
-        - plotnine
-        - duckdb
-        - mcp_console_test_empty_pkg
-        - mcp_console_test_raises_pkg
-      duckdb:
-        - sqlite
-      python_version: []
-      exclude_newer: ~
-    prepared: true
-    runtime_requirements:
-      r: []
-      python: []
-  isError: false
+  accepted_python_requirements:
+    - numpy
+    - pandas
+    - matplotlib
+    - plotnine
+    - duckdb
+    - mcp_console_test_empty_pkg
+    - mcp_console_test_raises_pkg
 ---
 send:
   python: >-

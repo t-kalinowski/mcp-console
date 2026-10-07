@@ -15,11 +15,9 @@ from support.r import r_test_environment
 from support.records import TranscriptWithCompanions
 from support.requirements import SQL
 from support.resolvers import bare_runtime_environment
-from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 
-@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_runs_without_a_resolver_bootstrap(
     binary: Path, execution: Execution
@@ -57,6 +55,7 @@ def test_runs_without_a_resolver_bootstrap(
 
         # fmt: r
         r = code(r"""
+            options(useFancyQuotes = FALSE)
             conditionMessage(tryCatch(
               library(mcpConsoleDefinitelyMissingPackage),
               error = identity

@@ -16,6 +16,7 @@ ir:
 ```
 
 ```{r}
+options(useFancyQuotes = FALSE)
 conditionMessage(tryCatch(
   library(mcpConsoleDefinitelyMissingPackage),
   error = identity

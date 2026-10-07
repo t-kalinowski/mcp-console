@@ -10,6 +10,15 @@ def code(source: str) -> str:
     return dedent(source).removeprefix("\n")
 
 
+def normalize_process_diagnostic(text: str) -> str:
+    """Share diagnostic presentation without dropping status or traceback text."""
+    return re.sub(
+        r"(failed with )exit code: (-?\d+):",
+        r"\1exit status: \2:",
+        text.replace("\r\n", "\n"),
+    )
+
+
 def normalize_python_resolution_error(
     error: str, invalid: str | None = None, *, executable: str | None = None
 ) -> str:

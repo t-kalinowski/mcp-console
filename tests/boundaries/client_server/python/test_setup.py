@@ -25,7 +25,7 @@ from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
 from support.python import runtime_source_line, virtualenv_python
 from support.records import Transcript
-from support.snapshots import execution_snapshots, platform_snapshots
+from support.snapshots import execution_snapshots
 from support.resolvers import (
     bare_runtime_environment,
     send_and_collect_runtime_python_resolution,
@@ -1169,7 +1169,6 @@ def test_preserves_setup_after_r_initialization(
 
 
 @executions(DIRECT, SANDBOXED)
-@platform_snapshots("win32")
 def test_retries_managed_import_setup_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1219,6 +1218,15 @@ def test_retries_managed_import_setup_after_interrupt(
             "requirements"
         ]
         assert "py-yaml12" in accepted["python"], accepted
+        # Inspect the complete public response before recording the Python fields
+        # owned by this case; provider inventories have separate coverage.
+        assert (
+            json.loads(last_result_text(client))
+            == client.transcript[-1]["result"]["structuredContent"]
+        )
+        client.transcript[-1]["result"] = {
+            "accepted_python_requirements": accepted["python"]
+        }
         return client.finish()
 
 

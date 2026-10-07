@@ -30,7 +30,10 @@ R_SCRIPT_GUIDANCE = (
 )
 
 
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32",
+    reason="Windows built-in tool presentation exposes its deferred SQL contract",
+)
 def test_builtin_configured_language_matrix(binary: Path) -> Transcript:
     return _configured_language_matrix(binary)
 

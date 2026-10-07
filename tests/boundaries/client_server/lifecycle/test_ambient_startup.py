@@ -9,15 +9,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.normalization import normalize_process_diagnostic
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
 from support.resolvers import bare_runtime_environment
 from support.records import Transcript
-from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 
-@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_probes_ambient_reticulate_before_first_use_bootstrap(
     binary: Path,
@@ -101,7 +100,12 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
             listed_again = client.request("tools/list")
             assert listed_again["result"]["tools"] == tools, listed_again
             listed_again["result"]["tools"] = "<unchanged from initialization>"
-            return client.finish()
+            transcript = client.finish()
+            for entry in transcript:
+                for part in entry.get("result", {}).get("content", []):
+                    if part["type"] == "text":
+                        part["text"] = normalize_process_diagnostic(part["text"])
+            return transcript
 
 
 if __name__ == "__main__":
