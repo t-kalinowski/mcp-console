@@ -48,6 +48,7 @@ Timeout likewise cancels nothing.
 Closing MCP input cancels startup and follows normal retirement; outstanding response delivery after closure is unspecified.
 
 Discovery or initial preparation failure is retained by ordinary sends; tool discovery remains usable with the same schema.
+Closing the connection preserves completed setup failures in the server's exit status and stderr, including failures before a resolver is registered.
 After correcting setup, an explicit `control="restart"` retries that failed readiness attempt using the server's captured configuration and current filesystem/tool availability.
 Concurrent restart callers share an in-flight retry; request cancellation and timeout leave it running, while connection closure cancels and retires it.
 If setup still fails, the retry reports and retains its new diagnostic.

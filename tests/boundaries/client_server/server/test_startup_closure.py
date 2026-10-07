@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run --script
-"""MCP closure between completed discovery and the next preparation stage."""
+"""MCP closure preserves setup failures and retires unfinished preparation."""
 
 import os
 import sys
@@ -13,8 +13,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
+from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
+
+
+@requires(POSIX)
+def test_eof_preserves_completed_setup_failure_without_resolver(
+    binary: Path,
+) -> Transcript:
+    with McpClient(
+        binary,
+        ("serve", "-c", "cache=host", "-c", "resolver.inherit_environment=false"),
+    ) as client:
+        client.initialize_and_list_tools()
+        failure = client.send(python="raise AssertionError('must not execute')")
+        assert failure["isError"] is True, failure
+        assert "resolver sandbox requires HOME" in str(failure), failure
+        assert client.request("tools/list")["result"] == client.transcript[2]["result"]
+        client.transcript[-1] = {"tools_schema_unchanged": True}
+        transcript, stderr = client.finish_with_standard_error(expected_exit_status=1)
+        assert stderr == "resolver sandbox requires HOME\n", stderr
+        return transcript + [{"exit_status": 1, "stderr": stderr}]
 
 
 @contextmanager

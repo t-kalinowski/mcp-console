@@ -177,10 +177,11 @@ impl Startup {
 
     pub fn finish_failed_preparation(&self, error: String) -> Result<(), String> {
         // A failed initializer has no installed configuration to own shutdown. Suppress only
-        // connection cancellation with confirmed cleanup; retain other failures.
+        // connection cancellation with confirmed cleanup; without a resolver handle,
+        // no preparation was cancelled and the initializer's failure must survive.
         let control = self.cancellation.lock().expect("startup cancellation lock");
         if control.closed
-            && control.resolver.as_ref().is_none_or(|resolver| {
+            && control.resolver.as_ref().is_some_and(|resolver| {
                 resolver.cleanup_confirmed()
                     && resolver.retirement_confirmed()
                     // A close/retirement failure appended by the initializer is
