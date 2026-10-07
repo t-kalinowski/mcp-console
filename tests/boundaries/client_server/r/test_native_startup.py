@@ -5,17 +5,20 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
+from contextlib import ExitStack, closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint, wait_for_path
 from support.assertions import wait_for_evaluation_output
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.snapshots import execution_snapshots
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import R, SANDBOX, requires
+from support.requirements import POSIX, R, SANDBOX, requires
 from support.r import r_test_environment
 from support.resolvers import bare_runtime_environment
 
@@ -246,6 +249,125 @@ def test_exit_requires_explicit_retry(binary: Path, execution: Execution) -> Tra
             client.expect("[1] TRUE\n", r="native_repaired")
             assert marker.read_text().splitlines() == ["attempt", "attempt"]
             return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+@execution_snapshots
+def test_eager_exit_does_not_authorize_unused_replacement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment = startup_environment(root, managed=True)
+        profile = root / ".Rprofile"
+        marker = root / "attempts"
+        profile.write_text(
+            'cat("attempt\\n", file = "attempts", append = TRUE)\n'
+            'cat("eager native profile diagnostic\\n")\n'
+            'quit(save = "no", status = 24L, runLast = FALSE)\n'
+        )
+        with McpClient(
+            binary,
+            writable_arguments(execution, root),
+            environment,
+            current_directory=root,
+            use_r_startup_files=True,
+        ) as client:
+            client.initialize_and_list_tools()
+            wait_for_path(
+                marker,
+                "eager profile ran",
+                client=client,
+                timeout=client.response_timeout,
+            )
+            poll_start = len(client.transcript)
+            deadline = time.monotonic() + client.response_timeout
+            output = ""
+            while True:
+                result = client.send()
+                output += result["content"][0]["text"].removesuffix("\n[idle]")
+                if result.get("isError"):
+                    break
+                assert time.monotonic() < deadline, output
+            client.transcript[poll_start:] = [client.transcript[-1]]
+            client.transcript[-1]["result"]["content"][0]["text"] = output
+            assert "eager native profile diagnostic" in output, output
+            assert "24" in output, output
+            assert marker.read_text().splitlines() == ["attempt"]
+            # No cell has used this worker. Preparation's unused-worker
+            # exception must not grant another attempt at the failed profile.
+            client.send(requirements={"action": "set", "r": ["MASS"]})
+            client.send(r='stop("eager startup must not retry")')
+            assert marker.read_text().splitlines() == ["attempt"]
+            profile.write_text(
+                'cat("attempt\\n", file = "attempts", append = TRUE)\n'
+                "native_repaired <- TRUE\n"
+            )
+            client.send(control="restart")
+            client.expect("[1] TRUE\n", r="native_repaired")
+            assert marker.read_text().splitlines() == ["attempt", "attempt"]
+            return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+@execution_snapshots
+@requires(POSIX)
+def test_preparation_waits_for_native_startup(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
+        root = Path(temporary).resolve()
+        environment = startup_environment(root, managed=True)
+        reached = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "reached"))
+        )
+        release = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "release"))
+        )
+        marker = root / "attempts"
+        (root / ".Rprofile").write_text(
+            # fmt: r
+            code(f"""
+                cat("attempt\\n", file = "attempts", append = TRUE)
+                if (length(readLines("attempts")) == 1L) {{
+                  reached <- fifo({json.dumps(str(reached.path))}, "wb", blocking = TRUE)
+                  writeBin(charToRaw("1"), reached)
+                  close(reached)
+                  release <- fifo({json.dumps(str(release.path))}, "rb", blocking = TRUE)
+                  readBin(release, "raw", 1L)
+                  close(release)
+                }}
+                native_ready <- TRUE
+                """)
+        )
+        with McpClient(
+            binary,
+            writable_arguments(execution, root),
+            environment,
+            current_directory=root,
+            use_r_startup_files=True,
+        ) as client:
+            try:
+                client.initialize_and_list_tools()
+                reached.wait(
+                    "native startup is executing the profile",
+                    timeout=client.response_timeout,
+                )
+                pending = client.start_send(
+                    requirements={"action": "set", "r": ["MASS"]}, timeout_ms=0
+                )
+                client.request("ping")
+                assert marker.read_text().splitlines() == ["attempt"]
+                release.release()
+                client.receive(pending)
+                assert pending["result"]["content"][0]["text"] == "[prepared]", pending
+                client.expect("[1] TRUE\n", r="native_ready")
+                assert marker.read_text().splitlines() == ["attempt", "attempt"]
+                return client.finish()
+            finally:
+                release.release()
 
 
 @requires(R)

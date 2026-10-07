@@ -50,6 +50,8 @@ Later early declarations use the same preparation transaction after shared start
 Changed requirements may replace an **unused** prewarmed worker after successful preparation and confirmed retirement, without an explicit restart.
 Initialization alone does not make that worker used; user code or nonempty stdin ends this exception.
 Replacement serializes bootstrap callbacks with preparation and confirms old-worker retirement before launching the successor.
+If native R startup has begun, preparation waits for that attempt to complete before using the unused-worker exception.
+Failed or interrupted R initialization closes this exception; only an explicit restart authorizes another attempt.
 Runtime site hooks can run once in each new generation, including a replacement before the first cell.
 A [captured startup source](CONFIGURATION.md#session-startup-source) is user code and ends the unused-worker exception at launch.
 Only explicit restart may replay it in a new generation after confirmed retirement; partial startup effects are not rolled back.
