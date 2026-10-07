@@ -169,6 +169,7 @@ Publishing a failed-worker transition checks that its generation still owns it.
 The operation keeps normal command/barrier failure separate from physical cleanup and the dispatcher outcome.
 Confirmed physical cleanup and joined tasks can supersede a failed normal barrier; failed native cleanup still blocks replacement.
 Process and worker consumers read their cleanup and I/O outcomes from that retained result, so an I/O failure is reported once.
+Failed-worker replacement also requires launcher reaping and confirmed retirement of its owned temporary storage.
 Available output is drained even when cleanup fails.
 The existing worker, relay, launcher and force-stop allowances are captured once.
 Relay drain eligibility uses when the local dispatcher processes ShutdownStarted.

@@ -35,16 +35,14 @@ result:
   content:
     - type: text
       text: |-
-        [cannot remove worker temporary directory <worker temporary>: Permission denied (os error 13); additionally failed to retire worker I/O: cannot remove worker temporary directory <worker temporary>: Permission denied (os error 13)]
+        [worker stopped: in-memory state lost]
+        [cannot remove worker temporary directory <worker temporary>: Permission denied (os error 13)]
         session restart did not complete; cell was not run
   isError: true
 ---
 stderr: >
-  worker relay shutdown was requested twice; additionally cannot remove
-  worker temporary directory <worker temporary>: Permission denied (os
-  error 13); additionally failed to retire worker I/O: cannot remove
-  worker temporary directory <worker temporary>: Permission denied (os
-  error 13)
+  cannot remove worker temporary directory <worker temporary>: Permission
+  denied (os error 13)
 ---
 stage: shutdown
 ---
@@ -69,9 +67,7 @@ result:
 ---
 stderr: >
   cannot remove worker temporary directory <worker temporary>: Permission
-  denied (os error 13); additionally failed to retire worker I/O: cannot
-  remove worker temporary directory <worker temporary>: Permission denied
-  (os error 13)
+  denied (os error 13)
 ---
 stage: startup failure
 ---
@@ -82,15 +78,11 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        [worker sideband read failed: worker sideband closed; additionally
-        failed to stop the worker: cannot remove worker temporary directory
-        <worker temporary>: Permission denied (os error 13); additionally failed
-        to retire worker I/O: cannot remove worker temporary directory <worker
-        temporary>: Permission denied (os error 13)]
+      text: |-
+        [worker sideband read failed: worker sideband closed; additionally failed to stop the worker: cannot remove worker temporary directory <worker temporary>: Permission denied (os error 13)]
+        [worker exited with status 47]
   isError: true
 ---
 stderr: >
-  worker relay shutdown was requested twice; additionally cannot remove
-  worker temporary directory <worker temporary>: Permission denied (os
-  error 13)
+  cannot remove worker temporary directory <worker temporary>: Permission
+  denied (os error 13)

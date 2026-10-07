@@ -118,6 +118,8 @@ struct RetirementResult {
     normal: Result<(), String>,
     cleanup: Result<(), String>,
     io: Result<Option<WorkerProcessOutcome>, String>,
+    // Replacement evidence is separate from native launcher status policy.
+    resources_confirmed: bool,
 }
 
 impl RetirementResult {
@@ -879,11 +881,9 @@ impl Worker {
         let retirement_deadline = relay_retirement_deadline(deadline);
         let shutdown = self.shutdown_handle();
         shutdown.request_shutdown(deadline, retirement_deadline);
-        let process = shutdown.finish_shutdown();
-        let retirement = self.finish_retirement();
-        let can_replace =
-            retirement.is_ok() && self.relay.child.lock().is_ok_and(|child| child.is_reaped());
-        let result = match (process, retirement) {
+        let retirement = shutdown.retire();
+        let can_replace = retirement.io.is_ok() && retirement.resources_confirmed;
+        let result = match (retirement.process_result(), retirement.io) {
             (Ok(()), Ok(outcome)) => Ok(outcome),
             (Err(error), Ok(outcome)) => Err(super::WorkerRetirementFailure::new(error, outcome)),
             (Ok(()), Err(error)) => Err(super::WorkerRetirementFailure::new(error, None)),
@@ -1363,6 +1363,10 @@ impl WorkerShutdownHandle {
             ),
         );
         let cleanup = self.stop_relay(deadline, retirement_deadline, allowance);
+        let resources_confirmed = self
+            .child
+            .lock()
+            .is_ok_and(|child| child.is_reaped() && child.temporary_retirement.is_ok());
         // Failed process cleanup must still drain available output and join all
         // owned I/O. Neither a normal-barrier timeout nor an I/O join confirms
         // native cleanup; the retained process result remains authoritative.
@@ -1385,6 +1389,7 @@ impl WorkerShutdownHandle {
             normal,
             cleanup,
             io,
+            resources_confirmed,
         };
         let mut state = self
             .retirement
