@@ -14,6 +14,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import TranscriptWithCompanions
 from support.requirements import NATIVE_FIXTURES, R, SANDBOX, requires
+from support.resolvers import send_and_collect_runtime_python_resolution
 from support.sandbox_configuration import NATIVE_PROXY, host_tcp_ports
 from support.suites import run_this_suite
 
@@ -98,17 +99,17 @@ def _snapshot_survives_replacement(
             client.initialize_and_list_tools()
             # Even the first worker uses the snapshot taken before MCP readiness.
             config.write_text("sandbox: {network: enabled}\n", encoding="utf-8")
-            client.send(python=exercise)
+            send_and_collect_runtime_python_resolution(client, python=exercise)
             assert last_tool_text(client).endswith(expected), last_tool_text(client)
 
             config.write_text("invalid: [", encoding="utf-8")
             client.send(control="restart")
-            client.send(python=exercise)
+            send_and_collect_runtime_python_resolution(client, python=exercise)
             assert last_tool_text(client).endswith(expected), last_tool_text(client)
 
             config.unlink()
             client.send(python="os._exit(23)")
-            client.send(python=exercise)
+            send_and_collect_runtime_python_resolution(client, python=exercise)
             assert last_tool_text(client).endswith(expected), last_tool_text(client)
 
             client.send(
@@ -119,7 +120,7 @@ def _snapshot_survives_replacement(
                 last_tool_text(client)
                 == "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             ), last_tool_text(client)
-            client.send(python=exercise)
+            send_and_collect_runtime_python_resolution(client, python=exercise)
             assert last_tool_text(client).endswith(expected), last_tool_text(client)
             client.send(python="import yaml12; print(yaml12.__name__)")
             assert last_tool_text(client) == "yaml12\n", last_tool_text(client)
