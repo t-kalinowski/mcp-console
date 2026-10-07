@@ -10,8 +10,13 @@ An unreadable or invalid project file fails launch rather than falling back.
 With neither file, configuration starts empty.
 Overrides may appear before or after the subcommand and do not edit files.
 
+Use `--no-project-config` before or after `serve` or `sandbox` to skip the launch-directory project file, including an unreadable or invalid one.
+Home configuration is still discovered, and `-c` overrides still apply in order.
+The flag does not change recording location.
+
 ```sh
 mcp-console serve -c extends=:workspace
+mcp-console serve --no-project-config -c extends=:workspace
 mcp-console -c extends=:workspace serve -c sandbox.network=enabled
 mcp-console sandbox -c 'sandbox.environment={LABEL: analysis}' -- Rscript analysis.R
 ```
@@ -118,6 +123,6 @@ Defaults, profile expansion, application decoding, and native-policy validation 
 
 Settings are captured once and reused across worker generations.
 Worker and resolver launches consume that captured input without rediscovering YAML.
-Explicit native `--config-env` and internal `--settings-env` inputs are already complete and reject `-c` overrides.
+Explicit native `--config-env` and internal `--settings-env` inputs are already complete and reject `-c` overrides and `--no-project-config`.
 
 The layering code is in [`src/config.rs`](../src/config.rs) and `src/config/`; application decoding belongs to [`src/settings.rs`](../src/settings.rs).

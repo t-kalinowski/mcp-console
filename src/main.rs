@@ -53,6 +53,7 @@ mod worker_relay;
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let mut overrides = cli.overrides.values;
+    let no_project_config = cli.overrides.no_project_config;
     match cli.command {
         #[cfg(windows)]
         cli::Command::SandboxSetup { status, state_dir } => {
@@ -77,7 +78,14 @@ fn main() -> ExitCode {
             overrides: command_overrides,
         } => {
             overrides.extend(command_overrides.values);
-            match run_server(worker, relay, no_sandbox, writable_root, &overrides) {
+            match run_server(
+                worker,
+                relay,
+                no_sandbox,
+                writable_root,
+                &overrides,
+                no_project_config || command_overrides.no_project_config,
+            ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => exit_with_error(error),
             }
@@ -110,6 +118,7 @@ fn main() -> ExitCode {
                 settings_env.as_deref(),
                 writable_root,
                 &overrides,
+                no_project_config || command_overrides.no_project_config,
             ) {
                 Ok(exit_code) => exit_code,
                 Err(error) => exit_with_error(error),
@@ -124,6 +133,7 @@ fn run_server(
     no_sandbox: bool,
     writable_roots: Vec<std::path::PathBuf>,
     overrides: &[String],
+    no_project_config: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
         cache,
@@ -132,7 +142,7 @@ fn run_server(
         source: _,
         mut policy,
         mut resolver,
-    } = settings::discover(overrides)?;
+    } = settings::discover(overrides, no_project_config)?;
     resolver::cache::configure(
         cache,
         no_sandbox,

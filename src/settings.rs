@@ -89,20 +89,29 @@ pub(crate) struct Captured {
     pub resolver: SandboxSettings,
 }
 
-pub fn discover(overrides: &[String]) -> Result<Captured, String> {
+pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Captured, String> {
     let project = Path::new(".agents/console/config.yaml");
-    let path = match std::fs::symlink_metadata(project) {
-        Ok(_) => Some(PathBuf::from(project)),
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            crate::console_paths::home_console_directory()?
-                .map(|directory| directory.join("config.yaml"))
+    let use_project = if no_project_config {
+        false
+    } else {
+        match std::fs::symlink_metadata(project) {
+            Ok(_) => true,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                false
+            }
+            Err(error) => return Err(format!("cannot inspect '{}': {error}", project.display())),
         }
-        Err(error) => return Err(format!("cannot inspect '{}': {error}", project.display())),
+    };
+    let path = if use_project {
+        Some(PathBuf::from(project))
+    } else {
+        crate::console_paths::home_console_directory()?
+            .map(|directory| directory.join("config.yaml"))
     };
     let Some(value) = crate::config::load(path.as_deref(), overrides)? else {
         return Ok(Captured::default());

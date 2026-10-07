@@ -16,12 +16,13 @@ const MARKER: &str = "MCP_CONSOLE_SANDBOX";
 pub fn capture_settings(
     roots: Vec<PathBuf>,
     overrides: &[String],
+    no_project_config: bool,
 ) -> Result<crate::settings::SandboxSettings, String> {
     let crate::settings::Captured {
         source,
         policy: settings,
         ..
-    } = crate::settings::discover(overrides)?;
+    } = crate::settings::discover(overrides, no_project_config)?;
     capture_policy(source.as_deref(), settings, roots)
 }
 
@@ -190,7 +191,13 @@ pub fn run(
     settings_env: Option<&str>,
     writable_roots: Vec<PathBuf>,
     overrides: &[String],
+    no_project_config: bool,
 ) -> Result<ExitCode, String> {
+    if no_project_config && (config_env.is_some() || settings_env.is_some()) {
+        return Err(
+            "--no-project-config cannot be combined with --config-env or --settings-env".into(),
+        );
+    }
     if !overrides.is_empty() && (config_env.is_some() || settings_env.is_some()) {
         return Err(
             "configuration overrides cannot be combined with --config-env or --settings-env".into(),
@@ -201,7 +208,7 @@ pub fn run(
     } else if let Some(name) = settings_env {
         crate::settings::from_environment(name)?
     } else {
-        capture_settings(writable_roots, overrides)?
+        capture_settings(writable_roots, overrides, no_project_config)?
     };
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     {
