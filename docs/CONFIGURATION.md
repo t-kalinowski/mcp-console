@@ -123,7 +123,9 @@ R reads environment files and site/user profiles, restores `.RData`, runs `.Firs
 Console passes `--quiet`, `--interactive`, and `--no-save`; ordinary shutdown does not save a workspace or prompt to save one.
 Profile settings such as `options(width = ...)` are preserved.
 Console still installs its transport, interrupt, graphics, and runtime integration.
+Its managed `device` option captures cell plots; presentation preferences such as width remain under R's control.
 Startup hooks run before Console's runtime bridges and managed plot device attach.
+Console-managed dependency resolution becomes available after those bridges attach.
 Startup plots use R's native device and its ordinary filesystem permissions.
 R/Python attachment must retain the running Python interpreter; a conflicting selection requires explicit restart.
 

@@ -92,7 +92,8 @@ The accepted first cell retains its admission and is never replayed.
 
 Worker readiness is not interpreter initialization.
 One coordinator initializes enabled interpreters and runs cells on a single owning thread.
-Bootstrap owns a graphics scope without marking user code active; startup output and plots use the ordinary output tape.
+After runtime attachment, bootstrap owns a graphics scope without marking user code active; configured Console startup output and plots use the ordinary output tape.
+Native R startup precedes Console's plot device and uses R's native graphics device.
 Enabled SQL opens its managed connection during bootstrap when its optional provider is installed; first-query work remains lazy.
 Custom workers retain lazy initialization, and an absent provider can be prepared on later SQL demand.
 An explicit or host-resolved Python selection can start without R.

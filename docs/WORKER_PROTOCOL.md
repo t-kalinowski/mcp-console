@@ -123,10 +123,10 @@ Startup diagnostics may use raw stdout/stderr before it.
 For the built-in worker, readiness means command admission is available, not that either interpreter has initialized.
 Enabled R and Python then initialize on the existing serialized worker thread; hooks may emit output, images, input, resolver, and activation messages before evaluation.
 The bootstrap attempt ends with `{"kind":"runtime_initialized","interrupted":false}`; an interrupt observed during initialization reports `interrupted:true`.
-Other incomplete setup preserves an admitted cell, allowing its language to retry initialization as needed.
+Other incomplete Python setup before R startup preserves an admitted cell, allowing its language to retry initialization as needed.
 It sends no `completed` frame and consumes no Python user-cell filename ID.
 The server withholds an accepted cell's `evaluate` frame until bootstrap finishes, while delivering its stdin normally.
-An interrupted bootstrap withholds any cell admitted before its incomplete receipt, including a cell whose evaluator has not begun waiting; a later cell can retry incomplete setup in the same interpreter.
+An interrupted bootstrap withholds any cell admitted before its incomplete receipt, including a cell whose evaluator has not begun waiting; a later cell can retry incomplete Python setup before native R initialization begins.
 The controller also orders interrupt admission against this receipt and withholds the waiting cell when the interrupt comes first.
 This covers signals delivered after the worker has sampled its interrupt state: the relay's interrupt result acknowledges signal dispatch, not worker-side handling.
 Native R startup emits `{"kind":"r_initialization","complete":false}` before entering R, and `complete:true` only after initialization and attachment succeed without an interrupt.

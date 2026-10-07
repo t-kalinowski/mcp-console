@@ -3,6 +3,8 @@
 import base64
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 from contextlib import ExitStack, contextmanager
@@ -12,7 +14,15 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.progress import normalize_elapsed, without_elapsed_result
-from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    R,
+    SQL,
+    command,
+    requires,
+)
 from support.assertions import last_result_text, last_tool_text
 from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
 from support.native import LOADER_VARIABLE, build_interposer
@@ -941,14 +951,42 @@ def test_flushes_calls_and_keeps_unpolled_images(
 
 @contextmanager
 def local_discovery(root: Path, *, image: bool = False, fail: bool = False):
-    environment, _ = r_test_environment()
+    environment, rscript = r_test_environment()
     home = Path(environment["R_HOME"])
     with ExitStack() as resources:
         if image:
-            environment = resources.enter_context(startup_r_package(root, STARTUP_PLOT))
-            # Image ordering does not require managed package preparation.
-            environment = bare_runtime_environment(
-                environment, root / "startup-library"
+            # Console's configured source runs after attachment of the managed
+            # device; native R startup uses its own earlier graphics device.
+            libraries = subprocess.check_output(
+                [
+                    shutil.which("ir"),
+                    "run",
+                    "--rscript",
+                    str(rscript),
+                    "--vanilla",
+                    "--isolated",
+                    "--with",
+                    "DBI",
+                    "--with",
+                    "duckdb",
+                    "--with",
+                    "reticulate",
+                    "-e",
+                    "writeLines(.libPaths())",
+                ],
+                env=environment,
+                cwd=root,
+                text=True,
+            ).splitlines()
+            environment["R_LIBS"] = os.pathsep.join(libraries)
+            source = (
+                "console_sql_connection(DBI::dbConnect(duckdb::duckdb()))\n"
+                + STARTUP_PLOT
+            )
+            configuration = root / ".agents/console/config.yaml"
+            configuration.parent.mkdir(parents=True)
+            configuration.write_text(
+                json.dumps({"startup": {"language": "r", "code": source}})
             )
         discovery, reached, release, alive = resources.enter_context(
             discovery_environment(r_home=None if fail else home)
@@ -1029,7 +1067,7 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
             release.release()
 
 
-@requires(NATIVE_FIXTURES, PROCESS_EVENTS, R)
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS, R, SQL, command("ir"))
 def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcript:
     reference_environment, rscript = r_test_environment()
     (expected_image,) = reference_plots(
@@ -1224,6 +1262,7 @@ def test_records_startup_without_a_tool_call(
         release = FifoCheckpoint.create(root / "startup-release")
         source = code(f"""
             cat(paste0(rep("startup text\\n", 20000L), collapse = ""))
+            grDevices::pdf("native-startup.pdf")
             graphics::plot(1:3)
             graphics::plot(3:1)
             grDevices::dev.off()
@@ -1268,15 +1307,10 @@ def test_records_startup_without_a_tool_call(
                 artifacts = [
                     event for event in events if event["event"] == "artifact_created"
                 ]
-                assert len(artifacts) == 2, artifacts
-                assert all(event["call_id"] is None for event in artifacts)
+                # Native package startup precedes Console's plot device.
+                assert artifacts == [], artifacts
+                assert (root / "native-startup.pdf").read_bytes().startswith(b"%PDF-")
                 assert all("schema_version" not in event for event in events), events
-                assert all(
-                    (session / event["path"])
-                    .read_bytes()
-                    .startswith(b"\x89PNG\r\n\x1a\n")
-                    for event in artifacts
-                )
                 assert any(
                     event["event"] == "session_output"
                     and event["retained_bytes"] == 260000
@@ -1285,7 +1319,8 @@ def test_records_startup_without_a_tool_call(
                 return [
                     {
                         "startup_text_retained_bytes": 260000,
-                        "startup_images": 2,
+                        "startup_images": 0,
+                        "native_startup_pdf": True,
                         "tool_calls": 0,
                         "eof_retired_startup": True,
                     }

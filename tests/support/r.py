@@ -228,7 +228,7 @@ def r_input_handler_client(
 
 @contextmanager
 def startup_r_package(directory: Path, source: str) -> Iterator[dict[str, str]]:
-    """Run a default package's .onLoad hook before ordinary Python startup."""
+    """Run a default package's .onLoad hook during native R startup."""
     environment, rscript = r_test_environment()
     package = directory / "startup-package"
     (package / "R").mkdir(parents=True)

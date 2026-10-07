@@ -19,7 +19,14 @@ from boundaries.client_server.python.test_without_r import (
     environment as without_r_environment,
 )
 from support.progress import phase_progress, without_elapsed
-from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    R,
+    SQL,
+    requires,
+)
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.allocations import AllocationProfile
 from support.checkpoints import FifoCheckpoint
@@ -43,6 +50,7 @@ from support.processes import (
 )
 from support.r import install_r_startup, r_test_environment
 from support.suites import run_this_suite
+from support.snapshots import execution_snapshots
 
 RUNNING = "\n[running; poll with an empty send]"
 R_CHECKPOINT = (FIXTURES / "bootstrap_r/checkpoint.R").read_text()
@@ -499,9 +507,9 @@ def test_closure_retires_blocked_bootstrap(binary: Path, execution: Execution) -
 
 
 @requires(POSIX)
-@requires(R)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
-def test_r_bootstrap_resolves_python_version_and_import(
+def test_console_startup_resolves_python_version_and_import(
     binary: Path, execution: Execution
 ) -> list:
     with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
@@ -521,13 +529,9 @@ def test_r_bootstrap_resolves_python_version_and_import(
         r_environment, _ = r_test_environment()
         environment.update(r_environment)
         environment["RETICULATE_PYTHON"] = ""
-        install_r_startup(
-            root,
-            environment,
-            R_CHECKPOINT
-            +
-            # fmt: r
-            code("""
+        install_r_startup(root, environment, R_CHECKPOINT)
+        # fmt: r
+        source = code("""
                 version <- reticulate:::resolve_python_version(">=3.13")
                 stopifnot(grepl("^[0-9]+[.][0-9]+[.][0-9]+$", version))
                 cat("Python version resolved\\n")
@@ -544,7 +548,12 @@ def test_r_bootstrap_resolves_python_version_and_import(
                 )
                 writeBin(charToRaw("1"), completed)
                 close(completed)
-                """),
+                console_sql_connection(DBI::dbConnect(duckdb::duckdb()))
+                """)
+        configuration = root / ".agents/console/config.yaml"
+        configuration.parent.mkdir(parents=True)
+        configuration.write_text(
+            json.dumps({"startup": {"language": "r", "code": source}})
         )
         environment.update(
             MCP_CONSOLE_LANGUAGES="r",
@@ -790,6 +799,7 @@ def test_restart_during_bootstrap_inspection_is_quiet(
 
 @requires(POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_first_declaration_replaces_blocked_bootstrap(
     binary: Path, execution: Execution
 ) -> list:
@@ -843,6 +853,7 @@ def test_first_declaration_replaces_blocked_bootstrap(
 
 @requires(POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_failed_declaration_preserves_bootstrap_and_reset_remains_allowed(
     binary: Path, execution: Execution
 ) -> list:
