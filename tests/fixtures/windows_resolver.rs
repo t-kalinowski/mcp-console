@@ -1,6 +1,8 @@
-use std::io::Write;
-use std::net::TcpStream;
+use std::io::{Read, Write};
 use std::process::Command;
+
+mod windows_gate;
+use windows_gate::Gate;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -18,12 +20,19 @@ fn main() {
     if args.iter().any(|arg| arg == "--version") {
         println!("ir 0.4.0");
     } else if args.first().is_some_and(|arg| arg == "python") {
-        println!(r#"[{{"version":"3.12.7","version_parts":{{"major":3,"minor":12,"patch":7}},"symlink":null,"variant":"default","implementation":"cpython"}}]"#);
+        println!(
+            r#"[{{"version":"3.12.7","version_parts":{{"major":3,"minor":12,"patch":7}},"symlink":null,"variant":"default","implementation":"cpython"}}]"#
+        );
     } else {
         if let Ok(gate) = std::env::var("TEST_RESOLVER_GATE") {
             let child = Command::new(&program).arg("--descendant").spawn().unwrap();
-            let mut gate = TcpStream::connect(gate).unwrap();
+            let mut gate = Gate::connect(gate).unwrap();
             writeln!(gate, "{} {}", std::process::id(), child.id()).unwrap();
+            // The acceptance owner pins both process handles before allowing
+            // this resolver to exit or sending it a control.
+            let mut ready = [0];
+            gate.read_exact(&mut ready).unwrap();
+            assert_eq!(ready, [1]);
             if std::env::var("TEST_RESOLVER_MODE").unwrap() == "blocked" {
                 std::thread::park();
             }
@@ -35,7 +44,11 @@ fn main() {
         if program.file_stem().unwrap() == "ir" || args.iter().any(|arg| arg == "ir") {
             print!("{}", std::env::var("TEST_RESOLVER_LIBRARY").unwrap());
         } else {
-            std::fs::write(args.last().unwrap(), std::env::var("TEST_RESOLVER_PYTHON").unwrap()).unwrap();
+            std::fs::write(
+                args.last().unwrap(),
+                std::env::var("TEST_RESOLVER_PYTHON").unwrap(),
+            )
+            .unwrap();
         }
     }
 }

@@ -10,11 +10,11 @@ from support.assertions import tool_text as _tool_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import POSIX, command, requires
-from support.requirements import R
+from support.requirements import POSIX, R, command, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_routes_python_output(binary: Path, execution: Execution) -> Transcript:
@@ -103,6 +103,7 @@ Traceback"""), output
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_routes_background_python_text_to_raw_streams(
     binary: Path, execution: Execution
@@ -152,6 +153,7 @@ thread log
     return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_routes_r_console_channels(binary: Path, execution: Execution) -> Transcript:
@@ -468,6 +470,7 @@ def test_preserves_redirected_python_streams_from_fork_children(
     )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_drains_standard_streams_while_evaluating(
     binary: Path, execution: Execution
@@ -492,8 +495,8 @@ def test_drains_standard_streams_while_evaluating(
     output = _tool_text(result)
     assert not result["isError"]
     assert len(output.encode()) <= 8 * 1024
-    assert "output preview: omitted" in output
-    assert "raw cell log:" in output
+    assert "output omitted:" in output
+    assert "raw log:" in output
 
     # The wire capture verifies every emitted byte independently of the preview.
     transcript = client.finish()

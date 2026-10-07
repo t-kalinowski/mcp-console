@@ -16,16 +16,13 @@ const MARKER: &str = "MCP_CONSOLE_SANDBOX";
 pub fn capture_settings(
     roots: Vec<PathBuf>,
     overrides: &[String],
+    no_project_config: bool,
 ) -> Result<crate::settings::SandboxSettings, String> {
     let crate::settings::Captured {
         source,
         policy: settings,
-        provider,
         ..
-    } = crate::settings::discover(overrides)?;
-    if provider == crate::settings::Provider::Compute {
-        return Err("standalone sandbox is local and cannot use the resolved compute provider; use mcp-console serve for Docker Sandbox execution".into());
-    }
+    } = crate::settings::discover(overrides, no_project_config)?;
     capture_policy(source.as_deref(), settings, roots)
 }
 
@@ -49,36 +46,12 @@ pub fn materialize_settings(
     roots: Vec<PathBuf>,
     workspace: &std::path::Path,
 ) -> Result<crate::settings::SandboxSettings, String> {
-    let selected = settings.contains_key("extends");
-    let workspace_profile = settings.get("extends").and_then(Value::as_str) == Some(":workspace");
-    if selected {
-        settings.insert(
-            "workspace".into(),
-            resolve_writable_root(".".into(), workspace)?.into(),
-        );
-    }
-    if workspace_profile {
-        // Preserve explicit native values, including null and malformed inputs.
-        if let Value::Object(options) = settings
-            .entry("workspace_options")
-            .or_insert_with(|| json!({}))
-        {
-            options
-                .entry("exclude_tmpdir_env_var")
-                .or_insert(true.into());
-            options.entry("exclude_slash_tmp").or_insert(true.into());
-        }
-    }
     let writable_roots = roots
         .into_iter()
         .map(|path| resolve_writable_root(path, workspace))
         .collect::<Result<Vec<_>, _>>()?;
-    // Augment the captured application policy once. Other shapes and kinds
-    // remain untouched for native validation.
-    if !selected || workspace_profile || !writable_roots.is_empty() {
-        settings.entry("filesystem").or_insert_with(|| json!({}));
-    }
-    let mut restricted = selected && !settings.contains_key("filesystem");
+    settings.entry("filesystem").or_insert_with(|| json!({}));
+    let mut restricted = false;
     if let Some(Value::Object(filesystem)) = settings.get_mut("filesystem") {
         restricted = crate::settings::native_variant_name(
             filesystem
@@ -96,7 +69,7 @@ pub fn materialize_settings(
                     *path = resolve_writable_root(PathBuf::from(&*path), workspace)?;
                 }
             }
-            if restricted && !selected {
+            if restricted {
                 entries.insert(
                     0,
                     json!({
@@ -104,14 +77,6 @@ pub fn materialize_settings(
                         "access": "read",
                     }),
                 );
-            }
-            if restricted && workspace_profile {
-                // This is an ordinary read grant, subject to native precedence.
-                // The constructor supplies the other workspace metadata defaults.
-                entries.push(json!({
-                    "path": {"type": "special", "value": {"kind": "project_roots", "subpath": ".claude"}},
-                    "access": "read",
-                }));
             }
             entries.extend(writable_roots.into_iter().map(|root| {
                 json!({
@@ -121,14 +86,9 @@ pub fn materialize_settings(
             }));
         }
     }
-    if !selected {
-        settings
-            .entry("network")
-            .or_insert_with(|| "restricted".into());
-    }
-    if settings.get("proxy").is_some_and(Value::is_null) {
-        settings.remove("proxy");
-    }
+    settings
+        .entry("network")
+        .or_insert_with(|| "restricted".into());
     if cfg!(target_os = "macos") && restricted {
         settings
             .entry("macos_seatbelt_profile_extension")
@@ -194,7 +154,13 @@ pub fn run(
     settings_env: Option<&str>,
     writable_roots: Vec<PathBuf>,
     overrides: &[String],
+    no_project_config: bool,
 ) -> Result<ExitCode, String> {
+    if no_project_config && (config_env.is_some() || settings_env.is_some()) {
+        return Err(
+            "--no-project-config cannot be combined with --config-env or --settings-env".into(),
+        );
+    }
     if !overrides.is_empty() && (config_env.is_some() || settings_env.is_some()) {
         return Err(
             "configuration overrides cannot be combined with --config-env or --settings-env".into(),
@@ -205,7 +171,7 @@ pub fn run(
     } else if let Some(name) = settings_env {
         crate::settings::from_environment(name)?
     } else {
-        capture_settings(writable_roots, overrides)?
+        capture_settings(writable_roots, overrides, no_project_config)?
     };
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     {

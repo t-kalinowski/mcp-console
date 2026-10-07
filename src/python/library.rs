@@ -9,6 +9,12 @@ mod services;
 // invoking Python so Python-to-R callbacks can re-enter library access.
 static PYTHON_LIBRARY: Mutex<Option<LoadedLibrary>> = Mutex::new(None);
 
+thread_local! {
+    // R can select a native connection before CPython exists. Retain that
+    // choice on the interpreter thread until the SQL adapter can own it.
+    static PENDING_R_SQL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 type PyIsInitialized = unsafe extern "C" fn() -> libc::c_int;
 type PySetProgramName = unsafe extern "C" fn(*const libc::wchar_t);
 type PyInitializeEx = unsafe extern "C" fn(libc::c_int);
@@ -278,7 +284,10 @@ pub(super) fn initialize(selected: &super::NativePython) -> Result<bool, String>
     if unsafe { (api.is_initialized)() } == 0 {
         return Err("CPython initialization did not complete".to_string());
     }
-    let mut argv = [program_name_wide.cast_mut()];
+    // CPython's Windows path bootstrap requires native separators; retain the
+    // caller's executable spelling in the public argument identity.
+    let mut argument_name = wide_string(&selected.embedding.python, "program name")?;
+    let mut argv = [argument_name.as_mut_ptr()];
     unsafe {
         // Workspace lookup is installed by common setup, never the bin directory.
         (api.set_argv_ex)(1, argv.as_mut_ptr(), 0);
@@ -440,10 +449,23 @@ pub(super) fn install_sql_runtime(source: &str) -> Result<bool, String> {
         let result = api.run_module_result(c"_mcp_console_sql", &source)?;
         api.finish_setup(result)
     })?;
-    if installed {
-        PYTHON_LIBRARY.lock().unwrap().as_mut().unwrap().setup.sql = true;
+    if !installed {
+        return Ok(false);
     }
-    Ok(installed)
+    if PENDING_R_SQL.with(|selected| selected.get()) {
+        // Replay is part of setup: retain its exception and the pending
+        // selection on interruption, so retry preserves live worker state.
+        let selected = api.with_gil(|api| unsafe {
+            let function = api.function(c"_mcp_console_sql", c"use_r")?;
+            api.finish_setup((api.call_no_args)(function))
+        })?;
+        if !selected {
+            return Ok(false);
+        }
+        PENDING_R_SQL.with(|selected| selected.set(false));
+    }
+    PYTHON_LIBRARY.lock().unwrap().as_mut().unwrap().setup.sql = true;
+    Ok(true)
 }
 
 fn api() -> Result<PythonApi, String> {
@@ -733,11 +755,62 @@ pub(super) fn dispatch_sql(source: &str) -> Result<super::SqlProvider, String> {
     api.with_gil(|api| api.call_sql_dispatch(source))
 }
 
+pub(super) fn initialize_sql_source(source: &str) -> Result<bool, String> {
+    api()?.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console_sql", c"initialize_connection")?;
+        let argument =
+            (api.unicode_from_string_and_size)(source.as_ptr().cast(), source.len() as isize);
+        if argument.is_null() {
+            return Err("cannot encode startup source".into());
+        }
+        let result =
+            (api.call_function_obj_args)(function, argument, std::ptr::null_mut::<PyObject>());
+        (api.dec_ref)(argument);
+        if result.is_null() {
+            api.display_pending_exception();
+            return Err("Python startup did not complete".into());
+        }
+        let complete = (api.long_as_long)(result);
+        (api.dec_ref)(result);
+        if complete == -1 {
+            crate::worker::record_bootstrap_interrupt();
+        }
+        Ok(complete == 1)
+    })
+}
+
 pub(super) fn use_r_sql() -> Result<(), String> {
     let Some(api) = installed_sql_api()? else {
+        PENDING_R_SQL.with(|selected| selected.set(true));
         return Ok(());
     };
     api.with_gil(|api| api.call_unit(c"_mcp_console_sql", c"use_r"))
+}
+
+pub(super) fn r_sql_connection_selected() -> Result<bool, String> {
+    let Some(api) = installed_sql_api()? else {
+        // SQL dispatch also defaults to R until the Python adapter is installed.
+        // Inspecting selection must not initialize Python or consume a reset.
+        return Ok(true);
+    };
+    api.with_gil(|api| unsafe {
+        let function = api.function(c"_mcp_console_sql", c"r_connection_selected")?;
+        let result = (api.call_no_args)(function);
+        if result.is_null() {
+            api.display_pending_exception();
+            return Err(python_function_error(
+                c"_mcp_console_sql",
+                c"r_connection_selected",
+            ));
+        }
+        let selected = (api.long_as_long)(result);
+        (api.dec_ref)(result);
+        match selected {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err("Python SQL selection returned an invalid value".into()),
+        }
+    })
 }
 
 pub(super) fn initialize_managed_sql() -> Result<(), String> {
@@ -1327,10 +1400,15 @@ unsafe fn load_symbol<T: Copy>(
 
 impl Configuration {
     fn new(selected: &super::NativePython) -> Result<Self, String> {
+        #[cfg(windows)]
+        // getpath's virtualenv search requires native Windows separators.
+        let program_name = selected.embedding.python.replace('/', "\\");
+        #[cfg(not(windows))]
+        let program_name = &selected.embedding.python;
         Ok(Self {
             selected: selected.clone(),
             reticulate_python: std::env::var_os("RETICULATE_PYTHON"),
-            program_name_wide: wide_string(&selected.embedding.python, "program name")?,
+            program_name_wide: wide_string(program_name.as_str(), "program name")?,
         })
     }
 }

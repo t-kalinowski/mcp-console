@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed_result
 from support.assertions import assert_result_content, last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -14,9 +15,11 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
+from support.requirements import POSIX, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_workers_keep_plot_files_separate(
     binary: Path, execution: Execution
@@ -95,7 +98,7 @@ def test_workers_keep_plot_files_separate(
                 evaluation = client.start_send(r=r, timeout_ms=0)
                 ready.wait("plot device is open")
                 client.receive(evaluation)
-                assert evaluation["result"] == {
+                assert without_elapsed_result(evaluation["result"]) == {
                     "content": [
                         {"type": "text", "text": "\n[running; poll with an empty send]"}
                     ],

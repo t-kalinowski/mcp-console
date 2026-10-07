@@ -9,8 +9,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.normalization import normalize_process_diagnostic
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
+from support.resolvers import bare_runtime_environment
 from support.records import Transcript
 from support.suites import run_this_suite
 
@@ -28,8 +30,15 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
         library.mkdir()
         record = temporary / "reticulate-calls"
         environment["MCP_CONSOLE_TEST_RETICULATE_RECORD"] = str(record)
+        environment["UV_TOOL_DIR"] = str(temporary)
         subprocess.run(
-            [rscript.with_name("R"), "CMD", "INSTALL", f"--library={library}", fixture],
+            [
+                rscript.with_name("R.exe" if os.name == "nt" else "R"),
+                "CMD",
+                "INSTALL",
+                f"--library={library}",
+                fixture,
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -38,18 +47,19 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
         record.write_text("", encoding="utf-8")
         for name in ("R_LIBS", "R_LIBS_SITE", "R_LIBS_USER"):
             environment[name] = str(library)
-        path = environment.get("PATH")
-        assert path is not None, "PATH is required"
-        environment["PATH"] = os.pathsep.join(
-            entry
-            for entry in path.split(os.pathsep)
-            if not any((Path(entry) / name).exists() for name in ("ir", "uv", "uvx"))
-        )
-        environment.pop("RETICULATE_UV", None)
-        environment.pop("RETICULATE_PYTHON", None)
+        environment = bare_runtime_environment(environment, library)
+        if os.name == "nt":
+            environment["PATH"] = os.pathsep.join(
+                entry
+                for entry in environment["PATH"].split(os.pathsep)
+                if not (Path(entry) / "python.exe").exists()
+            )
 
         with McpClient(
-            binary, execution.serve(), environment, current_directory=temporary
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            current_directory=temporary,
         ) as client:
             client.initialize_and_list_tools()
             tools = client.transcript[-1]["result"]["tools"]
@@ -90,7 +100,12 @@ def test_probes_ambient_reticulate_before_first_use_bootstrap(
             listed_again = client.request("tools/list")
             assert listed_again["result"]["tools"] == tools, listed_again
             listed_again["result"]["tools"] = "<unchanged from initialization>"
-            return client.finish()
+            transcript = client.finish()
+            for entry in transcript:
+                for part in entry.get("result", {}).get("content", []):
+                    if part["type"] == "text":
+                        part["text"] = normalize_process_diagnostic(part["text"])
+            return transcript
 
 
 if __name__ == "__main__":

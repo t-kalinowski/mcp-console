@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import re
 import subprocess
 import sys
@@ -12,15 +13,61 @@ from boundaries.client_server.python.test_peer_runtime import (
     DEFER_R_STARTUP,
     defer_r_bootstrap,
 )
+from support.requirements import POSIX, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import isolated_r_home, r_test_environment
 from support.records import Transcript
+from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 
+def native_r_launchers(source: str) -> str:
+    if os.name != "nt":
+        return source
+    for name in ("R", "Rscript"):
+        source = source.replace(
+            f'file.path(R.home("bin"), "{name}")',
+            f'normalizePath(file.path(R.home(), "bin", "{name}.exe"), winslash = "/")',
+        )
+    for argument in ("commandArgs()[1L]", "arguments[[1L]]"):
+        source = re.sub(
+            rf"(?<![\w$]){re.escape(argument)}",
+            lambda match: f'normalizePath({match[0]}, winslash = "/")',
+            source,
+        )
+    source = source.replace(
+        'stopifnot(is.null(attr(output, "status")), identical(output, character()))',
+        'if (!is.null(attr(output, "status"))) stop(paste(output, collapse = "\\n"))\n'
+        "  stopifnot(identical(output, character()))",
+    )
+    source = source.replace(
+        'gsub(" ", "~+~", script, fixed = TRUE)',
+        "script",
+    )
+    # The stock Windows launcher can shorten R_HOME to its 8.3 spelling.
+    source = source.replace(
+        "sub(R.home(),",
+        'sub(normalizePath(R.home(), winslash = "/"),',
+    )
+    for paths in (
+        "child$arguments[[1L]]",
+        "reference$arguments[[1L]]",
+        "child$environment[environment_names]",
+        "Sys.getenv(environment_names)",
+    ):
+        source = source.replace(paths, f'normalizePath({paths}, winslash = "/")')
+    # Windows R.exe delegates through cmd.exe's ANSI argument path. Keep this
+    # native-launcher fixture ASCII; shared cell tests exercise UTF-8 R source.
+    source = source.replace("λ", "ascii")
+    return 'invisible(Sys.setlocale("LC_CTYPE", ".UTF-8"))\n' + source.replace(
+        'basename(command) == "Rscript"', 'basename(command) == "Rscript.exe"'
+    )
+
+
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_uses_selected_r_resource_directories(
     binary: Path, execution: Execution
@@ -166,6 +213,7 @@ def test_uses_selected_r_resource_directories(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_uses_selected_r_launcher_default_architecture(
     binary: Path, execution: Execution
@@ -237,6 +285,10 @@ def test_uses_selected_r_launcher_default_architecture(
             return client.finish()
 
 
+@platform_snapshots(
+    "win32",
+    reason="Native R executable identity and launcher arguments differ on Windows",
+)
 @executions(DIRECT, SANDBOXED)
 def test_shows_interactive_interpreter_identity(
     binary: Path, execution: Execution
@@ -257,16 +309,16 @@ def test_shows_interactive_interpreter_identity(
                 """)
         )
         client.initialize_and_list_tools()
-        client.send(
-            # fmt: r
-            r=code(r"""
-                sub(R.home(), "<R_HOME>", commandArgs()[1L], fixed = TRUE)
-                identical(commandArgs()[1L], file.path(R.home("bin"), "R"))
-                interactive()
-                """),
-        )
+        # fmt: r
+        r = code(r"""
+            sub(R.home(), "<R_HOME>", commandArgs()[1L], fixed = TRUE)
+            identical(commandArgs()[1L], file.path(R.home("bin"), "R"))
+            interactive()
+            """)
+        client.send(r=native_r_launchers(r))
+        launcher = "R.exe" if os.name == "nt" else "R"
         assert last_tool_text(client) == (
-            '[1] "<R_HOME>/bin/R"\n[1] TRUE\n[1] TRUE\n'
+            f'[1] "<R_HOME>/bin/{launcher}"\n[1] TRUE\n[1] TRUE\n'
         ), last_tool_text(client)
         client.send(
             # fmt: python
@@ -279,10 +331,16 @@ def test_shows_interactive_interpreter_identity(
                 print("sys.argv:", sys.argv)
                 print("sys.orig_argv == [sys.executable]:", sys.orig_argv == [sys.executable])
                 print("sys.argv[0] == sys.executable:", sys.argv[0] == sys.executable)
-                child = subprocess.run([sys.executable, "identity.py", "two words"], check=True)
+                child = subprocess.run(
+                    [sys.executable, "identity.py", "two words"],
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                sys.stdout.write(child.stdout)
+                child.check_returncode()
                 """),
         )
-        assert last_tool_text(client) == (
+        assert last_tool_text(client).replace("\r\n", "\n") == (
             "sys.executable is a file: True\n"
             "sys.argv: ['']\n"
             "sys.orig_argv == [sys.executable]: True\n"
@@ -293,6 +351,9 @@ def test_shows_interactive_interpreter_identity(
         return client.finish()
 
 
+@platform_snapshots(
+    "win32", reason="Native R child launchers and argument escaping differ on Windows"
+)
 @executions(DIRECT, SANDBOXED)
 def test_launches_r_children_from_interpreter_identity(
     binary: Path, execution: Execution
@@ -300,9 +361,8 @@ def test_launches_r_children_from_interpreter_identity(
     environment, _ = r_test_environment()
     with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
-        client.send(
-            # fmt: r
-            r=code(r"""
+        # fmt: r
+        r = code(r"""
                 arguments <- commandArgs()
                 stopifnot(
                   file.exists(arguments[[1L]]),
@@ -377,8 +437,8 @@ def test_launches_r_children_from_interpreter_identity(
                 cat(
                   "R interpreter and children retain executable, arguments, and environment\n"
                 )
-                """),
-        )
+                """)
+        client.send(r=native_r_launchers(r))
         assert last_tool_text(client) == (
             "R interpreter and children retain executable, arguments, and environment\n"
         ), last_tool_text(client)

@@ -10,6 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.snapshots import execution_snapshots
+from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import large_output, last_tool_text
 from support.checkpoints import (
     FifoCheckpoint,
@@ -30,7 +32,7 @@ from support.previews import (
     session_directory,
 )
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.resolvers import record_resolved_r_library
 from support.suites import run_this_suite
 
@@ -60,7 +62,7 @@ def test_reports_missing_worker_launch_failure(
     result = client.transcript[-1]["result"]
     assert result["isError"] is True, result
     failure = result["content"][0]["text"]
-    assert failure.startswith("failed to launch worker: "), failure
+    assert failure.removeprefix("[").startswith("failed to launch worker: "), failure
     result["content"][0]["text"] = "failed to launch worker: <missing executable>"
 
     transcript, standard_error = client.finish_with_standard_error()
@@ -69,6 +71,7 @@ def test_reports_missing_worker_launch_failure(
     return transcript
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_reports_replacement_startup_failure_and_retry(
@@ -89,7 +92,7 @@ def test_reports_replacement_startup_failure_and_retry(
         )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), *writable_root),
+            execution.serve("-c", "cache=host", "--worker", str(zod), *writable_root),
             environment,
         )
         client.initialize_and_list_tools()
@@ -169,7 +172,7 @@ def test_polls_replacement_startup_after_send_timeout(
         record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
         )
         forced_release = threading.Event()
@@ -216,6 +219,7 @@ def test_polls_replacement_startup_after_send_timeout(
                             "[worker exited with status 86]\n"
                             "[worker stopped: in-memory state lost]\n"
                             "[starting new worker]\n"
+                            "[phase: replacement]\n"
                             "[worker starting]"
                         ),
                     }
@@ -283,6 +287,7 @@ def test_orders_explicit_restart_output(
             build_interposer(temporary_path, "cell_output_close_interposer")
         )
         environment["MCP_CONSOLE_TEST_CELL_OUTPUT_CLOSED"] = str(output_closed.path)
+        environment["MCP_CONSOLE_TEST_CELL_OUTPUT_SUFFIX"] = "/outputs/call-000003.log"
         environment["ZOD_STDIN_CLOSE_RELEASE"] = str(output_closed.path)
         client = McpClient(
             binary,
@@ -291,8 +296,16 @@ def test_orders_explicit_restart_output(
         )
         client.initialize_and_list_tools()
 
+        # Finish discovery and lazy startup before exercising worker retirement.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
+
         client.send(r="wait for stdin close", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         wait_for_marker(
             temporary_path,
             "zod-waiting-for-stdin-close",
@@ -382,6 +395,8 @@ def test_controlled_restart_runs_cell_once_in_fresh_worker(
         return client.finish()
 
 
+@execution_snapshots
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_controlled_interrupt_preserves_idle_worker_startup_failure(
     binary: Path,
@@ -411,6 +426,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["TMPDIR"] = temporary_directory
+        environment["UV_TOOL_DIR"] = str(temporary_path)
         environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
         environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
         environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
@@ -423,7 +439,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
         )
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod), *writable_root),
+            execution.serve("-c", "cache=host", "--worker", str(zod), *writable_root),
             environment,
         )
         finished = False
@@ -472,6 +488,7 @@ def test_controlled_interrupt_preserves_idle_worker_startup_failure(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_control_only_interrupt_returns_while_explicit_preparation_settles(
     binary: Path,
@@ -500,6 +517,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
         assert path is not None, "PATH is required"
         environment["PATH"] = os.pathsep.join((str(fake_bin), path))
         environment["TMPDIR"] = temporary_directory
+        environment["UV_TOOL_DIR"] = str(temporary_path)
         environment["MCP_CONSOLE_TEST_IR_COUNTER"] = str(temporary_path / "ir-counter")
         environment["MCP_CONSOLE_TEST_IR_LIBRARIES"] = str(library)
         environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
@@ -511,7 +529,7 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
 
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
         )
         finished = False
@@ -538,11 +556,14 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
                     "control-only interrupt waited for explicit preparation to settle"
                 )
                 client.receive(interrupt)
-                assert interrupt["result"] == {
+                assert without_elapsed_result(interrupt["result"]) == {
                     "content": [
                         {
                             "type": "text",
-                            "text": "\n[running; poll with an empty send]",
+                            "text": (
+                                "\n[phase: dependency preparation]"
+                                "\n[running; poll with an empty send]"
+                            ),
                         }
                     ],
                     "isError": False,
@@ -611,8 +632,16 @@ def test_restart_preserves_pending_sideband_output(
         )
         client.initialize_and_list_tools()
 
+        # Finish discovery and lazy startup before exercising worker retirement.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
+
         client.send(r="emit output and image before completion", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         image_started = wait_for_marker(
             temporary_path,
             "zod-image-evaluation-started",
@@ -660,8 +689,16 @@ def test_restart_preserves_unpolled_completion(
         )
         client.initialize_and_list_tools()
 
+        # Finish discovery and lazy startup before exercising worker retirement.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
+
         client.send(r="complete before restart checkpoint", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         wait_for_marker(
             temporary_path,
             "zod-completion-processed",
@@ -767,6 +804,7 @@ def test_restart_interrupts_waiting_send(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restarts_after_worker_exit(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
@@ -798,6 +836,7 @@ def test_restarts_after_worker_exit(binary: Path, execution: Execution) -> Trans
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_unexpected_worker_exit_zero(
     binary: Path, execution: Execution

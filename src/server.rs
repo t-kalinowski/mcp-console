@@ -32,31 +32,38 @@ struct ConsoleServer {
     startup: startup::Startup,
     deliveries: crate::server_transport::ResponseDeliveries,
     languages: Languages,
+    language_setting: &'static str,
     tool_router: ToolRouter<Self>,
 }
 
 impl ConsoleServer {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         input_closed: InputClosed,
         worker: Option<PathBuf>,
         relay: Option<PathBuf>,
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
-        target: Option<(crate::settings::Target, Vec<PathBuf>)>,
         python: Option<PathBuf>,
+        resolver: crate::settings::SandboxSettings,
+        startup: Option<crate::settings::startup::Startup>,
+        visibility: Option<Languages>,
     ) -> Result<Self, String> {
         let recording_directory = std::env::current_dir();
-        let languages = Languages::from_environment()?;
+        let (languages, language_setting) = match visibility {
+            Some(languages) => (languages, "languages"),
+            None => (Languages::from_environment()?, LANGUAGES_ENV),
+        };
         if worker.is_none() && relay.is_some() {
             return Err("a custom relay requires a custom worker".into());
         }
         // Presentation has no dependency on the client or its discovered capabilities.
         let tool_router = Self::configured_tool_router(
             languages,
+            visibility.is_some(),
             worker.is_none(),
             &sandbox_settings,
             no_sandbox,
-            target.as_ref().map(|(target, _)| target),
         );
         let runtime = Arc::new(startup::Runtime {
             worker: crate::worker_client::Client::pending(),
@@ -73,39 +80,33 @@ impl ConsoleServer {
             runtime,
             prelaunch,
             move |started, diagnostics| {
-                let configuration = if let Some((target, roots)) = target {
-                    crate::worker_client::ClientConfiguration::target(
-                        target,
-                        roots,
-                        no_sandbox,
-                        sandbox_settings,
-                        python,
-                        diagnostics,
-                        started,
-                    )?
-                } else if let Some(program) = worker {
+                let configuration = if let Some(program) = worker.clone() {
                     crate::worker_client::ClientConfiguration::new(
                         program,
-                        relay,
+                        relay.clone(),
                         no_sandbox,
-                        sandbox_settings,
+                        sandbox_settings.clone(),
                     )
+                    .with_resolver_settings(resolver.clone())?
                 } else {
                     crate::worker_client::ClientConfiguration::builtin(
                         no_sandbox,
-                        sandbox_settings,
-                        python,
+                        sandbox_settings.clone(),
+                        python.clone(),
+                        resolver.clone(),
                         diagnostics,
                         started,
                     )?
                 };
-                let target = configuration.target_metadata();
-                let transcript = crate::transcript::Transcript::with_target(
-                    recording_directory,
+                let configuration = configuration.with_startup(startup.clone());
+                let transcript = crate::transcript::Transcript::configured(
+                    recording_directory
+                        .as_ref()
+                        .cloned()
+                        .map_err(|error| std::io::Error::new(error.kind(), error.to_string())),
                     configuration.dynamic_resolution(),
                     configuration.python_preparation(),
                     !configuration.python_only(),
-                    target,
                 );
                 Ok(startup::PreparedRuntime {
                     configuration,
@@ -117,6 +118,7 @@ impl ConsoleServer {
             startup,
             deliveries: crate::server_transport::ResponseDeliveries::default(),
             languages,
+            language_setting,
             tool_router,
         })
     }
@@ -124,15 +126,7 @@ impl ConsoleServer {
 
 #[tool_router]
 impl ConsoleServer {
-    #[tool(
-        description = r#"Persistent R, Python, and SQL workbench for exact computation, file and data inspection, transformation, visualization, statistics, simulation, and modeling. State persists across calls. Language fields describe the configured interface, not installed runtimes. With both runtimes and their bridge available, Python reads R globals through `r.name` and R reads Python globals through `py$name`. R-owned managed DuckDB SQL can query R data frames by name; without R, Python-owned DuckDB requires explicit frame registration with `_console.sql_connection().register(name, frame)`. Get the active native connection with `.console$sql_connection()` in R or `_console.sql_connection()` in Python; a getter errors if the connection belongs to the other runtime. Pass a connection to select it, or NULL/None to restore the managed default without closing user connections. Managed dependency preparation requires resolver support on the execution host; bare runtimes require preinstalled packages, and explicitly selected Python uses its preinstalled Python packages.
-
-Send one complete `r`, `python`, or `sql` cell per call. Code-bearing calls must be sequential; a control-only interrupt may overlap a pending `send`. Inspect intermediate results before submitting dependent cells. Cells are not transactional; changes made before an error may remain.
-
-Omit code to poll, supply stdin, control the session, or prepare requirements when available. If a response ends in `[running; poll with an empty send]`, call `send` again without code or stdin; do not resubmit the cell. Send `stdin` alone to answer an active prompt or debugger. Field descriptions specify preparation, control, and timeout ordering.
-
-Each result has at most 8 KiB of UTF-8 text, including notices; oversized output keeps its beginning and latest tail. Images have separate limits. Retained raw-log paths are relative to the server's launch directory for project recordings and absolute for home recordings (both on the controller for remote targets). Full retained text requires filesystem access there through existing tools; Console provides no read/search interface."#
-    )]
+    #[tool]
     async fn send(
         &self,
         Extension(runtime): Extension<Arc<startup::Runtime>>,
@@ -164,17 +158,12 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
             }),
             (None, None, None) => None,
             _ => {
-                return Err("only one of `r`, `python`, or `sql` may be supplied".to_string());
+                return Err(format!(
+                    "only one of {} may be supplied",
+                    self.languages.cell_fields()
+                ));
             }
         };
-        if let Some(cell) = cell.as_ref()
-            && !self.languages.enables(cell.language)
-        {
-            return Err(format!(
-                "`{}` cells are disabled by `{LANGUAGES_ENV}`",
-                Languages::field(cell.language)
-            ));
-        }
         if let Some(requirements) = &requirements {
             use crate::worker_client::RequirementsAction::{Get, Reset};
             if matches!(requirements.action, Get | Reset)
@@ -213,8 +202,7 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                         ));
                     }
                     Err(_) => {
-                        let mut response = crate::worker_client::Response::default();
-                        response.push_notice("worker starting");
+                        let response = runtime.worker.starting_response();
                         return Ok(response_to_tool_result(
                             response,
                             &call,
@@ -266,24 +254,30 @@ Each result has at most 8 KiB of UTF-8 text, including notices; oversized output
                 }
             },
         );
-        let response = runtime
-            .worker
-            .send(crate::worker_client::SendRequest {
-                cell,
-                stdin,
-                requirements,
-                control: control.map(|control| match control {
-                    SendControl::Interrupt => crate::worker_client::SendControl::Interrupt,
-                    SendControl::Restart => crate::worker_client::SendControl::Restart,
-                }),
-                deadline: started
-                    .checked_add(Duration::from_millis(timeout_ms))
-                    .unwrap_or(started),
-                transcript: runtime.transcript.clone(),
-                call_id: call.id(),
-            })
-            .await
-            .unwrap_or_else(crate::worker_client::Response::tool_error);
+        let request = crate::worker_client::SendRequest {
+            cell,
+            stdin,
+            requirements,
+            control: control.map(|control| match control {
+                SendControl::Interrupt => crate::worker_client::SendControl::Interrupt,
+                SendControl::Restart => crate::worker_client::SendControl::Restart,
+            }),
+            deadline: started
+                .checked_add(Duration::from_millis(timeout_ms))
+                .unwrap_or(started),
+            transcript: runtime.transcript.clone(),
+            call_id: call.id(),
+        };
+        let response = async {
+            request.validate(true)?;
+            let initial_restart = matches!(
+                request.control,
+                Some(crate::worker_client::SendControl::Restart)
+            ) && self.startup.retry_failed()?;
+            runtime.worker.send(request, initial_restart).await
+        }
+        .await
+        .unwrap_or_else(crate::worker_client::Response::tool_error);
         Ok(response_to_tool_result(
             response,
             &call,
@@ -382,7 +376,10 @@ impl ServerHandler for ConsoleServer {
         };
         context.extensions.insert(delivery.clone());
         let runtime = self.startup.runtime();
-        let waiting_for_startup = !runtime.worker.startup_finished();
+        // A restart can reset completed failed readiness later in this call.
+        // Its wait stays cancellable until initial configuration is accepted.
+        let waiting_for_startup =
+            !runtime.worker.startup_finished() || !runtime.worker.is_configured();
         let transcript = runtime.transcript.clone();
         context.extensions.insert(runtime);
         let request_meta = context.meta.clone();
@@ -411,7 +408,15 @@ impl ServerHandler for ConsoleServer {
             .get("send")
             .expect("send tool must be registered");
         let cancellation = context.ct.clone();
-        let call_future = (send.call)(ToolCallContext::new(self, request, context));
+        let validation = SendArguments::validate_fields(
+            request.arguments.as_ref(),
+            self.languages,
+            self.language_setting,
+        );
+        let call_future = async {
+            validation.map_err(|message| ErrorData::invalid_params(message, None))?;
+            (send.call)(ToolCallContext::new(self, request, context)).await
+        };
         let result = if waiting_for_startup {
             tokio::select! {
                 biased;
@@ -451,13 +456,16 @@ impl ServerHandler for ConsoleServer {
 /// Runs the MCP stdio server and owns the selected worker.
 ///
 /// Closing MCP input also stops a worker whose evaluation is still running.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     worker: Option<PathBuf>,
     relay: Option<PathBuf>,
     no_sandbox: bool,
     sandbox_settings: crate::settings::SandboxSettings,
-    target: Option<(crate::settings::Target, Vec<PathBuf>)>,
     python: Option<PathBuf>,
+    resolver: crate::settings::SandboxSettings,
+    startup: Option<crate::settings::startup::Startup>,
+    visibility: Option<Languages>,
 ) -> Result<(), Box<dyn Error>> {
     let (input_closed, wait_for_input_close) = oneshot::channel();
     let input_closed = InputClosed(Arc::new(Mutex::new(Some(input_closed))));
@@ -469,8 +477,10 @@ pub async fn run(
         relay,
         no_sandbox,
         sandbox_settings,
-        target,
         python,
+        resolver,
+        startup,
+        visibility,
     )
     .map_err(std::io::Error::other)?;
     let startup = server.startup.clone();
@@ -506,6 +516,8 @@ pub async fn run(
                 let runtime = startup.runtime();
                 if runtime.worker.is_configured() {
                     runtime.worker.shutdown(deadline).await?;
+                } else {
+                    runtime.worker.finish_recording();
                 }
                 startup.finish_failed_preparation(error)
             }

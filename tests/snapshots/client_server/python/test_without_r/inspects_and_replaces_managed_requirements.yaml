@@ -12,6 +12,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb"
             ],
             "duckdb": [
@@ -32,6 +34,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
       duckdb:
         - sqlite
@@ -125,7 +129,13 @@ send:
   control: restart
   requirements:
     action: set
-  python: import importlib.util; importlib.util.find_spec('numpy') is None
+  python: |
+    import importlib.util
+
+    all(
+        importlib.util.find_spec(package) is None
+        for package in ("numpy", "pandas", "matplotlib", "plotnine")
+    )
 result:
   content:
     - type: text
@@ -196,6 +206,8 @@ result:
             "python": [
               "numpy",
               "pandas",
+              "matplotlib",
+              "plotnine",
               "duckdb"
             ],
             "duckdb": [
@@ -216,6 +228,8 @@ result:
       python:
         - numpy
         - pandas
+        - matplotlib
+        - plotnine
         - duckdb
       duckdb:
         - sqlite
@@ -228,7 +242,14 @@ result:
   isError: false
 ---
 send:
-  python: import numpy, pandas; 42
+  python: |
+    import importlib.metadata
+
+    for package in ("numpy", "pandas", "matplotlib", "plotnine", "duckdb"):
+        assert importlib.metadata.version(package)
+    import numpy, pandas, matplotlib, plotnine
+
+    42
 result:
   content:
     - type: text

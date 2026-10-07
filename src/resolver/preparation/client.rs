@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 #[cfg(unix)]
-use std::io;
+use std::io::{self, Write};
 use std::io::{BufReader, Read};
-use std::process::Stdio;
+use std::process::{Child, Stdio};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -11,10 +11,10 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::{Discovery, Input, Mode, Operation, Output, Selections};
-use crate::resolver::{ResolverControl, ResolverControlOutcome, ResolverStopHandle};
+use super::{Discovery, Input, Mode, Operation, Output};
 #[cfg(unix)]
-use crate::target_launch::transfer::Io;
+use crate::process_io::Io;
+use crate::resolver::{ResolverControl, ResolverControlOutcome, ResolverStopHandle};
 
 #[derive(Clone)]
 pub(crate) struct Preparation(Arc<Connection>);
@@ -23,8 +23,69 @@ struct Connection {
     events: mpsc::Sender<Event>,
     sequence: AtomicU64,
     owner: Mutex<Option<thread::JoinHandle<Result<(), String>>>>,
+    unconfirmed: Arc<Mutex<Option<UnconfirmedChild>>>,
     blocked: Arc<Mutex<Option<String>>>,
-    local: bool,
+    retired: Arc<AtomicBool>,
+}
+
+struct UnconfirmedChild {
+    child: Arc<Mutex<Option<Child>>>,
+    done: mpsc::Receiver<()>,
+    reaper: Option<thread::JoinHandle<()>>,
+}
+
+impl UnconfirmedChild {
+    fn retain(child: Child, mut exit: crate::process_exit::ChildExitWaiter) -> Self {
+        let child = Arc::new(Mutex::new(Some(child)));
+        let retained = child.clone();
+        let (finished, done) = mpsc::channel();
+        let reaper = thread::spawn(move || {
+            // Keep the process handle and its observer owned after the bounded
+            // caller returns. Exit observation precedes the sole reap.
+            if exit.finish().is_ok() {
+                let mut retained = retained.lock().expect("preparation child lock");
+                if retained
+                    .as_mut()
+                    .expect("unconfirmed preparation child")
+                    .try_wait()
+                    .is_ok_and(|status| status.is_some())
+                {
+                    retained.take();
+                }
+            }
+            let _ = finished.send(());
+        });
+        Self {
+            child,
+            done,
+            reaper: Some(reaper),
+        }
+    }
+
+    fn retry(&mut self) -> Result<(), String> {
+        if let Some(child) = self.child.lock().expect("preparation child lock").as_mut() {
+            child.kill().map_err(|error| {
+                format!(
+                    "cannot terminate {}: {error}; retirement unconfirmed",
+                    LABEL
+                )
+            })?;
+        }
+        if self.reaper.is_some() {
+            self.done
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|_| format!("{} retirement unconfirmed", LABEL))?;
+            self.reaper
+                .take()
+                .expect("preparation reaper")
+                .join()
+                .map_err(|_| format!("{} reaper panicked", LABEL))?;
+        }
+        if self.child.lock().expect("preparation child lock").is_some() {
+            return Err(format!("{} retirement unconfirmed", LABEL));
+        }
+        Ok(())
+    }
 }
 
 impl Drop for Connection {
@@ -44,10 +105,21 @@ struct Control {
     id: u64,
     events: mpsc::Sender<Event>,
     state: Arc<State>,
-    local: bool,
+    blocked: Arc<Mutex<Option<String>>>,
+    retired: Arc<AtomicBool>,
 }
 
 impl ResolverControl for Control {
+    fn phase(&self) -> Option<&'static str> {
+        if self.state.finished.load(Ordering::SeqCst) {
+            None
+        } else if self.id == 0 {
+            Some("startup")
+        } else {
+            Some("dependency preparation")
+        }
+    }
+
     fn stop(&self) -> Result<(), String> {
         if !self.state.finished.load(Ordering::SeqCst) {
             self.events
@@ -56,7 +128,7 @@ impl ResolverControl for Control {
                     control: ResolverControlOutcome::Cancelled,
                     reply: None,
                 })
-                .map_err(|_| format!("{} owner stopped", label(self.local)))?;
+                .map_err(|_| format!("{} owner stopped", LABEL))?;
         }
         Ok(())
     }
@@ -78,13 +150,25 @@ impl ResolverControl for Control {
         }
         response
             .recv()
-            .map_err(|_| format!("{} control lost its acknowledgment", label(self.local)))?
+            .map_err(|_| format!("{} control lost its acknowledgment", LABEL))?
     }
     fn control_outcome(&self) -> Option<ResolverControlOutcome> {
         *self.state.outcome.lock().expect("preparation control lock")
     }
     fn cleanup_confirmed(&self) -> bool {
         self.state.confirmed.load(Ordering::SeqCst)
+    }
+    fn retirement_confirmed(&self) -> bool {
+        self.retired.load(Ordering::SeqCst)
+    }
+    fn failure_is_controlled(&self) -> bool {
+        // Cancellation cannot account for a separate connection-close failure.
+        self.control_outcome().is_some()
+            && self
+                .blocked
+                .lock()
+                .expect("preparation session lock")
+                .is_none()
     }
 }
 
@@ -115,13 +199,7 @@ struct Pending {
     chunks: Option<String>,
 }
 
-fn label(local: bool) -> &'static str {
-    if local {
-        "local resolver"
-    } else {
-        "SSH preparation"
-    }
-}
+const LABEL: &str = "local resolver";
 
 impl Preparation {
     pub(crate) fn check_ready(&self) -> Result<(), String> {
@@ -136,64 +214,59 @@ impl Preparation {
         Ok(())
     }
 
-    pub(crate) fn open(
-        session: &crate::ssh::Session,
-        selections: Selections,
-        diagnostics: crate::process_output::Diagnostics,
-        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<(Self, Discovery), String> {
-        #[cfg(not(unix))]
-        {
-            let _ = (session, selections, diagnostics, on_started);
-            Err("SSH preparation requires macOS or Linux".into())
-        }
-        #[cfg(unix)]
-        {
-            let command = session.command_for("ssh-prepare")?;
-            let open = Input::Open {
-                version: super::VERSION,
-                build: env!("CARGO_PKG_VERSION").into(),
-                workspace: session.target.workspace.clone(),
-                selections,
-                mode: Mode::Auto,
-            };
-            Self::open_with(
-                command,
-                session.blocked.clone(),
-                open,
-                false,
-                diagnostics,
-                on_started,
-            )
-        }
-    }
-
     pub(crate) fn open_local(
         mode: Mode,
+        mut settings: crate::settings::SandboxSettings,
+        no_sandbox: bool,
+        python: Option<&std::ffi::OsStr>,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let mut command =
-            std::process::Command::new(std::env::current_exe().map_err(|error| error.to_string())?);
-        command.arg("resolve");
-        let open = Input::Open {
-            version: super::VERSION,
-            build: env!("CARGO_PKG_VERSION").into(),
-            workspace: String::new(),
-            selections: Selections::default(),
-            mode,
+        let mut command = if !no_sandbox {
+            // Preparation and the retained worker must agree on whether Python
+            // is managed, including with an isolated resolver environment.
+            crate::settings::preserve_environment(
+                &mut settings,
+                [("RETICULATE_PYTHON".as_ref(), python)],
+            )?;
+            #[cfg(unix)]
+            let command = crate::resolver::sandbox::command(settings, std::process::id())?;
+            #[cfg(windows)]
+            let command = {
+                // Windows has no resolver proxy support yet. Keep its existing
+                // host execution, but use the captured Console cache environment.
+                let mut command = std::process::Command::new(
+                    std::env::current_exe().map_err(|error| error.to_string())?,
+                );
+                crate::settings::configure_environment(&mut command, &settings);
+                command
+            };
+            command
+        } else {
+            let mut command = std::process::Command::new(
+                std::env::current_exe().map_err(|error| error.to_string())?,
+            );
+            crate::settings::configure_environment(&mut command, &settings);
+            command
         };
-        Self::open_with(command, Arc::default(), open, true, diagnostics, on_started)
+        if let Some(python) = python {
+            command.env("RETICULATE_PYTHON", python);
+        } else {
+            command.env_remove("RETICULATE_PYTHON");
+        }
+        command.arg("resolve");
+        let open = Input::Open { mode };
+        Self::open_with(command, Arc::default(), open, diagnostics, on_started)
     }
 
     fn open_with(
         mut command: std::process::Command,
         blocked: Arc<Mutex<Option<String>>>,
         open: Input,
-        local: bool,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
+        let native = command.get_args().next() == Some("sandbox".as_ref());
         #[cfg(unix)]
         command
             .stdin(Stdio::piped())
@@ -211,12 +284,12 @@ impl Preparation {
         #[cfg(windows)]
         let (stdin, stdout) = crate::windows::command_pipes(&mut command, aborted.clone())
             .map_err(|e| e.to_string())?;
-        let mut child = command.spawn().map_err(|error| {
-            format!(
-                "cannot start {} preparation: {error}",
-                if local { "local" } else { "SSH" }
-            )
-        })?;
+        let mut child = command
+            .spawn()
+            .map_err(|error| format!("cannot start local preparation: {error}"))?;
+        // Windows command_pipes installs owned child-side handles in Command.
+        // Release them before discovery failure can wait for shutdown and EOF.
+        drop(command);
         let (events, received) = mpsc::channel();
         let (outgoing, writes) = mpsc::channel();
         #[cfg(unix)]
@@ -226,7 +299,12 @@ impl Preparation {
         #[cfg(unix)]
         let stdin = child.stdin.take().expect("preparation stdin");
         #[cfg(unix)]
-        let (diagnostic_exit, notify_diagnostic_exit) = io::pipe().map_err(|e| e.to_string())?;
+        let (diagnostic_exit, mut notify_diagnostic_exit) =
+            io::pipe().map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        let mut diagnostic_abort = notify_diagnostic_exit
+            .try_clone()
+            .map_err(|e| e.to_string())?;
         #[cfg(unix)]
         let diagnostic_reader = {
             let stderr = child.stderr.take().expect("preparation stderr");
@@ -237,7 +315,7 @@ impl Preparation {
                 {
                     let _ = diagnostic_events.send(Event::Received(Err(format!(
                         "{} stderr read failed: {error}",
-                        label(local)
+                        LABEL
                     ))));
                 }
             })
@@ -250,22 +328,18 @@ impl Preparation {
         let reader = thread::spawn(move || {
             let result = (|| {
                 #[cfg(unix)]
-                let mut input = BufReader::new(Io::new(stdout, Some(reader_abort), None)?);
+                let mut input = BufReader::new(Io::new(stdout, Some(reader_abort))?);
                 #[cfg(windows)]
                 let mut input = BufReader::new(stdout.with_cancel(reader_abort));
                 loop {
-                    let message = if local {
-                        super::read_jsonl(&mut input)?
-                    } else {
-                        super::read(&mut input)?
-                    };
+                    let message = super::read_jsonl(&mut input)?;
                     let closed = matches!(message, Output::Closed);
                     if closed && input.read(&mut [0]).map_err(|error| error.to_string())? != 0 {
-                        return Err(format!("unexpected stdout after {} shutdown", label(local)));
+                        return Err(format!("unexpected stdout after {} shutdown", LABEL));
                     }
                     read_events
                         .send(Event::Received(Ok(message)))
-                        .map_err(|_| format!("{} owner stopped", label(local)))?;
+                        .map_err(|_| format!("{} owner stopped", LABEL))?;
                     if closed {
                         return Ok::<(), String>(());
                     }
@@ -279,15 +353,11 @@ impl Preparation {
         let writer = thread::spawn(move || {
             let result = (|| {
                 #[cfg(unix)]
-                let mut output = Io::new(stdin, Some(aborted), None)?;
+                let mut output = Io::new(stdin, Some(aborted))?;
                 #[cfg(windows)]
                 let mut output = stdin;
                 for message in writes {
-                    if local {
-                        super::write_jsonl(&mut output, &message)?;
-                    } else {
-                        super::write(&mut output, &message)?;
-                    }
+                    super::write_jsonl(&mut output, &message)?;
                 }
                 Ok::<(), String>(())
             })();
@@ -299,7 +369,7 @@ impl Preparation {
         let mut exit =
             crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
                 #[cfg(unix)]
-                drop(notify_diagnostic_exit);
+                let _ = notify_diagnostic_exit.write_all(&[1]);
                 let _ = exit_events.send(Event::Exited);
             })?;
         let state = Arc::new(State::default());
@@ -311,37 +381,98 @@ impl Preparation {
             chunks: None,
         };
         let owner_blocked = blocked.clone();
+        let unconfirmed = Arc::new(Mutex::new(None));
+        let owner_unconfirmed = unconfirmed.clone();
+        let retired = Arc::new(AtomicBool::new(false));
+        let owner_retired = retired.clone();
         let owner = thread::spawn(move || {
-            let result = run(received, &outgoing, pending, open, &owner_blocked, local);
+            let result = run(received, &outgoing, pending, open, &owner_blocked);
             drop(outgoing);
             drop(abort);
-            // Do not extend failed protocol retirement with a second exit wait.
-            // Kill before joining I/O and reaping.
-            if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
-                let _ = child.kill();
-            }
+            // Retire before joining I/O and reaping. Native cleanup needs a
+            // bounded SIGTERM allowance; direct execution can stop immediately.
+            let mut reaped = false;
+            let retired = (|| {
+                if result.is_err() || !exit.wait(Duration::from_secs(6)).unwrap_or(false) {
+                    #[cfg(unix)]
+                    let force = if native {
+                        // Let the native supervisor retire the resolver tree before
+                        // escalation. Killing the supervisor bypasses its cleanup.
+                        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+                        !exit.wait(Duration::from_secs(2)).unwrap_or(false)
+                    } else {
+                        true
+                    };
+                    #[cfg(windows)]
+                    let force = true;
+                    if force {
+                        child.kill().map_err(|error| {
+                            format!(
+                                "cannot terminate {}: {error}; retirement unconfirmed",
+                                LABEL
+                            )
+                        })?;
+                        if !exit.wait(Duration::from_secs(2))? {
+                            return Err(format!(
+                                "{} did not exit after forced termination; retirement unconfirmed",
+                                LABEL
+                            ));
+                        }
+                    }
+                }
+                exit.finish()?;
+                let status = child
+                    .try_wait()
+                    .map_err(|error| format!("cannot reap {}: {error}", LABEL))?
+                    .ok_or_else(|| format!("{} retirement unconfirmed", LABEL))?;
+                reaped = true;
+                if native && !status.success() {
+                    Err(format!("{} sandbox exited with {status}", LABEL))
+                } else {
+                    Ok(())
+                }
+            })();
+            #[cfg(unix)]
+            let _ = diagnostic_abort.write_all(&[1]);
             let _ = writer.join();
             let _ = reader.join();
-            let reaped = child
-                .wait()
-                .map(|_| ())
-                .map_err(|error| format!("cannot reap {}: {error}", label(local)));
             #[cfg(unix)]
             let _ = diagnostic_reader.join();
-            result.and(reaped)
+            if !reaped {
+                *owner_unconfirmed
+                    .lock()
+                    .expect("preparation retirement lock") =
+                    Some(UnconfirmedChild::retain(child, exit));
+            }
+            let result = match (result, retired) {
+                (Err(error), Err(cleanup)) => Err(format!("{error}; {cleanup}")),
+                (result, cleanup) => result.and(cleanup),
+            };
+            if let Err(error) = &result {
+                *owner_blocked.lock().expect("preparation session lock") = Some(format!(
+                    "{} retirement is unconfirmed; this session cannot prepare or start a replacement: {error}",
+                    LABEL
+                ));
+            }
+            // Operation receipts precede connection closure. Publish this
+            // separate receipt only after successful retirement and I/O joins.
+            owner_retired.store(result.is_ok(), Ordering::SeqCst);
+            result
         });
         let connection = Self(Arc::new(Connection {
             events: events.clone(),
             sequence: AtomicU64::new(1),
             owner: Mutex::new(Some(owner)),
+            unconfirmed,
             blocked,
-            local,
+            retired,
         }));
         let handle = ResolverStopHandle::new(Control {
             id: 0,
             events,
             state,
-            local,
+            blocked: connection.0.blocked.clone(),
+            retired: connection.0.retired.clone(),
         });
         if let Err(error) = on_started(handle.clone()) {
             let _ = handle.stop();
@@ -350,16 +481,11 @@ impl Preparation {
         }
         let discovery = response
             .recv()
-            .map_err(|_| format!("{} discovery stopped", label(local)))
+            .map_err(|_| format!("{} discovery stopped", LABEL))
             .and_then(|result| result)
             .and_then(|discovery| {
-                serde_json::from_value(discovery).map_err(|error| {
-                    if local {
-                        format!("invalid local resolver capability result: {error}")
-                    } else {
-                        format!("invalid remote capability result: {error}")
-                    }
-                })
+                serde_json::from_value(discovery)
+                    .map_err(|error| format!("invalid local resolver capability result: {error}"))
             });
         match discovery {
             Ok(discovery) => Ok((connection, discovery)),
@@ -381,16 +507,20 @@ impl Preparation {
     ) -> Result<T, String> {
         self.check_ready()?;
         let id = self.0.sequence.fetch_add(1, Ordering::SeqCst);
-        let request = Input::Run { id, operation };
+        let request = Input::Run {
+            id,
+            operation: Box::new(operation),
+        };
         // Reject unsendable requests before registering a resolver or admitting
-        // remote work. No retirement confirmation is needed for a rejected input.
+        // resolver work. No retirement confirmation is needed for a rejected input.
         super::encode(&request)?;
         let state = Arc::new(State::default());
         let handle = ResolverStopHandle::new(Control {
             id,
             events: self.0.events.clone(),
             state: state.clone(),
-            local: self.0.local,
+            blocked: self.0.blocked.clone(),
+            retired: self.0.retired.clone(),
         });
         let (reply, response) = mpsc::channel();
         self.0
@@ -401,7 +531,7 @@ impl Preparation {
                 state,
                 reply,
             })
-            .map_err(|_| format!("{} owner stopped", label(self.0.local)))?;
+            .map_err(|_| format!("{} owner stopped", LABEL))?;
         if let Err(error) = on_started(handle.clone()) {
             let _ = handle.stop();
             let _ = response.recv();
@@ -409,13 +539,9 @@ impl Preparation {
         }
         let value = response
             .recv()
-            .map_err(|_| format!("{} owner stopped", label(self.0.local)))??;
+            .map_err(|_| format!("{} owner stopped", LABEL))??;
         serde_json::from_value(value).map_err(|error| {
-            let error = if self.0.local {
-                format!("invalid local resolver result: {error}")
-            } else {
-                format!("invalid remote preparation result: {error}")
-            };
+            let error = format!("invalid local resolver result: {error}");
             *self.0.blocked.lock().expect("preparation session lock") = Some(error.clone());
             error
         })
@@ -425,13 +551,22 @@ impl Preparation {
         // Hold the lock through the join so every close caller waits for the
         // owner to reap its child, even after Closed and EOF arrive.
         let mut owner = self.0.owner.lock().map_err(|_| "preparation owner lock")?;
-        let Some(owner) = owner.take() else {
-            return Ok(());
-        };
         let _ = self.0.events.send(Event::Close);
-        owner
-            .join()
-            .map_err(|_| format!("{} owner panicked", label(self.0.local)))?
+        let result = owner.take().map_or(Ok(()), |owner| {
+            owner
+                .join()
+                .map_err(|_| format!("{} owner panicked", LABEL))?
+        });
+        let retry = self
+            .0
+            .unconfirmed
+            .lock()
+            .map_err(|_| "preparation retirement lock")?
+            .as_mut()
+            .map_or(Ok(()), |child| child.retry());
+        // A later exit or successful retry does not erase the original
+        // protocol/retirement failure or confirm native descendant cleanup.
+        result.and(retry)
     }
 }
 
@@ -441,22 +576,20 @@ fn run(
     initial: Pending,
     open: Input,
     blocked: &Mutex<Option<String>>,
-    local: bool,
 ) -> Result<(), String> {
-    let owner = label(local);
+    let owner = LABEL;
     let mut active = Some(initial);
     let mut controls: VecDeque<(u64, ResolverControlOutcome, Option<ControlReply>)> =
         VecDeque::new();
     let mut close_requested = false;
     let mut hello = false;
-    let mut setup_deadline = (!local).then(|| Instant::now() + super::SETUP_TIMEOUT);
-    let mut retirement_deadline = None;
+    let mut retirement_deadline: Option<Instant> = None;
     let result = (|| {
         outgoing
             .send(open)
             .map_err(|_| format!("{owner} writer stopped"))?;
         loop {
-            let event = match retirement_deadline.or(setup_deadline) {
+            let event = match retirement_deadline {
                 Some(deadline) => received
                     .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                     .map_err(|_| format!("{owner} setup or retirement deadline exceeded"))?,
@@ -488,20 +621,13 @@ fn run(
                         outgoing
                             .send(Input::Control { id, control })
                             .map_err(|_| format!("{owner} writer stopped"))?;
-                        if !local && control == ResolverControlOutcome::Cancelled {
-                            retirement_deadline = Some(Instant::now() + Duration::from_secs(7));
-                        }
                         controls.push_back((id, control, reply));
                     } else if let Some(reply) = reply {
                         let _ = reply.send(Ok(false));
                     }
                 }
-                Event::Received(Ok(Output::Hello { version, build })) if !hello => {
-                    if version != super::VERSION || build != env!("CARGO_PKG_VERSION") {
-                        return Err(format!("incompatible {owner} protocol or Console build"));
-                    }
+                Event::Received(Ok(Output::Hello)) if !hello => {
                     hello = true;
-                    setup_deadline = None;
                 }
                 Event::Received(Ok(Output::Controlled { id, result })) if hello => {
                     let Some((expected, control, reply)) = controls.pop_front() else {
@@ -548,11 +674,7 @@ fn run(
                         _ => return Err(format!("{owner} requires one complete result")),
                     };
                     if !confirmed {
-                        return Err(if local {
-                            "local resolver process cleanup failed".into()
-                        } else {
-                            "remote preparation process cleanup failed".into()
-                        });
+                        return Err("local resolver process cleanup failed".into());
                     }
                     pending.state.confirmed.store(true, Ordering::SeqCst);
                     pending.state.finished.store(true, Ordering::SeqCst);
@@ -569,11 +691,7 @@ fn run(
                         .outcome
                         .lock()
                         .expect("preparation control lock");
-                    let control_label = if local {
-                        "local resolver"
-                    } else {
-                        "remote preparation"
-                    };
+                    let control_label = LABEL;
                     let result = result.and_then(|value| match outcome {
                         Some(ResolverControlOutcome::Cancelled) => {
                             Err(format!("{control_label} cancelled"))

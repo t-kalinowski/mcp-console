@@ -195,10 +195,6 @@ unstaged
             "R_HOME": "",
             "RETICULATE_PYTHON": "/explicit/workload/python",
             "MCP_CONSOLE_SANDBOX_SOURCE": str(self.root / "runner-source"),
-            "MCP_CONSOLE_TEST_DOCKER_IMAGE": "",
-            "MCP_CONSOLE_TEST_SBX_TEMPLATE": "",
-            "MCP_CONSOLE_TEST_SSH_EXTERNAL": "",
-            "MCP_CONSOLE_TEST_SSH_HOST": "",
         }
         self.write(
             "runner-source/codex-rs/rust-toolchain.toml",
@@ -223,9 +219,7 @@ unstaged
         self.assertEqual(report["runtime"]["r_home"], str(self.root / "R-home"))
         self.assertEqual(report["caches"]["uv"], str(self.root / "shared-cache"))
         self.assertNotIn("host_budget", report["caches"])
-        self.assertTrue(
-            all(item["status"] == "skip" for item in report["providers"].values())
-        )
+        self.assertNotIn("providers", report)
         self.assertFalse((self.root / "target").exists())
         self.assertFalse((self.root / ".dev-workflow").exists())
         for name, label in (

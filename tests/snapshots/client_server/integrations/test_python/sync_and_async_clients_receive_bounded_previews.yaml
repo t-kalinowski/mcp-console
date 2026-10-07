@@ -1,22 +1,22 @@
 ---
 preview:
-  text_bytes: 8059
+  text_bytes: 8043
   concat:
     - repeat: x
-      count: 3904
+      count: 3968
     - |
 
-      [output preview: omitted 8380807 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 8388615 raw bytes retained, 0 raw bytes not retained]
+      [output omitted: 8380679 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000001.log]
     - repeat: x
-      count: 3904
+      count: 3968
 ---
 preview:
-  text_bytes: 8059
+  text_bytes: 8043
   concat:
     - repeat: x
-      count: 3904
+      count: 3968
     - |
 
-      [output preview: omitted 8380807 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 8388615 raw bytes retained, 0 raw bytes not retained]
+      [output omitted: 8380679 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000001.log]
     - repeat: x
-      count: 3904
+      count: 3968

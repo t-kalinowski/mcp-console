@@ -15,31 +15,37 @@ scenario: missing policy
 exit_code: 1
 stdout: ""
 stderr: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 2)
+  mcp-console-sandbox: filesystem is required without extends
 ---
 scenario: duplicate field
 exit_code: 1
 stdout: ""
 stderr: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 22)
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 33)
+---
+scenario: removed version
+exit_code: 1
+stdout: ""
+stderr: |
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 162)
 ---
 scenario: duplicate command
 exit_code: 1
 stdout: ""
 stderr: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 176)
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 162)
 ---
 scenario: duplicate cwd
 exit_code: 1
 stdout: ""
 stderr: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 172)
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 158)
 ---
 scenario: file include
 exit_code: 1
 stdout: ""
 stderr: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 176)
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 162)
 ---
 scenario: transport export
 exit_code: 1
@@ -58,7 +64,7 @@ scenario: invalid environment
 exit_code: 1
 stdout: ""
 stderr: |
-  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 212)
+  mcp-console-sandbox: invalid configuration JSON (Data at line 1, column 198)
 ---
 scenario: --config-env ABSENT_POLICY
 exit_code: 1

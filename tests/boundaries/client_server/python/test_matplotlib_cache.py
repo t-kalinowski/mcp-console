@@ -14,9 +14,79 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.resolvers import matplotlib_test_environment
-from support.requirements import R, requires
+from support.requirements import R, SANDBOX, requires
 from boundaries.client_server.server.test_no_r import no_r_environment
 from support.suites import run_this_suite
+
+
+@requires(SANDBOX, R)
+def test_uses_resolver_font_cache_with_r(binary: Path) -> Transcript:
+    return uses_resolver_font_cache(binary, with_r=True)
+
+
+@requires(SANDBOX)
+def test_uses_resolver_font_cache_without_r(binary: Path) -> Transcript:
+    return uses_resolver_font_cache(binary, with_r=False)
+
+
+def uses_resolver_font_cache(binary: Path, *, with_r: bool) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        env = (
+            matplotlib_test_environment(root / "cache")
+            if with_r
+            else no_r_environment(root)
+        )
+        env["XDG_CACHE_HOME"] = str(root / "cache")
+        env.pop("MPLCONFIGDIR", None)
+        # Reuse the prepared host R environment; rebuilding unrelated R packages
+        # is independent of the shared font cache contract. The R-free case
+        # covers the default Console cache selection.
+        cache = root / (
+            "cache/matplotlib"
+            if with_r
+            else "cache/mcp-console/dependencies/matplotlib"
+        )
+        if with_r:
+            env["MPLCONFIGDIR"] = str(cache)
+        env["MCP_CONSOLE_TEST_FONT_CACHE"] = str(cache)
+        config = root / "matplotlibrc"
+        config.write_text("lines.linewidth: 7.25\n", encoding="utf-8")
+        env["MATPLOTLIBRC"] = str(config)
+        arguments = SANDBOXED.serve("-c", "cache=host") if with_r else SANDBOXED.serve()
+        with McpClient(binary, arguments, env, root) as client:
+            client.initialize_and_list_tools()
+            wait_for_worker_ready(client, "resolver font cache readiness")
+            client.expect("[prepared]", requirements={"python": ["matplotlib"]})
+            for restart in (False, True):
+                if restart:
+                    client.send(control="restart")
+                client.expect(
+                    "resolver cache and host configuration retained\n",
+                    # fmt: python
+                    python=code("""
+                        import os
+                        from pathlib import Path
+                        import matplotlib
+
+                        source = Path(os.environ["MCP_CONSOLE_TEST_FONT_CACHE"])
+                        private = Path(os.environ["MPLCONFIGDIR"])
+                        caches = list(private.glob("fontlist-v*.json"))
+                        assert caches and private != source
+                        assert all(path.is_symlink() and path.resolve().parent == source for path in caches)
+                        assert matplotlib.rcParams["lines.linewidth"] == 7.25
+                        print("resolver cache and host configuration retained")
+                        """),
+                )
+            client.finish()
+        assert list(cache.glob("fontlist-v*.json"))
+    return [
+        {
+            "resolver_font_cache": "shared",
+            "restart": "shared",
+            "host_configuration": "retained",
+        }
+    ]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -63,7 +133,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
         client = clients.enter_context(
             McpClient(
                 binary,
-                execution.serve(),
+                execution.serve("-c", "cache=host"),
                 environment,
                 current_directory=workspace,
             )
@@ -86,6 +156,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             # fmt: python
             python=code("""
                 import os
+                import sys
                 from pathlib import Path
 
                 import matplotlib
@@ -103,7 +174,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             private_cache = next(
                 path
                 for path in Path(os.environ["MPLCONFIGDIR"]).glob("fontlist-v*.json")
-                if path.is_symlink()
+                if path.is_symlink() or sys.platform == "win32" and path.name != "fontlist-v999.json"
             )
             private_cache_bytes = private_cache.read_bytes()
             private_cache.unlink()
@@ -142,7 +213,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             private_probe.write_text("ok", encoding="utf-8")
 
             (
-                config.resolve() == Path(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]).resolve(),
+                config.samefile(os.environ["MCP_CONSOLE_TEST_MATPLOTLIBRC"]),
                 matplotlib.rcParams["lines.linewidth"],
                 private_probe.read_text(encoding="utf-8") == "ok",
             )

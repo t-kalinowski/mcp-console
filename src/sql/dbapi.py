@@ -14,6 +14,7 @@ _PROVIDER_R = 0
 _PROVIDER_MANAGED = 1
 _PROVIDER_HANDLED = 2
 _UNSET = object()
+_r_selected = False
 
 try:
     _connection
@@ -35,7 +36,7 @@ def _validate_connection(connection):
 
 
 def sql_connection(connection: object = _UNSET) -> object:
-    global _connection, _restore_managed
+    global _connection, _restore_managed, _r_selected
 
     if connection is _UNSET:
         if _connection is None:
@@ -47,11 +48,13 @@ def sql_connection(connection: object = _UNSET) -> object:
         return _connection
 
     if connection is None:
+        _r_selected = False
         _connection = None
         _restore_managed = True
         return None
 
     _validate_connection(connection)
+    _r_selected = False
     _connection = connection
     _restore_managed = False
     return None
@@ -62,7 +65,9 @@ def has_selected_connection() -> bool:
 
 
 def use_r():
-    global _connection, _restore_managed
+    global _connection, _restore_managed, _r_selected
+
+    _r_selected = True
 
     _connection = None
     _restore_managed = False
@@ -257,6 +262,8 @@ def _evaluate(source):
 
 
 def _dispatch(source):
+    if _r_selected:
+        return _PROVIDER_R
     if _connection is not None or _select_native_connection():
         _evaluate(source)
         return _PROVIDER_HANDLED
@@ -288,21 +295,16 @@ from pathlib import Path as _Path
 
 _native_storage = None
 _native_extension_directory = None
-_native_prepared_source = None
 _managed_connection = None
 
 
-def enable_native():
-    global _native_storage, _native_extension_directory, _native_prepared_source
+def enable_native() -> None:
+    global _native_storage, _native_extension_directory
 
     _native_storage = _Path(_os.environ["TMPDIR"]) / "mcp-console-duckdb"
     _native_extension_directory = _os.environ.get(
         "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", ""
     )
-    _native_prepared_source = {
-        "docker": "image",
-        "docker_sandbox": "template",
-    }.get(_os.environ.get("MCP_CONSOLE_EXECUTION_COMPUTE"))
 
 
 def _ensure_managed_connection():
@@ -317,12 +319,6 @@ def _ensure_managed_connection():
                 "in a managed session, install it before starting a selected Python environment, "
                 "or select a DB-API connection with _console.sql_connection(connection)"
             )
-            if _native_prepared_source is not None:
-                message = (
-                    f"DuckDB is unavailable in this prepared {_native_prepared_source}; "
-                    "preinstall duckdb there and start a new server session, or select a "
-                    "DB-API connection with _console.sql_connection(connection)"
-                )
             raise RuntimeError(message) from error
         config = {
             "extension_directory": _native_extension_directory,
@@ -330,10 +326,15 @@ def _ensure_managed_connection():
             "temp_directory": str(_native_storage / "spill"),
             "python_enable_replacements": "false",
         }
-        if _native_prepared_source is not None:
-            config["autoinstall_known_extensions"] = "false"
         connection = duckdb.connect(":memory:", config=config)
-        connection.execute("SET enable_progress_bar = false")
+        try:
+            connection.execute("SET enable_progress_bar = false")
+        except BaseException:
+            try:
+                connection.close()
+            except BaseException:
+                _traceback.print_exc()
+            raise
         _managed_connection = connection
     return _managed_connection
 
@@ -375,3 +376,34 @@ def _select_native_connection():
         print(f"Error: {error}")
         return False
     return True
+
+
+def initialize_connection(source: str) -> int:
+    import __main__
+
+    try:
+        exec(compile(source, "<console startup>", "exec"), __main__.__dict__)
+        if _connection is None or _connection is _managed_connection or _r_selected:
+            raise RuntimeError(
+                "startup must select a native connection with _console.sql_connection(connection)"
+            )
+        # DB-API has no common is-open predicate. Probe without executing a query,
+        # and close only cursors distinct from the user-owned connection.
+        cursor = _connection.cursor()
+        if cursor is not _connection:
+            cursor.close()
+        return 1
+    except BaseException as error:
+        rendered = _traceback.TracebackException.from_exception(error)
+        if isinstance(error, SyntaxError):
+            # Configuration is not a model-visible cell. Keep the syntax location
+            # and diagnosis without echoing a potentially credential-bearing line.
+            rendered.text = None
+        print("".join(rendered.format()), end="", file=__import__("sys").stderr)
+        return -1 if isinstance(error, KeyboardInterrupt) else 0
+    finally:
+        _runtime.finalize_plots()
+
+
+def r_connection_selected() -> bool:
+    return _r_selected and not _restore_managed

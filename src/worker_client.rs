@@ -11,9 +11,13 @@ mod execution;
 mod lifecycle;
 mod output;
 mod send;
+mod status;
 
 #[cfg(any(unix, windows))]
 mod events;
+
+#[cfg(any(unix, windows))]
+mod transport;
 
 #[cfg(any(unix, windows))]
 #[path = "worker_client/process.rs"]
@@ -40,6 +44,7 @@ pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "arrow",
     "nanoarrow",
     "yyjsonr",
+    "ggplot2",
 ];
 
 #[cfg(not(windows))]
@@ -68,7 +73,7 @@ pub(crate) struct SendRequest {
 }
 
 impl SendRequest {
-    fn validate(&self, requirements_available: bool) -> Result<(), String> {
+    pub(crate) fn validate(&self, requirements_available: bool) -> Result<(), String> {
         let Some(requirements) = &self.requirements else {
             return Ok(());
         };
@@ -114,7 +119,11 @@ pub(crate) struct Client(Arc<ClientInner>);
 
 struct ClientInner {
     configuration: OnceLock<ClientConfiguration>,
-    startup: tokio::sync::watch::Sender<Option<Result<(), String>>>,
+    startup: Mutex<tokio::sync::watch::Sender<Option<Result<(), String>>>>,
+    /// Identity of connection startup, including the interval before admission.
+    startup_generation: WorkerGeneration,
+    /// Disposable presentation fact; admission still uses the startup outcome.
+    startup_observation_complete: AtomicBool,
     /// The one evaluation occupying this session, independently of who is polling it.
     evaluation: Mutex<Option<ActiveEvaluation>>,
     /// Settles operations admitted before inline control reserves its optional new cell.
@@ -146,12 +155,14 @@ struct WorkerSpec<'a> {
     relay: Option<&'a std::path::Path>,
     no_sandbox: bool,
     sandbox_settings: &'a crate::settings::SandboxSettings,
+    startup_source: Option<&'a crate::settings::startup::Startup>,
+    duckdb_extension_directory: Option<&'a std::path::Path>,
+    resolver_matplotlib_cache: Option<&'a str>,
     python: Option<&'a PythonEnvironment>,
     managed_r: Option<&'a crate::resolver::ManagedR>,
     dynamic_resolution: bool,
     callbacks: WorkerCallbacks,
     local_runtime: Option<&'a crate::local_runtime::Selection>,
-    target: Option<&'a crate::target_session::Session>,
 }
 
 struct IdleResponseSnapshot {
@@ -290,14 +301,18 @@ struct ActiveEvaluation {
 impl Client {
     pub(crate) fn pending() -> Self {
         let (startup, _) = tokio::sync::watch::channel(None);
+        let lifecycle = LifecycleControl::new();
+        let startup_generation = lifecycle.generation.clone();
         Self(Arc::new(ClientInner {
             configuration: OnceLock::new(),
-            startup,
+            startup: Mutex::new(startup),
+            startup_generation,
+            startup_observation_complete: AtomicBool::new(false),
             evaluation: Mutex::new(None),
             admission: tokio::sync::RwLock::new(()),
             preparation: tokio::sync::RwLock::new(()),
             output: OutputTape::new(),
-            lifecycle: Mutex::new(LifecycleControl::new()),
+            lifecycle: Mutex::new(lifecycle),
             recording: Mutex::new(None),
             startup_failed: AtomicBool::new(false),
             startup_stdin: Mutex::new(String::new()),
@@ -307,24 +322,32 @@ impl Client {
     pub(crate) fn configure(&self, configuration: ClientConfiguration) {
         assert!(self.0.configuration.set(configuration).is_ok());
         self.0.unused_default.store(
-            self.0.environment.as_ref().is_some_and(|environment| {
-                !environment
-                    .lock()
-                    .expect("worker environment lock")
-                    .custom_worker
-            }),
+            self.0.startup_source.is_none()
+                && self.0.environment.as_ref().is_some_and(|environment| {
+                    !environment
+                        .lock()
+                        .expect("worker environment lock")
+                        .custom_worker
+                }),
             Ordering::Release,
         );
     }
 
     pub(crate) fn finish_startup(&self, result: Result<(), String>) {
-        self.0.startup.send_if_modified(|outcome| {
-            if outcome.is_some() {
-                return false;
-            }
-            *outcome = Some(result);
-            true
-        });
+        self.0
+            .startup
+            .lock()
+            .expect("startup result lock")
+            .send_if_modified(|outcome| {
+                if outcome.is_some() {
+                    return false;
+                }
+                *outcome = Some(result);
+                self.0
+                    .startup_observation_complete
+                    .store(true, Ordering::Release);
+                true
+            });
     }
 
     fn take_startup_failure(&self, generation: &WorkerGeneration) -> Result<bool, String> {
@@ -338,7 +361,20 @@ impl Client {
     }
 
     pub(crate) async fn ready(&self) -> Result<(), String> {
-        let mut result = self.0.startup.subscribe();
+        Self::wait_for_startup(self.startup_result()).await
+    }
+
+    fn startup_result(&self) -> tokio::sync::watch::Receiver<Option<Result<(), String>>> {
+        self.0
+            .startup
+            .lock()
+            .expect("startup result lock")
+            .subscribe()
+    }
+
+    async fn wait_for_startup(
+        mut result: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
+    ) -> Result<(), String> {
         let ready = result
             .wait_for(Option::is_some)
             .await
@@ -351,7 +387,41 @@ impl Client {
     }
 
     pub(crate) fn startup_finished(&self) -> bool {
-        self.0.startup.borrow().is_some()
+        self.0
+            .startup
+            .lock()
+            .expect("startup result lock")
+            .borrow()
+            .is_some()
+    }
+
+    pub(crate) fn retry_failed_startup(&self) -> bool {
+        assert!(!self.is_configured());
+        let active = self.0.evaluation.lock().expect("worker evaluation lock");
+        let mut startup = self.0.startup.lock().expect("startup result lock");
+        if !matches!(*startup.borrow(), Some(Err(_))) {
+            return false;
+        }
+        // Match early admission's evaluation/startup lock order. Keep the failed
+        // cell pollable, but exclude its declaration from the new attempt.
+        if let Some(active) = active.as_ref() {
+            *active
+                .initial_requirements
+                .lock()
+                .expect("initial requirements lock") = None;
+        }
+        // Existing observers keep the failed attempt. A rejected cell must
+        // never become runnable when a new attempt is installed.
+        *startup = tokio::sync::watch::channel(None).0;
+        self.0
+            .startup_observation_complete
+            .store(false, Ordering::Release);
+        self.0
+            .startup_stdin
+            .lock()
+            .expect("startup stdin lock")
+            .clear();
+        true
     }
 
     /// Launch the default process through the ordinary readiness/retirement path.

@@ -14,6 +14,8 @@ Source and public acceptance tests settle disagreements with prose.
   Verify an internal refactor against existing public tests; do not test private helpers.
 - Preserve generation ownership and confirmed-retirement barriers.
   Submitted code is shell-class capability; dependency preparation is a separate trusted host operation, not protected by the worker sandbox.
+- Console-owned internal protocols evolve in lockstep and are not independently versioned.
+  Update both endpoints and fixtures together; preserve external protocol versions, the separately pinned companion contract, and component/artifact identity checks.
 - Prefer event-driven waits with explicit cancellation over polling.
   Add abstractions for implemented responsibilities, not planned features.
   Reassess large files rather than enforcing a line limit; retain one Cargo package until a concrete crate boundary emerges.
@@ -39,7 +41,7 @@ Report commands actually run and any unavailable coverage.
 CI is the comprehensive merge gate.
 
 Windows x64 supports experimental local sandboxed and `serve --no-sandbox` sessions with R/Python and host dependency resolution through `ir`/`uv`.
-SQL and Windows SSH/Docker/SBX controllers are deferred.
+Windows SQL is deferred.
 Follow [Windows validation](docs/WINDOWS.md#validation); shared workflow commands select native Windows checks.
 Run native build and validation commands exclusively in the checkout; Windows packaging holds a blocking native checkout lock outside `target`.
 
@@ -49,6 +51,15 @@ See the [boundary test guide](tests/boundaries/README.md) for fixtures and snaps
 
 Never hand-edit `tests/snapshots/`.
 Update them through `scripts/test --update` or formatting.
+Use one shared transcript across platforms by default.
+Make fixtures deterministic, normalize incidental paths and presentation only after assertions, and split capability-specific coverage into separate cases with declared requirements.
+Reserve platform snapshots for the exact platform-specific behavior under test; document that behavior in the decorator's `reason`.
+A different handshake, dependency default, newline, or executable suffix alone does not justify a variant of an otherwise portable case.
+Preserve complete errors and tracebacks.
+Client/server transcripts should generally include initialization and tool discovery before ordinary calls.
+Generally keep one `mcp-console` invocation per YAML transcript.
+Include initialization once near the top, normally via a matching canonical `!same-as` reference; use separate transcript files for additional invocations.
+Use the existing exact canonical-handshake comparison for `!same-as` references; preserve different or incomplete exchanges in full.
 Preserve errors and tracebacks; normalize incidental values, not behavior.
 Fix the producer or serializer when regeneration is wrong.
 

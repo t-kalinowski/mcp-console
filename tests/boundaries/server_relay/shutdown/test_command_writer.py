@@ -15,9 +15,8 @@ from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import capture_process_identity, host_process_id, signal_process
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires, POSIX
 from support.suites import run_this_suite
-from support.ssh import configure, peer_environment
 
 
 def retirement_case(
@@ -105,6 +104,7 @@ def retirement_case(
         return [{"retained_stream": mode, "retired_writers": restarts + 1}]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_restarts_join_writer_with_retained_stdin(
@@ -113,6 +113,7 @@ def test_restarts_join_writer_with_retained_stdin(
     return retirement_case(binary, execution, "stdin", 3)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_idle_writer_joins_with_retained_stdout(
@@ -121,6 +122,7 @@ def test_idle_writer_joins_with_retained_stdout(
     return retirement_case(binary, execution, "stdout", 1)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_forced_retirement_aborts_full_command_pipe(
@@ -129,6 +131,7 @@ def test_forced_retirement_aborts_full_command_pipe(
     return retirement_case(binary, execution, "forced", 1)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_restart_accepts_aborted_frame_after_confirmed_retirement(
@@ -217,66 +220,6 @@ def test_restart_accepts_aborted_frame_after_confirmed_retirement(
         ]
 
 
-@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
-def test_eof_joins_blocked_target_bootstrap(binary: Path) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary, ExitStack() as stack:
-        root = Path(temporary)
-        partial, exit_relay, holder, held = [
-            stack.enter_context(
-                closing(FifoCheckpoint.create(root / f"bootstrap-{name}"))
-            )
-            for name in ("partial", "exit", "holder", "held")
-        ]
-        configure(
-            root,
-            root,
-            [str(binary)],
-            sandbox={"environment": {"BOOTSTRAP_PAYLOAD": "x" * (900 * 1024)}},
-        )
-        environment = {
-            **peer_environment(root, "blocked-command-bootstrap"),
-            LOADER_VARIABLE: str(build_interposer(root, "relay_writer_retirement")),
-            "MCP_CONSOLE_TEST_WRITER_ROOT": str(root),
-        }
-        client = McpClient(binary, ("serve", "--no-sandbox"), environment, root)
-        identity = None
-        events = stack.enter_context(Events())
-        try:
-            client.initialize_and_list_tools()
-            client.send(r="never-run", timeout_ms=0)
-            partial.wait(
-                f"bootstrap header received without consuming the body: {client.transcript[-1]!r}, stderr={client.stderr.buffer!r}"
-            )
-            wait_for_path(
-                root / "large-write-1",
-                "bootstrap writer entered oversized transfer",
-                client=client,
-            )
-            held.wait("bootstrap holder ready and PID published")
-            identity = capture_process_identity(
-                int((root / "bootstrap-holder-pid").read_text())
-            )
-            events.watch_process(identity[0])
-            # EOF owns startup cancellation. Release launcher exit, while its
-            # fixture descendant retains stdin until after the join assertion.
-            client.stdin.close()
-            exit_relay.release()
-            client.finish()
-            assert (root / "closed-1").exists()
-            assert (root / "joined-1").exists()
-            assert not (root / "calls").exists(), "EOF started a successor"
-        finally:
-            exit_relay.release()
-            holder.release()
-            if identity is not None:
-                signal_process(identity, signal.SIGKILL)
-                assert identity[0] in events.wait(10), (
-                    "fixture bootstrap holder did not exit"
-                )
-            client.close()
-        return [{"blocked_bootstrap_writer_closed_and_joined": True}]
-
-
 def interrupt_shutdown_case(
     binary: Path, execution: Execution, *, late_ack: bool
 ) -> Transcript:
@@ -357,6 +300,7 @@ def interrupt_shutdown_case(
         ]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_shutdown_settles_cancelled_interrupt_without_ack(
@@ -365,6 +309,7 @@ def test_shutdown_settles_cancelled_interrupt_without_ack(
     return interrupt_shutdown_case(binary, execution, late_ack=False)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_shutdown_ignores_interrupt_ack_after_command_eof(

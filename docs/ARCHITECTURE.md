@@ -3,11 +3,11 @@
 The shared runtime coordinator supports independent R and Python startup on [Windows](WINDOWS.md) for local sandboxed or unsandboxed sessions, including managed dependency resolution through the shared `resolve` subcommand with `ir` and `uv` materializing environments on the host.
 Windows uses native pipe/event/process primitives, and resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code; cancellation and normal completion require confirmed empty Jobs.
 These Jobs own trusted host preparation and inspection processes, not evaluated user code, and are not sandboxes.
-Windows SQL and remote controllers are deferred.
+Windows SQL is deferred.
 
 Console separates session management from code execution.
 The server owns what survives a worker; the worker owns live language state.
-A relay connects them, and a native runner or compute provider enforces the execution boundary.
+A relay connects them, and the native runner enforces the execution boundary.
 See the [glossary](GLOSSARY.md) for terms used below.
 
 ## Process layout
@@ -18,7 +18,7 @@ Default local execution:
 MCP client
   │ MCP over stdio
   ▼
-server ───── resolve ───── dependency resolvers       trusted host
+server ───── native runner → resolve → dependencies   resolver sandbox
   │
   ▼
 sandbox frontend → private native runner            same PID on Unix
@@ -32,24 +32,23 @@ The frontend verifies the installed companion and passes immutable launch config
 Unix replaces the frontend with the runner; Windows waits for its exit and uses native owner handles.
 Native enforcement, private storage, and descendant supervision belong to that runner, not to Console's relay.
 
-[SSH](SSH.md) places the launcher, relay, worker, and preparation owner on the remote host.
-[Docker](DOCKER.md) uses a captured image and a fresh container for each generation.
-[Docker Sandbox](DOCKER_SANDBOX.md) uses an owned microVM from a prepared template, with provider-managed enforcement and no inner native runner.
-Admission, requirements, output, and recordings remain on the controller.
+All Console processes run on the local host.
+The MCP client and its shell and filesystem tools should run on that same host.
+For remote work, run the client and Console together in the chosen environment; deployment and its outer lifecycle belong to the client or deployment tooling.
 
-`serve --no-sandbox` skips native enforcement at the selected target; it does not remove a Docker container or microVM boundary.
+`serve --no-sandbox` skips native enforcement.
 Direct host execution has no runner-provided descendant cleanup.
 See [sandbox limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 ## Ownership
 
-| Component                     | Owns                                                                                  | Does not own                                                  |
-| ----------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Server                        | Session, admission, generations, retained requirements, response delivery, recordings | Interpreter execution or native supervision                   |
-| Preparation owner             | Execution-host discovery, resolver processes, confirmed resolver cleanup              | Accepted session manifest or worker activation                |
-| Native runner / compute owner | Its enforcement and resource-retirement contract                                      | MCP operations or language state                              |
-| Relay                         | Worker descriptors, stream translation, signals, direct-worker shutdown and reaping   | Session policy, response budgets, or process-tree enforcement |
-| Worker                        | Interpreter state, cell evaluation, input, semantic output, environment activation    | Durable session state or MCP response ownership               |
+| Component         | Owns                                                                                  | Does not own                                                  |
+| ----------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| Server            | Session, admission, generations, retained requirements, response delivery, recordings | Interpreter execution or native supervision                   |
+| Preparation owner | Execution-host discovery, resolver processes, confirmed resolver cleanup              | Accepted session manifest or worker activation                |
+| Native runner     | Its enforcement and resource-retirement contract                                      | MCP operations or language state                              |
+| Relay             | Worker descriptors, stream translation, signals, direct-worker shutdown and reaping   | Session policy, response budgets, or process-tree enforcement |
+| Worker            | Interpreter state, cell evaluation, input, semantic output, environment activation    | Durable session state or MCP response ownership               |
 
 The server-relay transport is [JSONL](RELAY_PROTOCOL.md).
 The relay-worker [sideband](WORKER_PROTOCOL.md) carries commands and semantic events separately from interactive stdin and direct stdout/stderr.
@@ -61,13 +60,21 @@ The server captures launch configuration and constructs tool presentation before
 One connection-owned background task discovers capabilities, prepares defaults, and prelaunches the built-in worker through transport readiness.
 The worker then initializes enabled R and Python on its serialized interpreter thread, after input, resolver, and output services are connected.
 MCP initialization, tool discovery, and pings do not wait for it.
+Failed initial discovery/preparation can be retried only by explicit restart, under that same connection owner and after confirmed preparation cleanup.
+That confirmation includes closing the preparation connection and reaping its child; a completed resolver operation alone cannot authorize another attempt.
+The owner retains its captured initializer, replaces only the failed readiness attempt, and shares the new attempt among concurrent restart callers.
+Cells capture readiness at admission, so replacing a failed attempt cannot revive a rejected cell.
+Accepted configuration and post-acceptance worker recovery retain their existing ownership.
 Custom workers remain lazy.
+The captured public `languages` selection governs presentation and source-argument admission only; it is not forwarded into worker runtime configuration.
+Hidden source keys are rejected before same-call control, preparation, or stdin effects.
 Configured language fields stay visible even when a runtime is unavailable; execution validates discovered capabilities.
+SQL provider routing uses actual R capability independently of public visibility, so hidden interpreters can implement SQL.
 
 Early cells reserve the ordinary evaluation slot while startup finishes.
 There is no cell queue.
 A call's observation deadline includes that wait; timeout or request cancellation does not cancel admitted evaluation or shared startup.
-Connection closure cancels startup through the existing preparation/provider owners and waits for their cleanup contract.
+Connection closure cancels startup through the existing preparation and worker owners and waits for their cleanup contract.
 The preparation close barrier joins its owner thread after protocol closure and child reaping, so the server cannot exit with resolver cleanup still in flight.
 If the owner failed, closing retains its protocol error instead of replacing it with a generic stopped-owner error.
 A failed close handshake kills the preparation child before joining I/O and reaping, without starting a second exit allowance.
@@ -106,6 +113,8 @@ Do not split evaluators across threads without a new ownership design.
 
 SQL routes to an R DBI or Python DB-API provider.
 R capability selects the default managed provider independently of initialization order; without R, Python owns the managed DuckDB connection.
+An optional captured startup source runs on its owning interpreter after helpers and runtime setup, before cell dispatch; it selects a native connection without managed warmup.
+The worker retains failed startup admission, and the server refuses automatic replay after a configured launch; only explicit restart authorizes another attempt after confirmed retirement.
 Explicitly selected connections remain user-owned.
 The [runtime guide](BUILTIN_RUNTIME.md) owns connection and interoperability rules.
 
@@ -130,9 +139,10 @@ Explicit and failure-driven replacement both respect retirement barriers.
 
 ## Preparation and activation
 
-Dependency resolution runs outside the worker sandbox, on the execution host.
-Local sessions use the hidden `resolve` command; SSH has a remote preparation connection.
-Prepared Docker/SBX targets use preinstalled environments and never invoke controller or target dependency resolvers.
+Local dependency resolution runs in a separate native resolver sandbox on macOS and Linux.
+Its cache and download policy is independent of the worker policy; see [resolver configuration](RESOLVER.md).
+The hidden `resolve` command owns local preparation over a private JSONL connection.
+Its client and child run from the same Console executable, so their schema is unversioned.
 
 The server owns the accepted manifest and candidate transactions.
 The preparation owner returns a result only after resolver cleanup.
@@ -144,8 +154,8 @@ Unsafe partial activation can require restart.
 Explicit preparation and worker-originated requests share environment-change ownership, preventing a stale preparation result from overwriting a newer manifest.
 Automatic R loads and Python imports request packages only when execution reaches them; cells are not scanned or rerun.
 
-These are transaction boundaries, **not a resolver sandbox**.
-Accepted package builds and worker-writable resolver inputs can execute with host permissions.
+Transactions protect accepted environments; the resolver sandbox bounds preparation permissions.
+Its default host reads and Console-specific writable caches still require trusted dependencies and inputs.
 [Requirements](REQUIREMENTS.md) defines supported changes and the trust boundary.
 
 ## Retirement and cancellation
@@ -159,15 +169,33 @@ Normal retirement queues ordered Shutdown and allows the relay its grace period.
 Forced transport retirement closes command admission and independently aborts pending writes or an idle queue wait, then joins the writer.
 It does not use stdout closure to decide whether stdin can be retired, and it never inserts a control into a partial frame.
 Retirement settles outstanding control receipts; cancelling a call's observation does not redirect its queued interrupt.
-Owned output readers preserve their bounded available-output drain even when launcher cleanup fails; joining I/O does not confirm provider cleanup.
+Owned output readers preserve their bounded available-output drain even when launcher cleanup fails; joining I/O does not confirm native cleanup.
+Worker-client native adapters own endpoint setup and separate output wakeup from command cancellation.
+The shared process and generation owners retain exit observation, I/O joins, and retirement decisions.
+The preparation owner bounds exit observation after forced termination and reaps only an observed exited child.
+If termination fails, it reports unconfirmed retirement and stops diagnostic collection even when the child keeps stderr open.
+It retains the child and exit observer in a background reaping owner and retries termination during connection closure, without erasing the original retirement failure.
 
 The server integrates a local native launcher as an ordinary child; successful managed exit is the cleanup barrier.
-SSH and compute generations carry explicit retirement receipts: transport exit alone does not prove remote processes, containers, or microVMs are gone.
 Unconfirmed retirement blocks replacement.
-Provider setup, command, and retirement allowances have different owners; none is a universal end-to-end cleanup deadline.
+Worker, relay, and native retirement allowances have different owners; none is a universal end-to-end cleanup deadline.
+
+Connection closure that refuses the next preparation stage is separate from control of a completed operation.
+It permits a quiet exit only after the refused stage's cleanup is confirmed.
+Errors closing the preparation connection remain visible.
+Cancellation of a preparation operation does not suppress an independent failure of the preparation connection's close handshake.
 
 Interrupt targets the active resolver, otherwise the current worker.
 It is not retried against a replacement.
+Each materializer invocation owns its child, non-reaping exit observer, stdin writer, and stdout/stderr readers.
+Success, cancellation, registration failure, and process or I/O failure share one retirement path.
+Retirement cancels stdin independently and joins every I/O task, including when native process cleanup fails.
+Output collection preserves bytes already read plus a finite snapshot of queued bytes per stream after process retirement; it does not wait for inherited descriptors to close or accept an endless final producer.
+Failed process cleanup cancels and joins exit observation without signalling or reaping the remaining child.
+The original operation failure and cleanup failures remain separate until diagnostic formatting.
+Resolver cleanup confirmation combines the native process owner's result with settled observer/I/O tasks; it does not confirm preparation transport or worker retirement.
+Unix signals the owned process group and reaps its leader after observation settles; it does not provide a separate empty-group receipt, and escaped descendants remain outside that scope.
+Windows retains suspended creation and kill-on-close Job ownership, requires a confirmed empty Job, and shares its existing retirement allowance with exit observation.
 On connection closure, the server closes admission, cancels preparation, retires owned execution resources, settles accepted responses, and bounds blocked MCP delivery.
 Native runner death has no independent recovery guarantee.
 
@@ -207,7 +235,7 @@ Discovery failure retains pending calls and their results alongside the startup 
 | Relay transport and direct-worker supervision | [`src/worker_relay.rs`](../src/worker_relay.rs)                                                                                 |
 | Language coordination                         | [`src/worker/coordinator.rs`](../src/worker/coordinator.rs), [`src/python.rs`](../src/python.rs), [`src/sql.rs`](../src/sql.rs) |
 | Host preparation                              | [`src/resolver/preparation.rs`](../src/resolver/preparation.rs)                                                                 |
-| Target ownership                              | [`src/target_session.rs`](../src/target_session.rs), [`src/sandbox.rs`](../src/sandbox.rs)                                      |
+| Local launch ownership                        | [`src/worker_client/process.rs`](../src/worker_client/process.rs), [`src/sandbox.rs`](../src/sandbox.rs)                        |
 | Recording                                     | [`src/transcript.rs`](../src/transcript.rs)                                                                                     |
 
 Follow these owners into their modules rather than maintaining a parallel file inventory in prose.

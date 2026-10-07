@@ -10,12 +10,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import last_tool_text
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.processes import stop_process, stop_process_group
+from support.processes import (
+    capture_process_identity,
+    host_process_id,
+    live_processes,
+    stop_process,
+    stop_process_group,
+)
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.resolvers import resolver_interrupt_permission_environment
 from support.suites import run_this_suite
 
@@ -32,6 +39,7 @@ from boundaries.client_server._harness import (
 )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_running_worker_with_sigint(
     binary: Path, execution: Execution
@@ -49,14 +57,23 @@ def test_interrupts_running_worker_with_sigint(
         try:
             client.initialize_and_list_tools()
 
+            # Establish a ready worker before observing the interruptible cell.
+            ready_id = client._next_request_id
+            client.send(r=f"checkpoint {ready_id}")
+            assert last_tool_text(client) == "[done]"
+            control.connect(client)
+            control.wait_for(ready_id, "worker_operation_completed")
+
             target_id = client._next_request_id
             client.send(
                 r=f"wait for interrupt: {target_id}",
                 timeout_ms=0,
             )
             assert client.transcript[-1]["id"] == target_id
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
-            control.connect(client)
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             control.wait_for(target_id, "worker_operation_started")
 
             interrupt_id = client._next_request_id
@@ -133,14 +150,14 @@ def test_supervises_stopped_and_continued_workers(
             )
             assert readable, "relay supervision did not answer the interrupt request"
             client.receive(interrupt)
-            assert interrupt["result"] == {
+            assert without_elapsed_result(interrupt["result"]) == {
                 "content": [
                     {
                         "type": "text",
-                        "text": "worker evaluation is already being polled",
+                        "text": "\n[running; poll with an empty send]",
                     }
                 ],
-                "isError": True,
+                "isError": False,
             }, interrupt
 
             continue_stopped_worker(worker_pid, worker_group)
@@ -226,8 +243,9 @@ def test_reports_resolver_interrupt_permission_error(
 
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
+            temporary_path,
         )
         resolver_group = None
         passed = False
@@ -237,12 +255,14 @@ def test_reports_resolver_interrupt_permission_error(
                 requirements={"r": ["blocked-resolver"]},
             )
             resolver_started.wait("permission-denied R resolver")
-            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
+            namespace_group = int(resolver_group_record.read_text(encoding="utf-8"))
+            resolver_group = host_process_id(namespace_group, client.process.pid)
+            resolver_identity = capture_process_identity(resolver_group)
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
             )
             wait_for_path(
-                resolver_watches / str(resolver_group),
+                resolver_watches / str(namespace_group),
                 "active resolver supervision",
                 client,
             )
@@ -265,10 +285,13 @@ def test_reports_resolver_interrupt_permission_error(
                 watchdog.join()
 
             denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
-            assert denied_group == resolver_group, (
+            assert denied_group == namespace_group, (
                 "SIGINT denial targeted a different process group"
             )
             wait_for_process_group_exit(resolver_group, client)
+            assert not live_processes([resolver_identity]), (
+                "resolver survived its failed interrupt"
+            )
             assert not forced_stop.is_set(), (
                 "resolver interrupt failure did not terminate both calls"
             )
@@ -329,8 +352,9 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
         ) = resolver_interrupt_permission_environment(temporary_path)
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve("-c", "cache=host", "--worker", str(zod)),
             environment,
+            temporary_path,
         )
         resolver_group = None
         passed = False
@@ -341,13 +365,19 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
             evaluation = client.start_send(
                 r="report runtime R resolution failure",
             )
-            resolver_started.wait("permission-denied runtime R resolver")
-            resolver_group = int(resolver_group_record.read_text(encoding="utf-8"))
+            try:
+                resolver_started.wait("permission-denied runtime R resolver")
+            except AssertionError:
+                client.receive(evaluation)
+                raise AssertionError(evaluation) from None
+            namespace_group = int(resolver_group_record.read_text(encoding="utf-8"))
+            resolver_group = host_process_id(namespace_group, client.process.pid)
+            resolver_identity = capture_process_identity(resolver_group)
             assert resolver_group != os.getpgrp(), (
                 "resolver did not enter a dedicated process group"
             )
             wait_for_path(
-                resolver_watches / str(resolver_group),
+                resolver_watches / str(namespace_group),
                 "active resolver supervision",
                 client,
             )
@@ -370,10 +400,13 @@ def test_reports_runtime_r_resolver_interrupt_permission_error(
                 watchdog.join()
 
             denied_group = int(denied_interrupt.read_text(encoding="utf-8"))
-            assert denied_group == resolver_group, (
+            assert denied_group == namespace_group, (
                 "SIGINT denial targeted a different process group"
             )
             wait_for_process_group_exit(resolver_group, client)
+            assert not live_processes([resolver_identity]), (
+                "resolver survived its failed interrupt"
+            )
             assert not forced_stop.is_set(), (
                 "resolver interrupt failure did not terminate both calls"
             )

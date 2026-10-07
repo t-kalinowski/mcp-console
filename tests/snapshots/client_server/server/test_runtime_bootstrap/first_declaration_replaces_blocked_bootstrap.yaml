@@ -1,4 +1,6 @@
 ---
+!same-as MCP initialization for this execution mode
+---
 send:
   python: counter = 1; input('first cell> ')
   requirements:
@@ -11,6 +13,18 @@ result:
     - type: text
       text: |-
 
+        [elapsed: <elapsed>s since admission; no new output; phase: startup]
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [elapsed: <elapsed>s since admission; no new output; phase: startup]
         [running; poll with an empty send]
   isError: false
 ---

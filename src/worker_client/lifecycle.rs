@@ -1,4 +1,5 @@
-use std::sync::{Arc, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use super::environment::{Environment, RequirementDelta};
@@ -29,6 +30,8 @@ pub(super) struct LifecycleControl {
     pub(super) requirement_changes: RequirementChangeState,
     pub(super) processes: ProcessStopHandles,
     startup: Option<WorkerStartup>,
+    // Registration transfers interrupt ownership before transport readiness.
+    startup_transport: Option<Weak<AtomicBool>>,
 }
 
 struct WorkerStartup {
@@ -40,6 +43,7 @@ struct WorkerStartup {
 pub(crate) struct WorkerStartupAdmission {
     client: Client,
     generation: WorkerGeneration,
+    pub(super) transport_ready: Arc<AtomicBool>,
 }
 
 struct RetiringGeneration {
@@ -63,6 +67,7 @@ impl LifecycleControl {
             requirement_changes: RequirementChangeState::Available,
             processes: ProcessStopHandles::default(),
             startup: None,
+            startup_transport: None,
         }
     }
 
@@ -81,6 +86,7 @@ impl LifecycleControl {
         self.generation = WorkerGeneration::new();
         self.processes.resolver = None;
         self.startup = None;
+        self.startup_transport = None;
         (stop_handles, deadline, self.generation.clone())
     }
 
@@ -112,6 +118,21 @@ impl LifecycleControl {
         self.startup
             .as_ref()
             .is_some_and(|startup| startup.interrupted && startup.owner.strong_count() != 0)
+    }
+
+    pub(super) fn starting(&self) -> bool {
+        self.startup_observation().is_some()
+    }
+
+    pub(super) fn startup_observation(&self) -> Option<Weak<AtomicBool>> {
+        self.startup_transport
+            .as_ref()
+            .filter(|ready| {
+                ready
+                    .upgrade()
+                    .is_some_and(|ready| !ready.load(Ordering::Acquire))
+            })
+            .cloned()
     }
 
     fn interrupt_startup(&mut self) -> bool {
@@ -184,11 +205,27 @@ pub(super) struct ControlledSendAdmission {
     client: Client,
     token: Arc<()>,
     generation: WorkerGeneration,
+    pub(super) retry_cancelled: Option<Arc<Mutex<bool>>>,
 }
 
 impl ControlledSendAdmission {
     pub(super) fn generation(&self) -> WorkerGeneration {
         self.generation.clone()
+    }
+
+    /// Hold through code/input publication so cancellation cannot overtake admission.
+    pub(super) fn admit_retry_payload(
+        &self,
+        payload: &str,
+    ) -> Result<Option<MutexGuard<'_, bool>>, String> {
+        let cancelled = self
+            .retry_cancelled
+            .as_ref()
+            .map(|cancelled| cancelled.lock().expect("retry admission cancellation lock"));
+        if cancelled.as_ref().is_some_and(|cancelled| **cancelled) {
+            return Err(format!("request cancelled before {payload} admission"));
+        }
+        Ok(cancelled)
     }
 }
 
@@ -384,7 +421,9 @@ impl Client {
         let owner = Arc::new(WorkerStartupAdmission {
             client: self.clone(),
             generation: generation.clone(),
+            transport_ready: Arc::new(AtomicBool::new(false)),
         });
+        lifecycle.startup_transport = Some(Arc::downgrade(&owner.transport_ready));
         lifecycle.startup = Some(WorkerStartup {
             owner: Arc::downgrade(&owner),
             interrupted: false,
@@ -750,6 +789,9 @@ impl Client {
         }
         response.push_notice_line(super::output::WORKER_STARTING_NOTICE);
 
+        self.0
+            .startup_permitted
+            .store(true, std::sync::atomic::Ordering::Release);
         let completion_generation = generation.clone();
         if let Err(mut failure) = self.start_worker(
             &mut worker,
@@ -946,6 +988,7 @@ impl Client {
             client: self.clone(),
             token,
             generation: lifecycle.generation.clone(),
+            retry_cancelled: None,
         })
     }
 
@@ -1207,7 +1250,11 @@ impl Client {
                                 handle.write_startup_stdin(input)?;
                             }
                         }
-                        self.0.startup.send_modify(|_| {});
+                        self.0
+                            .startup
+                            .lock()
+                            .expect("startup result lock")
+                            .send_modify(|_| {});
                         return Ok(());
                     }
                 }
@@ -1309,7 +1356,7 @@ impl Client {
         Err(message.to_string())
     }
 
-    pub(super) fn clear_resolver_stop_handle(
+    pub(crate) fn clear_resolver_stop_handle(
         &self,
         expected: &WorkerGeneration,
     ) -> Result<(), String> {
@@ -1350,20 +1397,12 @@ impl Client {
         let stop_handles = self.close_lifecycle(deadline)?.unwrap_or_default();
         let client = self.clone();
         let result = tokio::task::spawn_blocking(move || {
-            let local = client
+            let preparation = client
                 .0
-                .local_preparation
+                .resolver_preparation
                 .lock()
-                .expect("local preparation lock")
+                .expect("preparation lock")
                 .clone();
-            let preparation = local.or_else(|| {
-                client
-                    .0
-                    .target
-                    .as_ref()
-                    .and_then(crate::target_session::Session::ssh_preparation)
-                    .cloned()
-            });
             // Queue relay shutdown and resolver cancellation before Close can
             // retire the preparation host and its control-input pipe.
             let (allowance, errors) = stop_handles.request_shutdown(deadline);
@@ -1424,6 +1463,7 @@ mod tests {
             Response::default(),
             Response::default(),
             false,
+            0,
         ));
         evaluation.complete_cell(Ok(()));
         let claim = evaluation.claim().unwrap();
@@ -1474,6 +1514,7 @@ mod tests {
             Response::default(),
             Response::default(),
             false,
+            0,
         ));
         evaluation.complete_cell(Ok(()));
         let claim = evaluation.claim().unwrap();

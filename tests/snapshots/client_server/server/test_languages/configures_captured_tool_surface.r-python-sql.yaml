@@ -1,0 +1,7 @@
+---
+languages:
+  - r
+  - python
+  - sql
+---
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.custom.direct.yaml

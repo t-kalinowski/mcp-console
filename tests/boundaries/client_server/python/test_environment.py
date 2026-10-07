@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -19,13 +20,15 @@ from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
+from support.snapshots import execution_snapshots, platform_snapshots
 from support.requirements import (
     OLD_PYTHON,
     OLD_PYTHON_EXECUTABLE,
+    POSIX,
     PROCESS_EVENTS,
+    R,
     requires,
 )
-from support.requirements import R
 from support.suites import run_this_suite
 from boundaries.client_server.server.test_no_r import no_r_environment
 
@@ -54,6 +57,10 @@ def bootstrap_diagnostic(client: McpClient, ending: str) -> str:
 
 @executions(DIRECT, SANDBOXED)
 @requires(R)
+@platform_snapshots(
+    "win32",
+    reason="Windows rejects an invalid explicit Python before interpreter startup",
+)
 def test_preserves_configured_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -61,6 +68,15 @@ def test_preserves_configured_python_environment(
     environment["RETICULATE_PYTHON"] = "configured-by-user"
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
+    if os.name == "nt":
+        # Windows inspects explicit selections on the host before launching
+        # either interpreter; retain that earlier public startup failure.
+        result = client.send(requirements={"action": "get"})
+        assert result["isError"] is True, result
+        assert last_result_text(client) == "explicit Python executable is not on PATH"
+        transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
+        assert errors == "explicit Python executable is not on PATH\n", errors
+        return transcript + [{"stderr": errors}]
     expected = "Error: explicit Python executable is not on PATH\n"
     assert bootstrap_diagnostic(client, expected) == expected
     # fmt: r
@@ -331,6 +347,7 @@ def test_sends_python_cell_with_initial_requirements(
     return client.finish()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_compacts_native_duckdb_progress_bar(
@@ -405,10 +422,16 @@ def test_compacts_native_duckdb_progress_bar(
             Events() as events,
         ):
             client.initialize_and_list_tools()
+            # Finish startup and preparation before observing native progress.
+            client.send(
+                python="pass",
+                requirements={"python": ["duckdb==1.5.5"]},
+                timeout_ms=600_000,
+            )
+            assert last_result_text(client) == "[done]"
             try:
                 initial = client.start_send(
                     python=python,
-                    requirements={"python": ["duckdb==1.5.5"]},
                     timeout_ms=0,
                 )
                 ready.wait(
@@ -416,12 +439,13 @@ def test_compacts_native_duckdb_progress_bar(
                 )
                 client.receive(initial)
                 assert (
-                    last_result_text(client) == "\n[running; poll with an empty send]"
+                    without_elapsed(last_result_text(client))
+                    == "\n[running; poll with an empty send]"
                 )
 
                 progress = (root / "progress.bin").read_bytes()
                 session = next((root / ".agents/console/sessions").iterdir())
-                raw = session / "outputs/call-000001.log"
+                raw = session / "outputs/call-000002.log"
                 events.watch_file(raw)
                 response = client.start_send(timeout_ms=220_000)
                 release.release()
@@ -524,6 +548,7 @@ def test_uses_200_column_default_after_r_initializes_python(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_prints_requirements_with_host_uv_cache(
@@ -544,11 +569,12 @@ def test_prints_requirements_with_host_uv_cache(
         environment["MCP_CONSOLE_TEST_UV_RECORD"] = str(uv_record)
         environment["MCP_CONSOLE_TEST_WORKER_UV_CACHE"] = str(worker_cache)
         environment["UV_CACHE_DIR"] = str(trusted_cache)
+        environment["UV_TOOL_DIR"] = str(temporary)
         environment["UV_DEFAULT_INDEX"] = "https://pypi.org/simple"
         environment["UV_OFFLINE"] = "1"
         client = McpClient(
             binary,
-            execution.serve(),
+            execution.serve("-c", "cache=host"),
             environment,
             current_directory=temporary,
         )
@@ -608,7 +634,12 @@ def test_prints_requirements_with_host_uv_cache(
                 "--no-config",
                 "--python",
             ], diagnostic
-            assert diagnostic["arguments"][11:] == ["numpy", "pandas"], diagnostic
+            assert diagnostic["arguments"][11:] == [
+                "numpy",
+                "pandas",
+                "matplotlib",
+                "plotnine",
+            ], diagnostic
             assert diagnostic["environment"] == {
                 "UV_CACHE_DIR": str(worker_cache),
                 "UV_DEFAULT_INDEX": "file:///worker-selected-index",

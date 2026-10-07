@@ -3,10 +3,12 @@
 import os
 import sys
 import tempfile
+from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.checkpoints import (
     release_fixture_checkpoint,
@@ -109,15 +111,27 @@ def test_restarts_after_worker_exit_with_partial_sideband(binary: Path) -> Trans
         ) as wait_for_descendant,
     ):
         temporary_path = Path(temporary_directory)
+        startup_control = temporary_path / "zod-startup-control"
+        startup_release = temporary_path / "zod-startup-release"
+        startup_control.write_text("ready", encoding="utf-8")
+        environment["ZOD_STARTUP_CONTROL"] = str(startup_control)
+        environment["ZOD_STARTUP_RELEASE"] = str(startup_release)
         control.configure(environment)
         descendant_group = None
         try:
-            with McpClient(
-                binary,
-                SANDBOXED.serve("--worker", str(zod)),
-                environment,
-            ) as client:
+            with (
+                McpClient(
+                    binary,
+                    SANDBOXED.serve("--worker", str(zod)),
+                    environment,
+                ) as client,
+                ExitStack() as cleanup,
+            ):
+                cleanup.callback(startup_release.touch)
                 client.initialize_and_list_tools()
+                client.send(r="complete silently")
+                assert last_tool_text(client) == "[done]"
+                startup_control.write_text("block", encoding="utf-8")
                 failed = client.start_send(
                     r="exit after partial sideband descendant",
                     timeout_ms=15_000,
@@ -135,30 +149,49 @@ def test_restarts_after_worker_exit_with_partial_sideband(binary: Path) -> Trans
                 control.connect(client)
                 release_partial_sideband(marker, client=client)
                 control.wait_for(0, "partial_sideband_written")
+                wait_for_marker(
+                    temporary_path,
+                    "zod-replacement-waiting-ready",
+                    client,
+                )
 
                 client.receive(failed)
                 result = failed["result"]
-                assert result["isError"] is True, result
                 assert not process_group_exists(descendant_group), (
                     "partial-sideband descendant outlived sandbox retirement"
                 )
                 descendant_group = None
 
-                # Cleanup has completed, but replacement startup can outlast
-                # the first response. Collect its documented startup polls
-                # before evaluating the next cell, preserving the full failure.
-                content = result["content"][0]
-                failure = content["text"].removesuffix("[worker starting]")
-                poll_start = len(client.transcript)
-                if content["text"].endswith("[worker starting]"):
-                    while True:
-                        client.send(timeout_ms=15_000)
-                        state = last_tool_text(client)
-                        assert state in {"[worker starting]", "[idle]"}, state
-                        if state == "[idle]":
-                            break
-                    content["text"] = failure + "[idle]"
-                    del client.transcript[poll_start:]
+                # Retirement is complete while replacement is held before ready.
+                # Preserve the failure and each public phase observation.
+                assert result == {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "[worker sideband read failed: worker sideband closed]\n"
+                                "[worker exited with status 86]\n"
+                                "[worker stopped: in-memory state lost]\n"
+                                "[starting new worker]\n"
+                                "[phase: replacement]\n"
+                                "[worker starting]"
+                            ),
+                        }
+                    ],
+                    "isError": True,
+                }, result
+                assert client.send(timeout_ms=0) == {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "\n[phase: replacement]\n[worker starting]",
+                        }
+                    ],
+                    "isError": False,
+                }
+                startup_release.touch()
+                client.send(timeout_ms=15_000)
+                assert last_tool_text(client) == "[idle]"
 
                 client.send(r="echo echo")
                 assert client.transcript[-1]["result"] == {
@@ -191,8 +224,15 @@ def test_replaces_worker_after_relay_exit(binary: Path) -> Transcript:
         passed = False
         try:
             client.initialize_and_list_tools()
+            # Establish the worker and relay before testing their retirement.
+            client.send(requirements={"action": "get"})
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="kill relay and remain live", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             started = wait_for_marker(
                 temporary_path,
                 "zod-relay-exit-evaluation-started",

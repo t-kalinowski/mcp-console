@@ -1,17 +1,11 @@
 #[cfg(windows)]
 use crate::windows::ExitStatusExt as _;
-#[cfg(windows)]
-use crate::windows::{Event as PipeReader, Notify as PipeWriter, Pipe as ChildStdout};
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::io::{BufReader, Read, Write};
-#[cfg(unix)]
-use std::io::{PipeReader, PipeWriter};
+use std::io::BufReader;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt as _;
-use std::process::{Child, Command, ExitStatus, Stdio};
-#[cfg(unix)]
-use std::process::{ChildStdin, ChildStdout};
+use std::process::{Child, Command, ExitStatus};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,6 +14,9 @@ use super::events::{
     OperationResult, ReadyCommitOutcome, WorkerEvent, WorkerEventDispatcher, WorkerOperationState,
 };
 use super::output::SendFailure;
+use super::transport::{
+    self, OutputNotifier, PreparedTransport, RelayInput, RelayOutput, WriterAbort,
+};
 use super::{
     PreparationOutcome, PythonPreparationCommit, RPreparationCommit, WorkerProcessOutcome,
 };
@@ -68,7 +65,6 @@ struct RelayConnection {
     child: Arc<Mutex<RelayProcess>>,
     commands: RelayCommandSender,
     tasks: Option<Box<RelayTasks>>,
-    target: Option<Box<crate::target_session::Generation>>,
     output_stop: RelayOutputStop,
 }
 
@@ -85,7 +81,6 @@ struct RelayProcess {
     relay_exit_recovery_expected: bool,
     retirement_requested: bool,
     retirement: Option<Result<(), String>>,
-    ssh: bool,
 }
 
 struct RelayTasks {
@@ -96,7 +91,7 @@ struct RelayTasks {
 }
 
 #[derive(Clone)]
-struct RelayOutputStop(Arc<Mutex<Option<PipeWriter>>>);
+struct RelayOutputStop(Arc<Mutex<Option<OutputNotifier>>>);
 
 impl RelayOutputStop {
     fn stop(&self) {
@@ -117,7 +112,7 @@ pub(super) struct RelayCommandSender {
 
 struct RelayCommandState {
     writer: Option<mpsc::Sender<RelayWriterMessage>>,
-    abort: Option<PipeWriter>,
+    abort: Option<WriterAbort>,
     failure: Option<String>,
 }
 
@@ -167,52 +162,42 @@ impl WorkerRuntime {
         let super::WorkerSpec {
             builtin,
             languages,
-            target,
             local_runtime,
             executable,
             arguments,
             relay,
             no_sandbox,
             sandbox_settings,
+            startup_source,
+            duckdb_extension_directory,
+            resolver_matplotlib_cache,
             python,
             managed_r,
             dynamic_resolution,
             callbacks,
         } = spec;
 
-        let (mut command, bootstrap, generation) = if let Some(session) = target {
-            let (command, bytes, generation) = session.launch(
-                sandbox_settings,
-                no_sandbox,
-                managed_r,
-                python.and_then(super::PythonEnvironment::managed),
-                local_runtime,
-            )?;
-            (command, Some((session.protocol(), bytes)), Some(generation))
+        let current_executable = std::env::current_exe()
+            .map_err(|error| format!("failed to locate the current executable: {error}"))?;
+        let relay_target = relay_command_line(&current_executable, executable, arguments, relay);
+        let mut command = if no_sandbox {
+            let mut command = Command::new(&relay_target[0]);
+            crate::settings::configure_environment(&mut command, sandbox_settings);
+            command
+                .args(&relay_target[1..])
+                .env_remove(crate::settings::ENVIRONMENT);
+            command
         } else {
-            let current_executable = std::env::current_exe()
-                .map_err(|error| format!("failed to locate the current executable: {error}"))?;
-            let relay_target =
-                relay_command_line(&current_executable, executable, arguments, relay);
-            let command = if no_sandbox {
-                let mut command = Command::new(&relay_target[0]);
-                command
-                    .args(&relay_target[1..])
-                    .env_remove(crate::settings::ENVIRONMENT);
-                command
-            } else {
-                let mut command = Command::new(&current_executable);
-                command
-                    .arg("sandbox")
-                    .arg("--exit-with-parent")
-                    .arg(std::process::id().to_string());
-                command.args(["--settings-env", crate::settings::ENVIRONMENT]);
-                command.arg("--").args(relay_target);
-                command
-            };
-            (command, None, None)
+            let mut command = Command::new(&current_executable);
+            command
+                .arg("sandbox")
+                .arg("--exit-with-parent")
+                .arg(std::process::id().to_string());
+            command.args(["--settings-env", crate::settings::ENVIRONMENT]);
+            command.arg("--").args(relay_target);
+            command
         };
-        let temporary = if no_sandbox && target.is_none() && local_runtime.is_some() {
+        let temporary = if no_sandbox && local_runtime.is_some() {
             Some(crate::local_runtime::TemporaryDirectory::create()?)
         } else {
             None
@@ -220,62 +205,66 @@ impl WorkerRuntime {
         if let Some(temporary) = &temporary {
             command.env("TMPDIR", temporary.path());
         }
-        if target.is_none() {
-            // Never accept an ambient internal selection for custom workers.
-            command.env_remove(crate::local_runtime::ENVIRONMENT);
-            if let Some(python) = python {
-                python.configure_worker(&mut command);
-            }
-            if let Some(runtime) = local_runtime {
-                runtime.configure(&mut command)?;
-            }
-            if let Some(managed_r) = managed_r {
-                managed_r.configure_worker(&mut command)?;
-            }
-            command.env(
-                "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
-                if dynamic_resolution { "1" } else { "0" },
-            );
-            if let Some(languages) = languages {
-                languages.configure(&mut command);
-            }
-            if !no_sandbox {
-                let mut settings = sandbox_settings.clone();
-                crate::settings::preserve_environment(&mut settings, command.get_envs())?;
-                command.env(
-                    crate::settings::ENVIRONMENT,
-                    serde_json::to_string(&settings)
-                        .map_err(|error| format!("cannot encode sandbox settings: {error}"))?,
-                );
-            }
+        command.env_remove(crate::settings::startup::ENVIRONMENT);
+        // Retain the private file through worker readiness; failures also drop
+        // its owner. The worker consumes it before any interpreter can run.
+        let startup_transport = if builtin && let Some(startup) = startup_source {
+            Some(startup.configure(&mut command)?)
+        } else {
+            None
+        };
+        command.env_remove("MCP_CONSOLE_MATPLOTLIB_CACHE");
+        if !no_sandbox
+            && cfg!(unix)
+            && python.is_none_or(|python| python.managed().is_some())
+            && let Some(cache) = resolver_matplotlib_cache
+        {
+            command.env("MCP_CONSOLE_MATPLOTLIB_CACHE", cache);
         }
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
-        #[cfg(unix)]
-        command.stderr(Stdio::piped());
+        // Never accept an ambient internal selection for custom workers.
+        command.env_remove(crate::local_runtime::ENVIRONMENT);
+        if let Some(python) = python {
+            python.configure_worker(&mut command);
+        }
+        if let Some(runtime) = local_runtime {
+            runtime.configure(&mut command)?;
+        }
+        if let Some(managed_r) = managed_r {
+            managed_r.configure_worker(&mut command)?;
+        }
+        // Managed Python carries its prepared cache in the runtime selection.
+        // Managed R and custom workers need the startup-captured cache;
+        // a custom worker may accept its first R layer after launch.
+        if (!builtin || managed_r.is_some())
+            && let Some(directory) = duckdb_extension_directory
+        {
+            command.env(crate::local_runtime::DUCKDB_EXTENSION_DIRECTORY, directory);
+        }
+        command.env(
+            "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
+            if dynamic_resolution { "1" } else { "0" },
+        );
+        if let Some(languages) = languages {
+            languages.configure(&mut command);
+        }
+        if !no_sandbox {
+            let mut settings = sandbox_settings.clone();
+            if let Some(transport) = &startup_transport {
+                transport.preserve_access(&mut settings)?;
+            }
+            crate::settings::preserve_environment(&mut settings, command.get_envs())?;
+            command.env(
+                crate::settings::ENVIRONMENT,
+                serde_json::to_string(&settings)
+                    .map_err(|error| format!("cannot encode sandbox settings: {error}"))?,
+            );
+        }
+        transport::configure_stdio(&mut command);
         #[cfg(unix)]
         crate::process_descriptors::close_unlisted_from_multithreaded_parent(&mut command)?;
 
         let (worker_events, worker_event_receiver) = mpsc::channel();
-        #[cfg(unix)]
-        let (output_exit, notify_output_exit) = std::io::pipe()
-            .map_err(|error| format!("failed to create launcher exit notification: {error}"))?;
-
-        #[cfg(windows)]
-        let (output_exit, notify_output_exit) =
-            crate::windows::notification().map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        let (writer_aborted, abort_writer) = std::io::pipe()
-            .map_err(|error| format!("failed to create relay writer abort pipe: {error}"))?;
-        #[cfg(windows)]
-        let (writer_aborted, abort_writer) =
-            crate::windows::notification().map_err(|e| e.to_string())?;
-        #[cfg(windows)]
-        let (relay_stdin, relay_stdout) =
-            crate::windows::command_pipes(&mut command, writer_aborted)
-                .map_err(|e| e.to_string())?;
+        let (transport, notify_output_exit, abort_writer) = PreparedTransport::new(&mut command)?;
         let child = command
             .spawn()
             .map_err(|error| format!("failed to launch worker relay: {error}"))?;
@@ -284,42 +273,18 @@ impl WorkerRuntime {
         let mut child = RelayProcess::new(
             child,
             no_sandbox,
-            target.is_some_and(crate::target_session::Session::is_ssh),
-            target.map_or(
-                LAUNCHER_RETIREMENT_GRACE,
-                crate::target_session::Session::retirement_grace,
-            ),
+            LAUNCHER_RETIREMENT_GRACE,
             output_stop.clone(),
         )
         .map_err(|error| format!("failed to monitor worker relay: {error}"))?;
         child.temporary = temporary;
-        #[cfg(unix)]
-        let relay_stdin = child
-            .take_stdin()
-            .expect("piped worker relay stdin should be available");
-        #[cfg(unix)]
-        let relay_stdout = child
-            .take_stdout()
-            .expect("piped worker relay stdout should be available");
-        #[cfg(unix)]
-        let relay_stdin =
-            crate::target_launch::transfer::Io::new(relay_stdin, Some(writer_aborted), None)?;
-        #[cfg(unix)]
-        let diagnostic_reader = {
-            let stderr = child.child.stderr.take().expect("piped launcher stderr");
-            let exited = output_exit.try_clone().map_err(|error| error.to_string())?;
-            let diagnostics = output.diagnostics();
-            let events = worker_events.clone();
-            Some(thread::spawn(move || {
-                if let Err(error) = crate::process_output::forward(stderr, exited, diagnostics) {
-                    let _ = events.send(WorkerEvent::TransportFailure(format!(
-                        "launcher stderr read failed: {error}"
-                    )));
-                }
-            }))
-        };
-        #[cfg(windows)]
-        let diagnostic_reader = None;
+        let events = worker_events.clone();
+        let transport =
+            transport.connect(&mut child.child, output.diagnostics(), move |error| {
+                let _ = events.send(WorkerEvent::TransportFailure(format!(
+                    "launcher stderr read failed: {error}"
+                )));
+            })?;
         let child = Arc::new(Mutex::new(child));
 
         let operation = WorkerOperationState::new(builtin);
@@ -330,20 +295,8 @@ impl WorkerRuntime {
         let shutdown_started = ShutdownAcceptance::default();
 
         let (commands, command_writer) =
-            start_relay_command_writer(relay_stdin, abort_writer, worker_events.clone(), bootstrap);
-        let event_reader = start_relay_event_reader(
-            relay_stdout,
-            output_exit,
-            worker_events,
-            generation.clone(),
-            callbacks
-                .client
-                .0
-                .recording
-                .lock()
-                .expect("recording lock")
-                .clone(),
-        );
+            start_relay_command_writer(transport.input, abort_writer, worker_events.clone());
+        let event_reader = start_relay_event_reader(transport.output, worker_events);
         let dispatcher = WorkerEventDispatcher::start(
             worker_event_receiver,
             operation.clone(),
@@ -357,14 +310,13 @@ impl WorkerRuntime {
         );
 
         let relay = RelayConnection {
-            target: generation.map(Box::new),
             child,
             commands: commands.clone(),
             tasks: Some(Box::new(RelayTasks {
                 dispatcher,
                 command_writer,
                 event_reader,
-                diagnostic_reader,
+                diagnostic_reader: transport.diagnostic_reader,
             })),
             output_stop,
         };
@@ -381,22 +333,9 @@ impl WorkerRuntime {
             let error = worker.startup_failure(error);
             return Err(error);
         }
-        let started = if target.is_some() {
-            startup_receiver
-                .recv_timeout(crate::target_launch::SETUP_TIMEOUT)
-                .map_err(|error| match error {
-                    mpsc::RecvTimeoutError::Timeout => {
-                        "target connection/bootstrap deadline exceeded".to_string()
-                    }
-                    mpsc::RecvTimeoutError::Disconnected => {
-                        "worker event dispatcher stopped before readiness".to_string()
-                    }
-                })
-        } else {
-            startup_receiver
-                .recv()
-                .map_err(|_| "worker event dispatcher stopped before readiness".to_string())
-        };
+        let started = startup_receiver
+            .recv()
+            .map_err(|_| "worker event dispatcher stopped before readiness".to_string());
         match started {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
@@ -444,7 +383,6 @@ impl RelayProcess {
     fn new(
         child: Child,
         no_sandbox: bool,
-        ssh: bool,
         retirement_grace: Duration,
         output_stop: RelayOutputStop,
     ) -> Result<Self, String> {
@@ -462,7 +400,6 @@ impl RelayProcess {
             child,
             retirement_grace,
             no_sandbox,
-            ssh,
             exit,
             exited: false,
             reaped: false,
@@ -471,16 +408,6 @@ impl RelayProcess {
             retirement_requested: false,
             retirement: None,
         })
-    }
-
-    #[cfg(unix)]
-    fn take_stdin(&mut self) -> Option<ChildStdin> {
-        self.child.stdin.take()
-    }
-
-    #[cfg(unix)]
-    fn take_stdout(&mut self) -> Option<ChildStdout> {
-        self.child.stdout.take()
     }
 
     fn wait_timeout_without_reaping(&mut self, timeout: Duration) -> Result<bool, String> {
@@ -523,14 +450,8 @@ impl RelayProcess {
         if self.reaped {
             return self.retirement.clone().unwrap_or(Ok(()));
         }
-        // Startup cancellation can reach the I/O join before the shutdown
-        // thread takes this lock. A local runner handles SIGTERM, but SSH must
-        // remain connected for the queued shutdown and remote acknowledgment.
-        let requested = if self.ssh {
-            Ok(())
-        } else {
-            self.request_retirement()
-        };
+        // Startup cancellation can reach the I/O join before the shutdown thread.
+        let requested = self.request_retirement();
         let cleanup = match self.wait_timeout_without_reaping(self.retirement_grace) {
             Ok(true) => self.reap(),
             outcome => {
@@ -640,13 +561,6 @@ impl RelayProcess {
         if let Some(mut temporary) = self.temporary.take() {
             self.temporary_retirement = temporary.retire();
             self.temporary_retirement.clone()?;
-        }
-        if self.ssh {
-            return if status.success() {
-                Ok(())
-            } else {
-                Err(format!("SSH process exited with {status}"))
-            };
         }
         // A direct relay's exit is redundant when its EOF established the
         // worker failure. The sandbox runner still owes cleanup; status 137
@@ -981,10 +895,9 @@ fn receive_operation(
 }
 
 fn start_relay_command_writer(
-    mut relay_stdin: impl Write + Send + 'static,
-    abort: PipeWriter,
+    relay_stdin: RelayInput,
+    abort: WriterAbort,
     events: mpsc::Sender<WorkerEvent>,
-    bootstrap: Option<(crate::target_launch::Protocol, Vec<u8>)>,
 ) -> (RelayCommandSender, RelayCommandThread) {
     let (writer, receiver) = mpsc::channel();
     let sender = RelayCommandSender {
@@ -998,11 +911,6 @@ fn start_relay_command_writer(
     let thread_sender = sender.clone();
     let thread = thread::spawn(move || {
         let result = (|| -> Result<(), String> {
-            if let Some((protocol, bootstrap)) = bootstrap {
-                relay_stdin
-                    .write_all(&bootstrap)
-                    .map_err(|error| format!("{} bootstrap write failed: {error}", protocol.0))?;
-            }
             let mut writer = JsonlWriter::new(relay_stdin);
             while let Ok(message) = receiver.recv() {
                 let (command, completed) = match message {
@@ -1039,7 +947,7 @@ fn start_relay_command_writer(
                 .err()
                 .unwrap_or_else(|| "worker relay command writer stopped".into()),
         );
-        // Closing admission disconnects the queue. Bootstrap/write aborts must
+        // Closing admission disconnects the queue. Write aborts must
         // also settle Shutdown receipts that never reached the serialization owner.
         for message in receiver.try_iter() {
             if let RelayWriterMessage::Shutdown { completed, .. } = message {
@@ -1051,18 +959,10 @@ fn start_relay_command_writer(
 }
 
 fn start_relay_event_reader(
-    relay_stdout: ChildStdout,
-    output_exit: PipeReader,
+    output: RelayOutput,
     events: mpsc::Sender<WorkerEvent>,
-    target: Option<crate::target_session::Generation>,
-    recording: Option<crate::transcript::Transcript>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
-        let output = crate::process_output::RelayOutput::new(relay_stdout, output_exit);
-        let output: Box<dyn Read> = match &target {
-            Some(generation) => Box::new(generation.output(output, recording)),
-            None => Box::new(output),
-        };
         let mut reader = JsonlReader::new(BufReader::new(output));
         let result = (|| -> Result<(), String> {
             while let Some(event) = reader
@@ -1076,11 +976,6 @@ fn start_relay_event_reader(
             Ok(())
         })();
         if let Err(error) = result {
-            let _ = events.send(WorkerEvent::TransportFailure(error));
-        }
-        if let Some(generation) = target
-            && let Err(error) = generation.check_retirement()
-        {
             let _ = events.send(WorkerEvent::TransportFailure(error));
         }
         let _ = events.send(WorkerEvent::RelayClosed);
@@ -1530,12 +1425,6 @@ impl RelayConnection {
             }
             None => Ok(None),
         };
-        let cleanup = combine_shutdown_results(
-            cleanup,
-            self.target
-                .as_deref()
-                .map_or(Ok(()), crate::target_session::Generation::check_retirement),
-        );
         match (tasks, cleanup) {
             (Ok(outcome), Ok(())) => Ok(outcome),
             (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),

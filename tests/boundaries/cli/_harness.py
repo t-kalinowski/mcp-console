@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-import fcntl
 import os
-import pty
 import select
 import selectors
 import shutil
 import subprocess
 import sys
-import termios
 import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+if os.name == "posix":
+    import fcntl
+    import pty
+    import termios
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -102,22 +105,27 @@ def _start_with_controlling_terminal(
     environment: dict[str, str] | None = None,
 ) -> tuple[subprocess.Popen[bytes], int, str]:
     master, slave = pty.openpty()
-    slave_name = os.ttyname(slave)
+    try:
+        slave_name = os.ttyname(slave)
 
-    def attach_controlling_terminal() -> None:
-        os.setsid()
-        fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-        os.tcsetpgrp(slave, os.getpid())
+        def attach_controlling_terminal() -> None:
+            os.setsid()
+            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+            os.tcsetpgrp(slave, os.getpid())
 
-    process = subprocess.Popen(
-        arguments,
-        env=environment,
-        stdin=slave,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        preexec_fn=attach_controlling_terminal,
-    )
-    os.close(slave)
+        process = subprocess.Popen(
+            arguments,
+            env=environment,
+            stdin=slave,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            preexec_fn=attach_controlling_terminal,
+        )
+    except BaseException:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
     assert process.stdout is not None
     assert process.stderr is not None
     return process, master, slave_name

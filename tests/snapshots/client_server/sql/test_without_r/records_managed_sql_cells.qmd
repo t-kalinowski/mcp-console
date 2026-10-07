@@ -12,6 +12,8 @@ ir:
   python-packages:
     - numpy
     - pandas
+    - matplotlib
+    - plotnine
     - duckdb
 ---
 

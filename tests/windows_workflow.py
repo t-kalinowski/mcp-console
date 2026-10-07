@@ -301,6 +301,7 @@ class WindowsWorkflow(unittest.TestCase):
         for name in (
             "windows.py",
             "windows_runner.py",
+            "windows_gate.py",
             "windows_relay.py",
             "windows_cargo.py",
             "windows_resolver.py",
@@ -309,7 +310,14 @@ class WindowsWorkflow(unittest.TestCase):
             path = self.root / "tests" / name
             path.parent.mkdir(exist_ok=True)
             shutil.copy2(ROOT / "tests" / name, path)
-        result = self.run_command("test", "--full", "--list")
+        # Native discovery imports shared helpers and their dependencies. Keep
+        # the package intact instead of maintaining a second import inventory.
+        shutil.copytree(
+            ROOT / "tests/support",
+            self.root / "tests/support",
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        result = self.run_command("test", "--list")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("WindowsConsole.test_python_without_r", result.stdout)
         result = self.run_command(
@@ -360,6 +368,45 @@ class WindowsWorkflow(unittest.TestCase):
         self.assertEqual(result.returncode, 7, result.stderr)
         self.assertEqual(json.loads(result.stdout), arguments)
         self.assertEqual(result.stderr.strip(), "diagnostic")
+
+    def test_full_validation_and_boundary_selectors_run_shared_cases(self):
+        self.write(
+            "tests/windows.py",
+            "import unittest\nclass Fixture(unittest.TestCase):\n    def test_native(self): pass\nif __name__ == '__main__': unittest.main()\n",
+        )
+        self.stub(
+            "uv",
+            "import json,sys\nfrom pathlib import Path\nPath('shared-arguments.json').write_text(json.dumps(sys.argv[1:]))\n",
+        )
+        environment = self.environment | {"MCP_CONSOLE_TEST_BINARY": "installed.exe"}
+        for arguments, expected in (
+            (
+                ("client_server/server/test_tools::initializes_and_lists_tools",),
+                ["transcripts"],
+            ),
+            (("--full",), ["native-tests", "transcripts"]),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_command(
+                    "checkout_workflow.py", "test", *arguments, environment=environment
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                records = list((self.root / ".dev-workflow/runs").glob("*/result.json"))
+                record = max(records, key=lambda path: path.stat().st_mtime_ns)
+                self.assertEqual(
+                    [
+                        phase["name"]
+                        for phase in json.loads(record.read_text())["phases"]
+                    ],
+                    expected,
+                )
+                self.assertEqual(
+                    json.loads((self.root / "shared-arguments.json").read_text())[
+                        -len(arguments) :
+                    ],
+                    list(arguments),
+                )
+        self.assertFalse((self.root / "target").exists())
 
     def test_cmd_launchers_work_from_a_different_directory(self):
         for name in (
@@ -438,9 +485,7 @@ class WindowsWorkflow(unittest.TestCase):
         self.assertEqual(report["required_missing"], [])
         self.assertEqual(report["companion"]["status"], "skip")
         self.assertTrue(report["executable"]["development"].endswith("mcp-console.exe"))
-        self.assertTrue(
-            all(p["status"] == "skip" for p in report["providers"].values())
-        )
+        self.assertNotIn("providers", report)
         self.assertFalse((self.root / "target").exists())
         self.assertFalse((self.root / ".dev-workflow").exists())
         self.stub(
@@ -522,6 +567,196 @@ class WindowsWorkflow(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("accepts --full or --quick", result.stderr)
         self.assertFalse((self.root / "target").exists())
+
+    def windows_preparation_fixture(self):
+        r_home = self.root / "R installation"
+        (r_home / "bin").mkdir(parents=True)
+        (r_home / "bin/R.exe").touch()
+        self.stub("R", f"print({str(r_home)!r})\n")
+        self.environment.pop("R_HOME", None)
+        self.environment["SETUP_LOG"] = str(self.root / "setup.jsonl")
+        self.stub(
+            "console",
+            dedent("""
+                import json
+                import os
+                from pathlib import Path
+                import sys
+
+                arguments = sys.argv[1:]
+                with Path(os.environ['SETUP_LOG']).open('a') as log:
+                    log.write(json.dumps(arguments) + '\\n')
+                state = Path(arguments[arguments.index('--state-dir') + 1])
+                if '--status' in arguments:
+                    configured = (state / 'ready').is_file()
+                    print(json.dumps({
+                        'configured': configured,
+                        'helpers_available': True,
+                        'offline_account': 'FixtureOffline',
+                        'online_account': 'FixtureOnline',
+                    }))
+                    sys.exit(0 if configured else 1)
+                state.mkdir(parents=True, exist_ok=True)
+                if not os.environ.get('UNCONFIRMED_SETUP'):
+                    (state / 'ready').touch()
+                """),
+        )
+        state = self.root / "sandbox state"
+        exported = self.root / "github-env"
+        arguments = (
+            "--binary",
+            str(self.commands / "console.cmd"),
+            "--state-dir",
+            str(state),
+            "--github-env",
+            str(exported),
+        )
+        self.environment["READ_ACCESS_LOG"] = str(self.root / "read-access.jsonl")
+        self.stub(
+            "icacls",
+            dedent("""
+                import json
+                import os
+                from pathlib import Path
+                import sys
+
+                with Path(os.environ['READ_ACCESS_LOG']).open('a') as log:
+                    log.write(json.dumps(sys.argv[1:]) + '\\n')
+                if os.environ.get('FAIL_READ_ACCESS'):
+                    print('fixture read-access failure', file=sys.stderr)
+                    sys.exit(7)
+                """),
+        )
+        return r_home, state, exported, arguments
+
+    def test_prepares_read_access_to_selected_runtime_assets(self):
+        r_home, _, exported, arguments = self.windows_preparation_fixture()
+        library = self.root / "R user library"
+        library.mkdir()
+        cache = self.root / "resolver cache"
+        cache.mkdir()
+        bundle = self.root / "libexec"
+        bundle.mkdir()
+        result = self.run_command(
+            "prepare-windows-tests",
+            *arguments,
+            *[
+                argument
+                for path in (
+                    self.commands,
+                    bundle,
+                    r_home,
+                    library,
+                    cache,
+                    Path(sys.prefix),
+                    Path(sys.base_prefix),
+                    self.commands,
+                )
+                for argument in ("--read-root", str(path))
+            ],
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(exported.is_file())
+        grants = [
+            json.loads(line)
+            for line in (self.root / "read-access.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual(len(grants), len({grant[0] for grant in grants}))
+        self.assertTrue(
+            {
+                self.commands.resolve(),
+                bundle.resolve(),
+                r_home.resolve(),
+                library.resolve(),
+                cache.resolve(),
+                Path(sys.prefix).resolve(),
+                Path(sys.base_prefix).resolve(),
+            }.issubset({Path(grant[0]) for grant in grants}),
+            grants,
+        )
+        for grant in grants:
+            self.assertEqual(
+                grant[1:],
+                [
+                    "/grant",
+                    "FixtureOffline:(OI)(CI)RX",
+                    "FixtureOnline:(OI)(CI)RX",
+                ],
+            )
+
+    def test_failed_runtime_read_access_does_not_enable_tests(self):
+        _, _, exported, arguments = self.windows_preparation_fixture()
+        result = self.run_command(
+            "prepare-windows-tests",
+            *arguments,
+            "--read-root",
+            str(self.commands),
+            environment=self.environment | {"FAIL_READ_ACCESS": "1"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fixture read-access failure", result.stderr)
+        self.assertFalse(exported.exists())
+
+    def test_invalid_read_root_does_not_provision_or_enable_tests(self):
+        _, _, exported, arguments = self.windows_preparation_fixture()
+        for path in ("relative", str(self.root / "missing")):
+            with self.subTest(path=path):
+                result = self.run_command(
+                    "prepare-windows-tests", *arguments, "--read-root", path
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("existing absolute directory", result.stderr)
+        self.assertFalse(exported.exists())
+        self.assertFalse((self.root / "setup.jsonl").exists())
+
+    def test_prepares_provisioned_windows_tests_and_reuses_ready_state(self):
+        r_home, state, exported, arguments = self.windows_preparation_fixture()
+        result = self.run_command("prepare-windows-tests", *arguments)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            exported.read_text().splitlines(),
+            [
+                f"R_HOME={r_home}",
+                f"MCP_CONSOLE_TEST_WINDOWS_STATE_DIR={state}",
+            ],
+        )
+        for _ in range(2):
+            # A ready machine, including a local developer's existing setup,
+            # must not request provisioning again.
+            result = self.run_command("prepare-windows-tests", *arguments)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        commands = [
+            json.loads(line)
+            for line in (self.root / "setup.jsonl").read_text().splitlines()
+        ]
+        provisioned = [command for command in commands if "--status" not in command]
+        self.assertEqual(provisioned, [["sandbox-setup", "--state-dir", str(state)]])
+
+    def test_unconfirmed_windows_setup_does_not_enable_tests(self):
+        _, _, exported, arguments = self.windows_preparation_fixture()
+        result = self.run_command(
+            "prepare-windows-tests",
+            *arguments,
+            environment=self.environment | {"UNCONFIRMED_SETUP": "1"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Windows sandbox setup is not ready", result.stderr)
+        self.assertFalse(exported.exists())
+
+    def test_unconfigured_required_state_does_not_provision(self):
+        _, _, exported, arguments = self.windows_preparation_fixture()
+        result = self.run_command(
+            "prepare-windows-tests", *arguments, "--require-configured"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Windows sandbox setup is not ready", result.stderr)
+        self.assertFalse(exported.exists())
+        commands = [
+            json.loads(line)
+            for line in (self.root / "setup.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual(len(commands), 1)
+        self.assertIn("--status", commands[0])
 
 
 if __name__ == "__main__":

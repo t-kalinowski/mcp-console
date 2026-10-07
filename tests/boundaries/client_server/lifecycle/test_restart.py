@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.previews import (
     compact_previews,
@@ -29,7 +30,7 @@ from support.processes import (
     stop_process_id,
 )
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 LARGE_OUTPUT_SIZE = 2 * 1024 * 1024
@@ -57,6 +58,7 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
             build_interposer(temporary_path, "cell_output_close_interposer")
         )
         environment["MCP_CONSOLE_TEST_CELL_OUTPUT_CLOSED"] = str(output_closed.path)
+        environment["MCP_CONSOLE_TEST_CELL_OUTPUT_SUFFIX"] = "/outputs/call-000003.log"
         environment["ZOD_STDIN_CLOSE_RELEASE"] = str(output_closed.path)
         client = McpClient(
             binary,
@@ -64,8 +66,15 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
             environment,
         )
         client.initialize_and_list_tools()
+        # Finish discovery and lazy startup before exercising worker retirement.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
         client.send(r="wait for stdin close", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         wait_for_marker(
             temporary_path,
             "zod-waiting-for-stdin-close",
@@ -74,17 +83,15 @@ def test_restart_closes_worker_stdin(binary: Path, execution: Execution) -> Tran
 
         client.send(control="restart")
         output = last_tool_text(client)
-        raw = cell_text(client, 1)
+        raw = cell_text(client, 3)
         assert raw == "", "output after the restart cut does not belong to the cell log"
-        marker = re.search(
-            r"outputs/session.log[^\n]*; (\d+) raw bytes retained", output
-        )
-        assert marker is not None, output
+        assert "outputs/session.log" in output, output
+        recorded = (session_directory(client) / "outputs/session.log").read_text()
         prefix = "zod stdin closed\n" + "x" * LARGE_OUTPUT_SIZE
-        observed = int(marker[1])
+        observed = len(recorded)
         assert observed > len(prefix), observed
         raw = prefix + "y" * (observed - len(prefix))
-        assert (session_directory(client) / "outputs/session.log").read_text() == raw
+        assert recorded == raw
         suffix = "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
         suffix = "[active evaluation stopped by session restart request]\n" + suffix
         assert output.endswith(suffix), "lifecycle notices followed old-worker output"
@@ -218,6 +225,7 @@ def test_restart_commits_lifecycle_before_replacement_callbacks(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_discards_unread_stdin(
     binary: Path, execution: Execution
@@ -243,6 +251,7 @@ def test_restart_discards_unread_stdin(
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retries_initial_startup_silently(
     binary: Path, execution: Execution
@@ -293,8 +302,15 @@ def test_restart_force_stops_stalled_worker(
         passed = False
         try:
             client.initialize_and_list_tools()
+            # The stalled evaluation belongs to an established worker.
+            client.send(requirements={"action": "get"})
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="stall", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             pid_marker = wait_for_marker(
                 temporary_path,
                 "zod-worker-pid",

@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, SQL, command, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -16,7 +17,6 @@ from support.normalization import code, normalize_python_resolution_error
 from support.r import isolated_r_home
 from support.records import Transcript
 from support.suites import run_this_suite
-from support.requirements import command, requires
 from support.resolvers import (
     checkpoint_uv_environment,
     ir_run_records,
@@ -95,6 +95,7 @@ def test_inspection_completes_while_prepared_cells_overlap(
     ]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_empty_declaration_and_round_trip(
     binary: Path, execution: Execution
@@ -103,9 +104,24 @@ def test_empty_declaration_and_round_trip(
     client.initialize_and_list_tools()
     startup = inspect(client)
     assert startup["prepared"] is True
-    assert startup["requirements"]["python"] == ["numpy", "pandas"]
-    assert "tidyverse" in startup["requirements"]["r"]
-    assert "yyjsonr" in startup["requirements"]["r"]
+    assert startup["requirements"]["python"] == [
+        "numpy",
+        "pandas",
+        "matplotlib",
+        "plotnine",
+    ], startup
+    assert startup["requirements"]["r"] == sorted(
+        [
+            "tidyverse",
+            "reticulate",
+            "DBI",
+            "duckdb",
+            "arrow",
+            "nanoarrow",
+            "yyjsonr",
+            "ggplot2",
+        ]
+    ), startup
     assert startup["runtime_requirements"]["python"] == []
     client.send(requirements=dict(startup["requirements"], action="set"))
     assert inspect(client) == startup
@@ -131,7 +147,7 @@ def test_empty_declaration_and_round_trip(
         import os
         import sys
 
-        assert not {"numpy", "pandas"} & {
+        assert not {"numpy", "pandas", "matplotlib", "plotnine"} & {
             d.metadata["Name"] for d in importlib.metadata.distributions()
         }
         marker = 42
@@ -140,17 +156,19 @@ def test_empty_declaration_and_round_trip(
             json.loads("42"),
             importlib.util.find_spec("numpy"),
             importlib.util.find_spec("pandas"),
+            importlib.util.find_spec("matplotlib"),
+            importlib.util.find_spec("plotnine"),
         )
         """)
     client.send(python=python)
-    assert last_tool_text(client) == "(42, None, None)\n"
+    assert last_tool_text(client) == "(42, None, None, None, None)\n"
     assert inspect(client) == empty
     client.send(r="stopifnot(identical(2L + 2L, 4L))")
     client.send(sql="SELECT 42 AS answer")
     assert inspect(client) == empty
     client.send(control="restart")
     client.send(python=python)
-    assert last_tool_text(client) == "(42, None, None)\n"
+    assert last_tool_text(client) == "(42, None, None, None, None)\n"
     assert inspect(client) == empty
 
     edited = dict(
@@ -176,6 +194,16 @@ def test_empty_declaration_and_round_trip(
     selected = inspect(client)
     assert selected["requirements"] == dict(
         edited, python_version=sorted(edited["python_version"])
+    )
+    client.expect(
+        # fmt: python
+        python=code("""
+            import importlib.metadata
+
+            assert not {"numpy", "pandas", "matplotlib", "plotnine"} & {
+                d.metadata["Name"] for d in importlib.metadata.distributions()
+            }
+            """),
     )
     client.send(requirements=dict(selected["requirements"], action="set"))
     assert last_tool_text(client) == "[prepared]"
@@ -209,6 +237,17 @@ def test_empty_declaration_and_round_trip(
     )
     client.send(control="restart", requirements={"action": "reset"})
     assert inspect(client)["requirements"] == startup["requirements"]
+    client.expect(
+        # fmt: python
+        python=code("""
+            import importlib.metadata
+
+            for package in ("numpy", "pandas", "matplotlib", "plotnine"):
+                assert importlib.metadata.version(package)
+            import matplotlib, plotnine
+            """),
+    )
+    client.expect(r='stopifnot(requireNamespace("ggplot2", quietly = TRUE))')
     return client.finish()
 
 
@@ -216,6 +255,8 @@ def test_empty_declaration_and_round_trip(
 def test_inspection_validation(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
+    # Validation owns request admission, not the host-specific default inventory.
+    client.expect("[prepared]", requirements={"action": "set"})
     initial = inspect(client)
     for extra in ({"python": "42"}, {"stdin": ""}, {"control": "restart"}):
         result = client.send(requirements={"action": "get"}, **extra)
@@ -238,6 +279,7 @@ def test_inspection_validation(binary: Path, execution: Execution) -> Transcript
     return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_inspection_during_input_and_replacement_resolution(
     binary: Path, execution: Execution
@@ -246,7 +288,7 @@ def test_inspection_during_input_and_replacement_resolution(
         environment, started, release = checkpoint_uv_environment(
             Path(directory), "six"
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         try:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set"})
@@ -284,6 +326,7 @@ def test_inspection_during_input_and_replacement_resolution(
             release.close()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupted_replacement_preserves_worker(
     binary: Path, execution: Execution
@@ -297,7 +340,7 @@ def test_interrupted_replacement_preserves_worker(
         environment["MCP_CONSOLE_TEST_UV_INTERRUPT_RELEASE"] = str(
             interrupt_release.path
         )
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         try:
             client.initialize_and_list_tools()
             client.expect(
@@ -337,6 +380,7 @@ def test_interrupted_replacement_preserves_worker(
                 checkpoint.close()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_r_duckdb_replacement_failure_and_reset(
@@ -375,7 +419,9 @@ def test_r_duckdb_replacement_failure_and_reset(
         rscript.write_text(f"#!{sys.executable}\n{capture}")
         rscript.chmod(0o755)
         environment["MCP_CONSOLE_TEST_IR_FAIL_REQUIREMENT"] = "missing.fixture"
-        with McpClient(binary, execution.serve(), environment) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
             client.initialize_and_list_tools()
             startup = inspect(client)
             assert startup["prepared"] is True
@@ -487,6 +533,7 @@ def test_large_manifest_round_trip(binary: Path, execution: Execution) -> Transc
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("yamark"))
 def test_records_requirement_boundaries(
@@ -498,7 +545,10 @@ def test_records_requirement_boundaries(
         inventories = workspace / "uv-python-inventories.json"
         environment["MCP_CONSOLE_TEST_UV_PYTHON_INVENTORIES"] = str(inventories)
         with McpClient(
-            binary, execution.serve(), environment, current_directory=workspace
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"action": "set"}, python="first_environment = 1")
@@ -536,6 +586,8 @@ def test_records_requirement_boundaries(
         assert boundaries[2]["snapshot"]["requirements"]["python"] == [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
         ]
         quarto = (session / "transcript.qmd").read_text()
         assert "execute:\n  eval: false" in quarto

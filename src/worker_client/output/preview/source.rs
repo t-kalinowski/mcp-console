@@ -1,4 +1,32 @@
 use super::Gap;
+use std::path::Path;
+
+const LOCATION_BYTES: usize = super::TEXT_BYTES / 16;
+
+/// Keep the generated session/file suffix exact when the configured recording
+/// prefix is too long. That suffix is bounded independently of the host path.
+fn recording_location(path: &Path, session: &Path, directory: bool) -> String {
+    let separator = if directory {
+        std::path::MAIN_SEPARATOR_STR
+    } else {
+        ""
+    };
+    let full = format!("{}{separator}", path.display());
+    if full.len() <= LOCATION_BYTES {
+        return full;
+    }
+    let console = session
+        .parent()
+        .expect("recording sessions directory")
+        .parent()
+        .expect("Console recording directory");
+    format!(
+        "{}{separator} (relative to Console recording directory)",
+        path.strip_prefix(console)
+            .expect("session-owned recording location")
+            .display()
+    )
+}
 
 #[derive(Clone, Default)]
 pub(in crate::worker_client::output) struct Source {
@@ -8,105 +36,202 @@ pub(in crate::worker_client::output) struct Source {
     pub(in crate::worker_client::output) discarded_bytes: u64,
 }
 
-impl Source {
-    pub(super) fn notice(&self, omitted: u64, notices: u64) -> String {
-        let location = match &self.file {
-            Some(file) => format!(
-                "raw cell log: {} (Console server recording workspace; controller for remote targets); {} raw bytes retained, {} raw bytes not retained{}",
-                file.public_path(),
-                self.retained_bytes,
-                self.discarded_bytes,
-                if self.discarded_bytes == 0 {
-                    ""
-                } else {
-                    "; file contains only a prefix; omitted text beyond it is unavailable"
-                },
-            ),
-            None => format!(
-                "no retained cell log ({} raw bytes observed); omitted text is unavailable",
-                self.raw_bytes
-            ),
-        };
-        let generated = if notices == 0 {
-            String::new()
+/// A single file, or its directory when several retained files contribute.
+/// All receipts in a Console response belong to the same recording session.
+#[derive(Clone, Default)]
+pub(super) struct Location {
+    path: Option<String>,
+    directory: bool,
+}
+
+impl Location {
+    pub(super) fn extend(&mut self, other: Self) {
+        if let Some(path) = other.path {
+            self.add(&path, other.directory);
+        }
+    }
+
+    pub(super) fn add(&mut self, path: &str, directory: bool) {
+        match &self.path {
+            None => {
+                self.path = Some(path.to_owned());
+                self.directory = directory;
+            }
+            Some(previous) if !self.directory && (directory || previous != path) => {
+                self.path = Some(
+                    Path::new(previous)
+                        .parent()
+                        .expect("recorded file directory")
+                        .display()
+                        .to_string(),
+                );
+                self.directory = true;
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn describe(&self, singular: &str, plural: &str) -> Option<String> {
+        self.path.as_ref().map(|path| {
+            let path = Path::new(path);
+            let directory = if self.directory {
+                path
+            } else {
+                path.parent().expect("recorded file directory")
+            };
+            let session = directory.parent().expect("recording session directory");
+            format!(
+                "{}: {}",
+                if self.directory { plural } else { singular },
+                recording_location(path, session, self.directory)
+            )
+        })
+    }
+
+    fn shared_recording(&self, images: &Self) -> Option<String> {
+        let logs = Path::new(self.path.as_ref()?);
+        let images_path = Path::new(images.path.as_ref()?);
+        let directory = logs.parent().expect("recorded output directory");
+        let session = if self.directory {
+            directory
         } else {
-            format!("; {notices} generated notice bytes not retained")
+            directory.parent().expect("recording session directory")
         };
-        format!(
-            "\n[output preview: omitted {omitted} rendered UTF-8 bytes{generated}; {location}]\n"
-        )
+        // Share and bound the session prefix once; filenames stay exact.
+        Some(format!(
+            "retained output: {}; logs: {}{}; images: {}{}",
+            recording_location(session, session, true),
+            logs.strip_prefix(session)
+                .expect("session-owned logs")
+                .display(),
+            if self.directory {
+                std::path::MAIN_SEPARATOR_STR
+            } else {
+                ""
+            },
+            images_path
+                .strip_prefix(session)
+                .expect("session-owned artifacts")
+                .display(),
+            if images.directory {
+                std::path::MAIN_SEPARATOR_STR
+            } else {
+                ""
+            }
+        ))
     }
 }
 
-/// Constant-size accounting for fully omitted response intervals. The journal
-/// retains individual file paths and cumulative cell totals after receipts drop.
+/// Constant-size accounting for fully omitted response intervals. Individual
+/// file paths and cumulative raw counts remain owned by their recording receipts.
 #[derive(Clone, Default)]
 pub(in crate::worker_client::output) struct Summary {
     pub(super) gap: Gap,
-    intervals: u64,
-    retained_bytes: u64,
-    discarded_bytes: u64,
-    journal: Option<String>,
+    logs: Location,
+    partial: bool,
+    unavailable: bool,
 }
 
 impl Summary {
     pub(super) fn new(source: &Source, gap: Gap) -> Self {
-        let (retained_bytes, discarded_bytes, journal) = match &source.file {
-            Some(file) => {
-                // Active polls replay an unclaimed response before collecting
-                // later output. Composition retires the old cell first, so its
-                // journal entry can be published before releasing this receipt.
-                file.note_inline_omission(gap.bytes);
-                file.publish();
-                // File retention only changes from accepting bytes to discarding
-                // them. Limit its cumulative discarded count to this interval.
-                let discarded = source.raw_bytes.min(source.discarded_bytes);
-                let session = std::path::Path::new(file.public_path())
-                    .parent()
-                    .and_then(std::path::Path::parent)
-                    .expect("recorded output has a session directory");
-                (
-                    source.raw_bytes - discarded,
-                    discarded,
-                    Some(session.join("internal/events.jsonl").display().to_string()),
-                )
-            }
-            None => (0, source.raw_bytes, None),
-        };
-        Self {
+        if let Some(file) = &source.file {
+            // Publish the retired interval before releasing its receipt;
+            // active polls replay unclaimed output before collecting more.
+            file.note_inline_omission(gap.bytes);
+            file.publish();
+        }
+        let mut summary = Self {
             gap,
-            intervals: u64::from(gap.bytes != 0),
-            retained_bytes,
-            discarded_bytes,
-            journal,
+            ..Self::default()
+        };
+        summary.source(source);
+        summary
+    }
+
+    pub(super) fn source(&mut self, source: &Source) {
+        if let Some(file) = &source.file {
+            if source.retained_bytes != 0 {
+                self.logs.add(file.public_path(), false);
+            }
+            self.partial |= source.discarded_bytes != 0;
+        } else {
+            self.unavailable |= source.raw_bytes != 0;
         }
     }
 
     pub(super) fn extend(&mut self, other: Self) {
         self.gap.bytes += other.gap.bytes;
         self.gap.notices += other.gap.notices;
-        self.intervals += other.intervals;
-        self.retained_bytes += other.retained_bytes;
-        self.discarded_bytes += other.discarded_bytes;
-        if self.journal.is_none() {
-            self.journal = other.journal;
+        self.partial |= other.partial;
+        self.unavailable |= other.unavailable;
+        if let Some(path) = other.logs.path {
+            self.logs.add(&path, other.logs.directory);
         }
     }
 
-    pub(super) fn notice(&self) -> String {
-        let location = match &self.journal {
-            Some(journal) => format!(
-                "raw cell log paths and per-cell counts: {journal} (Console server recording workspace; controller for remote targets)"
-            ),
-            None => "no retained cell logs".to_owned(),
-        };
-        format!(
-            "\n[output preview: omitted {} rendered UTF-8 bytes across {} output intervals; {} generated notice bytes not retained; {} raw bytes retained, {} raw bytes not retained; {location}; unretained text is unavailable]\n",
-            self.gap.bytes,
-            self.intervals,
-            self.gap.notices,
-            self.retained_bytes,
-            self.discarded_bytes,
-        )
+    pub(super) fn notice(
+        &self,
+        images: u64,
+        image_bytes: u64,
+        recorded_images: u64,
+        artifacts: &Location,
+    ) -> String {
+        let mut details = Vec::new();
+        if self.gap.bytes != 0 {
+            details.push(format!("{} UTF-8 bytes", self.gap.bytes));
+        }
+        if images != 0 {
+            details.push(format!(
+                "{images} {} ({image_bytes} encoded bytes)",
+                if images == 1 { "image" } else { "images" }
+            ));
+        }
+        let omitted = details.join(", ");
+        details.clear();
+        let shared = self.logs.shared_recording(artifacts);
+        let shared_location = shared.is_some();
+        if let Some(location) = shared {
+            details.push(location);
+        }
+        if self.gap.bytes != 0 {
+            if !shared_location {
+                details.push(
+                    self.logs
+                        .describe("raw log", "retained logs")
+                        .unwrap_or_else(|| "no retained log; omitted text unavailable".to_owned()),
+                );
+            }
+            if self.logs.path.is_some() {
+                if self.partial {
+                    details.push("logs contain prefixes; later raw text unavailable".to_owned());
+                }
+                if self.unavailable {
+                    details.push("some omitted text unavailable".to_owned());
+                }
+            }
+            if self.gap.notices != 0 {
+                details.push(format!(
+                    "{} generated notice bytes unavailable",
+                    self.gap.notices
+                ));
+            }
+        }
+        if !shared_location
+            && let Some(location) = artifacts.describe("retained image", "retained images")
+        {
+            details.push(location);
+        }
+        let unretained_images = images - recorded_images;
+        if unretained_images != 0 {
+            details.push(format!(
+                "{unretained_images} {} not retained",
+                if unretained_images == 1 {
+                    "image"
+                } else {
+                    "images"
+                }
+            ));
+        }
+        format!("\n[output omitted: {omitted}; {}]\n", details.join("; "))
     }
 }

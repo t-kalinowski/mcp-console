@@ -25,6 +25,7 @@ result:
     - type: text
       text: |-
 
+        [elapsed: <elapsed>s since admission; no new output]
         [running; poll with an empty send]
   isError: false
 ---
@@ -55,6 +56,8 @@ result:
           "packages": [
             "numpy",
             "pandas",
+            "matplotlib",
+            "plotnine",
             "mcp_console_blocked_automatic_import"
           ]
         }

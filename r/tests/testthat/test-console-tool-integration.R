@@ -29,6 +29,26 @@ bare_mcp_console <- function() {
   launcher
 }
 
+managed_python_mcp_console <- function() {
+  binary <- real_mcp_console()
+  directory <- tempfile("mcp-console-python-")
+  dir.create(directory)
+  uv <- Sys.which("uv")
+  stopifnot(nzchar(uv), file.symlink(uv, file.path(directory, "uv")))
+  launcher <- file.path(directory, "mcp-console")
+  writeLines(
+    c(
+      "#!/bin/sh",
+      "unset R_TESTS R_HOME RHOME RETICULATE_UV RETICULATE_PYTHON",
+      sprintf("export PATH=%s", shQuote(directory)),
+      sprintf("exec %s \"$@\"", shQuote(binary))
+    ),
+    launcher
+  )
+  Sys.chmod(launcher, "0755")
+  launcher
+}
+
 with_path <- function(path, code) {
   old <- Sys.getenv("PATH")
   on.exit(Sys.setenv(PATH = old), add = TRUE)
@@ -171,13 +191,29 @@ test_that("console_tool works when registered with an ellmer chat", {
             expect_lte(nchar(text, type = "bytes"), 8192L)
             expect_match(text, "adapter head\n", fixed = TRUE)
             expect_match(text, "adapter tail\n", fixed = TRUE)
-            expect_match(text, "rendered UTF-8 bytes", fixed = TRUE)
+            expect_match(text, "[output omitted: ", fixed = TRUE)
+            sessions <- list.dirs("console/sessions", recursive = FALSE)
+            expect_length(sessions, 1L)
+            raw_log <- file.path(
+              getwd(),
+              sessions,
+              "outputs",
+              "call-000001.log"
+            )
             expect_match(
               text,
-              file.path(getwd(), "console", "sessions"),
+              paste0(" UTF-8 bytes; raw log: ", raw_log, "]"),
               fixed = TRUE
             )
-            expect_length(list.dirs("console/sessions", recursive = FALSE), 1L)
+            expect_true(file.exists(raw_log))
+            expect_identical(
+              readChar(raw_log, file.info(raw_log)$size, useBytes = TRUE),
+              paste0(
+                "adapter head\n",
+                strrep("x", 10000),
+                "\nadapter tail\n[1] 42\n"
+              )
+            )
           },
           finally = {
             rm(chat)
@@ -193,7 +229,7 @@ test_that("console_tool works when registered with an ellmer chat", {
 inspect_requirements <- function(send) {
   deadline <- Sys.time() + 600
   text <- send(requirements = list(action = "get"), timeout_ms = 0)@text
-  while (identical(text, "[worker starting]")) {
+  while (endsWith(text, "[worker starting]")) {
     remaining <- as.numeric(difftime(deadline, Sys.time(), units = "secs"))
     stopifnot(remaining > 0)
     # This is the public readiness poll. Each call waits for startup rather
@@ -209,7 +245,8 @@ inspect_requirements <- function(send) {
 
 test_that("requirements actions preserve scalar fields and empty lists", {
   with_temp_working_directory({
-    send <- console_tool(path = real_mcp_console(), no_sandbox = TRUE)
+    # Exercise declaration serialization without rebuilding unrelated R packages.
+    send <- console_tool(path = managed_python_mcp_console(), no_sandbox = TRUE)
     startup <- inspect_requirements(send)
     # Inspect the committed default environment after worker readiness.
     expect_true(startup$prepared)

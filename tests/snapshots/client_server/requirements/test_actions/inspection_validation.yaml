@@ -3,6 +3,15 @@
 ---
 send:
   requirements:
+    action: set
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
     action: get
   timeout_ms: 600000
 result:
@@ -11,24 +20,9 @@ result:
       text: |-
         {
           "requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "nanoarrow",
-              "reticulate",
-              "tidyverse",
-              "yyjsonr"
-            ],
-            "python": [
-              "numpy",
-              "pandas"
-            ],
-            "duckdb": [
-              "icu",
-              "json",
-              "sqlite"
-            ],
+            "r": [],
+            "python": [],
+            "duckdb": [],
             "python_version": [],
             "exclude_newer": null
           },
@@ -50,21 +44,9 @@ result:
         }
   structuredContent:
     requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - nanoarrow
-        - reticulate
-        - tidyverse
-        - yyjsonr
-      python:
-        - numpy
-        - pandas
-      duckdb:
-        - icu
-        - json
-        - sqlite
+      r: []
+      python: []
+      duckdb: []
       python_version: []
       exclude_newer: ~
     prepared: true
@@ -303,24 +285,9 @@ result:
       text: |-
         {
           "requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "nanoarrow",
-              "reticulate",
-              "tidyverse",
-              "yyjsonr"
-            ],
-            "python": [
-              "numpy",
-              "pandas"
-            ],
-            "duckdb": [
-              "icu",
-              "json",
-              "sqlite"
-            ],
+            "r": [],
+            "python": [],
+            "duckdb": [],
             "python_version": [],
             "exclude_newer": null
           },
@@ -342,21 +309,9 @@ result:
         }
   structuredContent:
     requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - nanoarrow
-        - reticulate
-        - tidyverse
-        - yyjsonr
-      python:
-        - numpy
-        - pandas
-      duckdb:
-        - icu
-        - json
-        - sqlite
+      r: []
+      python: []
+      duckdb: []
       python_version: []
       exclude_newer: ~
     prepared: true

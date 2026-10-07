@@ -1,6 +1,7 @@
 base::local(
   {
     managed_connection <- NULL
+    rendering_connection <- NULL
     selected_connection <- NULL
     source <- NULL
     printer_ready <- FALSE
@@ -23,27 +24,25 @@ base::local(
       envir = globalenv()
     )
 
-    ensure_managed_connection <- function() {
-      if (!is.null(managed_connection)) {
-        return(invisible(managed_connection))
-      }
-
+    open_connection <- function() {
       storage <- file.path(Sys.getenv("TMPDIR"), "mcp-console-duckdb")
       connection <- DBI::dbConnect(
         duckdb::duckdb(
           dbdir = ":memory:",
           config = list(
-            # Suppress DuckDB-R's temporary fallback while leaving DuckDB core
-            # to resolve its native default extension directory.
-            extension_directory = "",
+            # Cache and worker storage remain Console-owned settings.
+            extension_directory = Sys.getenv(
+              "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
+            ),
             secret_directory = file.path(storage, "stored-secrets"),
             temp_directory = file.path(storage, "spill")
           ),
           environment_scan = TRUE
         )
       )
+      complete <- FALSE
       on.exit({
-        if (is.null(managed_connection)) {
+        if (!complete) {
           tryCatch(
             DBI::dbDisconnect(connection),
             error = function(condition) {
@@ -58,14 +57,33 @@ base::local(
         }
       })
       DBI::dbExecute(connection, "SET enable_progress_bar = false")
-      managed_connection <<- connection
+      complete <- TRUE
+      connection
+    }
+
+    ensure_managed_connection <- function() {
+      if (is.null(managed_connection)) {
+        managed_connection <<- open_connection()
+      }
       invisible(managed_connection)
+    }
+
+    ensure_rendering_connection <- function() {
+      if (identical(selected_connection, managed_connection)) {
+        return(managed_connection)
+      }
+      # User DBI previews must not depend on the managed database or its options.
+      # This scratch catalog opens only for a DBI preview, never the SQL default.
+      if (is.null(rendering_connection)) {
+        rendering_connection <<- open_connection()
+      }
+      rendering_connection
     }
 
     initialize_managed_connection <- function() {
       tryCatch(
         {
-          # Bare and prepared environments may omit the optional managed provider.
+          # Bare environments may omit the optional managed provider.
           if (
             !nzchar(system.file(package = "DBI")) ||
               !nzchar(system.file(package = "duckdb"))
@@ -122,6 +140,49 @@ base::local(
       invisible(.Call("mcp_console_sql_use_r"))
       selected_connection <<- connection
       invisible(NULL)
+    }
+
+    initialize_connection <- function(source) {
+      program <- tryCatch(
+        parse(text = source, keep.source = FALSE),
+        error = function(condition) {
+          # R's parse diagnostic appends the source excerpt on later lines.
+          cat(
+            "Error: R startup syntax error: ",
+            strsplit(conditionMessage(condition), "\n", fixed = TRUE)[[1L]][1L],
+            "\n",
+            sep = ""
+          )
+          NULL
+        }
+      )
+      if (is.null(program)) {
+        return("failed")
+      }
+      tryCatch(
+        {
+          eval(program, envir = globalenv())
+          if (
+            !.Call("mcp_console_sql_r_connection_selected") ||
+              is.null(selected_connection) ||
+              identical(selected_connection, managed_connection) ||
+              !isTRUE(DBI::dbIsValid(selected_connection))
+          ) {
+            stop(
+              "startup must select a valid native connection with .console$sql_connection(connection)"
+            )
+          }
+          "ready"
+        },
+        interrupt = function(condition) {
+          cat("R startup interrupted\n")
+          "interrupted"
+        },
+        error = function(condition) {
+          cat("Error: ", conditionMessage(condition), "\n", sep = "")
+          "failed"
+        }
+      )
     }
 
     restore_managed_connection <- function() {
@@ -241,7 +302,7 @@ base::local(
     }
 
     stringify <- function(batch, schema, rows, columns, id) {
-      render_connection <- ensure_managed_connection()
+      render_connection <- ensure_rendering_connection()
       array_pointer <- nanoarrow::nanoarrow_allocate_array()
       schema_pointer <- nanoarrow::nanoarrow_allocate_schema()
       nanoarrow::nanoarrow_pointer_export(batch, array_pointer)

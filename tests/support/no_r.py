@@ -1,4 +1,4 @@
-"""Shared public acceptance for R-free execution providers."""
+"""Shared public acceptance for R-free local execution."""
 
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.client import McpClient

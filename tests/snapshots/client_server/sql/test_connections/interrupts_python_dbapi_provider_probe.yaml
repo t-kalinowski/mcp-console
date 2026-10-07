@@ -91,6 +91,7 @@ result:
     - type: text
       text: |-
 
+        [elapsed: <elapsed>s since admission; no new output]
         [running; poll with an empty send]
   isError: false
 ---
@@ -102,6 +103,7 @@ result:
     - type: text
       text: |-
 
+        [elapsed: <elapsed>s since admission; no new output]
         [running; poll with an empty send]
   isError: false
 ---
@@ -112,7 +114,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 269, in dispatch
+          File "<string>", line 276, in dispatch
           File "<mcp-console:python:e1>", line 45, in pause_provider_probe
         KeyboardInterrupt
   isError: false

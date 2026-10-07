@@ -10,17 +10,17 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, R, requires
 from support.assertions import last_result_text
-from support import ssh
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
-from support.requirements import R, requires
 from support.linux_sandbox import retain_system_bwrap
 from boundaries.client_server.server.test_no_r import no_r_environment
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
+from support.snapshots import platform_snapshots
 
 
 def rejected_selection(binary: Path, root: Path, environment: dict[str, str]) -> list:
@@ -33,10 +33,14 @@ def rejected_selection(binary: Path, root: Path, environment: dict[str, str]) ->
         assert client.stdout.read(timeout=20) == ""
         error = client.stderr.read(timeout=20)
         assert "R_HOME" in error and str(root / "missing-r") in error, error
+        assert "setup or retirement deadline exceeded" not in error, error
         assert client.process.wait(timeout=5) != 0
         return [{"stderr": error.replace(str(root), "<workspace>")}]
 
 
+@platform_snapshots(
+    "win32", reason="Invalid R_HOME reports the native Rscript installation layout"
+)
 def test_rejects_invalid_local_r_home(binary: Path) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -44,20 +48,7 @@ def test_rejects_invalid_local_r_home(binary: Path) -> list:
         return rejected_selection(binary, root, environment)
 
 
-@requires(ssh.SSH)
-def test_rejects_invalid_remote_r_home(binary: Path) -> list:
-    with TemporaryDirectory() as temporary:
-        root = Path(temporary).resolve()
-        ssh.configure(
-            root,
-            root,
-            [str(binary)],
-            sandbox={"environment": {"R_HOME": str(root / "missing-r")}},
-        )
-        with ssh.localhost(root / "sshd") as environment:
-            return rejected_selection(binary, root, environment)
-
-
+@requires(POSIX)
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_retains_discovered_r_home_across_generations(
@@ -100,6 +91,7 @@ def test_retains_discovered_r_home_across_generations(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retains_r_absence_across_generations(
     binary: Path, execution: Execution
@@ -140,10 +132,15 @@ def test_retains_r_absence_across_generations(
             return client.finish()
 
 
-def test_removes_managed_sql_storage_on_restart_and_shutdown(binary: Path) -> list:
+@executions(DIRECT)
+def test_removes_managed_sql_storage_on_restart_and_shutdown(
+    binary: Path, execution: Execution
+) -> list:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
-        with McpClient(binary, DIRECT.serve(), no_r_environment(root), root) as client:
+        with McpClient(
+            binary, execution.serve(), no_r_environment(root), root
+        ) as client:
             client.initialize_and_list_tools()
             for restart in (False, True):
                 if restart:

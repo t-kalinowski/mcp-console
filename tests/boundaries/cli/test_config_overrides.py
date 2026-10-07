@@ -13,7 +13,7 @@ from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, SANDBOX, requires
 from support.suites import run_this_suite
 
 
@@ -29,13 +29,8 @@ def configure(workspace: Path, value: object) -> None:
 def test_ignores_yaml_tags_recursively(binary: Path) -> Transcript:
     yaml = code("""
         !configuration
-        !key target: !target
-          transport: !transport {kind: !kind local}
-          compute: !compute {kind: !kind host}
-          command: !command null
-        sandbox: !policy
-          environment: !environment {LABEL: !text tagged}
-          filesystem: !filesystem {entries: !entries []}
+        !key cache: !cache host
+        environment: !environment {LABEL: !text tagged}
         """)
     with TemporaryDirectory() as temporary:
         workspace = Path(temporary).resolve()
@@ -50,7 +45,7 @@ def test_ignores_yaml_tags_recursively(binary: Path) -> Transcript:
                 "--worker",
                 "unused-worker",
                 "-c",
-                "sandbox.environment.ADDED=override",
+                "environment.ADDED=override",
             ),
             current_directory=workspace,
         ) as client:
@@ -70,20 +65,9 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
         configure(
             workspace,
             {
-                "extends": ":read-only",
-                "sandbox": {
-                    "environment": {"KEEP": "project", "CHANGE": "project"},
-                    "workspace_options": {"exclude_slash_tmp": True},
-                    "filesystem": {
-                        "kind": "restricted",
-                        "entries": [
-                            {
-                                "path": {"type": "path", "path": "./project"},
-                                "access": "write",
-                            }
-                        ],
-                    },
-                },
+                "cache": "host",
+                "environment": {"KEEP": "project", "CHANGE": "project"},
+                "sandbox": {"filesystem": {"read_write": ["./project"]}},
             },
         )
         capture = workspace / "payloads.jsonl"
@@ -94,17 +78,13 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
         }
         overrides = [
             "-c",
-            "sandbox.environment.BEFORE=first",
+            "environment.BEFORE=first",
             "-c",
-            "sandbox.environment.CHANGE=first",
+            "environment.CHANGE=first",
             "-c",
-            "sandbox={environment: {CHANGE=last, ADD: cli}, filesystem: "
-            "{entries: [{path={type=path, path='./cli'}, access=write}], "
-            "glob_scan_max_depth: 3}}",
+            "environment={CHANGE=last, ADD: cli}",
             "-c",
-            "extends=null",
-            "-c",
-            "sandbox.workspace_options=null",
+            "sandbox.filesystem.read_write=[./cli]",
         ]
         for command in ("serve", "sandbox"):
             arguments = [*overrides[:2], command, *overrides[2:]]
@@ -141,14 +121,12 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
                     "ADD": "cli",
                     "BEFORE": "first",
                 }, payload
-                assert payload["workspace_options"] is None, payload
                 filesystem = payload["filesystem"]
                 assert filesystem["kind"] == "restricted", filesystem
-                assert filesystem["glob_scan_max_depth"] == 3, filesystem
                 paths = [
                     entry["path"]["path"]
                     for entry in filesystem["entries"]
-                    if entry["path"]["type"] == "path"
+                    if entry["access"] == "write"
                 ]
                 assert paths == [str(workspace / "cli")], filesystem
             records.append(
@@ -156,8 +134,6 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
                     "command": command,
                     "overrides": overrides,
                     "environment": payloads[-1]["environment"],
-                    "workspace_options": payloads[-1]["workspace_options"],
-                    "glob_scan_max_depth": filesystem["glob_scan_max_depth"],
                     "paths": [str(Path(path).relative_to(workspace)) for path in paths],
                 }
             )
@@ -191,7 +167,7 @@ def test_inline_strings_and_objects_without_project_file(binary: Path) -> Transc
                     binary,
                     "sandbox",
                     "--config",
-                    f"sandbox.environment={value}",
+                    f"environment={value}",
                     "--",
                     sys.executable,
                     "-c",
@@ -220,16 +196,16 @@ def test_inline_strings_and_objects_without_project_file(binary: Path) -> Transc
 def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        configure(workspace, {"sandbox": False, "target": ["invalid"]})
+        configure(workspace, {"environment": False, "python": ["invalid"]})
         overrides = (
             "-c",
-            "sandbox.environment.KEEP=first",
+            "environment.KEEP=first",
             "-c",
-            "sandbox.environment=null",
+            "environment=null",
             "-c",
-            "sandbox.environment={FINAL: last}",
+            "environment={FINAL: last}",
             "-c",
-            "target=null",
+            "python=null",
         )
         with McpClient(
             binary,
@@ -240,8 +216,8 @@ def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
             _, stderr = client.finish_with_standard_error()
             assert stderr == "", stderr
         assert json.loads((workspace / CONFIG).read_text()) == {
-            "sandbox": False,
-            "target": ["invalid"],
+            "environment": False,
+            "python": ["invalid"],
         }
     return [{"overrides": list(overrides), "initialized": True}]
 
@@ -256,6 +232,8 @@ def test_discovers_home_configuration_with_project_precedence(
         home.mkdir()
         workspace.mkdir()
         environment = {**os.environ, "HOME": str(home)}
+        if os.name == "nt":
+            environment["USERPROFILE"] = str(home)
         environment.pop("MCP_CONSOLE_HOME", None)
         configure(home, {"unknown": "home"})
 
@@ -272,7 +250,9 @@ def test_discovers_home_configuration_with_project_precedence(
             assert result.returncode == 1 and result.stdout == "", result
             return result.stderr
 
-        assert str(home / CONFIG) in launch_error()
+        assert str(home / CONFIG).replace("\\", "/") in launch_error().replace(
+            "\\", "/"
+        )
 
         fixture_workspace = root / "default-client"
         fixture_workspace.mkdir()
@@ -316,7 +296,9 @@ def test_discovers_home_configuration_with_project_precedence(
         assert CONFIG in error and str(home / CONFIG) not in error, error
 
         (workspace / CONFIG).unlink()
-        assert str(home / CONFIG) in launch_error()
+        assert str(home / CONFIG).replace("\\", "/") in launch_error().replace(
+            "\\", "/"
+        )
         configure(home, {})
         with McpClient(
             binary,
@@ -475,10 +457,10 @@ def test_python_home_expansion_requires_absolute_home(binary: Path) -> Transcrip
 
 def test_validates_effective_configuration(binary: Path) -> Transcript:
     cases = (
-        ("extends=true", "boolean"),
-        ("extends=42", "integer"),
-        ("extends=1.5", "floating point"),
-        ("target.command=[far, faz]", "local host target"),
+        ("inherit_environment=wrong", "boolean"),
+        ("inherit_environment=42", "integer"),
+        ("inherit_environment=1.5", "floating point"),
+        ("target.command=[far, faz]", "unknown field"),
         ("unknown={baz: [far, faz]}", "unknown field"),
     )
     records = []
@@ -498,6 +480,7 @@ def test_validates_effective_configuration(binary: Path) -> Transcript:
     return records
 
 
+@requires(POSIX)
 def test_overrides_do_not_bypass_file_errors_or_explicit_inputs(
     binary: Path,
 ) -> Transcript:
@@ -546,6 +529,110 @@ def test_overrides_do_not_bypass_file_errors_or_explicit_inputs(
             assert result.returncode == 1 and result.stdout == "", result
             assert expected in result.stderr, result.stderr
             records.append({"arguments": arguments, "stderr": result.stderr})
+    return records
+
+
+@requires(POSIX)
+def test_rejects_oversized_startup_before_launch(binary: Path) -> Transcript:
+    limit = 32 * 1024
+
+    def encoded_bytes(language: str, source: str) -> int:
+        payload = json.dumps(
+            {"language": language, "code": source},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return len(payload.encode("utf-8"))
+
+    cases = []
+    for language, padding in (
+        ("r", "a"),
+        ("python", "\n"),
+        ("python", "\x01"),
+        ("python", "雪"),
+    ):
+        remaining = limit + 1 - encoded_bytes(language, "#\npass")
+        unit_bytes = encoded_bytes(language, padding) - encoded_bytes(language, "")
+        count, remainder = divmod(remaining, unit_bytes)
+        source = "#" + padding * count + "a" * remainder + "\npass"
+        assert encoded_bytes(language, source) == limit + 1
+        cases.append((language, repr(padding), source))
+    cases.append(("python", "70,000 leading newlines", "\n" * 70_000 + "pass"))
+
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        for language, description, source in cases:
+            configured_language = "r" if description == repr("\n") else language
+            configure(
+                workspace,
+                {"startup": {"language": configured_language, "code": source}},
+            )
+            # Override after loading: validation must use the effective source.
+            arguments = [binary, "serve", "--no-sandbox"]
+            if configured_language != language:
+                arguments.extend(["-c", "startup.language=python"])
+            result = subprocess.run(
+                arguments,
+                cwd=workspace,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            expected = (
+                f"startup encoded source is {encoded_bytes(language, source)} bytes; "
+                f"maximum is {limit} bytes"
+            )
+            assert expected in result.stderr, result.stderr
+            records.append(
+                {
+                    "source": description,
+                    "error": result.stderr.replace(str(workspace), "<workspace>"),
+                }
+            )
+    return records
+
+
+@requires(POSIX)
+def test_rejects_invalid_startup(binary: Path) -> Transcript:
+    cases = (
+        ("startup.language=sql", "startup.language"),
+        ("startup.language=unknown", "startup.language"),
+        ("startup.code=''", "startup.code must be nonempty"),
+        ("startup.code=42", "startup.code"),
+        ("startup.code=null", "startup.code"),
+        ("startup.extra=true", "unknown field `extra`"),
+        ("sql.provider=python", "unknown field `sql`"),
+    )
+    records = []
+    with TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        configure(workspace, {"startup": {"language": "python", "code": "pass"}})
+        for override, expected in cases:
+            result = subprocess.run(
+                [binary, "serve", "--no-sandbox", "-c", override],
+                cwd=workspace,
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            assert expected in result.stderr, result.stderr
+            records.append({"override": override, "error": result.stderr})
+        result = subprocess.run(
+            [binary, "serve", "--no-sandbox", "--worker", "unused"],
+            cwd=workspace,
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 1 and result.stdout == "", result
+        assert "startup requires the built-in worker" in result.stderr, result.stderr
+        records.append({"custom_worker_error": result.stderr})
     return records
 
 

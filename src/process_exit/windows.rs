@@ -1,31 +1,35 @@
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
-use std::time::Duration;
+use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+use windows_sys::Win32::System::Threading::{INFINITE, WaitForMultipleObjects};
 
-pub(crate) struct ChildExitWaiter {
-    handle: OwnedHandle,
+pub(super) type Cancel = crate::windows::Notify;
+pub(super) fn cancellation() -> Result<(crate::windows::Event, Cancel), String> {
+    crate::windows::notification().map_err(|error| error.to_string())
 }
-impl ChildExitWaiter {
-    pub(crate) fn start(pid: u32) -> Result<Self, String> {
-        Ok(Self {
-            handle: crate::windows::process_handle(pid).map_err(|e| e.to_string())?,
-        })
+
+pub(super) struct Observer(OwnedHandle);
+
+impl Observer {
+    pub(super) fn new(process_id: u32) -> Result<Self, String> {
+        crate::windows::process_handle(process_id)
+            .map(Self)
+            .map_err(|error| error.to_string())
     }
-    pub(crate) fn start_notifying(
-        pid: u32,
-        notify: impl FnOnce() + Send + 'static,
-    ) -> Result<Self, String> {
-        let waiter = Self::start(pid)?;
-        let handle = waiter.handle.try_clone().map_err(|e| e.to_string())?;
-        std::thread::Builder::new()
-            .name("worker launcher exit".into())
-            .spawn(move || {
-                let _ = crate::windows::wait(handle.as_raw_handle(), None);
-                notify();
-            })
-            .map_err(|e| e.to_string())?;
-        Ok(waiter)
+
+    pub(super) fn wait(self) -> Result<(), String> {
+        crate::windows::wait(self.0.as_raw_handle(), None)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
-    pub(crate) fn wait(&mut self, timeout: Duration) -> Result<bool, String> {
-        crate::windows::wait(self.handle.as_raw_handle(), Some(timeout)).map_err(|e| e.to_string())
+
+    pub(super) fn wait_cancellable(self, cancelled: crate::windows::Event) -> Result<bool, String> {
+        let handles = [self.0.as_raw_handle(), cancelled.as_raw_handle()];
+        // Both handles stay owned until this wait settles. Exit has priority
+        // when cancellation and confirmed exit are both available.
+        match unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) } {
+            WAIT_OBJECT_0 => Ok(true),
+            result if result == WAIT_OBJECT_0 + 1 => Ok(false),
+            _ => Err(std::io::Error::last_os_error().to_string()),
+        }
     }
 }

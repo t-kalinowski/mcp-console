@@ -9,6 +9,8 @@ from contextlib import ExitStack
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
+from support.requirements import LINUX_NATIVE, NON_UTF8_FILENAMES, POSIX, requires
 from support.assertions import collect_running_output, tool_text
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
@@ -17,10 +19,10 @@ from support.r import isolated_r_home, r_test_environment
 from support.records import Transcript
 from support.resolvers import bare_runtime_environment
 from support.execution import DIRECT
-from support.requirements import LINUX_NATIVE, NON_UTF8_FILENAMES, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @requires(LINUX_NATIVE)
 def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
@@ -88,6 +90,10 @@ def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript
             binary, DIRECT.serve(), environment, current_directory=root
         ) as client:
             client.initialize_and_list_tools()
+            # Complete silent setup before timing the library-loading cell.
+            ready = client.send(r="NULL", timeout_ms=600_000)
+            assert tool_text(ready) == "[done]", ready
+            client.transcript.pop()
             result = client.send(
                 # fmt: r
                 r=code("""
@@ -101,7 +107,10 @@ def test_loads_native_libraries_from_selected_r_home(binary: Path) -> Transcript
                     """),
                 timeout_ms=0,
             )
-            assert tool_text(result) == "\n[running; poll with an empty send]", result
+            assert (
+                without_elapsed(tool_text(result))
+                == "\n[running; poll with an empty send]"
+            ), result
             gate.release()
             output = collect_running_output(
                 client, "R loader probe", timeouts_ms=(60_000,) * 8

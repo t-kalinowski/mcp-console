@@ -8,7 +8,6 @@ import importlib.metadata as _importlib_metadata
 import importlib.util as _importlib_util
 import io as _io
 import json as _json
-import logging as _logging
 import os as _os
 import re as _re
 import sys as _sys
@@ -454,25 +453,6 @@ if _mcp_console_import_finder is None:
     _sys.meta_path.append(_mcp_console_import_finder)
 
 
-class _McpConsoleMatplotlibLogFilter(_logging.Filter):
-    _mcp_console_filter = True
-
-    def filter(self, record):
-        return record.getMessage() != (
-            "Matplotlib is building the font cache; this may take a moment."
-        )
-
-
-_mcp_console_logger = _logging.getLogger("matplotlib.font_manager")
-_mcp_console_filter_installed = False
-for _mcp_console_filter in _mcp_console_logger.filters:
-    if _builtins.getattr(_mcp_console_filter, "_mcp_console_filter", False):
-        _mcp_console_filter_installed = True
-        break
-if not _mcp_console_filter_installed:
-    _mcp_console_logger.addFilter(_McpConsoleMatplotlibLogFilter())
-
-
 def _mcp_console_disable_matplotlib_show(
     _setattr=_builtins.setattr,
     _sys=_sys,
@@ -563,6 +543,20 @@ def _mcp_console_collect_plots(
     return tuple(images)
 
 
+def _mcp_console_finalize_plots(
+    _collect_plots=_mcp_console_collect_plots,
+    _publish_plot=_services.publish_plot,
+    _BaseException=_builtins.BaseException,
+    _print_exception=_mcp_console_print_exception,
+):
+    try:
+        for image in _collect_plots():
+            _publish_plot(image)
+    except _BaseException as error:
+        _print_exception(error)
+    return None
+
+
 def _mcp_console_eval_cell(
     source,
     filename,
@@ -576,8 +570,7 @@ def _mcp_console_eval_cell(
     _eval=_builtins.eval,
     _BaseException=_builtins.BaseException,
     _SystemExit=_builtins.SystemExit,
-    _collect_plots=_mcp_console_collect_plots,
-    _publish_plot=_services.publish_plot,
+    _finalize_plots=_mcp_console_finalize_plots,
     _sys=_sys,
     _print_exception=_mcp_console_print_exception,
     _ValueError=_builtins.ValueError,
@@ -609,11 +602,7 @@ def _mcp_console_eval_cell(
             if _isinstance(error, _SystemExit):
                 raise
             _print_exception(error)
-    try:
-        for image in _collect_plots():
-            _publish_plot(image)
-    except _BaseException as error:
-        _print_exception(error)
+    _finalize_plots()
     return None
 
 
@@ -712,7 +701,7 @@ def _mcp_console_activate_process_environment(
     multiprocessing = _sys.modules.get("multiprocessing")
     if multiprocessing is not None:
         multiprocessing.set_executable(executable)
-    _configure_psutil()
+    _sys.modules["_mcp_console"]._configure_backends(executable, _configure_psutil)
     return None
 
 
@@ -739,6 +728,7 @@ _mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
 _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.without_automatic_resolution = _mcp_console_without_automatic_resolution
 _mcp_console.eval_cell = _mcp_console_eval_cell
+_mcp_console.finalize_plots = _mcp_console_finalize_plots
 _sys.modules[_mcp_console.__name__] = _mcp_console
 # Native startup calls this module directly instead of using a dispatcher.
 _mcp_console_configure_psutil()
@@ -1000,6 +990,21 @@ def _mcp_console_conversion_metadata(
 
 
 _mcp_console.conversion_metadata = _mcp_console_conversion_metadata
+
+
+def _configure_process_backends(executable, configure_psutil, _sys=_sys):
+    # Loky also captures the executable. A Windows virtualenv redirector is
+    # bypassed only when that capture matches the current interpreter; stale
+    # captures duplicate semaphore handles into the redirector instead of the
+    # process that executes the task after live environment activation.
+    loky_spawn = _sys.modules.get("joblib.externals.loky.backend.spawn")
+    if loky_spawn is not None:
+        loky_spawn._python_exe = executable
+    configure_psutil()
+
+
+_mcp_console._configure_backends = _configure_process_backends
+
 
 # The runtime runs with __main__ globals and private locals. Remember its code
 # objects so cell tracebacks can omit our frames without hiding user exec() code.

@@ -24,7 +24,6 @@ pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other t
 pub(crate) struct Selection {
     pub(crate) r_home: Option<PathBuf>,
     // In managed sessions, None leaves R declarations and selection hints lazy.
-    // In prepared targets, None records genuine Python absence after discovery.
     pub(crate) python: Option<Python>,
 }
 
@@ -49,18 +48,20 @@ impl Selection {
     pub(crate) fn r_is_present() -> bool {
         // An explicit but invalid R_HOME, or a broken discovered installation,
         // must stay on the R path and report its own failure.
-        std::env::var_os("R_HOME").is_some() || crate::resolver::find_path_entry("R").is_some()
+        std::env::var_os("R_HOME").is_some() || crate::resolver::find_r_path_entry().is_some()
     }
 
     #[cfg(any(unix, windows))]
     pub(crate) fn python(
         configured: Option<OsString>,
         resolver: &crate::resolver::execution::PythonConfiguration,
+        extension_directory: Option<PathBuf>,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Option<ManagedPython>), String> {
         Self::python_with(
             configured,
             resolver.has_uv(),
+            extension_directory,
             |started| {
                 crate::resolver::execution::resolve_python_manifest(
                     crate::worker_protocol::default_native_python_requirement_manifest(),
@@ -78,40 +79,10 @@ impl Selection {
     }
 
     #[cfg(any(unix, windows))]
-    pub(crate) fn python_on_host(
-        configured: Option<OsString>,
-        resolver: &crate::resolver::ManagedPythonResolverConfiguration,
-        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<(Self, Option<ManagedPython>), String> {
-        let (mut selection, managed) = Self::python_with(
-            configured,
-            resolver.has_uv(),
-            |started| {
-                crate::resolver::resolve_python_manifest_for_remote(
-                    crate::worker_protocol::default_native_python_requirement_manifest(),
-                    resolver,
-                    None,
-                    None,
-                    started,
-                )
-            },
-            |executable, started| crate::python::inspect_native(executable, started),
-            on_started,
-        )?;
-        if let Some(Python {
-            selected, explicit, ..
-        }) = &mut selection.python
-            && explicit.is_some()
-        {
-            *explicit = Some(OsString::from(&selected.embedding.python));
-        }
-        Ok((selection, managed))
-    }
-
-    #[cfg(any(unix, windows))]
     fn python_with(
         configured: Option<OsString>,
         has_uv: bool,
+        extension_directory: Option<PathBuf>,
         resolve: impl FnOnce(
             &dyn Fn(ResolverStopHandle) -> Result<(), String>,
         ) -> Result<ManagedPython, String>,
@@ -138,14 +109,7 @@ impl Selection {
             .map_err(|error| format!("cannot locate selected Python: {error}"))?;
         let selected = inspect(&executable, on_started)?;
         // Default and requested extensions share the host cache across generations.
-        let duckdb_extension_directory = managed.as_ref().and_then(|_| {
-            let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
-            #[cfg(windows)]
-            let home = home.or_else(|| std::env::var_os("USERPROFILE"));
-            home.map(PathBuf::from)
-                .filter(|home| home.is_absolute())
-                .map(|home| home.join(".duckdb/extensions"))
-        });
+        let duckdb_extension_directory = managed.as_ref().and(extension_directory);
         let selection = Self {
             r_home: None,
             python: Some(Python {

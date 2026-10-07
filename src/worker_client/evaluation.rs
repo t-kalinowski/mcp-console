@@ -17,6 +17,7 @@ pub(super) struct Evaluation {
     call_id: Option<u64>,
     output: OutputTape,
     runtime: tokio::runtime::Handle,
+    admitted_at: Instant,
 }
 
 struct EvaluationState {
@@ -47,6 +48,7 @@ struct EvaluationState {
     #[cfg(any(unix, windows))]
     stdin: Option<super::platform::StdinSender>,
     pending_stdin: String,
+    observed_worker_revision: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -107,6 +109,12 @@ pub(super) struct WaitClaim {
     evaluation: Arc<Evaluation>,
 }
 
+#[derive(Clone, Copy)]
+enum WaitKind {
+    Poll,
+    Interrupt,
+}
+
 impl Evaluation {
     pub(super) fn new(
         transcript: crate::transcript::Transcript,
@@ -115,6 +123,7 @@ impl Evaluation {
         control_prelude: Response,
         idle_prelude: Response,
         controlled_completion: bool,
+        worker_revision: u64,
     ) -> Self {
         let delivery_changed = Arc::new(tokio::sync::Notify::new());
         Self {
@@ -136,6 +145,7 @@ impl Evaluation {
                 #[cfg(any(unix, windows))]
                 stdin: None,
                 pending_stdin: String::new(),
+                observed_worker_revision: worker_revision,
             }),
             changed: tokio::sync::Notify::new(),
             delivery_changed,
@@ -143,15 +153,16 @@ impl Evaluation {
             call_id,
             output,
             runtime: tokio::runtime::Handle::current(),
+            admitted_at: Instant::now(),
         }
     }
 
     fn claim_wait(self: &Arc<Self>) -> Result<WaitClaim, String> {
-        self.try_claim_wait()?
+        self.try_claim_wait(WaitKind::Poll)?
             .ok_or_else(|| "previous send response delivery is still pending".to_string())
     }
 
-    fn try_claim_wait(self: &Arc<Self>) -> Result<Option<WaitClaim>, String> {
+    fn try_claim_wait(self: &Arc<Self>, kind: WaitKind) -> Result<Option<WaitClaim>, String> {
         let mut state = self
             .state
             .lock()
@@ -160,12 +171,18 @@ impl Evaluation {
             return Ok(None);
         }
         if state.completion_collected && state.reclaimed.is_none() {
+            if matches!(kind, WaitKind::Interrupt) {
+                return Ok(None);
+            }
             return Err("evaluation response was already delivered".to_string());
         }
         if state.retired {
             return Err("session restart began before this send could wait".to_string());
         }
         if state.waiting {
+            if matches!(kind, WaitKind::Interrupt) {
+                return Ok(None);
+            }
             return Err("worker evaluation is already being polled".to_string());
         }
         state.waiting = true;
@@ -183,6 +200,12 @@ impl Evaluation {
             state.phase,
             EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting
         ))
+    }
+
+    /// None omits a busy observation; false leaves other owners observable.
+    pub(super) fn replacement_observation(&self) -> Option<bool> {
+        let state = self.state.try_lock().ok()?;
+        Some(!state.retired && matches!(state.phase, EvaluationPhase::ReplacementStarting))
     }
 
     pub(super) fn interrupt_bootstrap(&self) -> Result<(), String> {
@@ -247,20 +270,6 @@ impl Evaluation {
     pub(super) fn reserve_completed_for_handoff(
         self: &Arc<Self>,
     ) -> Result<Option<EvaluationReservation>, String> {
-        self.reserve_completed(false)
-    }
-
-    /// Reserves a completed response for direct delivery with its original terminal marker.
-    pub(super) fn reserve_completed_for_delivery(
-        self: &Arc<Self>,
-    ) -> Result<Option<EvaluationReservation>, String> {
-        self.reserve_completed(true)
-    }
-
-    fn reserve_completed(
-        self: &Arc<Self>,
-        project_completion: bool,
-    ) -> Result<Option<EvaluationReservation>, String> {
         let mut state = self
             .state
             .lock()
@@ -282,7 +291,7 @@ impl Evaluation {
         Ok(Some(EvaluationReservation {
             evaluation: self.clone(),
             unfinished: false,
-            project_completion,
+            project_completion: false,
             controlled_completion: state.controlled_completion,
             completion,
             completion_cut: completion.and(state.completion_cut),
@@ -574,6 +583,19 @@ impl Evaluation {
         self.claim_wait()
     }
 
+    /// Signaling does not transfer another send's polling or delivery ownership.
+    /// An empty interrupt observes output only when it can claim it atomically.
+    pub(super) fn claim_for_interrupt(self: &Arc<Self>) -> Result<Option<WaitClaim>, String> {
+        self.try_claim_wait(WaitKind::Interrupt)
+    }
+
+    /// A control response without output ownership cannot claim a silent interval.
+    pub(super) fn unobserved_progress(&self) -> Response {
+        let mut response = Response::default();
+        response.evaluation_progress(self.admitted_at.elapsed(), false);
+        response
+    }
+
     /// A poll already waiting for startup can encounter a later call's reply
     /// before its transport write settles. Retain observation within the call's
     /// deadline; expiry or cancellation leaves the response unclaimed.
@@ -585,7 +607,7 @@ impl Evaluation {
             let delivered = self.delivery_changed.notified();
             tokio::pin!(delivered);
             delivered.as_mut().enable();
-            if let Some(claim) = self.try_claim_wait()? {
+            if let Some(claim) = self.try_claim_wait(WaitKind::Poll)? {
                 return Ok(claim);
             }
             tokio::time::timeout(
@@ -706,6 +728,9 @@ impl Evaluation {
             if at_deadline {
                 let cut = self.output.cut();
                 let mut output = take_owned_response(&mut state, &self.output, cut);
+                let no_new_output = cut.worker_revision == state.observed_worker_revision;
+                state.observed_worker_revision = cut.worker_revision;
+                output.evaluation_progress(self.admitted_at.elapsed(), no_new_output);
                 state.track_delivery(&mut output);
                 return Ok(EvaluationStatus::Report(EvaluationWait::Running(output)));
             }
@@ -717,6 +742,7 @@ impl Evaluation {
         }
         let cut = self.output.cut();
         let mut output = take_owned_response(&mut state, &self.output, cut);
+        state.observed_worker_revision = cut.worker_revision;
         state.track_delivery(&mut output);
         Ok(EvaluationStatus::Report(EvaluationWait::InputRequested(
             output,
@@ -890,6 +916,7 @@ mod tests {
             Response::default(),
             Response::default(),
             false,
+            0,
         ));
         evaluation.complete_cell(Ok(()));
         let claim = evaluation.claim().unwrap();

@@ -6,7 +6,7 @@ Windows SQL remains unavailable, and Windows defaults do not prepare DuckDB exte
 The server retains dependency declarations and resolved environments across worker generations.
 Preparation makes packages or extensions **available**; it does not attach R packages, import Python modules, or load DuckDB extensions.
 [Send ordering](SEND_OPERATIONS.md) defines when preparation, control, input, and code run.
-[Host resolution and trust](#host-resolution-and-trust) is essential: installation runs outside the worker sandbox.
+[Host resolution and trust](#host-resolution-and-trust) describes the separate resolver sandbox and cache permissions.
 
 ## Retained environments
 
@@ -14,21 +14,20 @@ The retained environment combines an R library/declaration, a normalized Python 
 It lives in server memory, not across server processes.
 A plain restart reuses accepted requirements, including successful automatic additions, without resolving again.
 
-| Target/environment                    | Preparation                                                                                                  |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Local/SSH with R and resolver support | Managed R, Python when not explicitly selected, and R-backed DuckDB extensions.                              |
-| Local/SSH without R                   | Managed Python and extensions through execution-host uv, or an explicitly selected non-managed Python.       |
-| Bare R-capable runtime                | Preinstalled packages/adapters; inspection only.                                                             |
-| Docker/SBX                            | Preinstalled image/template; inspection only. No implicit resolver or installation.                          |
-| Custom worker                         | No built-in defaults; explicit R/DuckDB support, with worker receipts for live R changes. No managed Python. |
+| Environment                       | Preparation                                                                                                  |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Local with R and resolver support | Managed R, Python when not explicitly selected, and R-backed DuckDB extensions.                              |
+| Local without R                   | Managed Python and extensions through execution-host uv, or an explicitly selected non-managed Python.       |
+| Bare R-capable runtime            | Preinstalled packages/adapters; inspection only.                                                             |
+| Custom worker                     | No built-in defaults; explicit R/DuckDB support, with worker receipts for live R changes. No managed Python. |
 
 The default optional declarations are:
 
-| Environment | Defaults                                                                    |
-| ----------- | --------------------------------------------------------------------------- |
-| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr` |
-| Python      | `numpy`, `pandas`; also `duckdb` without R                                  |
-| DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                          |
+| Environment | Defaults                                                                               |
+| ----------- | -------------------------------------------------------------------------------------- |
+| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
+| Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                   |
+| DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                                     |
 
 Mixed-runtime R infrastructure is separate: reticulate, jsonlite, DBI, DuckDB, Arrow/nanoarrow, pillar, tibble, and utf8 support the bridge and SQL.
 Clearing optional requirements does not remove that infrastructure, ambient libraries, preinstalled packages, or caches.
@@ -85,6 +84,33 @@ They are preconditions: failed preparation withholds that cell.
 One environment transition covers preparation through admission, so another call cannot change the environment between them.
 Standalone preparation rejects nonempty stdin and returns `[prepared]` on success; bundled preparation adds no marker.
 See [operations](SEND_OPERATIONS.md#operations) for partial effects after interrupt and for wait timing.
+
+## Saving an R script
+
+After exploring in Console, save the analysis as a self-describing R script with [ir frontmatter](https://r-lib.github.io/ir/run.html).
+Include package requirements, R runtime metadata, imports, and data inputs: a fresh script run does not inherit Console's live objects or retained requirements.
+For example, save this as `script.R` for a CSV with `group` and `value` columns:
+
+```r
+#| packages:
+#|   - dplyr
+#| r-version: "4.6.1"
+library(dplyr)
+
+args <- commandArgs(trailingOnly = TRUE)
+stopifnot(length(args) == 1L)
+data <- read.csv(args[[1]])
+summary <- data |>
+  group_by(group) |>
+  summarise(mean_value = mean(value), .groups = "drop")
+print(summary)
+```
+
+Run it explicitly from the shell with `ir run script.R data.csv`.
+`packages` is a YAML sequence of ir package references; `r-version` selects a matching installed R version through rig.
+Change `r-version` to the installed R version you tested and declare the packages the script uses.
+Continue to use Console's `send(requirements=...)` for in-session preparation; script frontmatter is for the separate ir invocation.
+The [journal QMD](RECORDING.md) records calls and results; it is not an executed, reproducible script export.
 
 ## Accepted requirement input
 
@@ -144,7 +170,7 @@ Even if the distribution lacks the module or later code fails, a successfully ac
 
 Resolution is restricted to the configuring worker thread and process, with a reentrancy guard.
 Prepare dependencies before starting other threads or fork children; missing imports there cannot invoke the resolver.
-Explicit Python, bare, and prepared targets disable managed resolution.
+Explicit Python and bare workers disable managed resolution.
 Already available imports still work.
 
 ## Live preparation
@@ -182,7 +208,9 @@ Successful activation is its own commit boundary: it survives later import/cell 
 
 ### DuckDB extension preparation
 
-The trusted host uses DuckDB's installation API and normal repository/signature checks.
+The resolver uses DuckDB's installation API and normal repository/signature checks.
+Extensions built into the selected DuckDB library are already available and need no download.
+Under managed native networking, it explicitly supplies the runner's HTTP proxy to DuckDB.
 Loading happens later in the worker.
 No SQL catalog, user connection, or runtime object is replaced by an extension-only addition.
 
@@ -193,7 +221,6 @@ Combined Python and extension additions prepare everything before activation.
 Missing DuckDB in a replacement manifest makes extension preparation fail; include `duckdb` explicitly.
 
 Removing a declaration does not remove its cache entry.
-Prepared Docker/SBX connections can load preinstalled extensions but disable automatic installation.
 
 ## Restarting with requirements
 
@@ -210,7 +237,7 @@ An explicit selection disables managed Python from every request path.
 With R, R and its DuckDB preparation can remain available; without R, host extension preparation is disabled too.
 See [configuration](CONFIGURATION.md#python-environment-selection).
 
-Without R, local/SSH preparation uses startup PATH uv and ignores `RETICULATE_UV`; there is no PATH-Python fallback.
+Without R, preparation uses startup PATH uv and ignores `RETICULATE_UV`; there is no PATH-Python fallback.
 R-present preparation prefers PATH `ir`, then uv (`uv tool run --from r-lib-ir ir`), with reticulate bootstrap when needed.
 Selected broken tools fail rather than silently selecting alternatives.
 `ir` must be at least 0.4.0 and receives the exact selected Rscript.
@@ -223,28 +250,36 @@ Interrupt terminates the active resolver Job, preserving the previously accepted
 Custom workers have no built-in defaults and no managed Python.
 Explicit R candidates include DBI, DuckDB, and jsonlite infrastructure and are supplied as `R_LIBS`.
 Live R additions require the [worker preparation contract](WORKER_PROTOCOL.md); optional runtime R callbacks must confirm or reject every candidate.
-Apply the managed library before loading DuckDB and use its normal extension cache.
+Apply the managed library before loading DuckDB.
+When `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY` is set, pass it as DuckDB's `extension_directory`; otherwise use the normal extension cache.
 
 ## Host resolution and trust
 
-Local `mcp-console resolve` and SSH's trusted preparation owner run with execution- host account permissions, **outside the worker sandbox**.
-Installation, builds, Python startup hooks, and cache warming can execute package code there.
+Local `mcp-console resolve` runs in a separate native resolver sandbox on macOS and Linux.
+Installation, builds, Python startup hooks, and cache warming can execute package code with that policy's host reads, cache writes, and proxy destinations.
+See [resolver configuration and expanded defaults](RESOLVER.md).
+`--no-sandbox` and Windows preparation retain host permissions.
 Use only trusted requirements, resolvers, configuration, and package sources.
 
 R references become separate `ir` arguments with `IR_NO_LOCAL_SOURCES=1`; Python requirements become validated uv arguments, and DuckDB names are data.
 Submitted cells and `send` stdin are not resolver programs.
 These restrictions reduce input syntax; they do not make remote package code safe.
 
-**Worker-modifiable resolver inputs are an unresolved escape path.** Capturing paths/environment values does not freeze the files they name.
-A worker that can replace a selected uv wrapper, or write a wheel directory selected by `UV_FIND_LINKS` / uv configuration, can cause later preparation to execute its code with host permissions.
-Console does not yet isolate those inputs or sandbox resolvers.
-Native worker enforcement is not protection against this route.
+Capturing paths/environment values does not freeze the files they name.
+A worker that can replace a selected uv wrapper, or write a wheel directory selected by `UV_FIND_LINKS` / uv configuration, can influence later preparation.
+That code runs under the resolver policy in local sandboxed preparation.
+Local sandboxed sessions redirect preparation and worker cache paths to Console-specific storage.
+With `cache: host`, shared cache writes can also affect other users of those artifacts.
+Cache separation does not protect cache contents from processes explicitly granted writes.
 
 ### Host resolver uv configuration
 
 The preparation owner captures startup `UV_*` values except `UV_OFFLINE`, restores that snapshot for later calls, and uses its captured uv selection.
 R-present sessions respect `RETICULATE_UV`; the special `managed` value uses reticulate's managed tool/cache.
 Environment changes in evaluated cells do not configure later host resolution, though mutable files still can.
+Default local resolver writes are confined to the Console cache root and private temporary storage.
+With `cache: host`, grants cover default host cache locations and direct cache environment overrides.
+Custom host paths selected by uv configuration files need an explicit [resolver policy](RESOLVER.md#configuration) or a matching `resolver.environment.UV_CACHE_DIR` override.
 
 Managed environment creation removes `UV_NO_CACHE` because uv would otherwise delete the selected environment on exit.
 Worker code starts with `UV_OFFLINE=1`, including under `--no-sandbox`; that variable configures uv, not process-level network enforcement.

@@ -1,6 +1,7 @@
 ---
 scenario: sandbox defaults
 runner_configuration:
+  network: restricted
   filesystem:
     kind: restricted
     entries:
@@ -9,7 +10,6 @@ runner_configuration:
           value:
             kind: root
         access: read
-  network: restricted
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -78,7 +78,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -89,6 +88,7 @@ transcript_normalization:
 ---
 scenario: sandbox with roots
 runner_configuration:
+  network: restricted
   filesystem:
     kind: restricted
     entries:
@@ -109,7 +109,6 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
-  network: restricted
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -178,7 +177,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -189,6 +187,7 @@ transcript_normalization:
 ---
 scenario: serve initial worker
 runner_configuration:
+  network: restricted
   filesystem:
     kind: restricted
     entries:
@@ -209,7 +208,6 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
-  network: restricted
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -278,7 +276,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -291,6 +288,7 @@ transcript_normalization:
 ---
 scenario: serve restart
 runner_configuration:
+  network: restricted
   filesystem:
     kind: restricted
     entries:
@@ -311,7 +309,6 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
-  network: restricted
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -380,7 +377,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  version: 2
   lifecycle:
     private_tmp:
       environment:
@@ -393,6 +389,7 @@ transcript_normalization:
 ---
 scenario: serve failure replacement
 runner_configuration:
+  network: restricted
   filesystem:
     kind: restricted
     entries:
@@ -413,7 +410,6 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
-  network: restricted
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -482,7 +478,6 @@ runner_configuration:
       ; Darwin notification endpoint also probed during that uv startup workflow.
       ; Distinct from logd; the exact framework registration remains unconfirmed.
       (global-name "com.apple.system.notification_center"))
-  version: 2
   lifecycle:
     private_tmp:
       environment:

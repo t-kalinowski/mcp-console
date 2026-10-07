@@ -19,9 +19,11 @@ base::local({
     duckdb::duckdb(
       dbdir = ":memory:",
       config = list(
-        # Suppress DuckDB-R's storage policy while leaving DuckDB core to use
-        # its compiled default extension directory.
-        extension_directory = "",
+        # Local preparation and workers share one captured extension cache.
+        # An unset directory retains DuckDB core's native default.
+        extension_directory = Sys.getenv(
+          "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
+        ),
         secret_directory = base::file.path(storage, "stored-secrets"),
         temp_directory = base::file.path(storage, "spill")
       )
@@ -29,8 +31,25 @@ base::local({
   )
   base::on.exit(DBI::dbDisconnect(connection), add = TRUE)
   DBI::dbExecute(connection, "SET enable_progress_bar = false")
+  if (Sys.getenv("CODEX_NETWORK_PROXY_ACTIVE") == "1") {
+    # Extension INSTALL does not consume the proxy environment itself.
+    DBI::dbExecute(
+      connection,
+      paste(
+        "SET http_proxy =",
+        DBI::dbQuoteString(connection, Sys.getenv("HTTP_PROXY"))
+      )
+    )
+  }
 
-  for (extension in extensions) {
+  builtin_extensions <- DBI::dbGetQuery(
+    connection,
+    paste(
+      "SELECT unnest(aliases || [extension_name]) AS name FROM duckdb_extensions()",
+      "WHERE install_path = '(BUILT-IN)'"
+    )
+  )$name
+  for (extension in base::setdiff(extensions, builtin_extensions)) {
     identifier <- DBI::dbQuoteIdentifier(connection, extension)
     DBI::dbExecute(
       connection,

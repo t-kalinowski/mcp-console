@@ -162,11 +162,9 @@ fn bind_private_runner() {
             println!("cargo:rerun-if-changed={}", destination.display());
         }
     }
-    let protocol = pin["protocol_version"].as_u64().unwrap();
     let generated = output.join("sandbox_runner_installation.rs");
     let contents = format!(
-        "pub(super) const PROTOCOL_VERSION: u32 = {protocol};\n\
-             #[cfg(windows)] const NATIVE_BUNDLE: &str = {native_bundle:?};\n\
+        "#[cfg(windows)] const NATIVE_BUNDLE: &str = {native_bundle:?};\n\
              const ARTIFACTS: &[(&str, [u8; 32])] = &[{artifacts}];\n",
     );
     if !generated.exists() || std::fs::read(&generated).unwrap() != contents.as_bytes() {

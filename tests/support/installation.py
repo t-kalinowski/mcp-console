@@ -1,9 +1,20 @@
 """A complete immutable Console installation owned by one case process."""
 
 import shutil
+import os
 import tempfile
 from functools import cache
 from pathlib import Path
+
+
+def native_console(binary: Path) -> Path:
+    selected = os.environ.get("MCP_CONSOLE_TEST_NATIVE_BINARY")
+    if selected is not None:
+        return Path(selected)
+    # Installed Windows commands are Python launchers. Fixtures that bind to
+    # native PIDs or relocate/tamper with a bundle need its actual executable.
+    native = binary.parent.parent / "libexec/mcp-console.exe"
+    return native if os.name == "nt" and native.is_file() else binary
 
 
 @cache
@@ -12,9 +23,17 @@ def _installed_console(binary: Path) -> tuple[tempfile.TemporaryDirectory, Path]
     prefix = Path(temporary.name)
     try:
         (prefix / "bin").mkdir()
-        installed = prefix / "bin/mcp-console"
+        installed = (
+            prefix / "bin" / ("mcp-console.exe" if os.name == "nt" else "mcp-console")
+        )
         shutil.copy2(binary, installed)
-        for relative in ("libexec", "share/licenses/mcp-console"):
+        # Native Windows builds keep licenses inside the immutable libexec bundle.
+        directories = (
+            ("libexec",)
+            if os.name == "nt"
+            else ("libexec", "share/licenses/mcp-console")
+        )
+        for relative in directories:
             shutil.copytree(binary.parent.parent / relative, prefix / relative)
     except BaseException:
         temporary.cleanup()

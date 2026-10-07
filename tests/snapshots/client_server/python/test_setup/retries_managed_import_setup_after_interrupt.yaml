@@ -18,7 +18,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 147, in configure
+          File "<string>", line 146, in configure
           File "<setup checkpoint>", line 9, in configuring_thread
           File "<string>", line 50, in _console_input
         KeyboardInterrupt
@@ -40,80 +40,9 @@ send:
   requirements:
     action: get
 result:
-  content:
-    - type: text
-      text: |-
-        {
-          "requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "nanoarrow",
-              "reticulate",
-              "tidyverse",
-              "yyjsonr"
-            ],
-            "python": [
-              "numpy",
-              "pandas",
-              "py-yaml12"
-            ],
-            "duckdb": [
-              "icu",
-              "json",
-              "sqlite"
-            ],
-            "python_version": [],
-            "exclude_newer": null
-          },
-          "prepared": true,
-          "runtime_requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "duckdb",
-              "jsonlite",
-              "nanoarrow",
-              "pillar",
-              "reticulate",
-              "tibble",
-              "utf8"
-            ],
-            "python": []
-          }
-        }
-  structuredContent:
-    requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - nanoarrow
-        - reticulate
-        - tidyverse
-        - yyjsonr
-      python:
-        - numpy
-        - pandas
-        - py-yaml12
-      duckdb:
-        - icu
-        - json
-        - sqlite
-      python_version: []
-      exclude_newer: ~
-    prepared: true
-    runtime_requirements:
-      r:
-        - DBI
-        - arrow
-        - duckdb
-        - jsonlite
-        - nanoarrow
-        - pillar
-        - reticulate
-        - tibble
-        - utf8
-      python: []
-  isError: false
+  accepted_python_requirements:
+    - numpy
+    - pandas
+    - matplotlib
+    - plotnine
+    - py-yaml12

@@ -25,6 +25,28 @@ pub(crate) struct Languages {
 }
 
 impl Languages {
+    pub(crate) fn fields(self) -> Vec<&'static str> {
+        [Language::R, Language::Python, Language::Sql]
+            .into_iter()
+            .filter(|language| self.enables(*language))
+            .map(Self::field)
+            .collect()
+    }
+
+    pub(crate) fn cell_fields(self) -> String {
+        let fields = self.fields();
+        let quoted = fields
+            .iter()
+            .map(|field| format!("`{field}`"))
+            .collect::<Vec<_>>();
+        match quoted.as_slice() {
+            [only] => only.clone(),
+            [first, last] => format!("{first} or {last}"),
+            [first, second, last] => format!("{first}, {second}, or {last}"),
+            _ => unreachable!("a configured interface has at least one language"),
+        }
+    }
+
     pub(crate) fn from_environment() -> Result<Self, String> {
         let Some(value) = std::env::var_os(LANGUAGES_ENV) else {
             return Ok(Self::all());

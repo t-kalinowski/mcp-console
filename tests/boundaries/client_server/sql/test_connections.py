@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
+from support.requirements import NATIVE_FIXTURES, R, SQL, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
@@ -20,10 +23,57 @@ from support.normalization import code
 from support.r import r_test_environment
 from support.native import SHARED_LIBRARY_FLAG, build_interposer
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
 from support.suites import run_this_suite
 
 
+@requires(R, SQL)
+@executions(SANDBOXED)
+def test_prepares_builtin_extensions_without_downloads(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        environment, _ = r_test_environment()
+        environment["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"] = str(root / "extensions")
+        arguments = execution.serve("-c", "cache=host")
+        with McpClient(binary, arguments, environment, root) as client:
+            client.initialize_and_list_tools()
+            client.expect(r="invisible(.console$sql_connection())")
+            client.finish()
+        assert not list((root / "extensions").glob("**/parquet.duckdb_extension"))
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(
+            json.dumps(
+                {"resolver": {"sandbox": {"network": {"proxy": {"domains": {}}}}}}
+            )
+        )
+        environment["UV_OFFLINE"] = "1"
+        with McpClient(binary, arguments, environment, root) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                # fmt: r
+                r=code(r"""
+                    retained_connection <- .console$sql_connection()
+                    invisible(DBI::dbExecute(
+                      retained_connection,
+                      "CREATE TABLE retained AS SELECT 42 AS answer"
+                    ))
+                    """),
+            )
+            client.expect("[prepared]", requirements={"duckdb": ["parquet"]})
+            client.expect(
+                "[1] TRUE\n",
+                r="identical(.console$sql_connection(), retained_connection)",
+            )
+            client.expect(
+                "[1] 42\n",
+                r="DBI::dbGetQuery(.console$sql_connection(), 'SELECT answer FROM retained')$answer",
+            )
+            return client.finish()[3:]
+
+
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_gets_selects_and_resets_the_active_native_connection(
     binary: Path, execution: Execution
@@ -318,6 +368,7 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_python_restores_managed_connection_before_r_reads_it(
     binary: Path,
@@ -328,8 +379,7 @@ def test_python_restores_managed_connection_before_r_reads_it(
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
 
-    client.send(sql="CREATE TABLE managed_values AS SELECT 42 AS value")
-    assert last_tool_text(client) == "[done]"
+    client.expect(sql="CREATE TABLE managed_values AS SELECT 42 AS value")
 
     # fmt: r
     r = code(r"""
@@ -412,6 +462,7 @@ def test_python_restores_managed_connection_before_r_reads_it(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     binary: Path,
@@ -574,6 +625,7 @@ def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_selected_python_duckdb_connection_state(
     binary: Path,
@@ -591,11 +643,10 @@ def test_preserves_selected_python_duckdb_connection_state(
         _console.sql_connection(connection)
         del connection
         """)
-    client.send(
+    client.expect(
         python=python,
         requirements={"python": ["duckdb==1.5.5"]},
     )
-    assert last_tool_text(client) == "[done]"
 
     client.send(sql="SELECT value + 1 AS answer FROM before_selection")
     preview = last_tool_text(client)
@@ -616,6 +667,7 @@ def test_preserves_selected_python_duckdb_connection_state(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_reports_python_dbapi_cursor_cleanup_failures(
     binary: Path,
@@ -665,6 +717,7 @@ def test_reports_python_dbapi_cursor_cleanup_failures(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_recovers_when_python_dbapi_connection_raises_base_exception(
     binary: Path,
@@ -706,8 +759,7 @@ def test_recovers_when_python_dbapi_connection_raises_base_exception(
 
         _console.sql_connection(RecoverableConnection())
         """)
-    client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    client.expect(python=python)
 
     client.send(sql="EXIT")
     output = last_tool_text(client)
@@ -720,6 +772,7 @@ def test_recovers_when_python_dbapi_connection_raises_base_exception(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
     binary: Path,
@@ -793,7 +846,7 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
             )
             started.wait("Python DB-API callback entered R")
             client.receive(evaluation)
-            assert evaluation["result"]["content"][0]["text"] == (
+            assert without_elapsed(evaluation["result"]["content"][0]["text"]) == (
                 "\n[running; poll with an empty send]"
             )
 
@@ -816,6 +869,7 @@ def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
                 stop_client(client)
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_interrupts_selected_python_dbapi_connection(
@@ -897,7 +951,13 @@ def test_interrupts_selected_python_dbapi_connection(
                 _console.sql_connection(InterruptibleConnection())
                 print(started_path, release_path, sep="\n")
                 """)
-            client.send(python=python)
+            wait_for_evaluation_output(
+                client,
+                None,
+                "native SQL interrupt checkpoint paths",
+                python=python,
+                completion_timeout_seconds=client.response_timeout,
+            )
             setup = client.transcript[-1]["result"]
             paths = last_tool_text(client).splitlines()
             assert len(paths) == 2, setup
@@ -908,11 +968,17 @@ def test_interrupts_selected_python_dbapi_connection(
             checkpoints.extend((started, release))
 
             client.send(sql="WAIT", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             started.wait("SQL execution entered native interrupt checkpoint")
 
             client.send(control="interrupt", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             release.release()
             release = None
             client.send()
@@ -933,6 +999,7 @@ def test_interrupts_selected_python_dbapi_connection(
                 stop_client(client)
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_interrupts_python_dbapi_provider_probe(
@@ -980,7 +1047,13 @@ def test_interrupts_python_dbapi_provider_probe(
                 probe_release <- tempfile("mcp-console-sql-probe-release-")
                 cat(probe_started, probe_release, sep = "\n")
                 """)
-            client.send(r=r)
+            wait_for_evaluation_output(
+                client,
+                None,
+                "SQL provider probe checkpoint paths",
+                r=r,
+                completion_timeout_seconds=client.response_timeout,
+            )
             setup = client.transcript[-1]["result"]
             paths = setup["content"][0]["text"].splitlines()
             assert len(paths) == 2, setup
@@ -1058,12 +1131,15 @@ def test_interrupts_python_dbapi_provider_probe(
             evaluation = client.start_send(sql="ANSWER", timeout_ms=0)
             started.wait("Python DB-API provider probe started")
             client.receive(evaluation)
-            assert evaluation["result"]["content"][0]["text"] == (
+            assert without_elapsed(evaluation["result"]["content"][0]["text"]) == (
                 "\n[running; poll with an empty send]"
             )
 
             client.send(control="interrupt", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             release.release()
             release = None
             client.send(timeout_ms=30_000)
@@ -1084,6 +1160,7 @@ def test_interrupts_python_dbapi_provider_probe(
                 stop_client(client)
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
     binary: Path,
@@ -1127,8 +1204,7 @@ def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
         _console.sql_connection(connection)
         sys.settrace(exit_sql_dispatch)
         """)
-    client.send(python=python)
-    assert last_tool_text(client) == "[done]"
+    client.expect(python=python)
 
     client.send(sql="ANSWER")
     assert "SystemExit: selected SQL dispatch exit" in last_tool_text(client)
@@ -1142,6 +1218,7 @@ def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_recovers_when_r_provider_switch_trace_raises_system_exit(
     binary: Path,
@@ -1208,6 +1285,7 @@ def display_width(text: str) -> int:
     )
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_sql_warmup_without_losing_worker(
     binary: Path, execution: Execution
@@ -1245,6 +1323,14 @@ def test_interrupts_sql_warmup_without_losing_worker(
                 assert "optional SQL disconnect failed" in last_tool_text(client), (
                     result
                 )
+            # The interrupt receipt can precede completion of the early cell's
+            # admission. Observe that completion before submitting another cell.
+            wait_for_evaluation_output(
+                client,
+                None,
+                "interrupted startup cell completes",
+                completion_timeout_seconds=client.response_timeout,
+            )
             if with_r:
                 client.expect(r="stopifnot(startup_sql_pid == Sys.getpid())")
                 if behavior.startswith("setup-interrupt"):
@@ -1273,6 +1359,7 @@ def test_interrupts_sql_warmup_without_losing_worker(
     return [{"sql_warmup_interrupt_withholds_cell_and_retains_worker": True}]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_optional_sql_warmup_failure_preserves_runtime(
     binary: Path, execution: Execution
@@ -1326,6 +1413,7 @@ def test_optional_sql_warmup_failure_preserves_runtime(
     return [{"optional_sql_warmup_failure_preserves_runtime_and_later_sql": True}]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_closes_provisional_connections_after_sql_setup_failure(
     binary: Path, execution: Execution
@@ -1368,7 +1456,10 @@ def test_closes_provisional_connections_after_sql_setup_failure(
 
 @contextmanager
 def startup_sql_client(
-    binary: Path, execution: Execution, with_r: bool, behavior: str
+    binary: Path,
+    execution: Execution,
+    with_r: bool,
+    behavior: str,
 ) -> Iterator[tuple[McpClient, FifoCheckpoint, FifoCheckpoint]]:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -1439,6 +1530,7 @@ def startup_sql_client(
             release.close()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_creates_managed_connection_without_a_send(
     binary: Path, execution: Execution

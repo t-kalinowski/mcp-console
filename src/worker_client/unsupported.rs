@@ -6,35 +6,11 @@ pub(super) struct Worker;
 impl WorkerRuntime {
     pub(super) fn spawn(
         &self,
-        spec: super::WorkerSpec<'_>,
+        _spec: super::WorkerSpec<'_>,
         _output: super::OutputTape,
         _on_started: impl FnOnce(WorkerShutdownHandle) -> Result<(), String>,
         _on_ready: impl FnOnce() -> Result<(), String>,
     ) -> Result<Worker, super::output::SendFailure> {
-        let super::WorkerSpec {
-            ssh,
-            executable,
-            arguments,
-            relay,
-            no_sandbox,
-            sandbox_settings,
-            python,
-            managed_r,
-            dynamic_resolution,
-            callbacks,
-        } = spec;
-        let _ = (
-            ssh,
-            executable,
-            arguments,
-            relay,
-            no_sandbox,
-            sandbox_settings,
-            python,
-            managed_r,
-            dynamic_resolution,
-            callbacks,
-        );
         Err(super::output::SendFailure::from(
             "workers are supported only on macOS".to_string(),
         ))

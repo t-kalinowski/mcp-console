@@ -1,22 +1,27 @@
 //! Windows direct-worker owner. Process and pipe events wake blocking waits.
-use std::ffi::OsString;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, OwnedHandle};
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use super::event_writer;
+use super::lifecycle::{self, FirstFailure, Retirement, WORKER_SHUTDOWN_GRACE};
+use super::routing::Operation;
+use crate::jsonl::JsonlBuffer;
 use crate::relay_protocol::{EncodedBytes, RelayCommand, RelayEvent};
 use crate::windows::{Event, Pipe};
 use crate::worker_protocol::{ServerMessage, WorkerMessage};
 
 enum Control {
     Command(RelayCommand),
-    Closed,
+    ControllerEof,
+    SidebandEof,
+    SidebandReaderFinished,
+    SidebandForwardingFailed,
     Exited,
     Failed(String),
 }
@@ -24,7 +29,7 @@ enum Control {
 #[derive(Clone)]
 struct Controls {
     sender: mpsc::Sender<Control>,
-    failure: Arc<OnceLock<String>>,
+    failure: FirstFailure,
 }
 
 impl Controls {
@@ -32,20 +37,17 @@ impl Controls {
         if let Control::Failed(message) = &control {
             // Preserve the first error even when a reader reports it during
             // retirement. Collecting it must not drain a live command queue.
-            let _ = self.failure.set(message.clone());
+            self.failure.record(message.clone());
         }
         self.sender.send(control)
     }
 }
 
-pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
-    let (program, arguments) = command_line
-        .split_first()
-        .ok_or("worker relay command must include an executable")?;
+pub(super) fn run(command: Command) -> Result<(), String> {
     let (sender, commands) = mpsc::channel();
     let controls = Controls {
         sender,
-        failure: Arc::new(OnceLock::new()),
+        failure: FirstFailure::default(),
     };
     let failed = controls.clone();
     let (events, mut event_writer) = event_writer::start(move |message| {
@@ -62,19 +64,11 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
         cancel,
         input_ready,
         interrupt,
-        _exit,
-    } = match start_worker(program, arguments, controls.clone()) {
+        mut exit,
+    } = match start_worker(command, controls.clone()) {
         Ok(worker) => worker,
         Err(message) => {
-            event_writer.begin_retirement();
-            events.send_supervisor(RelayEvent::Fatal {
-                message: message.clone(),
-            });
-            events.finish();
-            return match event_writer.join() {
-                Ok(()) => Err(message),
-                Err(error) => Err(format!("{message}; additionally {error}")),
-            };
+            return lifecycle::report_startup_failure(&events, event_writer, message);
         }
     };
     let input_controls = controls.clone();
@@ -82,21 +76,35 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     // exits while its caller still owns stdin. It never outlives a generation.
     thread::spawn(move || {
         let mut input = io::stdin().lock();
-        let mut frame = Vec::new();
+        let mut buffer = JsonlBuffer::default();
         loop {
-            frame.clear();
-            let message = match input.read_until(b'\n', &mut frame) {
-                Ok(0) => break,
-                Ok(_) if frame.last() != Some(&b'\n') => Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    crate::relay_protocol::PARTIAL_COMMAND_EOF,
-                )),
-                Ok(_) => serde_json::from_slice(&frame).map_err(io::Error::other),
-                Err(error) => Err(error),
+            let message = match buffer.next_line() {
+                Ok(Some(command)) => Ok(command),
+                Err(error) => Err(io::Error::other(error)),
+                Ok(None) => {
+                    let mut chunk = [0; 8192];
+                    match input.read(&mut chunk) {
+                        Ok(0) if !buffer.has_buffered_data() => break,
+                        Ok(0) => Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            crate::relay_protocol::PARTIAL_COMMAND_EOF,
+                        )),
+                        Ok(length) => {
+                            buffer.append(&chunk[..length]);
+                            continue;
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        Err(error) => Err(error),
+                    }
+                }
             };
             match message {
                 Ok(command) => {
+                    let shutdown = matches!(command, RelayCommand::Shutdown { .. });
                     if input_controls.send(Control::Command(command)).is_err() {
+                        return;
+                    }
+                    if shutdown {
                         return;
                     }
                 }
@@ -108,7 +116,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 }
             }
         }
-        let _ = input_controls.send(Control::Closed);
+        let _ = input_controls.send(Control::ControllerEof);
     });
     let mut tasks = Vec::new();
     for (handle, is_error) in [(stdout, false), (stderr, true)] {
@@ -165,10 +173,12 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     let sideband_events = events.clone();
     let sideband_controls = controls.clone();
     tasks.push(thread::spawn(move || {
+        let mut completion = Control::SidebandReaderFinished;
         loop {
             match sideband.receive::<WorkerMessage>() {
                 Ok(message) => {
                     if !sideband_events.send(message.into()) {
+                        completion = Control::SidebandForwardingFailed;
                         break;
                     }
                 }
@@ -182,7 +192,10 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                     }
                     break;
                 }
-                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
+                    completion = Control::SidebandEof;
+                    break;
+                }
                 Err(error) => {
                     let _ = sideband_controls.send(Control::Failed(format!(
                         "worker sideband read failed: {error}"
@@ -191,7 +204,7 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 }
             }
         }
-        let _ = sideband_controls.send(Control::Closed);
+        let _ = sideband_controls.send(completion);
     }));
     let (send_sideband, messages) = mpsc::channel::<ServerMessage>();
     let writer_controls = controls.clone();
@@ -234,12 +247,14 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
         input_ready.set();
     }));
     let mut send_stdin = Some(send_stdin);
-    let mut deadline = None::<Instant>;
+    let mut retirement = Retirement::default();
     loop {
-        let next = match deadline {
-            Some(deadline) => {
-                commands.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        let next = match retirement.remaining() {
+            Some(remaining) if remaining.is_zero() => {
+                let _ = child.kill();
+                break;
             }
+            Some(remaining) => commands.recv_timeout(remaining),
             None => commands
                 .recv()
                 .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
@@ -250,69 +265,60 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
                 let _ = child.kill();
                 break;
             }
-            Ok(Control::Failed(_)) => {
+            Ok(Control::Failed(_) | Control::SidebandForwardingFailed) => {
+                // Failed event admission can precede the writer's failure
+                // callback when stdout is blocked. Retire the direct child
+                // before cancelling/joining its I/O, just as for other failures.
                 let _ = child.kill();
                 break;
             }
-            Ok(Control::Closed) => {
-                if deadline.is_none() {
+            Ok(Control::ControllerEof | Control::SidebandEof) => {
+                if retirement.start_if_idle(|| {
                     stopping.store(true, Ordering::SeqCst);
-                    deadline = Some(Instant::now() + Duration::from_secs(1));
+                    Instant::now() + WORKER_SHUTDOWN_GRACE
+                }) {
                     send_stdin.take();
                     let _ = send_sideband.send(ServerMessage::Shutdown);
                 }
             }
-            Ok(Control::Command(command)) => match command {
-                RelayCommand::Interrupt { request_id } => {
-                    interrupt.set();
-                    events.send_supervisor(RelayEvent::InterruptResult {
-                        request_id,
-                        error: None,
-                    });
-                }
-                RelayCommand::Shutdown { grace_millis } => {
-                    stopping.store(true, Ordering::SeqCst);
-                    events.send_supervisor(RelayEvent::ShutdownStarted);
-                    deadline = Some(Instant::now() + Duration::from_millis(grace_millis));
-                    send_stdin.take();
-                    let _ = send_sideband.send(ServerMessage::Shutdown);
-                }
-                RelayCommand::Stdin { data } => {
-                    if let Some(stdin) = &send_stdin {
-                        let _ = stdin.send(data);
+            // Cancellation completion is not observed sideband EOF. Its owner
+            // has already begun retirement before setting the cancellation.
+            Ok(Control::SidebandReaderFinished) => {}
+            Ok(Control::Command(command)) if retirement.accepts_commands() => {
+                match Operation::from(command) {
+                    Operation::Interrupt { request_id } => {
+                        interrupt.set();
+                        events.send_supervisor(RelayEvent::InterruptResult {
+                            request_id,
+                            error: None,
+                        });
+                    }
+                    Operation::Shutdown { grace_millis } => {
+                        stopping.store(true, Ordering::SeqCst);
+                        if !retirement.accept_shutdown(&events, || {
+                            Instant::now() + Duration::from_millis(grace_millis)
+                        }) {
+                            let _ = child.kill();
+                            break;
+                        }
+                        send_stdin.take();
+                        let _ = send_sideband.send(ServerMessage::Shutdown);
+                    }
+                    Operation::Stdin { data } => {
+                        if let Some(stdin) = &send_stdin {
+                            let _ = stdin.send(data);
+                        }
+                    }
+                    Operation::Worker(message) => {
+                        let _ = send_sideband.send(message);
                     }
                 }
-                RelayCommand::Evaluate { language, source } => {
-                    let _ = send_sideband.send(ServerMessage::Evaluate { language, source });
-                }
-                RelayCommand::PrepareR { library } => {
-                    let _ = send_sideband.send(ServerMessage::PrepareR { library });
-                }
-                RelayCommand::RResolved { library } => {
-                    let _ = send_sideband.send(ServerMessage::RResolved { library });
-                }
-                RelayCommand::RResolutionFailed { failure, message } => {
-                    let _ =
-                        send_sideband.send(ServerMessage::RResolutionFailed { failure, message });
-                }
-                RelayCommand::PreparePython { packages } => {
-                    let _ = send_sideband.send(ServerMessage::PreparePython { packages });
-                }
-                RelayCommand::PythonResolved { python, native } => {
-                    let _ = send_sideband.send(ServerMessage::PythonResolved { python, native });
-                }
-                RelayCommand::PythonResolutionFailed { message } => {
-                    let _ = send_sideband.send(ServerMessage::PythonResolutionFailed { message });
-                }
-                RelayCommand::PythonVersionResolved { version } => {
-                    let _ = send_sideband.send(ServerMessage::PythonVersionResolved { version });
-                }
-                RelayCommand::PythonVersionResolutionFailed { message } => {
-                    let _ = send_sideband
-                        .send(ServerMessage::PythonVersionResolutionFailed { message });
-                }
-            },
+            }
+            Ok(Control::Command(_)) => {}
         }
+    }
+    if let Err(message) = exit.finish() {
+        let _ = controls.send(Control::Failed(message));
     }
     let status = child.wait().map_err(|e| e.to_string())?;
     event_writer.begin_retirement();
@@ -323,19 +329,14 @@ pub(super) fn run(command_line: &[OsString]) -> Result<(), String> {
     for task in tasks {
         task.join().map_err(|_| "worker I/O task panicked")?;
     }
-    events.send_supervisor(RelayEvent::StdoutClosed);
-    events.send_supervisor(RelayEvent::StderrClosed);
-    if let Some(message) = controls.failure.get() {
-        events.send_supervisor(RelayEvent::Fatal {
-            message: message.clone(),
-        });
-    }
-    events.send_supervisor(RelayEvent::WorkerSidebandClosed);
-    events.send_supervisor(RelayEvent::WorkerExited {
-        code: status.code().unwrap_or(1),
-    });
-    events.finish();
-    event_writer.join()
+    lifecycle::finish(
+        &events,
+        event_writer,
+        controls.failure.message(),
+        Some(RelayEvent::WorkerExited {
+            code: status.code().unwrap_or(1),
+        }),
+    )
 }
 
 struct StartedWorker {
@@ -348,14 +349,10 @@ struct StartedWorker {
     cancel: Event,
     input_ready: Event,
     interrupt: Event,
-    _exit: crate::process_exit::ChildExitWaiter,
+    exit: crate::process_exit::ChildExitWaiter,
 }
 
-fn start_worker(
-    program: &OsString,
-    arguments: &[OsString],
-    controls: Controls,
-) -> Result<StartedWorker, String> {
+fn start_worker(mut command: Command, controls: Controls) -> Result<StartedWorker, String> {
     // Keep setup in one fallible scope. On failure, all partial resources and
     // any spawned child retire before the caller publishes the Fatal frame.
     let cancel =
@@ -370,9 +367,7 @@ fn start_worker(
         .map_err(|e| format!("failed to inherit worker interrupt event: {e}"))?;
     let (sideband, sideband_writer, endpoints) = crate::sideband::bind(cancel.clone())
         .map_err(|e| format!("failed to create worker sideband: {e}"))?;
-    let mut command = Command::new(program);
     command
-        .args(arguments)
         .creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW)
         .env(
             "MCP_CONSOLE_INTERRUPT_HANDLE",
@@ -404,8 +399,12 @@ fn start_worker(
         .map_err(|e| format!("failed to clear worker interrupt event inheritance: {e}"))?;
     crate::windows::inherit(input_ready.as_raw_handle(), false)
         .map_err(|e| format!("failed to clear worker input event inheritance: {e}"))?;
-    let exit = crate::process_exit::ChildExitWaiter::start_notifying(child.id(), move || {
-        let _ = controls.send(Control::Exited);
+    let exit = crate::process_exit::ChildExitWaiter::start_observing(child.id(), move |result| {
+        let control = match result {
+            Ok(()) => Control::Exited,
+            Err(message) => Control::Failed(message),
+        };
+        let _ = controls.send(control);
     })
     .map_err(|e| format!("failed to observe worker exit: {e}"))?;
     Ok(StartedWorker {
@@ -418,7 +417,7 @@ fn start_worker(
         cancel,
         input_ready,
         interrupt,
-        _exit: exit,
+        exit,
     })
 }
 

@@ -106,12 +106,7 @@ def _augment_default_permissions(binary: Path, configured: bool = False) -> Tran
                     code("""
                     sandbox:
                       filesystem:
-                        kind: restricted
-                        entries:
-                          - path:
-                              type: path
-                              path: ./output café 雪
-                            access: write
+                        read_write: [./output café 雪]
                     """),
                     encoding="utf-8",
                 )
@@ -317,7 +312,9 @@ def test_rejects_conflicting_writable_root_options(binary: Path) -> Transcript:
             {
                 "arguments": arguments,
                 "exit_code": result.returncode,
-                "stderr": result.stderr,
+                "stderr": result.stderr.replace(
+                    "Usage: mcp-console.exe ", "Usage: mcp-console "
+                ),
             }
         )
     return transcript

@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.allocations import AllocationProfile
 from support.assertions import last_tool_text
 from support.previews import (
@@ -30,7 +31,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import startup_r_package
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
 from boundaries.client_server._harness import ZodFixtureControl
 
@@ -81,12 +82,11 @@ after final image
             )
         else:
             assert "omitted" in text
-            assert "rendered UTF-8 bytes" in text
+            assert "UTF-8 bytes" in text
             assert (
-                f".agents/console/sessions/{session.name}/outputs/call-000001.log"
+                f"raw log: .agents/console/sessions/{session.name}/outputs/call-000001.log"
                 in text
             )
-            assert "Console server" in text
         for block in result["content"]:
             if block["type"] == "text":
                 block["text"] = block["text"].replace(session.name, "<run ID>")
@@ -98,6 +98,7 @@ after final image
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_summarizes_empty_cell_after_oversized_startup_output(
     binary: Path, execution: Execution
@@ -181,6 +182,7 @@ def test_summarizes_empty_cell_after_oversized_startup_output(
         return [{"startup_preview_and_empty_cell_retained": True}]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_actual_tail_and_image_after_huge_line(
     binary: Path, execution: Execution
@@ -188,6 +190,7 @@ def test_keeps_actual_tail_and_image_after_huge_line(
     return check_preview(binary, execution, "preview huge line")
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_actual_tail_after_tiny_event_flood(
     binary: Path, execution: Execution
@@ -222,6 +225,7 @@ def test_bounds_metadata_for_alternating_tiny_events(binary: Path) -> Transcript
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_edits_unicode_after_same_producer_overflow(
     binary: Path, execution: Execution
@@ -269,6 +273,7 @@ def test_edits_unicode_after_same_producer_overflow(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_compacts_redraws_before_preview_limits(
     binary: Path, execution: Execution
@@ -276,6 +281,53 @@ def test_compacts_redraws_before_preview_limits(
     return check_preview(binary, execution, "preview redraw")
 
 
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_compacts_ansi_redraws_and_discards_oversized_controls(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with McpClient(binary, execution.serve("--worker", str(worker))) as client:
+        client.initialize_and_list_tools()
+        result = client.send(r="preview ansi redraw")
+        assert [block["type"] for block in result["content"]] == [
+            "text",
+            "image",
+            "text",
+        ]
+        assert result["content"][0]["text"] == (
+            "preview head\nprogress final\npreview tail: final diagnostic\n"
+        ), result
+        assert result["content"][-1]["text"] == "after final image\n", result
+        assert (
+            sum(
+                len(block["text"].encode())
+                for block in result["content"]
+                if block["type"] == "text"
+            )
+            <= TEXT_BUDGET
+        )
+        raw = (
+            "preview head\n"
+            + "x" * 32768
+            + "\x1b[2K"
+            + "\x1b["
+            + "0;" * 100000
+            + "2K"
+            + "\x1b]52;c;"
+            + "hidden\n" * 100000
+            + "\x1b\\"
+            + ("\r\x1b[2K\x1b[32m" + "x" * 2048 + "\x1b[0m") * 5000
+            + "\r\x1b[K\x1b[32mprogress final\x1b[0m\npreview tail: final diagnostic\n"
+            + "\x1b]unterminated before imageafter final image\n"
+        ).encode()
+        assert (
+            session_directory(client) / "outputs/call-000001.log"
+        ).read_bytes() == raw
+        return client.finish()
+
+
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_raw_and_rendered_counts_for_invalid_utf8(
     binary: Path, execution: Execution
@@ -303,7 +355,6 @@ def test_reports_raw_and_rendered_counts_for_invalid_utf8(
         text = last_tool_text(client)
         raw = b"raw head\n" + "€".encode() + b"\xff" * 20000 + "€ raw tail\n".encode()
         assert_preview(text, raw.decode("utf-8", errors="replace"))
-        assert f"{len(raw)} raw bytes retained, 0 raw bytes not retained" in text
         assert client.temporary_directory is not None
         session = next(
             (
@@ -316,6 +367,7 @@ def test_reports_raw_and_rendered_counts_for_invalid_utf8(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_tail_when_recording_is_disabled(
     binary: Path, execution: Execution
@@ -341,9 +393,7 @@ def test_keeps_tail_when_recording_is_disabled(
             assert len(text.encode()) <= TEXT_BUDGET
             assert text.startswith("preview head\n")
             assert text.endswith("preview tail: final diagnostic\nafter final image\n")
-            assert (
-                "no retained cell log" in text and "omitted text is unavailable" in text
-            )
+            assert "no retained log" in text and "omitted text unavailable" in text
             assert "outputs/call-" not in text
             compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
             transcript, stderr = client.finish_with_standard_error()
@@ -351,6 +401,7 @@ def test_keeps_tail_when_recording_is_disabled(
             return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_active_prompt_and_state_after_text_flood(
     binary: Path, execution: Execution
@@ -390,6 +441,7 @@ def test_preserves_active_prompt_and_state_after_text_flood(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_image_overflow_preserves_later_text_and_fitting_image(
     binary: Path, execution: Execution
@@ -402,7 +454,7 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
         assert [block["type"] for block in content] == ["text", "image", "text"]
         assert content[0]["text"] == (
             "before oversized image\n\n"
-            "[image limit: omitted 1 images (8388612 encoded bytes); 0 already recorded, 1 not retained]\n"
+            "[output omitted: 1 image (8388612 encoded bytes); 1 image not retained]\n"
             "before accepted image\n"
         )
         assert content[-1]["text"] == "after accepted image\n"
@@ -417,6 +469,7 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_validates_images_before_omitting_them(
     binary: Path, execution: Execution
@@ -440,6 +493,7 @@ def test_validates_images_before_omitting_them(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_combines_old_worker_and_replacement_cell_under_one_budget(
     binary: Path, execution: Execution
@@ -454,8 +508,15 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
         ) as client,
     ):
         client.initialize_and_list_tools()
+        # Finish shared discovery and lazy worker startup before replacement.
+        client.send(requirements={"action": "get"})
+        client.send(control="restart")
+        assert last_tool_text(client) == "[starting new worker]\n[idle]"
         client.send(r="overflow cell output file", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         release = wait_for_worker_file(
             Path(temporary), "zod-release-spooled-output", client
         )
@@ -480,7 +541,11 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
         ) in text
         assert "preview tail: final diagnostic\n" in text
         assert text.endswith("after final image\n[done]")
-        assert "outputs/call-000001.log" in text and "outputs/call-000002.log" in text
+        assert text.count("[output omitted:") == 1
+        assert (
+            f"retained logs: .agents/console/sessions/{session_directory(client).name}/outputs"
+            in text
+        )
         assert not result.get("isError", False), result
         normalize_preview_paths(client)
         client.send()
@@ -489,6 +554,7 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_partial_idle_utf8_out_of_cell_omission_counts(
     binary: Path, execution: Execution
@@ -516,23 +582,25 @@ def test_keeps_partial_idle_utf8_out_of_cell_omission_counts(
         text = last_tool_text(client)
         idle = (b"idle head\n" + b"s" * 20000 + b"\xe2").decode(errors="replace")
         cell = "cell head\n" + "x" * 32768 + "\ncell tail\n"
-        markers = list(OMISSION.finditer(text))
-        assert len(markers) == 2, text
-        head, tail = text[: markers[0].start()], text[markers[1].end() :]
+        (marker,) = OMISSION.finditer(text)
+        head = text[: marker.start()]
+        boundary, tail = text[marker.end() :].split("\n[…]\n")
+        assert boundary == ""
         assert idle.startswith(head) and cell.endswith(tail)
-        assert len(head.encode()) + int(markers[0][1]) == len(idle.encode())
-        assert int(markers[1][1]) + len(tail.encode()) == len(cell.encode())
-        assert "outputs/session.log" in markers[0][0]
-        assert "outputs/call-000001.log" in markers[1][0]
+        idle_omitted = len(idle.encode()) - len(head.encode())
+        cell_omitted = len(cell.encode()) - len(tail.encode())
+        assert int(marker[1]) == idle_omitted + cell_omitted
+        assert "retained logs:" in marker[0]
         session = session_directory(client)
+        assert f".agents/console/sessions/{session.name}/outputs/" in marker[0]
         assert (session / "outputs/session.log").read_text(errors="replace") == idle
         assert (session / "outputs/call-000001.log").read_text() == cell
-        summaries = [
+        events = [
             json.loads(line)
             for line in (session / "internal/events.jsonl").read_text().splitlines()
-            if json.loads(line)["event"] == "cell_output"
         ]
-        assert summaries[-1]["inline_omitted_bytes"] == int(markers[1][1])
+        cell_summaries = [event for event in events if event["event"] == "cell_output"]
+        assert cell_summaries[-1]["inline_omitted_bytes"] == cell_omitted
         normalize_preview_paths(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab", "�")
         return client.finish()

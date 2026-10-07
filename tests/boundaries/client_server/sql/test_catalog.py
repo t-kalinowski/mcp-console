@@ -9,6 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
+from support.requirements import POSIX, SQL, requires
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
@@ -17,15 +19,33 @@ from support.native import build_interposer
 from support.normalization import (
     code,
     normalize_duckdb_progress,
+    normalize_process_diagnostic,
     normalize_trailing_spaces,
 )
-from support.r import r_test_environment
+from support.r import isolated_r_home, r_test_environment
 from support.records import Transcript
 from support.previews import assert_preview, cell_text, normalize_preview_paths
-from support.resolvers import normalize_duckdb_resolution_error
 from support.suites import run_this_suite
 
 
+def extension_failure_environment(workspace: Path) -> dict[str, str]:
+    environment, real_rscript = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    selected_home = isolated_r_home(workspace, environment)
+    selected_rscript = selected_home / "bin/Rscript"
+    selected_rscript.unlink()
+    selected_rscript.symlink_to(
+        Path(__file__).resolve().parents[3] / "fixtures/fail_duckdb_rscript.py"
+    )
+    # Give transaction rollback a deterministic materializer failure.
+    environment["MCP_CONSOLE_TEST_REAL_RSCRIPT"] = str(real_rscript)
+    environment["MCP_CONSOLE_TEST_DUCKDB_FAIL_EXTENSION"] = (
+        "not_a_real_duckdb_extension"
+    )
+    return environment
+
+
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_uses_default_duckdb_extensions(
     binary: Path, execution: Execution
@@ -83,14 +103,14 @@ def test_uses_default_duckdb_extensions(
         return client.finish()
 
 
+@requires(SQL, POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_adds_r_and_duckdb_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
+        environment = extension_failure_environment(workspace)
         ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
         environment["R_LIBS"] = str(ambient_library)
@@ -116,12 +136,10 @@ def test_restart_adds_r_and_duckdb_requirements(
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         failure = result["content"][0]["text"]
-        assert (
-            'Failed to download extension "not_a_real_duckdb_extension"' in failure
+        assert failure.endswith(
+            "fixture DuckDB extension not_a_real_duckdb_extension is unavailable"
         ), failure
-        result["content"][0]["text"] = normalize_duckdb_resolution_error(
-            failure, "not_a_real_duckdb_extension"
-        )
+        result["content"][0]["text"] = normalize_process_diagnostic(failure)
 
         client.send(r="identical(restart_marker, 42L)")
         assert last_tool_text(client) == "[1] TRUE\n"
@@ -161,14 +179,14 @@ def test_restart_adds_r_and_duckdb_requirements(
         return client.finish()
 
 
+@requires(SQL, POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_prepares_and_loads_duckdb_extensions(
     binary: Path, execution: Execution
 ) -> Transcript:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
+        environment = extension_failure_environment(workspace)
         client = McpClient(
             binary,
             execution.serve(),
@@ -206,13 +224,10 @@ def test_prepares_and_loads_duckdb_extensions(
         assert result["isError"] is True, result
         failure = result["content"][0]["text"]
         assert failure.startswith("DuckDB extension resolution failed with "), failure
-        assert (
-            'Failed to download extension "not_a_real_duckdb_extension"' in failure
+        assert failure.endswith(
+            "fixture DuckDB extension not_a_real_duckdb_extension is unavailable"
         ), failure
-        assert "unknown core DuckDB extension" not in failure, failure
-        result["content"][0]["text"] = normalize_duckdb_resolution_error(
-            failure, "not_a_real_duckdb_extension"
-        )
+        result["content"][0]["text"] = normalize_process_diagnostic(failure)
 
         client.send(
             sql=(
@@ -287,6 +302,7 @@ def test_prepares_and_loads_duckdb_extensions(
         return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_sends_sql_cell_with_initial_requirements(
     binary: Path, execution: Execution
@@ -302,11 +318,15 @@ def test_sends_sql_cell_with_initial_requirements(
         FROM duckdb_extensions()
         WHERE extension_name = 'fts' AND loaded
         """)
-    client.send(sql=sql, requirements={"duckdb": ["fts"]})
-    assert last_tool_text(client).splitlines()[-1].split() == ["1", "1"]
+    client.expect(
+        "# A tibble: 1 × 1\n   loaded\n  <int64>\n1       1\n",
+        sql=sql,
+        requirements={"duckdb": ["fts"]},
+    )
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_queries_a_ragnar_store_created_in_r(
     binary: Path, execution: Execution
@@ -439,6 +459,7 @@ def test_queries_a_ragnar_store_created_in_r(
     return transcript
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     binary: Path,
@@ -663,6 +684,7 @@ def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
     return transcript
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_evaluates_queries_in_a_persistent_catalog(
     binary: Path, execution: Execution
@@ -705,6 +727,7 @@ def test_evaluates_queries_in_a_persistent_catalog(
         return client.finish()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -772,7 +795,10 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
                 SELECT sum(i) AS total FROM range(1000000000000) AS t(i)
                 """)
             client.send(sql=sql, timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             # A marker in a preceding statement can race DuckDB's reset of its
             # interrupt flag. Hold this query until its active handler has run.
             started.wait("DuckDB query reached its progress callback")
@@ -798,6 +824,7 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
                 started.close()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_queries_r_data_frames(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -824,6 +851,7 @@ def test_queries_r_data_frames(binary: Path, execution: Execution) -> Transcript
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_sql_views_follow_rebound_r_data_frames(
     binary: Path, execution: Execution
@@ -860,6 +888,7 @@ def test_sql_views_follow_rebound_r_data_frames(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_prefers_catalog_relations_over_r_data_frames(
     binary: Path, execution: Execution
@@ -884,6 +913,7 @@ def test_prefers_catalog_relations_over_r_data_frames(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_scans_r_bindings_named_like_bridge_state(
     binary: Path, execution: Execution
@@ -911,6 +941,7 @@ def test_scans_r_bindings_named_like_bridge_state(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_exposes_catalog_as_lazy_r_relations(
     binary: Path, execution: Execution
@@ -974,6 +1005,7 @@ c:11:22
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_connection_helper_after_clearing_r_workspace(
     binary: Path,
@@ -1002,6 +1034,7 @@ def test_keeps_connection_helper_after_clearing_r_workspace(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_recovers_from_sql_errors(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -1024,6 +1057,7 @@ def test_recovers_from_sql_errors(binary: Path, execution: Execution) -> Transcr
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_avoids_private_preview_name_collisions(
     binary: Path, execution: Execution
@@ -1054,6 +1088,7 @@ def test_avoids_private_preview_name_collisions(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_utf8_preview_in_c_locale(
     binary: Path, execution: Execution
@@ -1084,6 +1119,7 @@ def test_preserves_utf8_preview_in_c_locale(
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_previews_schema_and_exact_values(
     binary: Path, execution: Execution
@@ -1175,6 +1211,7 @@ def test_previews_schema_and_exact_values(
     return transcript
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -1200,6 +1237,7 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
     return client.finish()
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_bounds_query_previews_without_materializing_results(
     binary: Path,
@@ -1251,12 +1289,13 @@ def test_bounds_query_previews_without_materializing_results(
     assert "a" * 161 not in wide
     assert f'"{"z" * 159}…"' in long_cell
     assert "[cell values truncated to 160 characters]" in long_cell
-    assert large != "\n[running; poll with an empty send]"
+    assert without_elapsed(large) != "\n[running; poll with an empty send]"
     assert len(large.encode("utf-8")) <= 8 * 1024
     assert "[additional rows omitted]" in large
     return transcript
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_keeps_repeated_previews_deterministic(
     binary: Path, execution: Execution

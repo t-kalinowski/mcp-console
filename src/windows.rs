@@ -10,6 +10,9 @@ use windows_sys::Win32::Storage::FileSystem::*;
 use windows_sys::Win32::System::IO::*;
 use windows_sys::Win32::System::Pipes::*;
 use windows_sys::Win32::System::Threading::*;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, QS_ALLINPUT,
+};
 
 pub(crate) fn configure_worker_stdio() -> io::Result<()> {
     unsafe extern "C" {
@@ -19,6 +22,24 @@ pub(crate) fn configure_worker_stdio() -> io::Result<()> {
     // interpret a queued Ctrl-Z as EOF before a console callback can see it.
     for descriptor in 0..=2 {
         if unsafe { _setmode(descriptor, libc::O_BINARY) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn restore_worker_stdio() -> io::Result<()> {
+    use windows_sys::Win32::System::Console::{
+        STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle,
+    };
+    // R's system2 can clear the Win32 standard handles while the CRT retains
+    // its live descriptors. Python subprocesses use the Win32 handles.
+    for (descriptor, kind) in [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
+        .into_iter()
+        .enumerate()
+    {
+        let handle = unsafe { libc::get_osfhandle(descriptor as _) } as HANDLE;
+        if handle == INVALID_HANDLE_VALUE || unsafe { SetStdHandle(kind, handle) } == 0 {
             return Err(io::Error::last_os_error());
         }
     }
@@ -150,7 +171,16 @@ impl Pipe {
     pub(crate) fn available(&self) -> io::Result<usize> {
         available(self.as_raw_handle())
     }
-    fn transfer(&self, bytes: *mut u8, length: usize, read: bool) -> io::Result<usize> {
+    pub(crate) fn read_or_message(&self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.transfer(bytes.as_mut_ptr(), bytes.len(), true, true)
+    }
+    fn transfer(
+        &self,
+        bytes: *mut u8,
+        length: usize,
+        read: bool,
+        message_wakeup: bool,
+    ) -> io::Result<usize> {
         if length == 0 {
             return Ok(0);
         }
@@ -204,7 +234,21 @@ impl Pipe {
                 .map_or(std::ptr::null_mut(), AsRawHandle::as_raw_handle),
         ];
         let count = if self.cancel.is_some() { 2 } else { 1 };
-        let result = unsafe { WaitForMultipleObjects(count, handles.as_ptr(), 0, INFINITE) };
+        let result = unsafe {
+            if message_wakeup {
+                // Wake the interpreter owner without dispatching callbacks here:
+                // it must first release the command-reader lock and retire this I/O.
+                MsgWaitForMultipleObjectsEx(
+                    count,
+                    handles.as_ptr(),
+                    INFINITE,
+                    QS_ALLINPUT,
+                    MWMO_INPUTAVAILABLE,
+                )
+            } else {
+                WaitForMultipleObjects(count, handles.as_ptr(), 0, INFINITE)
+            }
+        };
         let cancelled = result != WAIT_OBJECT_0;
         if cancelled {
             unsafe {
@@ -238,12 +282,12 @@ impl AsRawHandle for Pipe {
 }
 impl Read for Pipe {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
-        self.transfer(bytes.as_mut_ptr(), bytes.len(), true)
+        self.transfer(bytes.as_mut_ptr(), bytes.len(), true, false)
     }
 }
 impl Write for Pipe {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.transfer(bytes.as_ptr().cast_mut(), bytes.len(), false)
+        self.transfer(bytes.as_ptr().cast_mut(), bytes.len(), false, false)
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
@@ -336,4 +380,3 @@ pub(crate) fn inherit(handle: RawHandle, inherit: bool) -> io::Result<()> {
 }
 
 mod pipe_security;
-pub(crate) mod resolver;

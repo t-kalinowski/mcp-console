@@ -1,15 +1,17 @@
+use crate::jsonl::JsonlBuffer;
 use crate::windows::{Event, Pipe};
 use serde::{Serialize, de::DeserializeOwned};
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::sync::{Arc, Mutex};
 
 const READ_HANDLE: &str = "MCP_CONSOLE_SIDEBAND_READ_HANDLE";
 const WRITE_HANDLE: &str = "MCP_CONSOLE_SIDEBAND_WRITE_HANDLE";
+const READ_CHUNK_SIZE: usize = 8 * 1024;
 
 pub(crate) struct Reader {
-    input: BufReader<Pipe>,
-    frame: Vec<u8>,
+    input: Pipe,
+    buffer: JsonlBuffer,
 }
 #[derive(Clone)]
 pub(crate) struct Writer(Arc<Mutex<Pipe>>);
@@ -55,40 +57,62 @@ pub(crate) fn connect_from_env() -> io::Result<(Reader, Writer)> {
 impl Reader {
     fn new(pipe: Pipe) -> Self {
         Self {
-            input: BufReader::new(pipe),
-            frame: Vec::new(),
+            input: pipe,
+            buffer: JsonlBuffer::default(),
         }
     }
 
     pub(crate) fn receive<T: DeserializeOwned>(&mut self) -> io::Result<T> {
-        // Keep a partial frame if cancellation interrupts read_until. The
-        // retirement drain must append queued bytes to the same frame.
-        if self.input.read_until(b'\n', &mut self.frame)? == 0 && self.frame.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "worker sideband closed",
-            ));
+        self.receive_with_messages(false)
+    }
+
+    fn receive_with_messages<T: DeserializeOwned>(&mut self, messages: bool) -> io::Result<T> {
+        loop {
+            if let Some(message) = self
+                .buffer
+                .next_line()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+            {
+                return Ok(message);
+            }
+            // Cancellation leaves the accumulated prefix in the shared buffer
+            // for the next receive or the bounded retirement drain.
+            let mut chunk = [0; READ_CHUNK_SIZE];
+            let read = if messages {
+                self.input.read_or_message(&mut chunk)
+            } else {
+                self.input.read(&mut chunk)
+            };
+            match read {
+                Ok(0) if self.buffer.has_buffered_data() => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "worker sideband closed midway through a frame",
+                    ));
+                }
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "worker sideband closed",
+                    ));
+                }
+                Ok(length) => self.buffer.append(&chunk[..length]),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
+            }
         }
-        if self.frame.last() != Some(&b'\n') {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "worker sideband closed midway through a frame",
-            ));
-        }
-        let frame = std::mem::take(&mut self.frame);
-        serde_json::from_slice(&frame).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     pub(crate) fn receive_or_wake<T: DeserializeOwned>(
         &mut self,
         wakeup: Event,
+        messages: bool,
     ) -> io::Result<Option<T>> {
         // Reuse the overlapped read's cancellation wait. A wakeup preserves
         // the partial frame, and receive resumes it after idle processing.
-        let pipe = self.input.get_mut();
-        pipe.set_cancel(wakeup);
-        let result = self.receive();
-        self.input.get_mut().clear_cancel();
+        self.input.set_cancel(wakeup);
+        let result = self.receive_with_messages(messages);
+        self.input.clear_cancel();
         match result {
             Err(error) if error.kind() == io::ErrorKind::ConnectionAborted => Ok(None),
             result => result.map(Some),
@@ -99,25 +123,37 @@ impl Reader {
         &mut self,
         mut forward: impl FnMut(T) -> bool,
     ) -> io::Result<()> {
-        let queued = match self.input.get_ref().available() {
+        let mut remaining = match self.input.available() {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == io::ErrorKind::BrokenPipe => 0,
             Err(error) => return Err(error),
         };
-        let remaining = self.input.buffer().len() + queued;
-        self.input.get_mut().clear_cancel();
+        self.input.clear_cancel();
         // Snapshot the readable bytes so an inherited writer cannot extend
-        // retirement. Include BufReader's unread bytes and the partial frame.
-        let mut input = (&mut self.input).take(remaining as u64);
-        while input.read_until(b'\n', &mut self.frame)? != 0 {
-            if self.frame.last() != Some(&b'\n') {
+        // retirement. Already-buffered frames and prefixes are owned separately.
+        loop {
+            while let Some(message) = self
+                .buffer
+                .next_line()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+            {
+                if !forward(message) {
+                    return Ok(());
+                }
+            }
+            if remaining == 0 {
                 break; // An incomplete retiring tail is deliberately abandoned.
             }
-            let message = serde_json::from_slice(&self.frame)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-            self.frame.clear();
-            if !forward(message) {
-                break;
+            let mut chunk = [0; READ_CHUNK_SIZE];
+            let length = remaining.min(chunk.len());
+            match self.input.read(&mut chunk[..length]) {
+                Ok(0) => break,
+                Ok(length) => {
+                    remaining -= length;
+                    self.buffer.append(&chunk[..length]);
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error),
             }
         }
         Ok(())

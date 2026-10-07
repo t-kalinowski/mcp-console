@@ -6,18 +6,23 @@ import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from contextlib import ExitStack
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import phase_progress, without_elapsed
+from support.snapshots import execution_snapshots
 from support.assertions import last_result_text
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
+from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import host_process_id, process_exists
 from support.r import r_test_environment
 from support.suites import run_this_suite
+from support.requirements import NATIVE_FIXTURES, POSIX, SQL, requires
 
 
 def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[str, str]:
@@ -143,6 +148,7 @@ def write_distribution(root: Path, name: str, module: str, version: str) -> None
     (metadata / "RECORD").write_text(f"{source.as_posix()},,\n")
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_removes_previous_environment_pth_paths(
     binary: Path, execution: Execution
@@ -182,6 +188,7 @@ def test_removes_previous_environment_pth_paths(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_site_hooks_observe_candidate_identity(
     binary: Path, execution: Execution
@@ -218,6 +225,7 @@ def test_site_hooks_observe_candidate_identity(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rolls_back_interrupted_python_site_activation(
     binary: Path, execution: Execution
@@ -275,6 +283,7 @@ def test_rolls_back_interrupted_python_site_activation(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_r_interrupt_during_python_site_activation(
     binary: Path, execution: Execution
@@ -350,6 +359,7 @@ def test_preserves_r_interrupt_during_python_site_activation(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_publication_after_committing_python(
     binary: Path, execution: Execution
@@ -401,6 +411,7 @@ def test_interrupts_publication_after_committing_python(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_suspended_r_interrupt_during_publication(
     binary: Path, execution: Execution
@@ -454,6 +465,7 @@ def test_preserves_suspended_r_interrupt_during_publication(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_replacement_of_loaded_distribution(
     binary: Path, execution: Execution
@@ -517,6 +529,7 @@ def test_rejects_replacement_of_loaded_distribution(
             return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_allows_changes_to_unloaded_namespace_distributions(
     binary: Path, execution: Execution
@@ -695,6 +708,7 @@ def cancelled_candidate_probe(
                 checkpoint.close()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_cancels_candidate_probe_and_reaps_its_child(
     binary: Path, execution: Execution
@@ -702,11 +716,13 @@ def test_cancels_candidate_probe_and_reaps_its_child(
     return cancelled_candidate_probe(binary, execution, "interrupt")
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restarts_during_candidate_probe(binary: Path, execution: Execution) -> list:
     return cancelled_candidate_probe(binary, execution, "restart")
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_r_interrupt_during_candidate_probe(
     binary: Path, execution: Execution
@@ -714,6 +730,7 @@ def test_preserves_r_interrupt_during_candidate_probe(
     return cancelled_candidate_probe(binary, execution, "interrupt", r_transition=True)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retains_previous_candidate_after_lazy_projection_failure(
     binary: Path, execution: Execution
@@ -775,6 +792,8 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
             return client.finish()[3:]
 
 
+@execution_snapshots
+@requires(POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
 def test_retries_interrupted_startup_with_prepared_candidate_without_r(
     binary: Path, execution: Execution
@@ -802,10 +821,40 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
         arguments = ("--writable-root", str(root)) if execution == SANDBOXED else ()
         ready = FifoCheckpoint.create(root / "ready")
         release = FifoCheckpoint.create(root / "release")
+        launching = FifoCheckpoint.create(root / "launching")
+        launch = FifoCheckpoint.create(root / "launch")
+        armed = root / "launch-armed"
+        environment.update(
+            MCP_CONSOLE_TEST_SPAWN_LIBRARY=str(
+                build_interposer(root, "resolver_spawn_interposer")
+            ),
+            MCP_CONSOLE_TEST_SPAWN_ARMED=str(armed),
+            MCP_CONSOLE_TEST_SPAWN_ORDINAL="1",
+            MCP_CONSOLE_TEST_SPAWN_STARTED=str(launching.path),
+            MCP_CONSOLE_TEST_SPAWN_RELEASE=str(launch.path),
+        )
+        # Keep the admitted cell in startup until its first response is delivered.
+        # fmt: python
+        server = code(f"""
+            import os
+            import sys
+
+            os.environ["MCP_CONSOLE_TEST_SPAWN_SERVER"] = str(os.getpid())
+            os.environ[{LOADER_VARIABLE!r}] = os.environ.pop("MCP_CONSOLE_TEST_SPAWN_LIBRARY")
+            os.execv(sys.argv[1], sys.argv[1:])
+            """)
         try:
-            with McpClient(
-                binary, execution.serve(*arguments), environment, root
-            ) as client:
+            with (
+                McpClient(
+                    Path(sys.executable),
+                    ("-c", server, str(binary), *execution.serve(*arguments)),
+                    environment,
+                    root,
+                ) as client,
+                ExitStack() as completion,
+            ):
+                completion.callback(launch.release)
+                completion.callback(release.release)
                 initialize_managed_client(client)
                 client.send(requirements={"python": ["console-activation-fixture"]})
                 assert last_result_text(client) == "[prepared]", last_result_text(
@@ -834,17 +883,30 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
                             Path({str(root / "worker-pid")!r}).write_text(str(os.getpid()))
                         """)
                 )
+                armed.touch()
                 evaluation = client.start_send(
                     python="print('initialized')", timeout_ms=0
                 )
+                launching.wait(
+                    "prepared candidate launch is held before transport ready"
+                )
+                client.receive(evaluation)
+                assert without_elapsed(last_result_text(client)) == (
+                    "\n[running; poll with an empty send]"
+                )
+                assert phase_progress(last_result_text(client)) == "startup"
+                launch.release()
                 ready.wait("prepared environment startup probe")
                 child_pid = host_process_id(
                     int((root / "probe-pid").read_text()), client.process.pid
                 )
-                client.receive(evaluation)
+                client.send(timeout_ms=0)
                 assert (
-                    last_result_text(client) == "\n[running; poll with an empty send]"
+                    without_elapsed(last_result_text(client))
+                    == "\n[running; poll with an empty send]"
                 )
+                # Transport is ready; the embedded startup probe is worker-owned.
+                assert "phase:" not in last_result_text(client)
                 client.send(control="interrupt", timeout_ms=30_000)
                 assert not process_exists(child_pid), (child_pid, client.transcript[-1])
                 hook.unlink()
@@ -875,10 +937,13 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
                 )
                 return client.finish()
         finally:
+            launching.close()
+            launch.close()
             ready.close()
             release.close()
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_retries_interrupted_startup_probe_with_live_r_and_sql(
     binary: Path, execution: Execution
@@ -939,7 +1004,8 @@ def test_retries_interrupted_startup_probe_with_live_r_and_sql(
                 )
                 client.receive(evaluation)
                 assert (
-                    last_result_text(client) == "\n[running; poll with an empty send]"
+                    without_elapsed(last_result_text(client))
+                    == "\n[running; poll with an empty send]"
                 )
                 client.send(control="interrupt", timeout_ms=30_000)
                 assert not process_exists(child_pid), (child_pid, client.transcript[-1])

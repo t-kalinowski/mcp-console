@@ -30,7 +30,27 @@ pub(super) fn send_response_from_wait(wait: EvaluationWait) -> SendResponse {
 
 impl Client {
     /// Interprets preparation, control, evaluation, stdin, and polling for the session.
-    pub(crate) async fn send(&self, request: SendRequest) -> Result<Response, String> {
+    pub(crate) async fn send(
+        &self,
+        request: SendRequest,
+        initial_restart: bool,
+    ) -> Result<Response, String> {
+        let replacing = matches!(request.control, Some(SendControl::Restart));
+        let generation = self.status_generation();
+        let mut response = self.send_observed(request, initial_restart).await?;
+        response.observe_phase(self.status_source(if replacing {
+            self.status_generation()
+        } else {
+            generation
+        }));
+        Ok(response)
+    }
+
+    async fn send_observed(
+        &self,
+        request: SendRequest,
+        initial_restart: bool,
+    ) -> Result<Response, String> {
         if self.is_configured()
             && let Some(cell) = &request.cell
         {
@@ -85,7 +105,11 @@ impl Client {
             }
             tokio::time::sleep(INTERRUPT_GRACE).await;
             if let Some(active) = self.current_evaluation()? {
-                let claim = active.evaluation.claim()?;
+                let Some(claim) = active.evaluation.claim_for_interrupt()? else {
+                    return Ok(output::render_response(SendResponse::Running(
+                        active.evaluation.unobserved_progress(),
+                    )));
+                };
                 return Ok(output::render_response(send_response_from_wait(
                     active
                         .evaluation
@@ -100,7 +124,10 @@ impl Client {
                 self.0.output.take(),
             )));
         }
-        if !matches!(request.control, Some(SendControl::Restart)) || !self.is_configured() {
+        if initial_restart
+            || !matches!(request.control, Some(SendControl::Restart))
+            || !self.is_configured()
+        {
             match tokio::time::timeout(
                 request.deadline.saturating_duration_since(Instant::now()),
                 self.ready(),
@@ -129,8 +156,37 @@ impl Client {
             self.validate_cell(cell)?;
         }
         request.validate(self.0.dynamic_resolution || self.0.python_preparation)?;
+        if initial_restart && let Some(response) = self.take_prelaunch_failure()? {
+            return Ok(response);
+        }
         if let Some(control) = request.control {
-            return self.send_controlled(control, request).await;
+            if initial_restart && request.cell.is_none() && request.requirements.is_none() {
+                // Joining a retry is observation, not another generation change.
+                // Ordinary ownership routes stdin through any accepted evaluation.
+                return Ok(
+                    match self
+                        .send_inner(
+                            None,
+                            request.stdin,
+                            None,
+                            request.deadline,
+                            request.transcript,
+                            request.call_id,
+                        )
+                        .await
+                    {
+                        Ok(response) => output::render_response(response),
+                        Err(failure) => {
+                            let mut response = Response::default();
+                            response.push_failure(failure);
+                            response
+                        }
+                    },
+                );
+            }
+            return self
+                .send_controlled(control, request, initial_restart)
+                .await;
         }
         let SendRequest {
             cell,
@@ -300,7 +356,7 @@ impl Client {
                 None => {
                     preparation = Some(self.admit_send()?);
                     self.ensure_ordinary_generation(&generation)?;
-                    let mut startup = self.0.startup.subscribe();
+                    let mut startup = self.startup_result();
                     let mut stdin = stdin;
                     #[cfg(any(unix, windows))]
                     if !self.startup_finished()
@@ -448,9 +504,6 @@ impl Client {
         if self.0.python_only && matches!(language, crate::cell::Language::R) {
             return Err("R cells are unavailable in Python sessions without R".into());
         }
-        if !self.0.python_available() && matches!(language, crate::cell::Language::Python) {
-            return Err("Python cells are unavailable: the target has no Python runtime".into());
-        }
         Ok(())
     }
 
@@ -485,19 +538,6 @@ impl Client {
     }
 
     pub(super) fn validate_requirements(&self, requirements: &Requirements) -> Result<(), String> {
-        if let Some(target) = &self.0.target
-            && !target.is_ssh()
-        {
-            let source = if matches!(target, crate::target_session::Session::Docker(..)) {
-                "image"
-            } else {
-                "template"
-            };
-            return Err(format!(
-                "dynamic environment resolution is disabled for {} targets; install packages in the {source} and start a new server session",
-                target.protocol().0
-            ));
-        }
         if self.0.python_only {
             if !self.0.python_preparation {
                 if !requirements.duckdb.is_empty() {

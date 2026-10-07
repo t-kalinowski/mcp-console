@@ -9,6 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import phase_progress, without_elapsed, without_elapsed_result
+from support.requirements import POSIX, PROCESS_EVENTS, R, requires
 from support.assertions import entry_result_text, last_result_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
@@ -20,7 +22,6 @@ from support.processes import (
 )
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, R, requires
 from boundaries.client_server.python.test_peer_runtime import without_r
 from support.resolvers import (
     checkpoint_uv_environment,
@@ -32,6 +33,7 @@ from support.resolvers import (
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_automatic_resolution_from_background_thread(
     binary: Path,
@@ -40,7 +42,7 @@ def test_rejects_automatic_resolution_from_background_thread(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -84,6 +86,7 @@ def test_rejects_automatic_resolution_from_background_thread(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_automatic_resolution_from_fork_child(
     binary: Path, execution: Execution
@@ -91,7 +94,7 @@ def test_rejects_automatic_resolution_from_fork_child(
     with tempfile.TemporaryDirectory() as temporary:
         directory = Path(temporary)
         environment, record = recording_uv_environment(directory)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         client.initialize_and_list_tools()
         baseline = initialize_python_and_record_baseline(client, record)
 
@@ -166,6 +169,7 @@ def test_rejects_automatic_resolution_from_fork_child(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_times_out_and_polls_automatic_python_resolution(
     binary: Path,
@@ -178,15 +182,20 @@ def test_times_out_and_polls_automatic_python_resolution(
             "py-yaml12",
         )
         environment.pop("RETICULATE_PYTHON", None)
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         resolver_released = False
         finished = False
+        begin = FifoCheckpoint.create(
+            Path(client.temporary_directory.name) / "automatic-import-release"
+        )
         try:
             client.initialize_and_list_tools()
             client.send(python="None")
             assert last_result_text(client) == "[done]"
             # fmt: python
             python = code("""
+                with open("automatic-import-release", "rb", buffering=0) as gate:
+                    assert gate.read(1) == b"1"
                 automatic_timeout_attempts = (
                     globals().get(
                         "automatic_timeout_attempts",
@@ -199,11 +208,20 @@ def test_times_out_and_polls_automatic_python_resolution(
                 (yaml12.__name__, automatic_timeout_attempts)
                 """)
             evaluation = client.start_send(python=python, timeout_ms=1)
-            started.wait("automatic Python resolver")
             client.receive(evaluation)
             assert (
-                entry_result_text(evaluation) == "\n[running; poll with an empty send]"
+                without_elapsed(entry_result_text(evaluation))
+                == "\n[running; poll with an empty send]"
             )
+            assert "phase:" not in entry_result_text(evaluation), evaluation
+
+            begin.release()
+            started.wait("automatic Python resolver")
+            client.send(timeout_ms=0)
+            assert without_elapsed(last_result_text(client)) == (
+                "\n[running; poll with an empty send]"
+            )
+            assert phase_progress(last_result_text(client)) == "dependency preparation"
 
             release.release()
             resolver_released = True
@@ -216,6 +234,8 @@ def test_times_out_and_polls_automatic_python_resolution(
             finished = True
             return transcript
         finally:
+            begin.release()
+            begin.close()
             if not resolver_released:
                 release.release()
             started.close()
@@ -272,7 +292,7 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
         previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
         previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
         try:
-            client = McpClient(binary, execution.serve(), environment)
+            client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         finally:
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
@@ -296,7 +316,10 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
                 automatic_interrupt_cell_ran = True
                 """)
             client.send(python=python, timeout_ms=0)
-            assert last_result_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_result_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             started.wait("automatic Python resolver")
             resolver = [
                 child
@@ -342,6 +365,7 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
                 stop_client(client)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
 def test_restart_discards_unactivated_automatic_python_candidate(
@@ -360,7 +384,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
         environment.pop("RETICULATE_PYTHON", None)
         environment["TMPDIR"] = temporary
         reuse_record = Path(environment["MCP_CONSOLE_TEST_UV_REUSE_RECORD"])
-        client = McpClient(binary, execution.serve(), environment)
+        client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         passed = False
         worker_checkpoints: list[FifoCheckpoint] = []
         try:
@@ -431,7 +455,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             activation_ready.wait("automatic managed Python activation")
             client.receive(evaluation)
             evaluation_result = evaluation["result"]
-            assert evaluation_result == {
+            assert without_elapsed_result(evaluation_result) == {
                 "content": [
                     {
                         "type": "text",

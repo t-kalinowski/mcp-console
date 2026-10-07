@@ -1,37 +1,95 @@
 ---
-yaml: >-
-  sandbox: {proxy: {"enabled": true, "enableSocks5": true,
-  "enableSocks5Udp": false, "allowUpstreamProxy": false,
-  "dangerouslyAllowAllUnixSockets": false, "mode": "full",
-  "allowLocalBinding": false, enabled: !!bool true}}
+configuration: {}
+command:
+  - mcp-console
+  - serve
+  - --worker
+  - unused-worker
+  - --writable-root
+  - future CLI
 initialized: true
+exit_status: 0
+stderr: ""
 ---
-yaml: "{}"
+configuration:
+  sandbox: {}
+command:
+  - mcp-console
+  - serve
+  - --worker
+  - unused-worker
+  - --writable-root
+  - future CLI
 initialized: true
+exit_status: 0
+stderr: ""
 ---
-yaml: "sandbox: {}"
+configuration:
+  sandbox:
+    network:
+      proxy: {}
+command:
+  - mcp-console
+  - serve
+  - --worker
+  - unused-worker
+  - --writable-root
+  - future CLI
 initialized: true
+exit_status: 0
+stderr: ""
 ---
-yaml: "sandbox: {proxy: null}"
+configuration:
+  sandbox:
+    filesystem:
+      read_write:
+        - ./out
+command:
+  - mcp-console
+  - serve
+  - --worker
+  - unused-worker
+  - --writable-root
+  - future CLI
 initialized: true
+exit_status: 0
+stderr: ""
 ---
-yaml: "sandbox: {filesystem: {kind: {restricted: null}}}"
+configuration:
+  sandbox:
+    filesystem:
+      read_write:
+        - ./future café 雪
+command:
+  - mcp-console
+  - serve
+  - --worker
+  - unused-worker
+  - --writable-root
+  - future CLI
 initialized: true
+exit_status: 0
+stderr: ""
 ---
-yaml: >-
-  sandbox: {filesystem: {entries: [{path: {type: path, path: ./out},
-  access: {write: null}}]}}
+configuration:
+  sandbox:
+    network:
+      proxy:
+        mode: limited
+        allow_upstream_proxy: true
+        domains:
+          allow:
+            - "*.example.com"
+          deny:
+            - blocked.example.com
+      allow_local_binding: true
+command:
+  - mcp-console
+  - serve
+  - --worker
+  - unused-worker
+  - --writable-root
+  - future CLI
 initialized: true
----
-yaml: >-
-  sandbox: {filesystem: {entries: [{path: {type: path, path: './future
-  café 雪'}, access: write}]}}
-initialized: true
----
-yaml: >-
-  {"sandbox": {"network": "enabled", "proxy": {"enabled": true,
-  "enableSocks5": false, "enableSocks5Udp": false, "allowUpstreamProxy":
-  true, "dangerouslyAllowAllUnixSockets": false, "mode": "limited",
-  "allowLocalBinding": true, "domains": {"*.example.com": "allow",
-  "blocked.example.com": "deny", "ignored.example.com": "none"}}}}
-initialized: true
+exit_status: 0
+stderr: ""

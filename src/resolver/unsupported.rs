@@ -36,8 +36,22 @@ impl ManagedRResolverConfiguration {
 #[derive(Clone)]
 pub(crate) struct ResolverStopHandle;
 
+pub(crate) struct ResolverPhase;
+
+impl ResolverPhase {
+    pub(crate) fn phase(&self) -> Option<&'static str> {
+        None
+    }
+}
+
 impl ResolverStopHandle {
+    pub(crate) fn phase_observation(&self) -> ResolverPhase {
+        ResolverPhase
+    }
     pub(crate) fn cleanup_confirmed(&self) -> bool {
+        true
+    }
+    pub(crate) fn retirement_confirmed(&self) -> bool {
         true
     }
     pub(crate) fn stop(&self) -> Result<(), String> {

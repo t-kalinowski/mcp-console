@@ -4,12 +4,23 @@ from importlib import import_module
 from pathlib import Path
 import sys
 from types import ModuleType
+import zipfile
 
 
 def build(*args):
     print("building", flush=True)
     if sys.stdin.readline().strip() == "fail":
         raise RuntimeError("fixture build failed")
+    entries = b"[console_scripts]\nOtherTool = other.module:main\n"
+    if sys.argv[1].startswith("prepare_metadata"):
+        metadata = Path(args[0]) / "fixture-1.dist-info"
+        metadata.mkdir(exist_ok=True)
+        (metadata / "entry_points.txt").write_bytes(entries)
+        return metadata.name
+    with zipfile.ZipFile("fixture.whl", "w") as archive:
+        archive.writestr("fixture-1.data/scripts/mcp-console.exe", b"native fixture")
+        archive.writestr("fixture-1.dist-info/entry_points.txt", entries)
+        archive.writestr("fixture-1.dist-info/RECORD", b"")
     return "fixture.whl"
 
 

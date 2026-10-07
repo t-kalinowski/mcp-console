@@ -763,6 +763,7 @@ mod tests {
             Response::default(),
             Response::default(),
             false,
+            0,
         ));
         let claim = evaluation.claim().unwrap();
         let (routed, routed_rx) = mpsc::sync_channel(0);

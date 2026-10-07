@@ -19,6 +19,7 @@ result:
     - type: text
       text: |-
 
+        [phase: dependency preparation]
         [running; poll with an empty send]
   isError: false
 ---
@@ -50,6 +51,7 @@ result:
     - type: text
       text: |-
 
+        [phase: dependency preparation]
         [running; poll with an empty send]
   isError: false
 ---

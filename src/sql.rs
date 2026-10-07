@@ -17,7 +17,9 @@ pub(crate) fn attach_r() -> Result<(), String> {
 /// R DBI connections stay in embedded R, while Python DB-API connections stay
 /// in CPython. Rust chooses the active provider for each SQL cell without
 /// converting connection objects or result rows between the runtimes.
-pub(crate) struct Bridge;
+pub(crate) struct Bridge {
+    startup_failure: Option<String>,
+}
 
 impl Bridge {
     pub(crate) fn initialize(&self) -> Result<(), String> {
@@ -28,8 +30,18 @@ impl Bridge {
         }
     }
 
+    pub(crate) fn initialize_r_source(&self, source: &str) -> Result<bool, String> {
+        self.r_backend()?.initialize_source(source)
+    }
+
     pub(crate) fn new() -> Self {
-        Self
+        Self {
+            startup_failure: None,
+        }
+    }
+
+    pub(crate) fn withhold_startup(&mut self, message: Option<String>) {
+        self.startup_failure = message;
     }
 
     fn r_backend(&self) -> Result<std::rc::Rc<r_dbi::Backend>, String> {
@@ -40,17 +52,23 @@ impl Bridge {
     }
 
     pub(crate) fn evaluate(&mut self, source: &str) -> Result<(), String> {
-        if !crate::worker::r_available() && !crate::python::ensure_initialized()? {
+        if let Some(message) = &self.startup_failure {
+            crate::worker::emit_output(
+                crate::worker_protocol::ConsoleChannel::Diagnostic,
+                format!("Error: SQL unavailable: {message}; explicit restart required\n")
+                    .as_bytes(),
+            );
             return Ok(());
         }
         match py_dbapi::dispatch(source)? {
             py_dbapi::Provider::Handled => Ok(()),
-            py_dbapi::Provider::Managed => {
+            provider @ (py_dbapi::Provider::Managed | py_dbapi::Provider::R) => {
                 let r_dbi = self.r_backend()?;
-                r_dbi.restore_managed()?;
+                if matches!(provider, py_dbapi::Provider::Managed) {
+                    r_dbi.restore_managed()?;
+                }
                 r_dbi.evaluate(source)
             }
-            py_dbapi::Provider::R => self.r_backend()?.evaluate(source),
         }
     }
 }

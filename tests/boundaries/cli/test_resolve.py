@@ -2,22 +2,121 @@
 
 import json
 import os
+import re
+import signal
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.records import Transcript
+from support.capture import read_lines
+from support.checkpoints import FifoCheckpoint
+from support.events import Events
+from support.native import LOADER_VARIABLE, build_interposer
+from support.processes import stop_process_group
+from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
 
 
+def test_rejects_invalid_preparation_frames(binary: Path) -> Transcript:
+    transcript: Transcript = []
+    with TemporaryDirectory() as temporary:
+        for name, frame, diagnostic in (
+            (
+                "versioned_open",
+                '{"Open":{"mode":"PythonOnly","version":1}}\n',
+                "invalid resolver JSON: unknown field `version`, expected `mode` at line 1 column 38",
+            ),
+            (
+                "malformed_json",
+                '{"Open":}\n',
+                "invalid resolver JSON: expected value at line 1 column 9",
+            ),
+            (
+                "unterminated_open",
+                '{"Open":{"mode":"PythonOnly"}}',
+                "resolver input closed",
+            ),
+            (
+                "oversized_line",
+                " " * (1024 * 1024 + 1) + "\n",
+                "resolver JSON line exceeds 1 MiB",
+            ),
+        ):
+            result = subprocess.run(
+                [binary, "resolve"],
+                input=frame,
+                text=True,
+                capture_output=True,
+                timeout=10,
+                cwd=temporary,
+                env={
+                    **os.environ,
+                    "MCP_CONSOLE_HOME": str(Path(temporary) / "console"),
+                },
+            )
+            assert result.returncode == 1, result
+            assert result.stdout == "", result.stdout
+            assert result.stderr == diagnostic + "\n", result.stderr
+            transcript.append(
+                {
+                    "case": name,
+                    "input_bytes": len(frame.encode("utf-8")),
+                    "exit": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                }
+            )
+    return transcript
+
+
+def test_opens_and_closes_with_batched_frames(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        environment = {
+            **os.environ,
+            "PATH": "",
+            "MCP_CONSOLE_HOME": str(Path(temporary) / "console"),
+        }
+        environment.pop("RETICULATE_PYTHON", None)
+        frames = '{"Open":{"mode":"PythonOnly"}}\n"Close"\n'
+        process = subprocess.Popen(
+            [binary, "resolve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+            cwd=temporary,
+        )
+        try:
+            assert process.stdin is not None
+            assert process.stdout is not None and process.stderr is not None
+            process.stdin.write(frames)
+            process.stdin.flush()
+            # Keep stdin open: Close must survive a read alongside Open.
+            assert process.wait(timeout=10) == 0
+            messages = [json.loads(line) for line in process.stdout]
+            assert len(messages) == 3, messages
+            assert messages[0] == "Hello" and messages[2] == "Closed", messages
+            assert messages[1]["Completed"]["id"] == 0, messages
+            assert messages[1]["Completed"]["confirmed"] is True, messages
+            errors = process.stderr.read()
+            assert errors == "", errors
+            return [{"input": frames, "stdout": messages, "stderr": errors, "exit": 0}]
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=10)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
+
+
+@requires(POSIX)
 def test_resolves_python_version_over_json(binary: Path) -> Transcript:
-    root = Path(__file__).resolve().parents[3]
-    with (root / "Cargo.toml").open("rb") as source:
-        build = tomllib.load(source)["package"]["version"]
     with TemporaryDirectory() as temporary:
         uv = Path(temporary) / "uv"
         uv.write_text(
@@ -54,20 +153,10 @@ esac
             return json.loads(process.stdout.readline())
 
         try:
-            send(
-                {
-                    "Open": {
-                        "version": 6,
-                        "build": build,
-                        "workspace": "",
-                        "selections": {"r_home": None, "python": None},
-                        "mode": "PythonOnly",
-                    }
-                }
-            )
+            send({"Open": {"mode": "PythonOnly"}})
             hello = receive()
             discovery = receive()
-            assert hello == {"Hello": {"version": 6, "build": build}}, hello
+            assert hello == "Hello", hello
             assert discovery["Completed"]["id"] == 0, discovery
             assert discovery["Completed"]["confirmed"] is True, discovery
             send(
@@ -121,6 +210,145 @@ esac
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=10)
+
+
+@requires(NATIVE_FIXTURES)
+def test_close_settles_resolver_observation_before_reaping(binary: Path) -> Transcript:
+    return observe_resolver(binary, fail=False)
+
+
+@requires(NATIVE_FIXTURES)
+def test_observation_failure_retires_resolver(binary: Path) -> Transcript:
+    return observe_resolver(binary, fail=True)
+
+
+def observe_resolver(binary: Path, *, fail: bool) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory)
+        resolver_pid = root / "resolver-pid"
+        checkpoints = {
+            name: FifoCheckpoint.create(root / name)
+            for name in ("entered", "release", "killed")
+        }
+        uv = root / "uv"
+        uv.write_text(f"#!{sys.executable}\nimport signal\nsignal.pause()\n")
+        uv.chmod(0o755)
+        environment = {
+            **os.environ,
+            "PATH": str(root),
+            LOADER_VARIABLE: str(build_interposer(root, "child_exit_observation")),
+            "MCP_CONSOLE_TEST_OBSERVER_ENTERED": str(root / "entered"),
+            "MCP_CONSOLE_TEST_OBSERVER_CANCELLABLE": "1",
+            "MCP_CONSOLE_TEST_OBSERVER_PID": str(resolver_pid),
+            "MCP_CONSOLE_TEST_OBSERVER_RELEASE": str(root / "release"),
+            "MCP_CONSOLE_TEST_CHILD_KILLED": str(root / "killed"),
+            "MCP_CONSOLE_TEST_EARLY_REAP": str(root / "early-reap"),
+        }
+        if fail:
+            environment["MCP_CONSOLE_TEST_OBSERVER_FAIL"] = "1"
+        process = subprocess.Popen(
+            [binary, "resolve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+            start_new_session=True,
+        )
+        try:
+            assert process.stdin is not None and process.stdout is not None
+            process.stdin.write(json.dumps({"Open": {"mode": "PythonOnly"}}) + "\n")
+            process.stdin.flush()
+            opened = [
+                json.loads(line)
+                for line in read_lines(process.stdout, 2, "preparation open")
+            ]
+            assert opened[0] == "Hello", opened
+            assert opened[1]["Completed"]["confirmed"] is True, opened
+            process.stdin.write(
+                json.dumps(
+                    {
+                        "Run": {
+                            "id": 1,
+                            "operation": {"PythonVersion": {"constraints": [">=3.12"]}},
+                        }
+                    }
+                )
+                + "\n"
+            )
+            process.stdin.flush()
+            checkpoints["entered"].wait("resolver observation entered")
+            if fail:
+                checkpoints["release"].release()
+                checkpoints["killed"].wait("failed observation terminates the resolver")
+                messages = [
+                    json.loads(line)
+                    for line in read_lines(process.stdout, 1, "failed completion")
+                ]
+                process.stdin.write('"Close"\n')
+                process.stdin.flush()
+                messages.extend(
+                    json.loads(line)
+                    for line in read_lines(process.stdout, 1, "preparation close")
+                )
+            else:
+                process.stdin.write('"Close"\n')
+                process.stdin.flush()
+                checkpoints["killed"].wait("close terminates the active resolver")
+                checkpoints["release"].release()
+                messages = [
+                    json.loads(line)
+                    for line in read_lines(
+                        process.stdout, 2, "cancelled completion and close"
+                    )
+                ]
+            _, stderr = process.communicate(timeout=10)
+            assert process.returncode == 0, stderr
+            assert stderr == "", stderr
+            assert not (root / "early-reap").exists(), (
+                "resolver reaped before observation settled"
+            )
+            assert messages[-1] == "Closed", messages
+            completed = next(
+                message["Completed"] for message in messages if "Completed" in message
+            )
+            assert completed["id"] == 1 and completed["confirmed"] is True, completed
+            error = "managed Python version resolution cancelled"
+            if fail:
+                completed["result"]["Err"] = re.sub(
+                    r"child process \d+",
+                    "child process PID",
+                    completed["result"]["Err"].replace(str(uv), "UV"),
+                )
+                error = "failed to wait for managed Python version resolver `UV`: failed to observe child process PID exit: Input/output error (os error 5)"
+            assert completed == {
+                "id": 1,
+                "result": {"Err": error},
+                "control": None if fail else "Cancelled",
+                "confirmed": True,
+            }, completed
+            return [{"messages": messages}]
+        finally:
+            try:
+                # The resolver leads its own group, outside the resolve owner.
+                if resolver_pid.exists():
+                    group = int(resolver_pid.read_text())
+                    with Events() as exits:
+                        try:
+                            exits.watch_process(group)
+                        except ProcessLookupError:
+                            pass
+                        else:
+                            stop_process_group(group)
+                            assert exits.wait(10) == {group}, (
+                                "resolver outlived fixture cleanup"
+                            )
+            finally:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=10)
+                for checkpoint in checkpoints.values():
+                    checkpoint.close()
 
 
 if __name__ == "__main__":

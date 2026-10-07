@@ -35,15 +35,15 @@ result:
       mimeType: image/png
     - type: text
       text:
-        text_bytes: 8065
+        text_bytes: 8049
         concat:
           - repeat: x
-            count: 3787
+            count: 3851
           - |
 
-            [output preview: omitted 8380988 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 8388633 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 8380860 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000002.log]
           - repeat: x
-            count: 3840
+            count: 3904
           - |-
 
             [stopped by session restart request before evaluation finished]

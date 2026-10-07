@@ -1,5 +1,0 @@
----
-arguments:
-  - serve
-  - --no-sandbox
-invalid_native_policy_ignored: true

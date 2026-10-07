@@ -11,15 +11,18 @@ from boundaries.client_server._harness import (
     submit_prompted_stdin,
     wait_for_marker,
 )
+from support.snapshots import execution_snapshots
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import stop_process
 from support.records import Transcript
-from support.requirements import PROCESS_EVENTS, requires
+from support.requirements import POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_accepts_idle_stdin(binary: Path, execution: Execution) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
@@ -41,6 +44,7 @@ def test_accepts_idle_stdin(binary: Path, execution: Execution) -> Transcript:
     return client.finish()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(PROCESS_EVENTS)
 def test_idle_stdin_startup_blocks_preparation(
@@ -141,7 +145,10 @@ def test_routes_combined_and_followup_stdin(
         assert last_tool_text(client) == "zod stdin length: 1030\n"
 
         client.send(r="input without request", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         client.send(stdin="followup\n")
         assert last_tool_text(client) == "zod stdin: followup\n"
 
@@ -185,6 +192,7 @@ def test_routes_combined_and_followup_stdin(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_routes_same_call_stdin_to_direct_fd0(
     binary: Path, execution: Execution
@@ -218,12 +226,18 @@ def test_preserves_unexposed_input_output(
         )
         client.initialize_and_list_tools()
 
+        # Observe input from an established worker, after a completed public cell.
+        client.send(r="echo ready")
+        assert last_tool_text(client) == "zod: ready\n"
         client.send(
             r="request input after timeout",
             stdin="answer\n",
             timeout_ms=0,
         )
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         waiting = wait_for_marker(
             temporary_path,
             "zod-waiting-to-request-input",

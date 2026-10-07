@@ -6,10 +6,7 @@ use serde::Serialize;
 
 use super::ManagedPython;
 
-use super::process::{
-    ResolverOutput, ResolverProcess, ResolverStopHandle, completed_write, read_output,
-    resolver_command,
-};
+use super::process::{ResolverOutput, ResolverProcess, ResolverStopHandle, resolver_command};
 
 const PYTHON_PATH_SOURCE: &str = r#"
 import sys
@@ -34,29 +31,12 @@ pub(crate) fn resolve_python_manifest(
     configuration: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
-    resolve_python_manifest_with_r(requirements, configuration, None, None, on_started)
+    resolve_python_manifest_for_host(requirements, configuration, None, on_started)
 }
 
-pub(crate) fn resolve_python_manifest_for_remote(
+pub(crate) fn resolve_python_manifest_for_host(
     requirements: crate::worker_protocol::PythonRequirementManifest,
     configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
-    selected_python: Option<&Path>,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<ManagedPython, String> {
-    resolve_python_manifest_with_r(
-        requirements,
-        configuration,
-        managed_r,
-        selected_python,
-        on_started,
-    )
-}
-
-fn resolve_python_manifest_with_r(
-    requirements: crate::worker_protocol::PythonRequirementManifest,
-    configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
     selected_python: Option<&Path>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<ManagedPython, String> {
@@ -77,8 +57,7 @@ fn resolve_python_manifest_with_r(
             .ok_or("running Python executable is not UTF-8")?
             .to_owned()
     } else {
-        let versions =
-            resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)?;
+        let versions = resolve_python_versions_with(configuration, &resolver, &mut on_started)?;
         versions
             .resolve(&requirements.python_version)
             .map_err(|error| {
@@ -91,7 +70,6 @@ fn resolve_python_manifest_with_r(
         &resolved_python,
         output_path.path(),
         configuration,
-        managed_r,
         &resolver,
         &mut on_started,
     )?;
@@ -147,26 +125,8 @@ pub(crate) fn resolve_python_version(
     configuration: &super::ManagedPythonResolverConfiguration,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
 ) -> Result<String, String> {
-    resolve_python_version_with_r(constraints, configuration, None, on_started)
-}
-
-pub(crate) fn resolve_python_version_for_remote(
-    constraints: Vec<String>,
-    configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: &super::ManagedR,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<String, String> {
-    resolve_python_version_with_r(constraints, configuration, Some(managed_r), on_started)
-}
-
-fn resolve_python_version_with_r(
-    constraints: Vec<String>,
-    configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<String, String> {
     crate::python_requirement::validate_version_constraints(&constraints)?;
-    let versions = resolve_python_versions(configuration, managed_r, on_started)?;
+    let versions = resolve_python_versions(configuration, on_started)?;
     versions
         .resolve(&constraints)
         .map_err(|error| format!("managed Python version resolution failed: {}", error.trim()))
@@ -174,7 +134,6 @@ fn resolve_python_version_with_r(
 
 fn resolve_python_versions<F>(
     configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
     on_started: F,
 ) -> Result<super::python_version::PythonVersions, String>
 where
@@ -182,12 +141,11 @@ where
 {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
-    resolve_python_versions_with(configuration, managed_r, &resolver, &mut on_started)
+    resolve_python_versions_with(configuration, &resolver, &mut on_started)
 }
 
 fn resolve_python_versions_with<F>(
     configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
     resolver: &ResolverProcess,
     on_started: &mut Option<F>,
 ) -> Result<super::python_version::PythonVersions, String>
@@ -199,39 +157,20 @@ where
     let system = OsStr::new("only-system");
     match configured_preference {
         None => {
-            let versions = run_uv_python_list(
-                configuration,
-                managed_r,
-                resolver,
-                on_started,
-                managed,
-                true,
-            )?;
+            let versions = run_uv_python_list(configuration, resolver, on_started, managed, true)?;
             if versions.is_empty() {
-                return Ok(run_uv_python_list(
-                    configuration,
-                    managed_r,
-                    resolver,
-                    on_started,
-                    system,
-                    false,
-                )?
-                .rank(false));
+                return Ok(
+                    run_uv_python_list(configuration, resolver, on_started, system, false)?
+                        .rank(false),
+                );
             }
             Ok(versions.rank(true))
         }
         Some(preference) if preference == OsStr::new("managed") => {
-            let mut versions = run_uv_python_list(
-                configuration,
-                managed_r,
-                resolver,
-                on_started,
-                managed,
-                true,
-            )?;
+            let mut versions =
+                run_uv_python_list(configuration, resolver, on_started, managed, true)?;
             versions.extend(run_uv_python_list(
                 configuration,
-                managed_r,
                 resolver,
                 on_started,
                 system,
@@ -240,17 +179,10 @@ where
             Ok(versions.rank(true))
         }
         Some(preference) if preference == OsStr::new("system") => {
-            let mut versions = run_uv_python_list(
-                configuration,
-                managed_r,
-                resolver,
-                on_started,
-                managed,
-                true,
-            )?;
+            let mut versions =
+                run_uv_python_list(configuration, resolver, on_started, managed, true)?;
             versions.extend(run_uv_python_list(
                 configuration,
-                managed_r,
                 resolver,
                 on_started,
                 system,
@@ -262,7 +194,6 @@ where
             let prefer_managed = preference != system;
             Ok(run_uv_python_list(
                 configuration,
-                managed_r,
                 resolver,
                 on_started,
                 preference,
@@ -275,7 +206,6 @@ where
 
 fn run_uv_python_list<F>(
     configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
     resolver: &ResolverProcess,
     on_started: &mut Option<F>,
     preference: &OsStr,
@@ -303,7 +233,7 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_remove("VIRTUAL_ENV");
-    configure_python_resolver(&mut command, configuration, managed_r)?;
+    configuration.configure_direct(&mut command)?;
     let output = run_resolver_command(
         command,
         resolver,
@@ -329,7 +259,6 @@ fn run_managed_python_resolver<F>(
     resolved_python: &str,
     output_path: &Path,
     configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
     resolver: &ResolverProcess,
     on_started: &mut Option<F>,
 ) -> Result<ResolverOutput, String>
@@ -355,7 +284,7 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_remove("VIRTUAL_ENV");
-    configure_python_resolver(&mut command, configuration, managed_r)?;
+    configuration.configure_direct(&mut command)?;
     // A no-cache tool environment is deleted when `uv tool run` exits,
     // so it cannot back a retained MCP Console session.
     command.env_remove("UV_NO_CACHE");
@@ -371,6 +300,11 @@ where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
     let mut command = resolver_command(python);
+    // Matplotlib checks its config directory before its separate Linux cache.
+    // A read-only host config must not redirect warmup to private temporary data.
+    if let Some(cache) = crate::python::matplotlib_cache_directory() {
+        command.env("MPLCONFIGDIR", cache);
+    }
     command
         .args(["-I", "-c", "import matplotlib.font_manager"])
         .stdin(Stdio::null())
@@ -395,17 +329,6 @@ fn check_resolver_control(resolver: &ResolverProcess, operation: &str) -> Result
     }
 }
 
-fn configure_python_resolver(
-    command: &mut Command,
-    configuration: &super::ManagedPythonResolverConfiguration,
-    managed_r: Option<&super::ManagedR>,
-) -> Result<(), String> {
-    if let Some(managed_r) = managed_r {
-        managed_r.configure_worker(command)?;
-    }
-    configuration.configure_direct(command)
-}
-
 fn resolver_error(output: &ResolverOutput) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr = stderr.trim();
@@ -425,22 +348,16 @@ fn run_resolver_command<F>(
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let mut child = super::process::spawn_resolver(&mut command).map_err(|error| {
+    let invocation = resolver.spawn(&mut command, None).map_err(|error| {
         format!(
             "failed to run {kind} resolver with `{}`: {error}",
             program.display()
         )
     })?;
-    let stdout = read_output(child.stdout.take().expect("resolver stdout is piped"));
-    let stderr = read_output(child.stderr.take().expect("resolver stderr is piped"));
-    resolver.watch_exit(child.id());
-    if let Some(on_started) = on_started.take()
-        && let Err(error) = on_started(resolver.stop_handle())
-    {
-        resolver
-            .abort(&mut child, program, kind)
-            .map_err(|cleanup| format!("{error}; {cleanup}"))?;
-        return Err(error);
-    }
-    resolver.wait(&mut child, completed_write(), stdout, stderr, program, kind)
+    resolver.collect(invocation, program, kind, |handle| {
+        match on_started.take() {
+            Some(started) => started(handle),
+            None => Ok(()),
+        }
+    })
 }

@@ -84,6 +84,8 @@ pub(crate) fn attach_bridge() -> Result<bool, String> {
 }
 
 pub(crate) fn reinstall_services() -> Result<(), String> {
+    #[cfg(windows)]
+    crate::windows::restore_worker_stdio().map_err(|error| error.to_string())?;
     if library::initialized_selection()?.is_some() && library::services_installed()? {
         library::install_services()?;
     }
@@ -102,14 +104,6 @@ pub(crate) fn ensure_initialized() -> Result<bool, String> {
     let selection = SELECTION
         .get()
         .ok_or("Python capability is not configured")?;
-    if crate::worker::bootstrapping()
-        && selection.python.is_none()
-        && std::env::var_os("MCP_CONSOLE_EXECUTION_COMPUTE").is_some()
-    {
-        // Prepared targets already probed genuine Python absence. Preserve
-        // their R-only capability instead of entering unresolved R discovery.
-        return Ok(true);
-    }
     if !crate::worker::r_initialized()
         && let Some(python) = &selection.python
     {
@@ -191,6 +185,8 @@ pub(crate) fn resolve_managed_import(
 }
 
 pub(crate) fn evaluate_embedded(source: &str, filename: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    crate::windows::restore_worker_stdio().map_err(|error| error.to_string())?;
     library::evaluate(source, filename)
 }
 
@@ -199,6 +195,9 @@ pub(crate) fn install_sql_runtime(source: &str) -> Result<bool, String> {
 }
 
 pub(crate) fn dispatch_sql(source: &str) -> Result<SqlProvider, String> {
+    if !crate::worker::r_available() && !library::runtime_configured()? && !ensure_initialized()? {
+        return Ok(SqlProvider::Handled);
+    }
     library::dispatch_sql(source)
 }
 
@@ -206,11 +205,22 @@ pub(crate) fn use_r_sql() -> Result<(), String> {
     library::use_r_sql()
 }
 
+pub(crate) fn r_sql_connection_selected() -> Result<bool, String> {
+    library::r_sql_connection_selected()
+}
+
 pub(crate) fn initialize_managed_sql() -> Result<(), String> {
-    if ensure_initialized()? {
+    if ensure_initialized()? && library::runtime_configured()? {
         library::initialize_managed_sql()?;
     }
     Ok(())
+}
+
+pub(crate) fn initialize_sql_source(source: &str) -> Result<bool, String> {
+    if !ensure_initialized()? {
+        return Err("Python initialization is incomplete".into());
+    }
+    library::initialize_sql_source(source)
 }
 
 pub(crate) fn take_sql_restore_request() -> Result<bool, String> {
@@ -256,7 +266,10 @@ mod platform {
     static INHERITED_MATPLOTLIB_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
     pub(crate) fn configure_worker_environment(temporary_directory: &Path) -> io::Result<()> {
-        let matplotlib_cache_directory = inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache");
+        let matplotlib_cache_directory = std::env::var_os("MCP_CONSOLE_MATPLOTLIB_CACHE")
+            .map(std::path::absolute)
+            .transpose()?
+            .or_else(matplotlib_cache_directory);
         let matplotlib_config_directory =
             inherited_matplotlib_directory("XDG_CONFIG_HOME", ".config");
         // Preserve the selected host configuration before redirecting all
@@ -341,6 +354,10 @@ mod platform {
         regular_file(&config_directory?.join("matplotlibrc"))
     }
 
+    pub(crate) fn matplotlib_cache_directory() -> Option<PathBuf> {
+        inherited_matplotlib_directory("XDG_CACHE_HOME", ".cache")
+    }
+
     fn inherited_matplotlib_directory(xdg_variable: &str, xdg_default: &str) -> Option<PathBuf> {
         let directory = match std::env::var_os("MPLCONFIGDIR") {
             Some(directory) if !directory.is_empty() => PathBuf::from(directory),
@@ -410,4 +427,4 @@ mod platform {
     }
 }
 
-pub(crate) use platform::link_matplotlib_caches;
+pub(crate) use platform::{link_matplotlib_caches, matplotlib_cache_directory};

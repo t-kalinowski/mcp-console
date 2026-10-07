@@ -3,6 +3,8 @@
 `send` operates on one implicit session and accepts at most one complete `r`, `python`, or `sql` cell.
 Submit cells sequentially and collect unfinished results before another cell.
 A control-only interrupt may overlap pending work; `requirements.action="get"` may inspect the last commit during evaluation or resolution without consuming output.
+If another send owns evaluation polling or response delivery, the interrupt returns `[running; poll with an empty send]` without consuming that send's output.
+Otherwise, it observes and collects the interrupted evaluation normally.
 
 [Runtime behavior](BUILTIN_RUNTIME.md) and [requirements](REQUIREMENTS.md) explain the operations themselves.
 This page defines their order and partial effects.
@@ -25,6 +27,18 @@ Its evaluation frame waits behind interpreter bootstrap; timeout and polling nev
 An empty poll or `get` without an accepted cell can instead return `[worker starting]`.
 `timeout_ms=0` observes immediately; it does not skip validation or create another worker.
 
+Starting and running responses include the latest Console-owned phase when available.
+An accepted cell can report `[elapsed: 2.3s since admission; phase: dependency preparation]`; startup without a cell instead reports `[phase: startup]` alongside `[worker starting]`, with no cell clock.
+Phases are broad observations of startup, dependency preparation, or replacement owners.
+Worker startup remains observable until transport readiness, including after its process is registered for control.
+An observation is omitted while its owner is busy; it never extends a response deadline or delays cancellation.
+They do not describe interpreter activity or promise initialization completion.
+Completion and generation retirement invalidate the matching observation; sending an interrupt or cancelling a poll does not.
+If a captured owner completes before projection, the response observes the current lifecycle owner in that generation.
+Replacement remains the phase until its single successor reaches transport readiness; retirement is confirmed before that worker starts.
+Recovered responses refresh their observation when the current owner is available.
+Phase updates do not accumulate in output, and their text shares the complete 8 KiB response budget with diagnostics and other notices.
+
 Early standalone requirements that time out before readiness have **not** been accepted and must be submitted again.
 Early code-free stdin is buffered for its generation; a cell's bundled stdin waits for its requirements.
 Startup hooks can emit output, plots, errors, and managed input requests without a submitted cell.
@@ -36,7 +50,9 @@ Later early declarations use the same preparation transaction after shared start
 Changed requirements may replace an **unused** prewarmed worker after successful preparation and confirmed retirement, without an explicit restart.
 Initialization alone does not make that worker used; user code or nonempty stdin ends this exception.
 Replacement serializes bootstrap callbacks with preparation and confirms old-worker retirement before launching the successor.
-Configured hooks can run once in each new generation, including a replacement before the first cell.
+Runtime site hooks can run once in each new generation, including a replacement before the first cell.
+A [captured startup source](CONFIGURATION.md#session-startup-source) is user code and ends the unused-worker exception at launch.
+Only explicit restart may replay it in a new generation after confirmed retirement; partial startup effects are not rolled back.
 Once user code or nonempty stdin has reached it, normal live/restart rules apply.
 Prewarming must not change the user's effective declaration semantics.
 
@@ -45,7 +61,23 @@ Cancellation after early admission releases the caller's wait, not the accepted 
 Timeout likewise cancels nothing.
 Closing MCP input cancels startup and follows normal retirement; outstanding response delivery after closure is unspecified.
 
-Discovery failure is retained and requires a new server after correcting setup; tool discovery remains usable.
+Discovery or initial preparation failure is retained by ordinary sends; tool discovery remains usable with the same schema.
+Closing the connection preserves completed setup failures in the server's exit status and stderr, including failures before a resolver is registered.
+Connection closure that refuses pending startup admission exits quietly; that refusal is separate from a completed setup error.
+After correcting setup, an explicit `control="restart"` retries that failed readiness attempt using the server's captured configuration and current filesystem/tool availability.
+Concurrent restart callers share an in-flight retry; request cancellation and timeout leave it running, while connection closure cancels and retires it.
+Cancelling a restart before its code or nonempty stdin is admitted leaves that work unaccepted, including stdin-only retries.
+If cancellation arrives during its bundled requirements preparation, preparation can commit, but that call's code and stdin stay unaccepted.
+If setup still fails, the retry reports and retains its new diagnostic.
+Previously rejected cells and their bundled stdin or requirements are not replayed; their diagnostics remain available for polling.
+A retry that succeeds accepts its environment once; joining restart callers do not replace that worker or discard state accepted meanwhile.
+A code-free retry routes its stdin through any cell admitted during shared readiness and observes that evaluation under ordinary polling ownership, including after preparation accepts unchanged requirements.
+After configuration is accepted, restart uses the retained environment and ordinary worker replacement.
+Same-call code, stdin, and requirements proceed only after readiness succeeds and retain their ordinary admission rules.
+A code-free retry with changed requirements starts the prepared replacement before returning readiness, even when preparation retired the unused prewarmed worker.
+Retries require confirmed cleanup of the failed preparation attempt.
+The preparation connection must also close and reap its child; a completed operation does not prove that retirement.
+An unconfirmed connection retirement blocks further retries in that session and retains its diagnostic.
 After discovery, a failed built-in worker prelaunch is reported once by the next idle poll, cell, or requirements inspection, with its diagnostics.
 The declaration remains available and ordinary worker recovery still applies.
 The first failure response includes captured startup diagnostics, including for requirements-only calls and restart.
@@ -57,7 +89,7 @@ Later environment/worker-start failures follow the ordinary later-cell retry bou
 Decoding and structural checks precede side effects: unknown fields/types, multiple or configured-disabled languages, incompatible get/reset payloads, set/reset with interrupt, standalone preparation with nonempty stdin, and interrupt-plus-requirements without a cell are rejected first.
 Runtime-capability checks precede execution/preparation, though an early accepted cell can report such an error through its polling result.
 
-Bare/prepared targets reject mutations before control, stdin, or evaluation.
+Bare workers reject mutations before control, stdin, or evaluation.
 Python-only sessions reject **all** interrupt-plus-requirements combinations before signaling or queuing input, including retained requirements.
 
 Requirement-content errors normally precede effects too.
@@ -103,7 +135,7 @@ Idle polls return immediately.
 
 Transport setup and retirement have their own deadlines, not a total resolver installation deadline.
 Interrupt targets active resolver work; connection closure cancels and retires it.
-See the target guides for provider-specific limits.
+See [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 ## Preparation and failure
 
@@ -131,6 +163,6 @@ Polling consumes its observed interval, including omitted text.
 Get returns the complete manifest in structured content, not a truncated declaration.
 
 [Raw cell logs](RECORDING.md) are flushed at response cuts and can be read while evaluation continues.
-Paths refer to the controller, including remote targets.
+Paths refer to the local Console server.
 Reading a file does not move the polling cursor; resubmitting code is not output retrieval.
 [Architecture](ARCHITECTURE.md#output-and-delivery) covers response recovery and the limits of delivery guarantees.

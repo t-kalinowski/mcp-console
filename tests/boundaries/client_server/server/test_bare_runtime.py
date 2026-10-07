@@ -13,6 +13,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import TranscriptWithCompanions
+from support.requirements import SQL
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
 
@@ -38,7 +39,10 @@ def test_runs_without_a_resolver_bootstrap(
         client.initialize_and_list_tools()
         send = client.transcript[-1]["result"]["tools"][0]
         properties = send["inputSchema"]["properties"]
-        assert {"r", "python", "sql"} <= properties.keys(), properties
+        expected_languages = {"r", "python"}
+        if SQL.available:
+            expected_languages.add("sql")
+        assert expected_languages <= properties.keys(), properties
         assert properties["requirements"]["properties"]["action"]["enum"] == [
             "get",
             "add",
@@ -51,6 +55,7 @@ def test_runs_without_a_resolver_bootstrap(
 
         # fmt: r
         r = code(r"""
+            options(useFancyQuotes = FALSE)
             conditionMessage(tryCatch(
               library(mcpConsoleDefinitelyMissingPackage),
               error = identity
@@ -88,7 +93,9 @@ def test_runs_without_a_resolver_bootstrap(
         assert "tidyverse" not in quarto, quarto
         assert "numpy" not in quarto, quarto
         assert "praise" not in quarto, quarto
-        quarto = quarto.replace(str(workspace.resolve()), "<workspace>")
+        quarto = quarto.replace(str(workspace.resolve()), "<workspace>").replace(
+            str(workspace), "<workspace>"
+        )
         return TranscriptWithCompanions(
             transcript=transcript,
             companions={

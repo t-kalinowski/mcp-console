@@ -23,7 +23,10 @@ pub(super) struct OutputTape(Arc<Mutex<OutputTapeState>>);
 
 /// An opaque boundary between sealed response intervals.
 #[derive(Clone, Copy)]
-pub(super) struct OutputCut(u64);
+pub(super) struct OutputCut {
+    sequence: u64,
+    pub(super) worker_revision: u64,
+}
 
 pub(super) struct DirectOutput {
     output: OutputTape,
@@ -41,6 +44,8 @@ pub(crate) struct Response {
     preview: Box<Preview>,
     is_error: bool,
     delivery: Option<ResponseDeliveryTarget>,
+    phase_terminal: Option<TerminalState>,
+    phase: Option<super::status::Source>,
 }
 
 pub(super) enum ResponseAcknowledgment {
@@ -158,7 +163,7 @@ impl Response {
                 data,
                 mime_type,
                 artifact,
-            } = content
+            } = Arc::get_mut(content).expect("retained image has one owner before projection")
             else {
                 continue;
             };
@@ -171,7 +176,25 @@ impl Response {
 
     /// Consumes the response for the MCP adapter.
     pub(crate) fn into_parts(mut self) -> (Vec<Content>, bool, Option<ResponseDelivery>) {
-        let content = self.preview.render();
+        // Phase observations are rendered inside the ordinary complete-response
+        // budget, but never enter retained output or delivery recovery history.
+        let content = match self
+            .phase
+            .as_ref()
+            .filter(|_| self.phase_terminal.is_some())
+            .and_then(|source| source.phase())
+        {
+            Some(phase) => {
+                self.preview.bound();
+                let mut preview = self.preview.clone();
+                preview.phase_before_terminal(
+                    phase,
+                    matches!(self.phase_terminal, Some(TerminalState::Running)),
+                );
+                preview.render()
+            }
+            None => self.preview.render(),
+        };
         let is_error = self.is_error;
         let delivery = self.delivery.take().map(|target| ResponseDelivery {
             target: Some(target),
@@ -179,9 +202,18 @@ impl Response {
                 preview: std::mem::take(&mut self.preview),
                 is_error,
                 delivery: None,
+                phase_terminal: self.phase_terminal,
+                phase: self.phase.take(),
             }),
         });
         (content, is_error, delivery)
+    }
+
+    pub(super) fn observe_phase(&mut self, source: Option<super::status::Source>) {
+        // Preserve a retained observation only when current capture is unavailable.
+        if let Some(source) = source {
+            self.phase = Some(source);
+        }
     }
 
     pub(super) fn extend(&mut self, mut other: Self) {
@@ -238,6 +270,20 @@ impl Response {
         self.with_builder(|builder| builder.notice_line(message));
     }
 
+    pub(super) fn evaluation_progress(
+        &mut self,
+        elapsed: std::time::Duration,
+        no_new_output: bool,
+    ) {
+        self.with_builder(|builder| {
+            let silence = if no_new_output { "; no new output" } else { "" };
+            builder.state_banner(&format!(
+                "elapsed: {:.1}s since admission{silence}",
+                elapsed.as_secs_f64()
+            ));
+        });
+    }
+
     pub(super) fn push_tool_error(&mut self, message: impl Into<String>) {
         self.with_builder(|builder| builder.tool_error(message));
     }
@@ -276,11 +322,11 @@ impl ResponseBuilder {
         mime_type: String,
         artifact: Option<crate::transcript::Artifact>,
     ) {
-        self.response.preview.image(Content::Image {
+        self.response.preview.image(Arc::new(Content::Image {
             data,
             mime_type,
             artifact,
-        });
+        }));
     }
 
     pub(super) fn append_response(&mut self, other: &mut Response) {
@@ -354,6 +400,10 @@ impl ResponseBuilder {
     }
 
     pub(super) fn terminal(&mut self, state: TerminalState) {
+        self.response.phase_terminal = match state {
+            TerminalState::Running | TerminalState::WorkerStarting => Some(state),
+            _ => None,
+        };
         match state {
             TerminalState::Completed => {
                 if self.response.is_empty() {
@@ -431,6 +481,8 @@ impl Drop for Response {
             preview: std::mem::take(&mut self.preview),
             is_error: self.is_error,
             delivery: None,
+            phase_terminal: self.phase_terminal,
+            phase: self.phase.take(),
         };
         target.unclaimed(response);
     }

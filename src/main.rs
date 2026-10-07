@@ -9,20 +9,18 @@ mod cell;
 mod cli;
 mod config;
 mod console_paths;
-mod docker;
-mod docker_sandbox;
 #[cfg(unix)]
 mod input_watch;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod jsonl;
 mod local_runtime;
 #[cfg(unix)]
 mod process_descriptors;
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, path = "process_exit/windows.rs")]
 mod process_exit;
+#[cfg(unix)]
+mod process_io;
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, path = "process_output/windows.rs")]
 mod process_output;
 #[cfg(any(unix, windows))]
 mod python;
@@ -43,13 +41,9 @@ mod server;
 mod server_transport;
 mod settings;
 #[cfg(any(unix, windows))]
-#[cfg_attr(windows, path = "sideband/windows.rs")]
 mod sideband;
 #[cfg(any(unix, windows))]
 mod sql;
-mod ssh;
-mod target_launch;
-mod target_session;
 mod transcript;
 mod worker;
 mod worker_client;
@@ -59,11 +53,17 @@ mod worker_relay;
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let mut overrides = cli.overrides.values;
+    let no_project_config = cli.overrides.no_project_config;
     match cli.command {
         #[cfg(windows)]
         cli::Command::SandboxSetup { status, state_dir } => {
             match sandbox::windows_setup(status, state_dir) {
-                Ok(status) => status,
+                Ok(exit_code) => {
+                    if !status && exit_code == ExitCode::SUCCESS {
+                        println!("\n{}", cli::SANDBOX_SETUP_DETAILS);
+                    }
+                    exit_code
+                }
                 Err(error) => {
                     eprintln!("{error}");
                     ExitCode::FAILURE
@@ -78,7 +78,14 @@ fn main() -> ExitCode {
             overrides: command_overrides,
         } => {
             overrides.extend(command_overrides.values);
-            match run_server(worker, relay, no_sandbox, writable_root, &overrides) {
+            match run_server(
+                worker,
+                relay,
+                no_sandbox,
+                writable_root,
+                &overrides,
+                no_project_config || command_overrides.no_project_config,
+            ) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => exit_with_error(error),
             }
@@ -88,52 +95,6 @@ fn main() -> ExitCode {
             Err(error) => exit_with_error(error),
         },
         cli::Command::Resolve => match resolver::run() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        cli::Command::DockerSandboxOwner => match docker_sandbox::run_owner() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        cli::Command::DockerSandboxLaunch => {
-            match target_launch::run(docker_sandbox::PROTOCOL, false, Some("docker_sandbox")) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
-        cli::Command::DockerSandboxProbe => {
-            match target_launch::run(docker_sandbox::PROTOCOL, true, Some("docker_sandbox")) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
-        cli::Command::DockerOwner => match docker::run_owner() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        cli::Command::DockerLaunch => {
-            match target_launch::run(docker::PROTOCOL, false, Some("docker")) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
-        cli::Command::DockerProbe => {
-            match target_launch::run(docker::PROTOCOL, true, Some("docker")) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
-        cli::Command::ImageRuntimeProbe { python } => {
-            match target_launch::runtime::runtime_probe(python.as_deref()) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => exit_with_error(error),
-            }
-        }
-        cli::Command::SshLaunch => match ssh::run() {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => exit_with_error(error),
-        },
-        cli::Command::SshPrepare => match ssh::preparation::run() {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
@@ -157,6 +118,7 @@ fn main() -> ExitCode {
                 settings_env.as_deref(),
                 writable_root,
                 &overrides,
+                no_project_config || command_overrides.no_project_config,
             ) {
                 Ok(exit_code) => exit_code,
                 Err(error) => exit_with_error(error),
@@ -171,34 +133,42 @@ fn run_server(
     no_sandbox: bool,
     writable_roots: Vec<std::path::PathBuf>,
     overrides: &[String],
+    no_project_config: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let settings::Captured {
+        startup,
+        cache,
         python,
+        languages,
         source: _,
-        policy,
-        target,
-        provider,
-    } = settings::discover(overrides)?;
-    if provider == settings::Provider::Compute {
-        docker_sandbox::validate_policy(&policy, false, &writable_roots)?;
+        mut policy,
+        mut resolver,
+        sandbox_requested,
+        resolver_sandbox_requested,
+    } = settings::discover(overrides, no_project_config)?;
+    if no_sandbox && (sandbox_requested || resolver_sandbox_requested) {
+        return Err("explicit sandbox or resolver.sandbox permissions require sandboxing; remove them when using --no-sandbox".into());
     }
-    #[cfg(windows)]
-    {
-        if target.is_some() {
-            return Err("Windows currently supports local execution only".into());
+    resolver::cache::configure(
+        cache,
+        no_sandbox,
+        python.as_deref(),
+        &mut resolver,
+        &mut policy,
+    )?;
+    if startup.is_some() {
+        if worker.is_some() || relay.is_some() {
+            return Err("startup requires the built-in worker and relay".into());
+        }
+        if cfg!(windows) {
+            return Err("configured startup is not supported on Windows".into());
         }
     }
     if python.is_some() && (worker.is_some() || relay.is_some()) {
         return Err("python selection requires the built-in worker and relay".into());
     }
-    let target = target.map(|target| (target, writable_roots.clone()));
-    if target.is_some() && (worker.is_some() || relay.is_some()) {
-        return Err("Execution targets require the built-in worker and relay".into());
-    }
-    let settings = if target.is_some() {
+    let settings = if no_sandbox {
         policy
-    } else if no_sandbox {
-        settings::SandboxSettings::default()
     } else {
         // Native validation belongs to the owned background launch. Running a
         // preflight child here would precede MCP serving and EOF ownership.
@@ -208,7 +178,7 @@ fn run_server(
         .enable_all()
         .build()?;
     let result = runtime.block_on(server::run(
-        worker, relay, no_sandbox, settings, target, python,
+        worker, relay, no_sandbox, settings, python, resolver, startup, languages,
     ));
     // `server::run` has already finished owned runtime retirement and response settling. Tokio's
     // stdout uses a blocking task that cannot be cancelled while the client

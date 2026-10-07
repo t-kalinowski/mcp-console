@@ -6,13 +6,13 @@ import os
 from pathlib import Path
 from queue import Queue
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
 from threading import Thread
-import tomllib
 import unittest
+
+from windows_gate import Gate
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(
@@ -38,18 +38,7 @@ class Resolver:
             self.messages.put(None)
 
         Thread(target=read, daemon=True).start()
-        build = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
-        self.send(
-            {
-                "Open": {
-                    "version": 6,
-                    "build": build,
-                    "workspace": "",
-                    "selections": {},
-                    "mode": mode,
-                }
-            }
-        )
+        self.send({"Open": {"mode": mode}})
 
     def send(self, message):
         self.process.stdin.write(json.dumps(message).encode() + b"\n")
@@ -62,7 +51,7 @@ class Resolver:
         return message
 
     def ready(self):
-        assert "Hello" in self.receive()
+        assert self.receive() == "Hello"
         discovery = self.receive()["Completed"]
         assert discovery["confirmed"], discovery
         assert "Ok" in discovery["result"], discovery
@@ -191,15 +180,12 @@ class WindowsResolver(unittest.TestCase):
         )
         self.assertIn("fixture resolver failure", result["result"]["Err"])
 
-    def blocked_resolver(self, mode="blocked"):
-        listener = socket.socket()
-        listener.bind(("127.0.0.1", 0))
-        listener.listen()
-        listener.settimeout(10)
-        self.addCleanup(listener.close)
-        self.environment["TEST_RESOLVER_GATE"] = (
-            f"127.0.0.1:{listener.getsockname()[1]}"
-        )
+    def blocked_resolver(
+        self, mode: str = "blocked", *, release: bool = True
+    ) -> tuple[Resolver, dict[int, int]]:
+        gate = Gate()
+        self.addCleanup(gate.close)
+        self.environment["TEST_RESOLVER_GATE"] = gate.name
         self.environment["TEST_RESOLVER_MODE"] = mode
         resolver = self.resolver()
         resolver.send(
@@ -212,33 +198,46 @@ class WindowsResolver(unittest.TestCase):
                 }
             }
         )
-        connection, _ = listener.accept()
-        with connection, connection.makefile() as input:
-            pids = [int(pid) for pid in input.readline().split()]
-        return resolver, pids
+        gate.accept(resolver.process)
+        try:
+            pids = [int(pid) for pid in gate.readline().split()]
+            self.assertEqual(len(pids), 2)
+            kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel.OpenProcess.argtypes = [
+                ctypes.c_uint32,
+                ctypes.c_int,
+                ctypes.c_uint32,
+            ]
+            kernel.OpenProcess.restype = ctypes.c_void_p
+            kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+            processes: dict[int, int] = {}
+            for pid in pids:
+                handle = kernel.OpenProcess(0x100000, 0, pid)
+                self.assertTrue(handle, ctypes.get_last_error())
+                self.addCleanup(kernel.CloseHandle, handle)
+                processes[pid] = handle
+            # Pin both identities before permitting normal exit or sending a
+            # control. Reopening PIDs after retirement can observe their reuse.
+            if release:
+                gate.sendall(b"\x01")
+        finally:
+            if release:
+                gate.close()
+        return resolver, processes
 
-    def assert_retired(self, pids):
+    def assert_retired(self, processes: dict[int, int]) -> None:
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
-        kernel.OpenProcess.restype = ctypes.c_void_p
         kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
-        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
-        for pid in pids:
-            handle = kernel.OpenProcess(0x100000, 0, pid)
-            if handle:
-                try:
-                    self.assertEqual(
-                        kernel.WaitForSingleObject(handle, 0),
-                        0,
-                        f"resolver process {pid} survived completion",
-                    )
-                finally:
-                    kernel.CloseHandle(handle)
-            else:
-                self.assertEqual(ctypes.get_last_error(), 87)
+        kernel.WaitForSingleObject.restype = ctypes.c_uint32
+        for pid, handle in processes.items():
+            self.assertEqual(
+                kernel.WaitForSingleObject(handle, 0),
+                0,
+                f"resolver process {pid} survived completion",
+            )
 
     def test_interrupt_confirms_descendant_retirement(self):
-        resolver, pids = self.blocked_resolver()
+        resolver, processes = self.blocked_resolver()
         resolver.send({"Control": {"id": 1, "control": "Interrupted"}})
         self.assertEqual(
             resolver.receive(), {"Controlled": {"id": 1, "result": {"Ok": True}}}
@@ -247,7 +246,7 @@ class WindowsResolver(unittest.TestCase):
         self.assertTrue(completed["confirmed"], completed)
         self.assertEqual(completed["control"], "Interrupted")
         self.assertIn("Err", completed["result"])
-        self.assert_retired(pids)
+        self.assert_retired(processes)
         # A settled interrupt belongs to the old operation; a later call works.
         self.assertEqual(
             resolver.run(2, {"PythonVersion": {"constraints": []}})["result"],
@@ -255,17 +254,142 @@ class WindowsResolver(unittest.TestCase):
         )
 
     def test_eof_cancels_resolver_and_descendants(self):
-        resolver, pids = self.blocked_resolver()
+        resolver, processes = self.blocked_resolver()
         resolver.process.stdin.close()
         resolver.process.wait(timeout=10)
-        self.assert_retired(pids)
+        self.assert_retired(processes)
+
+    def test_cancellation_before_gate_release_retires_resolver_and_descendants(self):
+        for action in ("Interrupted", "Close"):
+            with self.subTest(action=action):
+                # Pin both identities without releasing the fixture's pipe
+                # checkpoint. Cancellation must retire it and its descendant.
+                resolver, processes = self.blocked_resolver(release=False)
+                if action == "Close":
+                    resolver.process.stdin.close()
+                    resolver.process.wait(timeout=10)
+                else:
+                    resolver.send({"Control": {"id": 1, "control": action}})
+                    self.assertEqual(
+                        resolver.receive(),
+                        {"Controlled": {"id": 1, "result": {"Ok": True}}},
+                    )
+                    completed = resolver.receive()["Completed"]
+                    self.assertTrue(completed["confirmed"], completed)
+                    self.assertEqual(completed["control"], action)
+                    self.assertIn("Err", completed["result"])
+                self.assert_retired(processes)
+
+    def test_delayed_exit_reports_unconfirmed_retirement(self) -> None:
+        # A held EXIT_PROCESS_DEBUG_EVENT delays kernel shutdown and process
+        # handle signaling, without depending on a slow or faulty I/O driver.
+        # https://learn.microsoft.com/en-us/windows/win32/debug/debugging-events
+        class ExceptionRecord(ctypes.Structure):
+            _fields_ = [
+                ("code", ctypes.c_uint32),
+                ("flags", ctypes.c_uint32),
+                ("record", ctypes.c_void_p),
+                ("address", ctypes.c_void_p),
+                ("count", ctypes.c_uint32),
+                ("parameters", ctypes.c_size_t * 15),
+            ]
+
+        class ExceptionInfo(ctypes.Structure):
+            _fields_ = [("record", ExceptionRecord), ("first", ctypes.c_uint32)]
+
+        class DebugInfo(ctypes.Union):
+            # The exception member determines the union's native size/alignment.
+            # CREATE_PROCESS and LOAD_DLL both begin with an owned file handle.
+            _fields_ = [("exception", ExceptionInfo), ("file", ctypes.c_void_p)]
+
+        class DebugEvent(ctypes.Structure):
+            _fields_ = [
+                ("code", ctypes.c_uint32),
+                ("pid", ctypes.c_uint32),
+                ("tid", ctypes.c_uint32),
+                ("info", DebugInfo),
+            ]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.DebugActiveProcess.argtypes = [ctypes.c_uint32]
+        kernel.DebugActiveProcessStop.argtypes = [ctypes.c_uint32]
+        kernel.WaitForDebugEvent.argtypes = [
+            ctypes.POINTER(DebugEvent),
+            ctypes.c_uint32,
+        ]
+        kernel.ContinueDebugEvent.argtypes = [ctypes.c_uint32] * 3
+        kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+
+        def checked(result: int | None) -> None:
+            if not result:
+                raise ctypes.WinError(ctypes.get_last_error())
+
+        def next_event() -> DebugEvent:
+            event = DebugEvent()
+            checked(kernel.WaitForDebugEvent(ctypes.byref(event), 10000))
+            if event.code in (3, 6) and event.info.file:
+                checked(kernel.CloseHandle(event.info.file))
+            return event
+
+        def resume(event: DebugEvent) -> None:
+            checked(kernel.ContinueDebugEvent(event.pid, event.tid, 0x00010002))
+
+        for action in ("Cancelled", "Close"):
+            with self.subTest(action=action):
+                resolver, processes = self.blocked_resolver()
+                pid, handle = next(iter(processes.items()))
+                checked(kernel.DebugActiveProcess(pid))
+                held = None
+                try:
+                    # Consume the attachment events through its breakpoint so
+                    # termination begins with a running, registered resolver.
+                    while True:
+                        event = next_event()
+                        if event.code == 1:
+                            self.assertEqual(
+                                event.info.exception.record.code, 0x80000003
+                            )
+                        resume(event)
+                        if event.code == 1:
+                            break
+                    if action == "Close":
+                        resolver.send("Close")
+                    else:
+                        resolver.send({"Control": {"id": 1, "control": action}})
+                        self.assertEqual(
+                            resolver.receive(),
+                            {"Controlled": {"id": 1, "result": {"Ok": True}}},
+                        )
+                    while True:
+                        event = next_event()
+                        if event.code == 5:
+                            held = event
+                            break
+                        resume(event)
+                    self.assertEqual(kernel.WaitForSingleObject(handle, 0), 258)
+                    # The five-second allowance must expire while exit remains
+                    # held. An observer join before that allowance hangs here.
+                    self.assertNotEqual(resolver.process.wait(timeout=10), 0)
+                    self.assertIn(
+                        "preparation retirement is unconfirmed",
+                        resolver.process.stderr.read().decode(errors="replace"),
+                    )
+                    self.assertEqual(kernel.WaitForSingleObject(handle, 0), 258)
+                finally:
+                    if held is not None:
+                        resume(held)
+                    else:
+                        checked(kernel.DebugActiveProcessStop(pid))
+                self.assertEqual(kernel.WaitForSingleObject(handle, 10000), 0)
+                self.assert_retired(processes)
 
     def test_success_retires_descendant_holding_output(self):
-        resolver, pids = self.blocked_resolver("exited")
+        resolver, processes = self.blocked_resolver("exited")
         completed = resolver.receive()["Completed"]
         self.assertTrue(completed["confirmed"], completed)
         self.assertIn("Ok", completed["result"])
-        self.assert_retired(pids)
+        self.assert_retired(processes)
 
 
 @unittest.skipUnless(os.name == "nt", "native Windows materialization")
@@ -322,7 +446,9 @@ class WindowsResolverMaterialization(unittest.TestCase):
     def test_uv_bootstraps_ir_and_materializes_r_library(self):
         r_home = os.environ.get("R_HOME")
         if not r_home:
-            r_home = subprocess.check_output(["R", "RHOME"], text=True).strip()
+            r_home = subprocess.check_output(
+                [shutil.which("R") or "R", "RHOME"], text=True
+            ).strip()
         self.environment["R_HOME"] = r_home
         resolver = self.resolver("R")
         self.assertEqual(

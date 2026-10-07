@@ -2,8 +2,9 @@
 
 This private interface connects one relay to one worker generation, including custom workers selected by `serve --worker PATH`.
 [Architecture](ARCHITECTURE.md) explains ownership; [relay protocol](RELAY_PROTOCOL.md) defines the outer transport.
-The schemas in [`src/worker_protocol.rs`](../src/worker_protocol.rs), framing in [`src/sideband.rs`](../src/sideband.rs), and executable boundary tests are authoritative.
-There is no sideband version negotiation; incompatible changes must also update target-envelope compatibility.
+The schemas in [`src/worker_protocol.rs`](../src/worker_protocol.rs), incremental framing in [`src/jsonl.rs`](../src/jsonl.rs), native endpoints selected by [`src/sideband.rs`](../src/sideband.rs), and executable boundary tests are authoritative.
+The sideband schema is unversioned; custom workers must implement the current contract.
+The sideband evolves in lockstep with the relay; update both endpoints and fixtures together.
 
 ## Launch and transport
 
@@ -130,7 +131,7 @@ The controller also orders interrupt admission against this receipt and withhold
 This covers signals delivered after the worker has sampled its interrupt state: the relay's interrupt result acknowledges signal dispatch, not worker-side handling.
 Fatal startup failure follows ordinary generation failure and replacement handling.
 Custom workers retain their existing readiness and evaluation contract and do not send this event.
-Default local and target launchers opt into interpreter bootstrap with the private `worker --bootstrap-runtimes` argument.
+The default local launcher opts into interpreter bootstrap with the private `worker --bootstrap-runtimes` argument.
 
 The server admits one evaluation or explicit preparation at a time.
 Each ordinary operation has exactly one matching terminal result:
@@ -216,11 +217,11 @@ Generation checks prevent an old receipt from committing into a replacement.
 
 The relay concurrently closes fd 0 and attempts `shutdown`; the worker must not require both signals in a particular order.
 It exits without acknowledgment, or the relay forcibly terminates and reaps the direct child after the supplied grace.
-Remaining descendants and private storage belong to the selected runner or compute provider, not this sideband.
+Remaining descendants and private storage belong to the native runner, not this sideband.
 
 Outside intentional retirement, unexpected sideband EOF or worker exit, including status zero, fails the generation.
 The relay drains within its bounded allowances and reports closure and process outcome through the outer protocol.
-Those events do not prove sandbox, remote-host, container, or VM retirement.
+Those events do not prove native sandbox retirement.
 See [relay retirement](RELAY_PROTOCOL.md#retirement-and-failure).
 
 ## Custom-worker conformance

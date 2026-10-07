@@ -94,6 +94,9 @@ pub(crate) fn setup_runtime(libpython: &Path, managed: bool) -> Result<bool, Str
     if !crate::sql::install_python_runtime()? {
         return Ok(false);
     }
+    if !crate::worker::r_available() {
+        super::library::configure_native_sql()?;
+    }
     if !super::library::configure_environment()? {
         return Err("Python environment setup failed; restart required".into());
     }
@@ -121,16 +124,8 @@ fn import_policy(managed: bool) -> ImportResolution<'static> {
         return ImportResolution::Managed;
     }
     ImportResolution::Disabled(
-        match std::env::var("MCP_CONSOLE_EXECUTION_COMPUTE").as_deref() {
-            Ok("docker") => {
-                "automatic package installation is unavailable in prepared Docker targets; preinstall the distribution in the image and start a new server session"
-            }
-            Ok("docker_sandbox") => {
-                "automatic package installation is unavailable in prepared Docker Sandbox targets; preinstall the distribution in the template and start a new server session"
-            }
-            _ if std::env::var("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION").as_deref()
-                == Ok("0") =>
-            {
+        match std::env::var("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION").as_deref() {
+            Ok("0") => {
                 "MCP Console dynamic environment resolution is unavailable. Install the distribution into the ambient Python environment, or install `ir` or `uv` and restart MCP Console."
             }
             _ => {
@@ -152,12 +147,7 @@ pub(super) fn initialize_native(
 ) -> Result<bool, String> {
     let selected = &configuration.embedding;
     initialize_selected(configuration)?;
-    let result = setup_runtime(Path::new(&selected.libpython), managed).and_then(|configured| {
-        if configured && !crate::worker::r_available() {
-            super::library::configure_native_sql()?;
-        }
-        Ok(configured)
-    });
+    let result = setup_runtime(Path::new(&selected.libpython), managed);
     if !matches!(result, Ok(true)) {
         super::library::display_setup_exception()?;
     }

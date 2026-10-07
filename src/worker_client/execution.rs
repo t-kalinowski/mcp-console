@@ -51,7 +51,13 @@ impl Client {
         }
         self.ensure_evaluation_admission(&generation, control)?;
         let startup = self.reserve_worker_startup(&generation)?;
-        let idle_prelude = self.0.output.take_prelude();
+        // Serialize retry cancellation with publishing its accepted cell.
+        // Its preparation has already committed and is not rolled back here.
+        let retry_admission = match control {
+            Some(control) => control.admit_retry_payload("cell")?,
+            None => None,
+        };
+        let (idle_prelude, worker_revision) = self.0.output.take_admission_prelude();
         let evaluation = Arc::new(Evaluation::new(
             transcript,
             call_id,
@@ -59,6 +65,7 @@ impl Client {
             control_prelude.take().unwrap_or_default(),
             idle_prelude,
             control.is_some(),
+            worker_revision,
         ));
         let wait_claim = evaluation
             .claim()
@@ -75,12 +82,21 @@ impl Client {
             initial_requirements: Arc::new(Mutex::new(initial_requirements)),
         });
         let initial_requirements = active.as_ref().unwrap().initial_requirements.clone();
+        let readiness = self.startup_result();
+        drop(retry_admission);
         drop(active);
 
         let client = self.clone();
         let evaluator = evaluation.clone();
         let evaluation_task = tokio::task::spawn_blocking(move || {
-            client.evaluate_blocking(cell, evaluator, generation, startup, initial_requirements);
+            client.evaluate_blocking(
+                cell,
+                evaluator,
+                generation,
+                startup,
+                initial_requirements,
+                readiness,
+            );
         });
         let failed = evaluation.clone();
         let _completion_task = tokio::spawn(async move {
@@ -177,12 +193,34 @@ impl Client {
         stdin: String,
         generation: WorkerGeneration,
     ) -> Result<(), SendFailure> {
+        self.write_idle_stdin_admitted(stdin, generation, None)
+    }
+
+    pub(super) fn write_idle_stdin_admitted(
+        &self,
+        stdin: String,
+        generation: WorkerGeneration,
+        control: Option<&ControlledSendAdmission>,
+    ) -> Result<(), SendFailure> {
         self.with_worker(&generation, |worker| {
+            // Startup may block; accept stdin only after it settles, using the
+            // same cancellation boundary as a retry's following cell.
+            let _admission = match control {
+                Some(control) => match control.admit_retry_payload("stdin") {
+                    Ok(admission) => admission,
+                    // Cancelled admission is not a worker transport failure.
+                    Err(error) => return Ok(Err(SendFailure::from(error))),
+                },
+                None => None,
+            };
             if !stdin.is_empty() {
                 self.0.unused_default.store(false, Ordering::Release);
             }
-            worker.write_stdin(stdin).map_err(SendFailure::from)
-        })
+            worker
+                .write_stdin(stdin)
+                .map(|()| Ok(()))
+                .map_err(SendFailure::from)
+        })?
     }
 
     fn evaluate_blocking(
@@ -192,9 +230,11 @@ impl Client {
         generation: WorkerGeneration,
         startup: Option<Arc<lifecycle::WorkerStartupAdmission>>,
         initial_requirements: Arc<Mutex<Option<Requirements>>>,
+        readiness: tokio::sync::watch::Receiver<Option<Result<(), String>>>,
     ) {
         let result = (|| {
-            let readiness = tokio::runtime::Handle::current().block_on(self.ready());
+            let readiness =
+                tokio::runtime::Handle::current().block_on(Self::wait_for_startup(readiness));
             self.ensure_generation(&generation)
                 .map_err(SendFailure::from)?;
             if !evaluation.is_interruptible()? {
@@ -345,13 +385,13 @@ impl Client {
             #[cfg(any(unix, windows))]
             if let Some(preparation) = &*self
                 .0
-                .local_preparation
+                .resolver_preparation
                 .lock()
-                .map_err(|_| "local preparation lock poisoned".to_string())?
+                .map_err(|_| "preparation lock poisoned".to_string())?
             {
                 preparation.check_ready()?;
             }
-            let _startup = self.reserve_worker_startup(&generation)?;
+            let startup = self.reserve_worker_startup(&generation)?;
             let mut environment = match &self.0.environment {
                 Some(environment) => Some(
                     environment
@@ -388,7 +428,6 @@ impl Client {
                     .as_ref()
                     .is_some_and(|environment| !environment.custom_worker),
                 languages: self.0.languages,
-                target: self.0.target.as_ref(),
                 local_runtime: environment
                     .as_ref()
                     .and_then(|environment| environment.local_runtime.as_ref()),
@@ -397,6 +436,14 @@ impl Client {
                 relay: self.0.relay.as_deref(),
                 no_sandbox: self.0.no_sandbox,
                 sandbox_settings: &self.0.sandbox_settings,
+                startup_source: self.0.startup_source.as_ref(),
+                duckdb_extension_directory: self.0.duckdb_extension_directory.as_deref(),
+                resolver_matplotlib_cache: self
+                    .0
+                    .resolver_settings
+                    .get("environment")
+                    .and_then(|environment| environment.get("MPLCONFIGDIR"))
+                    .and_then(serde_json::Value::as_str),
                 python,
                 managed_r,
                 dynamic_resolution: self.0.dynamic_resolution,
@@ -410,10 +457,25 @@ impl Client {
                     .output
                     .push_notice_line(output::WORKER_STARTING_NOTICE);
             }
-            let running =
-                self.0
-                    .runtime
-                    .spawn(spec, self.0.output.clone(), on_started, on_ready)?;
+            // A launched initializer may already have produced external effects.
+            // Only explicit restart grants another attempt after confirmed retirement.
+            if self.0.startup_source.is_some()
+                && !self.0.startup_permitted.swap(false, Ordering::AcqRel)
+            {
+                return Err("startup may have executed; explicit restart required"
+                    .to_string()
+                    .into());
+            }
+            let running = self
+                .0
+                .runtime
+                .spawn(spec, self.0.output.clone(), on_started, || {
+                    on_ready()?;
+                    if let Some(startup) = startup.as_ref() {
+                        startup.transport_ready.store(true, Ordering::Release);
+                    }
+                    Ok(())
+                })?;
             if let Some(environment) = environment.as_mut() {
                 // An external `--worker` must apply its first managed R layer before
                 // loading DuckDB; arbitrary preloaded namespaces are not tracked.

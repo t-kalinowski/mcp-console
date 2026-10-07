@@ -37,6 +37,9 @@ Homepage = "https://github.com/t-kalinowski/mcp-console"
 Repository = "https://github.com/t-kalinowski/mcp-console"
 Issues = "https://github.com/t-kalinowski/mcp-console/issues"
 
+[tool.ruff.format]
+line-ending = "lf"
+
 [tool.maturin]
 bindings = "bin"
 compatibility = "pypi"

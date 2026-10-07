@@ -9,7 +9,7 @@ result:
       text: |
         before oversized image
 
-        [image limit: omitted 1 images (8388612 encoded bytes); 0 already recorded, 1 not retained]
+        [output omitted: 1 image (8388612 encoded bytes); 1 image not retained]
         before accepted image
     - type: image
       data: iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=

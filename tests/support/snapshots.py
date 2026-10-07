@@ -1,11 +1,18 @@
 import difflib
 import json
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 
 from yaml12 import Yaml, format_yaml, parse_yaml, read_yaml
 
-from support.records import Transcript, TranscriptWithCompanions, YamlStream
+from support.records import (
+    McpTranscript,
+    Transcript,
+    TranscriptWithCompanions,
+    YamlStream,
+)
+from support.progress import normalize_elapsed
 
 root = Path(__file__).resolve().parents[2]
 snapshot_directory = root / "tests" / "snapshots"
@@ -22,6 +29,24 @@ initialization_reference = (
     .relative_to(root)
     .as_posix()
 )
+
+
+def execution_snapshots(case):
+    """Keep distinct direct/sandbox transcripts when their captured policy differs."""
+    case.execution_snapshots = True
+    return case
+
+
+def platform_snapshots(*platforms: str, reason: str):
+    """Reserve variants for the platform contract this case explicitly tests."""
+    assert reason.strip(), "platform snapshots require a nonempty contract reason"
+
+    def decorate(case):
+        case.snapshot_platforms = platforms
+        case.snapshot_platform_reason = reason
+        return case
+
+    return decorate
 
 
 def identical(left: object, right: object) -> bool:
@@ -167,6 +192,16 @@ def normalize_request_ids(transcript: Transcript) -> Transcript:
     rendered = []
     for entry in transcript:
         entry = entry.copy()
+        if isinstance(result := entry.get("result"), dict) and "content" in result:
+            entry["result"] = {
+                **result,
+                "content": [
+                    {**part, "text": normalize_elapsed(part["text"])}
+                    if part["type"] == "text" and isinstance(part["text"], str)
+                    else part
+                    for part in result["content"]
+                ],
+            }
         if entry.keys() & {"input", "send"}:
             request_id = entry.pop("id", None)
             if request_id in labels:
@@ -204,6 +239,7 @@ def compact_initializations(
                     .removesuffix(".direct")
                     .removeprefix(".")
                 )
+                variant = variant.replace(".win32", "").removeprefix("win32")
                 target = (
                     f"{variant + ' ' if variant else ''}MCP initialization for this execution mode"
                     if execution is not None
@@ -225,10 +261,18 @@ def check_recording(
     *,
     update: bool,
     execution: str | None = None,
+    platform_specific: bool = False,
+    execution_specific: bool = False,
 ) -> set[Path]:
     snapshot = snapshot_path(suite_name, case_name)
     initialization = snapshot == root / initialization_reference
-    mode_suffix = ".direct" if initialization and execution == "direct" else ""
+    mode_suffix = (f".{sys.platform}" if platform_specific else "") + (
+        ".direct"
+        if initialization and execution == "direct"
+        else ".sandbox"
+        if execution_specific and execution == "sandbox"
+        else ""
+    )
     primary = snapshot.with_suffix(f"{mode_suffix}.yaml")
     case = f"{suite_name}::{case_name}"
     if execution is not None:
@@ -242,7 +286,7 @@ def check_recording(
             suffix = (
                 f".{name.removesuffix('.yaml')}{mode_suffix}.yaml"
                 if initialization
-                else f".{name}"
+                else f"{mode_suffix}.{name}"
             )
             companions.append((snapshot.with_suffix(suffix), contents))
     else:
@@ -255,7 +299,15 @@ def check_recording(
             # Prefer the canonical direct handshake when variant schemas are equal.
             *sorted(
                 reference.parent.glob(f"{reference.stem}.*.yaml"),
-                key=lambda path: (path != reference.with_suffix(".direct.yaml"), path),
+                key=lambda path: (
+                    path
+                    != reference.with_suffix(
+                        ".win32.direct.yaml"
+                        if sys.platform == "win32"
+                        else ".direct.yaml"
+                    ),
+                    path,
+                ),
             ),
         ]
         if execution is not None:
@@ -263,6 +315,14 @@ def check_recording(
                 path
                 for path in references
                 if path.stem.endswith(".direct") == (execution == "direct")
+            ]
+        if sys.platform != "win32" or any(
+            "win32" in path.stem.split(".") for path in references
+        ):
+            references = [
+                path
+                for path in references
+                if ("win32" in path.stem.split(".")) == (sys.platform == "win32")
             ]
         assert references, f"no initialization reference for {execution}"
         actual = compact_initializations(actual, references, execution=execution)
@@ -273,9 +333,15 @@ def check_recording(
             check_text_snapshot(companion, contents, case, update=update)
         else:
             assert companion.suffix == ".yaml", companion
-            if initialization:
-                # These companions are MCP handshakes; other YAML companions
-                # can carry protocol IDs that must remain visible.
+            if isinstance(contents, McpTranscript):
+                contents = normalize_request_ids(contents.transcript)
+                if not initialization:
+                    contents = compact_initializations(
+                        contents, references, execution=execution
+                    )
+            elif initialization:
+                # Canonical companions are MCP handshakes; ordinary YAML
+                # companions can carry protocol IDs that must remain visible.
                 contents = normalize_request_ids(contents)
             check_snapshot(companion, contents, case, update=update)
         checked.add(companion)

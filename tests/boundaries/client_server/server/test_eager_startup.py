@@ -2,6 +2,7 @@
 
 import os
 import json
+import signal
 import sys
 import tempfile
 from contextlib import ExitStack, closing
@@ -17,6 +18,16 @@ from boundaries.client_server.lifecycle.test_startup import startup_fixture
 from boundaries.client_server.python.test_startup import (
     isolated_python,
     selected_python,
+)
+from support.progress import elapsed_progress, phase_progress, without_elapsed
+from support.snapshots import execution_snapshots
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    R,
+    command,
+    requires,
 )
 from support.assertions import last_result_text
 from support.allocations import AllocationProfile
@@ -34,8 +45,11 @@ from support.normalization import code
 from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
 from support.records import Transcript
-from support.resolvers import ir_run_records, recording_ir_environment
-from support.requirements import R, NATIVE_FIXTURES, PROCESS_EVENTS, command, requires
+from support.resolvers import (
+    ir_run_records,
+    local_resolver_owner,
+    recording_ir_environment,
+)
 from support.suites import run_this_suite
 
 RUNNING = "\n[running; poll with an empty send]"
@@ -76,6 +90,17 @@ def test_connection_closure_joins_preparation_owner(binary: Path) -> Transcript:
 def test_connection_closure_reaps_stalled_preparation_within_shutdown_budget(
     binary: Path,
 ) -> Transcript:
+    return closes_stalled_preparation(binary, deny_kill=False)
+
+
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_connection_closure_reports_failed_preparation_termination(
+    binary: Path,
+) -> Transcript:
+    return closes_stalled_preparation(binary, deny_kill=True)
+
+
+def closes_stalled_preparation(binary: Path, *, deny_kill: bool) -> Transcript:
     with (
         tempfile.TemporaryDirectory() as temporary,
         ExitStack() as resources,
@@ -98,6 +123,8 @@ def test_connection_closure_reaps_stalled_preparation_within_shutdown_budget(
                 "MCP_CONSOLE_TEST_REAP_BLOCK_CLOSE": str(blocked.path),
             }
         )
+        if deny_kill:
+            environment["MCP_CONSOLE_TEST_REAP_DENY_KILL"] = str(root / "denied-kill")
         identity = None
         with McpClient(binary, DIRECT.serve(), environment, root) as client:
             try:
@@ -109,16 +136,23 @@ def test_connection_closure_reaps_stalled_preparation_within_shutdown_budget(
                     int((root / "resolver-pid").read_text())
                 )
                 _, errors = client.finish_with_standard_error(expected_exit_status=1)
-                assert (
-                    errors == "local resolver setup or retirement deadline exceeded\n"
-                )
-                assert (root / "reaped").exists(), "preparation was not reaped"
-                assert not live_processes([identity]), (
-                    "preparation survived server exit"
-                )
+                expected = "local resolver setup or retirement deadline exceeded"
+                if deny_kill:
+                    expected += "; cannot terminate local resolver: Operation not permitted (os error 1); retirement unconfirmed"
+                    assert (root / "denied-kill").exists()
+                    assert not (root / "reaped").exists()
+                    assert live_processes([identity]), (
+                        "fixture did not keep preparation alive"
+                    )
+                else:
+                    assert (root / "reaped").exists(), "preparation was not reaped"
+                    assert not live_processes([identity]), (
+                        "preparation survived server exit"
+                    )
+                assert errors == expected + "\n", errors
                 return [
                     {
-                        "stalled_preparation_reaped_before_server_exit": True,
+                        "stalled_preparation_reaped_before_server_exit": not deny_kill,
                         "stderr": errors,
                     }
                 ]
@@ -127,6 +161,85 @@ def test_connection_closure_reaps_stalled_preparation_within_shutdown_budget(
                     kill_processes([identity])
 
 
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_reaps_preparation_after_unconfirmed_termination(binary: Path) -> Transcript:
+    return retains_failed_preparation(binary, retry_on_close=False)
+
+
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_retries_unconfirmed_preparation_termination_on_close(
+    binary: Path,
+) -> Transcript:
+    return retains_failed_preparation(binary, retry_on_close=True)
+
+
+def retains_failed_preparation(binary: Path, *, retry_on_close: bool) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        python, _ = isolated_python(root)
+        environment = selected_python(root, python)
+        environment.pop("R_HOME", None)
+        environment.update(
+            {
+                "PATH": str(root),
+                LOADER_VARIABLE: str(
+                    build_interposer(root, "preparation_reap_interposer")
+                ),
+                "MCP_CONSOLE_TEST_REAP_PID": str(root / "resolver-pid"),
+                "MCP_CONSOLE_TEST_REAP_DONE": str(root / "reaped"),
+                "MCP_CONSOLE_TEST_REAP_CORRUPT": "1",
+                "MCP_CONSOLE_TEST_REAP_DENY_KILL": str(root / "denied-kill"),
+            }
+        )
+        if retry_on_close:
+            environment["MCP_CONSOLE_TEST_REAP_DENY_ONCE"] = "1"
+        identity = None
+        with McpClient(binary, DIRECT.serve(), environment, root) as client:
+            try:
+                client.initialize_and_list_tools()
+                client.expect("42\n", python="42")
+                identity = local_resolver_owner(
+                    capture_process_identity(client.process.pid), binary
+                )
+                (root / "resolver-pid").write_text(str(identity[0]))
+                os.kill(identity[0], signal.SIGUSR1)
+                wait_for_path(
+                    root / "denied-kill",
+                    "forced preparation termination was denied",
+                    client=client,
+                )
+                rejected = client.send(control="restart")
+                assert rejected["isError"], rejected
+                assert "unconfirmed" in last_result_text(client), last_result_text(
+                    client
+                )
+                assert live_processes([identity]), "preparation must still be alive"
+                if not retry_on_close:
+                    kill_processes([identity])
+                    wait_for_path(
+                        root / "reaped",
+                        "server reaped the preparation child after its later exit",
+                        client=client,
+                    )
+                _, errors = client.finish_with_standard_error(expected_exit_status=1)
+                assert "cannot terminate local resolver" in errors, errors
+                assert "retirement unconfirmed" in errors, errors
+                assert (root / "reaped").exists(), "preparation was not reaped"
+                assert not live_processes([identity])
+                return [
+                    {
+                        "replacement_rejected": True,
+                        "preparation_reaped": True,
+                        "termination_retried_on_close": retry_on_close,
+                        "original_retirement_error_retained": True,
+                    }
+                ]
+            finally:
+                if identity is not None:
+                    kill_processes([identity])
+
+
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_invalid_early_cell_does_not_poison_default_startup(
     binary: Path, execution: Execution
@@ -159,7 +272,10 @@ def test_invalid_early_cell_does_not_poison_default_startup(
         environment = selected_python(root, python)
         environment.pop("R_HOME", None)
         environment["PATH"] = str(root)
-        with McpClient(binary, execution.serve(), environment, root) as client:
+        environment["UV_TOOL_DIR"] = str(root)
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment, root
+        ) as client:
             try:
                 reached.wait("selected Python inspection is blocked")
                 client.initialize_and_list_tools()
@@ -168,7 +284,10 @@ def test_invalid_early_cell_does_not_poison_default_startup(
                     requirements={"python": ["six"]},
                     timeout_ms=0,
                 )
-                assert last_result_text(client) == RUNNING
+                assert without_elapsed(last_result_text(client)) == RUNNING
+                assert (
+                    phase_progress(last_result_text(client)) == "dependency preparation"
+                )
                 release.release()
                 failure = client.send()
                 assert failure["isError"]
@@ -183,6 +302,7 @@ def test_invalid_early_cell_does_not_poison_default_startup(
                 release.release()
 
 
+@requires(POSIX)
 @requires(R)
 def test_accepts_zero_timeout_cell_during_discovery(binary: Path) -> Transcript:
     environment, _ = r_test_environment()
@@ -194,11 +314,13 @@ def test_accepts_zero_timeout_cell_during_discovery(binary: Path) -> Transcript:
         client.send(
             r='started <- get0("started", ifnotfound = 0L) + 1L; started', timeout_ms=0
         )
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
         client.send(timeout_ms=0)
-        assert last_result_text(client) == RUNNING
-        client.send(timeout_ms=20)
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
+        client.send(timeout_ms=250)
+        assert without_elapsed(last_result_text(client)) == RUNNING
+        age, silent = elapsed_progress(last_result_text(client))
+        assert age >= 0.2 and silent
         client.send(r="stop('second cell must not execute')", timeout_ms=0)
         assert client.transcript[-1]["result"]["isError"]
         client.request("ping")
@@ -335,6 +457,7 @@ def ready_without_send(
                 release.release()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_sans_r_worker_is_ready_without_send(
@@ -343,6 +466,7 @@ def test_sans_r_worker_is_ready_without_send(
     return ready_without_send(binary, execution, sans_r=True)
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_connection_closure_retires_prelaunch_resources(
@@ -351,6 +475,7 @@ def test_connection_closure_retires_prelaunch_resources(
     return ready_without_send(binary, execution, sans_r=True, close=True)
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(R, NATIVE_FIXTURES, command("ir"), command("uv"))
 def test_r_worker_is_ready_without_send(
@@ -374,11 +499,13 @@ def test_early_replacement_requirements_withholds_cell_until_prepared(
             requirements={"action": "set"},
             timeout_ms=0,
         )
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
+        assert phase_progress(last_result_text(client)) == "dependency preparation"
         client.send(python="counter += 1", timeout_ms=20)
         assert client.transcript[-1]["result"]["isError"]
         client.send(timeout_ms=20)
-        assert last_result_text(client) == RUNNING
+        assert without_elapsed(last_result_text(client)) == RUNNING
+        assert phase_progress(last_result_text(client)) == "dependency preparation"
         fixture.release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
@@ -389,6 +516,7 @@ def test_early_replacement_requirements_withholds_cell_until_prepared(
         return client.finish()
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(R, NATIVE_FIXTURES, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_early_requirements_select_candidate_before_default_preparation(
@@ -397,6 +525,7 @@ def test_early_requirements_select_candidate_before_default_preparation(
     return early_requirements_with_pending_poll(binary, execution, expire=False)
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 @requires(R, NATIVE_FIXTURES, PROCESS_EVENTS, command("ir"), command("uv"))
 def test_startup_poll_deadline_preserves_unclaimed_output(
@@ -454,7 +583,9 @@ def early_requirements_with_pending_poll(
         with McpClient(
             binary,
             execution.serve(
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ())
+                "-c",
+                "cache=host",
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
             ),
             environment,
             root,
@@ -476,7 +607,8 @@ def early_requirements_with_pending_poll(
                     "running response is visible before its write settles"
                 )
                 client.receive(submitted)
-                assert last_result_text(client) == RUNNING
+                assert without_elapsed(last_result_text(client)) == RUNNING
+                assert phase_progress(last_result_text(client)) == "startup"
                 release.release()
                 prepared.wait("initial polling does not block candidate preparation")
                 proceed.release()
@@ -557,10 +689,7 @@ def test_idle_stdin_preserves_used_worker_and_input(
             client.send(requirements={"action": "get"})["structuredContent"] == initial
         )
         client.transcript[-1]["result"] = "<unchanged default manifest>"
-        client.send(python="input()")
-        assert last_result_text(client) == (
-            "[input requested: \"\"]\n'retained input'\n"
-        ), last_result_text(client)
+        client.expect("[input requested: \"\"]\n'retained input'\n", python="input()")
         return client.finish()[3:]
 
 

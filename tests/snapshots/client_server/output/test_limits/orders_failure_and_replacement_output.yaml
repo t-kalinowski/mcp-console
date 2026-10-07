@@ -15,17 +15,17 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8072
+        text_bytes: 8056
         concat:
           - |
             zod old stdout
           - repeat: x
-            count: 3825
+            count: 3889
           - |
 
-            [output preview: omitted 4186655 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000002.log (Console server recording workspace; controller for remote targets); 4194335 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 4186527 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000002.log]
           - repeat: y
-            count: 3824
+            count: 3888
           - |-
             zod stdout tail
             [worker sent an unexpected ready message]

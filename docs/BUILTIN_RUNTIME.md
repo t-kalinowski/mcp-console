@@ -22,14 +22,20 @@ Interrupting warmup withholds an early waiting cell and retains the worker.
 Early calls use [shared startup](SEND_OPERATIONS.md#server-readiness), not an independent worker per call.
 Custom workers retain lazy launch.
 
-[SSH](SSH.md), [Docker](DOCKER.md), and [SBX](DOCKER_SANDBOX.md) execute on their selected target while the controller owns recordings and responses.
-Provider filesystems, preparation, and cleanup differ; they are not interchangeable sandbox modes.
+The captured [`languages` setting](CONFIGURATION.md#model-visible-languages) controls model-facing code fields independently of this runtime initialization.
+SQL-only and SQL+Python interfaces can use an installed but hidden R provider; without R, SQL can use hidden Python.
+No setup cell is needed for the managed connection.
+Hidden-provider package requirements, ordinary polling, input, interruption, and restart remain available.
+An explicit public selection does not change the internal `MCP_CONSOLE_LANGUAGES` bootstrap configuration.
+
+The server, resolver, relay, and worker run on the same host.
+For remote work, run the MCP client and Console together on the remote host.
 
 ## Python sessions without R
 
 R discovery uses `R_HOME` or `R` on the execution host's PATH.
 Genuine absence allows Python/SQL; a broken selected R installation is an error, not fallback.
-Local and SSH sessions without an explicit Python selection require uv on that host.
+Sessions without an explicit Python selection require uv on that host.
 There is no automatic PATH-Python fallback.
 Managed defaults are NumPy, pandas, DuckDB, and the SQLite extension; Matplotlib is not a default dependency.
 
@@ -38,9 +44,9 @@ Paths and legacy selection precedence are described in [configuration](CONFIGURA
 CPython 3.10+ with a usable shared embedding library is required.
 Selected virtualenv paths and prefixes are preserved for imports, subprocesses, and multiprocessing.
 
-Prepared Docker/SBX targets use preinstalled interpreters and packages.
-They can run ordinary Python without NumPy, pandas, or DuckDB; missing DuckDB disables managed SQL, not Python or a user-selected DB-API connection.
-Managed local/SSH Python needs an absolute startup `HOME` for its shared extension cache.
+Explicit Python selections use preinstalled packages and can run without NumPy, pandas, or DuckDB.
+Missing DuckDB disables managed SQL, not Python or a user-selected DB-API connection.
+Managed Python uses the captured [resolver extension cache](RESOLVER.md).
 Worker spill, secrets, and caches use private lifetime storage, not ownership by R's session tempdir.
 
 ## Cells and polling
@@ -52,6 +58,10 @@ Sources are not fragments accumulated across calls.
 Submit a coherent cell, inspect its result, then submit the next.
 Leave the main result last for ordinary display.
 A timeout does not cancel execution: after `[running; poll with an empty send]`, poll with no code or stdin rather than resubmitting.
+An adjacent `[elapsed: 1.2s since admission]` notice reports the cell's age across polls, including startup and preparation before execution.
+It adds `; no new output` when the observed interval received no worker text or images, even if server notices appeared.
+Worker output counts before preview compaction or omission.
+An interrupt response that cannot claim another call's output reports only elapsed time; recovered responses retain their original elapsed notice.
 New code is rejected while a cell or its uncollected result is active.
 Completion returns text/images, or `[done]` when there is no content; an idle poll returns pending output and `[idle]`.
 
@@ -98,12 +108,22 @@ See [output ownership](ARCHITECTURE.md#output-and-delivery) for cancellation rac
 
 ## R
 
+For fresh R state, send `control: "restart"` with the next cell; for background work, use `timeout_ms: 0` and poll with an empty `send`.
+Use a subprocess such as `callr` when the task needs separate process isolation, preserving the current session while running independently, or ordinary R behavior without Console's runtime hooks.
+
 Accepted cells run in persistent global state through R's native console semantics.
 Every visible top-level expression may autoprint.
 Parse errors reject the whole cell without running earlier expressions or changing `.Last.value`, `.Traceback`, history, task callbacks, or `options(error)`.
 Evaluation and print errors are console outcomes; they preserve earlier effects and leave the worker usable.
 
-On macOS and Linux, R event handlers, including `later` callbacks, run while idle.
+R's native bootstrap and event APIs are component-local to Unix and Windows.
+Both use the same console callbacks, parser, REPL, graphics scopes, and environment integration on the coordinator's interpreter thread.
+Bootstrap restores the captured R installation immediately before startup; argument strings and Windows startup paths live until worker exit.
+Bootstrap defers default packages when needed to attach runtime services and the R/Python adapter first.
+Windows installs an interrupt-delivery callback and wakes its idle command wait for R's window messages.
+Event dispatch runs inside R's top-level error boundary, after releasing the command reader and within the ordinary graphics/input scope.
+
+On macOS, Linux, and Windows, R event handlers, including `later` callbacks, run while idle.
 They may change state and produce output returned by a later poll, Python cell, or SQL cell.
 When needed, `[output produced while idle]` separates that region from new-cell output.
 The initial display width is 200 columns and remains user-configurable.
@@ -134,6 +154,7 @@ The working-directory import entry follows `os.chdir()`.
 NumPy/pandas display defaults use width 200 without overwriting nondefault startup settings or later user changes.
 Bridge attachment preserves the running interpreter, objects, selected connection, and user stream redirections.
 Interrupted setup can retry completed-safe steps; incompatible identity or unsafe partial initialization requires replacement.
+Python-owned SQL cells also finish incomplete Python setup before execution.
 See [current limitations](#current-limitations).
 
 Main-thread text uses Console channels.
@@ -143,11 +164,15 @@ Console adds no notebook event loop: asynchronous work must be started and manag
 
 Use imports directly in managed sessions.
 [Automatic Python resolution](REQUIREMENTS.md#automatic-python-import-resolution) explains inference, optional dependencies, and thread restrictions.
-Explicit Python environments and bare/prepared targets require installed packages.
+Explicit Python environments and bare workers require installed packages.
 
 ## R and Python interoperability
 
 Reticulate supplies the on-demand bridge: Python uses `r.name` for R globals and functions; R uses `py$name` for Python globals.
+Accessing attributes through `py` or `reticulate::py` initializes the bridge on demand, including after restart.
+When Python is already running, the bridge attaches to that same interpreter and preserves its existing objects; no preceding `py_eval()` or `py_available(initialize = TRUE)` call is needed.
+Loading reticulate or reading its `py` module proxy alone does not initialize Python or attach the bridge.
+During a `reticulate.python.beforeInitialized` callback, `py` retains reticulate's `NULL` behavior until attachment publishes its configuration, so reading it does not reenter initialization.
 An actual `r` access can initialize R when shared bootstrap has not completed it.
 Conversion follows reticulate's rules; objects/proxies do not survive worker replacement.
 
@@ -159,6 +184,7 @@ Both interpreters and reentrant bridge calls share the worker's owning thread.
 
 Managed SQL uses one in-memory DuckDB connection and persistent catalog.
 With R available it belongs to R/DBI; without R it belongs to Python/DB-API.
+[Captured startup source](CONFIGURATION.md#session-startup-source) can select a native DBI or DB-API connection after session helpers are installed and before SQL runs, without opening an unused managed default.
 SQL-only use still needs one of those adapters.
 DuckDB CLI dot commands are not supported.
 Defaults prepare SQLite for read-only attachment; use `READ_ONLY` when opening databases outside sandbox-writable paths.
@@ -166,7 +192,7 @@ Defaults prepare SQLite for read-only attachment; use `READ_ONLY` when opening d
 With R-owned DuckDB, unqualified relation names can refer to R global data frames; a table/view with that name takes precedence.
 A view sees later rebinding of the R name.
 Python frames must be assigned to an R global first.
-Without R, register frames explicitly with `_console.sql_connection().register("name", frame)`; Python globals are not scanned.
+With Python-owned DuckDB, register frames explicitly with `_console.sql_connection().register("name", frame)`; Python and R globals are not scanned or copied into the Python catalog.
 
 Use `.console$sql_connection(connection)` in R or `_console.sql_connection(connection)` in Python to get, select, or reset the active connection:
 
@@ -200,12 +226,14 @@ _console.sql_connection(None)  # Restore the existing managed catalog.
 ```
 
 The latest selection controls SQL cells.
+An R connection selected before Python initializes can execute SQL without starting Python; later Python initialization preserves that selection.
+SQL on a selected R connection can continue while Python setup is incomplete without resuming that setup.
+Interrupting selection replay leaves Python setup incomplete; a later Python cell retries setup while preserving the R connection, its transaction, and live worker state.
 User connections remain user-owned; restoring managed DuckDB does not close them.
 Never disconnect Console's managed connection.
 Reset restores the same managed connection and catalog within the current worker generation.
 The managed default is currently built-in in-memory DuckDB, owned by R when available and Python otherwise, regardless of initialization order.
 A user selection does not replace that default.
-There is no configured provider or initializer default in this API yet.
 Restart clears selection and catalog state and reinstalls the helper namespaces; connection objects do not survive worker replacement.
 
 R rejects non-DBI and already-invalid connections before changing selection.
@@ -214,6 +242,9 @@ Closing a selected connection leaves it selected until reset or reselection, wit
 
 This API replaces the previous top-level getter and selector in one migration; no compatibility aliases are installed.
 The small `.console` R environment and `_console` Python namespace remain available after clearing user globals.
+
+Reset does not replay captured startup; failed startup keeps SQL withheld until explicit restart.
+R previews of user DBI connections use a private in-memory rendering catalog, opened only when a preview needs it.
 
 R submits cells through `DBI::dbSendQuery()`.
 Python uses the connection's `execute()` when available, otherwise its cursor protocol.
@@ -270,17 +301,41 @@ Discovery failures require a new server; other startup retries follow [server re
 Each complete response, including generated notices, has at most **8 KiB UTF-8 text**.
 Large output retains its beginning and latest tail.
 Consecutive progress redraws from one producer are compacted within a response interval: carriage return replaces the frame, backspace removes a Unicode scalar, and CRLF remains a newline.
-Other controls stay literal.
 Raw streams use incremental decoding; invalid UTF-8 is replaced for display, not in retained raw logs.
+
+Previews project the following [ANSI controls](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) to plain text:
+
+| Control                                                                 | Preview behavior                                                                                                                                      |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SGR (`CSI ... m`), including semicolon/colon color parameters           | Remove styling and preserve text.                                                                                                                     |
+| Erase line (`CSI K` or `CSI 0 K`)                                       | Erase the current frame after CR; otherwise leave it unchanged.                                                                                       |
+| Erase whole line (`CSI 2 K`)                                            | Erase the current frame, including any omitted middle. Finished lines remain.                                                                         |
+| OSC title, clipboard, and hyperlink commands; DCS, SOS, PM, APC strings | Suppress payloads through the string terminator (`ESC \` or decoded U+009C); OSC also accepts BEL. Hyperlink labels outside the commands remain text. |
+| Other complete CSI/ESC controls and decoded C1 controls                 | Suppress the control without screen or cursor emulation.                                                                                              |
+
+Parsing is incremental within one contiguous producer/response interval.
+Each native launcher or preparation diagnostic reader is a separate producer from worker stderr and other native readers.
+Producer switches, response cuts, images, notices, completion, and retirement discard incomplete controls.
+An unterminated control string suppresses the rest of that interval; its payload is never buffered.
+CSI syntax is inspected up to 128 bytes; longer sequences are suppressed through their final character.
+ESC intermediate syntax is consumed without buffering.
+Outside strings, a new ESC restarts parsing, CR/LF/backspace cancel incomplete controls and retain their ordinary behavior, and an invalid scalar resumes plain text at that scalar.
+Decoded C1 introducers follow the same projection rules; isolated invalid raw C1 bytes still use UTF-8 replacement.
+These rules retain CR frame replacement and Unicode-scalar backspace, without terminal cell-width or multiline fidelity.
+Suppressed controls use no rendered-text allowance; retained raw logs keep their exact original bytes.
 
 Images have independent limits: 8 MiB encoded data, 64 KiB MIME metadata, and 4,096 images per undrained interval and complete result.
 Whole images are admitted; text limits do not consume their allowance.
-Omitted text/images are reported.
+One notice reports omitted text/images and names available raw logs or image artifacts on the Console host.
+Multiple sources share a directory location; later gaps use `[…]` without repeating retrieval instructions.
+Long locations use exact session/file paths explicitly relative to the Console recording directory, keeping retrieval notices within the text budget.
+If recording is disabled or fails, the notice says when omitted output is unavailable.
+Partially retained logs are identified as prefixes, and images rejected before recording are marked as not retained.
 
 Polling consumes an observed interval, including its omitted middle.
 Reading a raw file does not change that cursor.
 Raw per-cell files retain up to 1 GiB and can be read during evaluation; startup/idle output without a cell log cannot borrow another cell's path.
-Full retrieval requires filesystem access to the controller's recording directory.
+Retrieval requires filesystem access to the Console host's recording directory; only retained output is available there.
 See [recording](RECORDING.md) for loss counts, artifacts, privacy, and report generation.
 
 ## Current limitations
@@ -295,5 +350,5 @@ Partial R initialization or unsafe bridge/startup failure can require restart ev
 macOS and Linux are supported.
 Windows x64 supports experimental [local R and Python](WINDOWS.md), including managed dependency resolution; SQL is deferred.
 Native enforcement and descendant retirement have explicit [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
-`--no-sandbox` removes native enforcement/descendant cleanup but not an outer Docker/SBX resource.
+`--no-sandbox` removes native enforcement and descendant cleanup.
 Preparation remains a separate [trusted host operation](REQUIREMENTS.md#host-resolution-and-trust).

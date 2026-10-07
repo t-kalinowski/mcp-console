@@ -15,11 +15,10 @@ The native inherited-procfs alternative retains isolation/policy but can reveal 
 It is not a backend switch.
 Pidfds are optional emergency termination; without them, a stopped namespace init can exceed the cleanup deadline.
 Missing native wait evidence causes failure and retained storage, never inferred successful cleanup.
+Resolver child observation uses SIGCHLD notifications and non-reaping `waitid`, without requiring pidfds.
+Its observer unblocks SIGCHLD on its own thread, retains an independent cancellation endpoint, and unregisters the notification before joining; cancellation is not evidence of child exit.
 
-An explicit Landlock backend is direct execution, not equivalent isolation: it has no namespace process boundary or descendant retirement, and same-user host signaling can remain possible.
-Restricted filesystem policies require Landlock ABI 3 truncate enforcement.
-Restricted reads, unsupported carveouts, proxy, and supervised lifecycle requests are rejected.
-ABI-5 device ioctl enforcement is not a portable guarantee.
+The standalone Landlock backend has been removed; `linux_backend: landlock` is rejected before native setup.
 There is no automatic Landlock or unsandboxed fallback.
 
 ### Filesystem classification

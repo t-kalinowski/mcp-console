@@ -3,17 +3,18 @@
 This private interface connects the server to one generation's relay.
 [`src/relay_protocol.rs`](../src/relay_protocol.rs) defines its frames; [`src/worker_relay.rs`](../src/worker_relay.rs) and [`src/worker_client/process.rs`](../src/worker_client/process.rs) implement the endpoints.
 Windows uses the same JSONL frames with named pipes, process handles, and cooperative interrupt events; see [Windows execution](WINDOWS.md).
-It has no independent negotiation; incompatible wire changes require a target-envelope version change.
+It has no independent negotiation; the server and relay use the same Console build.
+Console-owned internal protocols are unversioned and evolve in lockstep; update both endpoints and fixtures together.
 
 ## Process boundary
 
 ```text
-server <--> [target transport] <--> [sandbox runner] <--> relay <--> worker
-                                    lifetime owner      direct-child owner
+server <--> [sandbox runner] <--> relay <--> worker
+             lifetime owner      direct-child owner
 ```
 
 The native runner inherits streams without proxying their contents.
-Direct mode omits it; Docker and SBX still retain their outer-resource lifetime.
+Direct mode omits it.
 The relay need not be a sandbox root or process-group leader.
 It owns the worker's standard streams, sideband pipes, direct-child signals and reaping, not dependency resolution, environment commits, or descendants outside that direct-child contract.
 
@@ -25,61 +26,12 @@ Stderr is inherited and reserved for infrastructure diagnostics; when available,
 Unrelated descriptors are closed before launch.
 The [worker protocol](WORKER_PROTOCOL.md) owns the inherited fd and worker-message contract; [sandbox integration](SANDBOX.md) owns native enforcement.
 
-## Target launch envelope
-
-SSH, Docker, and SBX wrap unchanged relay JSONL using [`src/target_launch.rs`](../src/target_launch.rs).
-The current launch version is **11** for Docker/SBX and **10** for SSH, with matching Console package version required independently.
-Version 11 requires conversion metadata in the Python identity returned by Docker/SBX runtime probes; version 10 peers are rejected before decoding those identities.
-Version 10 distinguishes interrupted interpreter bootstrap from other incomplete setup.
-Version 9 carries enabled languages captured on the controller; execution-host ambient values and workload policy cannot replace that selection.
-Version 8 introduced the built-in interpreter-bootstrap completion event after transport readiness, preventing older target workers from leaving an admitted cell waiting indefinitely.
-Increment launch compatibility for incompatible envelope or relay changes, even between development builds sharing a package version.
-SSH preparation has its own protocol and connection.
-
-Controller input begins with a four-byte unsigned big-endian length and at most 1 MiB of UTF-8 JSON bootstrap:
-
-| Field                                    | Meaning                                                                                                          |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `version`, `build`                       | Launch version and Console package version.                                                                      |
-| `languages`                              | Controller-selected `r`, `python`, and `sql` booleans; omitted by private launch-only callers means all enabled. |
-| `workspace`                              | Existing absolute execution-host directory.                                                                      |
-| `policy`, `writable_roots`, `no_sandbox` | Captured policy, root array, and direct-launch selection.                                                        |
-| `provider`                               | `native` by default, or `compute` for SBX.                                                                       |
-| `environment`                            | Optional discovered capabilities and retained R/Python selections; required for prepared-target worker launch.   |
-| `python`                                 | Optional Python selection for Docker/SBX probes only; rejected by SSH.                                           |
-
-Consume exactly the bootstrap, forwarding every subsequent byte to relay stdin, including bytes received in the same read.
-Validate compatibility before worker startup; relay `ready` does not substitute for this check.
-
-Helper stdout frames contain a one-byte tag, four-byte unsigned big-endian length, and at most 64 KiB of payload:
-
-| Tag | Payload and phase                                                                                                               |
-| --- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `1` | JSON hello: `version`, `build`, optional authoritative `container_id` or `sandbox: {name, id}`.                                 |
-| `2` | Raw relay stdout bytes; chunks need not align with JSONL frames. Invalid during probes.                                         |
-| `3` | Terminal JSON `{confirmed: boolean, error: string or null}`, followed by EOF. Setup rejection may send this without a hello.    |
-| `4` | Typed prepared-runtime result, exactly once after compatible hello during a Docker/SBX probe. Invalid for SSH or worker launch. |
-
-The prepared descriptor rejects managed state, contradictory selections, unknown fields, and relative native paths.
-It supports R-only, Python-only, and combined preinstalled runtimes.
-Target paths remain opaque metadata on the controller; launch validates them again inside the target without rediscovery or fallback.
-Unexpected stdout, bad versions, oversized/truncated frames, missing terminal confirmation, or trailing bytes are transport errors.
-Diagnostics use stderr.
-
-Docker/SBX ownership helpers consume a bounded owner request, create the resource, and forward its inner envelope through an outer envelope carrying authoritative resource identity.
-Their terminal receipt confirms **outer resource removal**, not merely relay or inner-launcher exit.
-The controller accepts a probe descriptor only after successful validation and confirmed removal, then reuses it with the captured image/template across generations.
-
-SSH requires its remote helper's cleanup acknowledgment; local SSH exit is insufficient.
-Copying preserves backpressure, while input-closure observation remains independent of blocked output.
-Worker setup has a 30-second deadline separate from `send.timeout_ms`.
-Provider creation/removal and native retirement have their own owners and bounds; no setup timeout proves cleanup after an undetected partition.
-See [SSH](SSH.md), [Docker](DOCKER.md), and [SBX](DOCKER_SANDBOX.md) for placement-specific guarantees.
-
 ## Framing and raw bytes
 
 Each relay direction is ordered UTF-8 JSONL, flushed per frame.
-Unknown kinds/fields, wrong types, malformed JSON, and partial-frame EOF fail the transport.
+While command input is open, unknown kinds/fields, wrong types, malformed JSON, and partial-frame EOF fail the transport.
+The first explicit Shutdown ends command parsing; all trailing frames and bytes are ignored, including malformed or incomplete tails.
+Worker output framing remains strict through retirement.
 
 Raw stdout/stderr reads are chunks of at most 8 KiB.
 An entirely valid UTF-8 chunk uses a text event; otherwise it uses padded standard base64.
@@ -136,6 +88,8 @@ Each reader can also hold one frame awaiting admission, so this is not a total-m
 Supervisor events have a separate 16-frame/64-KiB allowance but enter the same FIFO and cannot overtake earlier output.
 All worker-originated frames, including completion and resolver requests, use the ordinary allowance.
 Supervisor-budget exhaustion fails the transport.
+Failed sideband event forwarding starts direct-worker retirement independently of the stdout writer's failure callback, which a blocking Windows write may delay.
+Reader completion after cancellation is a separate observation and does not initiate retirement again.
 
 For pipes, FIFOs, and sockets, output is nonblocking and retirement bounds both writes and queue admission.
 Original descriptor flags are restored when the writer finishes; duplicate descriptors share `O_NONBLOCK` state.
@@ -150,18 +104,26 @@ An unsolicited or duplicate acceptance is invalid.
 Timely server observation permits up to two additional seconds for relay retirement, not more worker grace.
 Failure retirement instead uses zero worker grace and the same bounded relay allowance.
 
-The relay concurrently closes stdin and sends worker `shutdown`.
-At the worker deadline it sends SIGKILL if needed, reaps the direct child, and retires transports.
-Clean relay-input EOF performs shutdown with a fresh one-second grace but no `shutdown_started`; partial-command EOF is failure.
+The relay's supervisor closes command admission when shutdown or retirement begins.
+It forwards no later evaluation, preparation, resolution, stdin or interrupt command, and sends at most one `shutdown_started` and one worker `shutdown`.
+The first worker retirement deadline is retained; later Shutdown or EOF observations cannot renew it, and queued commands cannot keep an expired deadline alive.
+Fatal failures still retire immediately.
+
+Explicit Shutdown and clean relay-input EOF concurrently close stdin and send worker `shutdown`.
+Clean input EOF starts a one-second grace only if retirement has not begun, without `shutdown_started`; partial-command EOF is failure while parsing remains open.
+Worker-sideband EOF also closes admission and stdin and starts that grace only if needed.
+Unix waits for the worker without sending another sideband command on this observation; Windows retains its cooperative worker `shutdown`.
+Controller EOF, worker-sideband EOF, child exit and fatal transport failure remain distinct observations; cancellation completion does not count as EOF.
+At the worker deadline the relay terminates the direct child if needed, reaps it, and retires transports.
+Unix uses SIGKILL and reports the signal; Windows uses native termination and reports the numeric exit code.
 After the server aborts its command writer during retirement, the resulting partial-command EOF describes the abandoned transport and does not itself block replacement.
-Other fatal failures, owned task joins, and confirmed launcher/provider cleanup still determine whether replacement is permitted.
+Other fatal failures, owned task joins, and confirmed launcher cleanup still determine whether replacement is permitted.
 
 The server's ordered retirement marker separates old-generation event ownership from replacement.
 It is not a wire frame.
 After the applicable relay deadline, the server requests launcher retirement with SIGTERM, allows six seconds before forced termination, then one second to observe exit.
 Repeated retirement reuses its result rather than signaling an old PID again.
 Forced launcher exit is not proof of descendant cleanup.
-Remote/container adapters additionally require their own cleanup receipts.
 
 ## Retirement and failure
 
@@ -178,5 +140,5 @@ Expiry with pending output is a transport error and may leave a partial JSONL pr
 
 Clean relay-output EOF requires expected closures and the worker outcome.
 Malformed frames/base64, unexpected events/EOF, and fatal failures stop the worker transport; available output and the failure remain observable before retirement.
-Worker exit reports only the direct child, never native, remote, container, or VM cleanup.
+Worker exit reports only the direct child, never native descendant cleanup.
 Public failure/replacement notices belong to the [runtime guide](BUILTIN_RUNTIME.md#output-and-notices).

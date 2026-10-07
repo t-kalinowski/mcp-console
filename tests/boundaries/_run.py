@@ -22,6 +22,7 @@ import pickle
 import runpy
 import shlex
 import signal
+import subprocess
 import sys
 import time
 from collections.abc import Callable, Sequence
@@ -80,8 +81,8 @@ parser.add_argument(
     "-j",
     "--jobs",
     type=int,
-    default=2 * max(2, os.cpu_count() or 2),
-    help="number of transcript cases to run concurrently (default: twice the CPU count, at least 4)",
+    default=max(2, 2 * (os.cpu_count() or 1)),
+    help="concurrent transcript cases (default: %(default)s; twice the logical CPU count, at least 2)",
 )
 parser.add_argument("selectors", nargs="*", metavar="BOUNDARY/SUITE[::CASE]")
 
@@ -104,7 +105,17 @@ if "--bootstrap" in sys.argv[1:]:
     parse_arguments()
     arguments = sys.argv[1:]
     arguments.remove("--bootstrap")
-    os.execvp("uv", ["uv", "run", "--script", __file__, *arguments])
+    command = [
+        "uv",
+        "run",
+        *(["--python", sys.executable] if os.name == "nt" else []),
+        "--script",
+        __file__,
+        *arguments,
+    ]
+    if os.name == "nt":
+        raise SystemExit(subprocess.call(command, env=os.environ | {"PYTHONUTF8": "1"}))
+    os.execvp("uv", command)
 
 
 from support.cases import (
@@ -126,9 +137,12 @@ from support.snapshots import (
 
 binary = Path(
     os.environ.get(
-        "MCP_CONSOLE_TEST_BINARY", root / "target" / "release" / "mcp-console"
+        "MCP_CONSOLE_TEST_BINARY",
+        root
+        / "target"
+        / ("debug/mcp-console.exe" if os.name == "nt" else "release/mcp-console"),
     )
-).absolute()
+).resolve()
 boundaries = {"client_server", "server_relay", "relay_worker", "cli"}
 suite_paths = sorted(
     path
@@ -248,12 +262,23 @@ def record_case(suite_path: Path, case_name: str, *, update: bool) -> set[Path]:
                 suite_name,
                 case_name,
                 recorded,
-                update=update and (index == 0 or initialization),
+                update=update
+                and (
+                    index == 0
+                    or initialization
+                    or getattr(case, "execution_snapshots", False)
+                ),
                 execution=execution.name if execution is not None else None,
+                platform_specific=sys.platform
+                in getattr(case, "snapshot_platforms", ()),
+                execution_specific=getattr(case, "execution_snapshots", False),
             )
-            assert initialization or index == 0 or mode_snapshots == checked, (
-                "execution modes produced different companion snapshots"
-            )
+            assert (
+                initialization
+                or index == 0
+                or getattr(case, "execution_snapshots", False)
+                or mode_snapshots == checked
+            ), "execution modes produced different companion snapshots"
             checked.update(mode_snapshots)
             status = "passed"
         except BaseException as error:
@@ -445,23 +470,72 @@ def selected_cases(
 def prune_stale_snapshots(checked_snapshots: set[Path], orphans: list[Path]) -> None:
     snapshot_root = snapshot_directory
     checked_cases = {
-        snapshot.with_suffix("")
+        snapshot.parent / snapshot.name.split(".", 1)[0]
         for snapshot in checked_snapshots
         if snapshot.suffix == ".yaml"
     }
+    platform_cases = {
+        snapshot.parent / snapshot.name.split(".", 1)[0]
+        for snapshot in checked_snapshots
+        if sys.platform in snapshot.name.split(".")[1:]
+    }
     orphans = set(orphans)
+    declared_platforms = {}
+    declared_execution_modes = {}
+    suites = {}
+    for owner in checked_cases:
+        suite = owner.parent.relative_to(snapshot_root)
+        if suite not in suites:
+            suites[suite] = load_suite(
+                root / "tests" / "boundaries" / suite.with_suffix(".py")
+            )
+        case = suites[suite][owner.name]
+        declared_platforms[owner] = set(getattr(case, "snapshot_platforms", ()))
+        if getattr(case, "execution_snapshots", False):
+            declared_execution_modes[owner] = {
+                execution.name for execution in getattr(case, "executions", ())
+            }
 
     for snapshot in snapshot_root.rglob("*"):
         if not snapshot.is_file() or snapshot.suffix not in {".yaml", ".md", ".qmd"}:
             continue
         owner = snapshot.parent / snapshot.name.split(".", 1)[0]
         other_platform = bool(
-            ({"darwin", "linux"} - {sys.platform}) & set(snapshot.name.split(".")[1:])
+            (declared_platforms.get(owner, set()) - {sys.platform})
+            & set(snapshot.name.split(".")[1:])
+        )
+        shared_reference = (
+            owner in platform_cases and sys.platform not in snapshot.name.split(".")[1:]
+        )
+        unavailable_initialization_mode = owner == snapshot_path(
+            initialization_suite, initialization_case
+        ).with_suffix("") and not any(
+            ("direct" in snapshot.name.split(".")[1:])
+            == ("direct" in checked.name.split(".")[1:])
+            for checked in checked_snapshots
+            if checked.parent / checked.name.split(".", 1)[0] == owner
+        )
+        mode = "sandbox" if "sandbox" in snapshot.name.split(".")[1:] else "direct"
+        retired_platform = bool(
+            ({"darwin", "linux", "win32"} - declared_platforms.get(owner, set()))
+            & set(snapshot.name.split(".")[1:])
+        )
+        unavailable_execution_mode = (
+            not retired_platform
+            and mode in declared_execution_modes.get(owner, set())
+            and not any(
+                ("sandbox" in checked.name.split(".")[1:]) == (mode == "sandbox")
+                for checked in checked_snapshots
+                if checked.parent / checked.name.split(".", 1)[0] == owner
+            )
         )
         stale = snapshot in orphans or (
             owner in checked_cases
             and snapshot not in checked_snapshots
             and not other_platform
+            and not shared_reference
+            and not unavailable_initialization_mode
+            and not unavailable_execution_mode
         )
 
         if stale:
@@ -501,7 +575,11 @@ def run_cases(
         number: signal.signal(
             number, lambda received, _frame: events.put((-received, None, None))
         )
-        for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+        for number in (
+            signal.SIGINT,
+            signal.SIGTERM,
+            *([signal.SIGBREAK] if os.name == "nt" else [signal.SIGHUP]),
+        )
     }
 
     def interruption(index: int) -> BaseException:
@@ -643,6 +721,8 @@ def main() -> None:
             os.kill(os.getpid(), number)
         raise SystemExit(status)
     if options.record_case is not None:
+        if os.name == "nt":
+            signal.signal(signal.SIGBREAK, signal.default_int_handler)
         suite_path, case_name, output_path = options.record_case
         checked = record_case(Path(suite_path), case_name, update=options.update)
         with Path(output_path).open("wb") as output:
@@ -652,7 +732,7 @@ def main() -> None:
     assert suite_paths, "no transcript suites found"
 
     suites = {suite_identifier(path): path for path in suite_paths}
-    # The global audit imports every suite, including external provider probes.
+    # The global audit imports every suite and its capability probes.
     # Keep smoke and focused runs confined to their selected suites.
     full_selection = options.full and not options.selectors and options.locate is None
     orphans = orphan_snapshots(suites) if full_selection else []
@@ -686,6 +766,17 @@ def main() -> None:
         arguments.remove("--build")
         # Re-enter through the shared owner only after metadata and arguments
         # are valid. The execution child consumes the prepared release binary.
+        if os.name == "nt":
+            raise SystemExit(
+                subprocess.call(
+                    [
+                        sys.executable,
+                        str(root / "scripts/checkout_workflow.py"),
+                        "test",
+                        *arguments,
+                    ]
+                )
+            )
         os.execv(
             sys.executable,
             [
@@ -721,7 +812,7 @@ def main() -> None:
             reporter=reporter,
             initialize_first=initialize_first,
         )
-        if full_update:
+        if options.update:
             prune_stale_snapshots(checked_snapshots, orphans)
     finally:
         reporter.close()

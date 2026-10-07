@@ -24,21 +24,25 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
         home = Path(r_home)
     else:
         output = subprocess.run(
-            ["R", "RHOME"],
+            [shutil.which("R") or "R", "RHOME"],
             check=True,
             capture_output=True,
             text=True,
         )
         home = Path(output.stdout.strip())
         environment["R_HOME"] = str(home)
-    return environment, home / "bin" / "Rscript"
+    return environment, home / "bin" / ("Rscript.exe" if os.name == "nt" else "Rscript")
 
 
 def install_r_startup(
     directory: Path, environment: dict[str, str], source: str
 ) -> Path:
     """Install the shared interactive startup package with a case-specific script."""
-    rscript = Path(environment["R_HOME"]) / "bin/Rscript"
+    rscript = (
+        Path(environment["R_HOME"])
+        / "bin"
+        / ("Rscript.exe" if os.name == "nt" else "Rscript")
+    )
     libraries = subprocess.check_output(
         [rscript, "--vanilla", "-e", "writeLines(.libPaths())"],
         env=environment,
@@ -53,7 +57,7 @@ def install_r_startup(
     library.mkdir()
     subprocess.run(
         [
-            rscript.with_name("R"),
+            rscript.with_name("R.exe" if os.name == "nt" else "R"),
             "CMD",
             "INSTALL",
             f"--library={library}",
@@ -107,7 +111,13 @@ def isolated_r_home(directory: Path, environment: dict[str, str]) -> Path:
 
 def reference_r_error(environment: dict[str, str], source: str) -> str:
     result = subprocess.run(
-        [Path(environment["R_HOME"]) / "bin/Rscript", "--vanilla", "-"],
+        [
+            Path(environment["R_HOME"])
+            / "bin"
+            / ("Rscript.exe" if os.name == "nt" else "Rscript"),
+            "--vanilla",
+            "-",
+        ],
         input=source,
         env=environment,
         stdout=subprocess.PIPE,

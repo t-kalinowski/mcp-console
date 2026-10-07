@@ -1,6 +1,7 @@
 //! Bounded ordered text projection, independent of raw-file retention.
 
 use super::{Content, utf8_prefix_length};
+use std::sync::Arc;
 
 /// Complete rendered tool-result text, including all Console notices.
 pub(crate) const TEXT_BYTES: usize = 8 * 1024;
@@ -12,7 +13,7 @@ const IMAGE_EVENTS: usize = 4096;
 
 mod source;
 pub(super) use source::Source;
-use source::Summary;
+use source::{Location, Summary};
 
 #[derive(Clone)]
 pub(super) enum Part {
@@ -20,7 +21,8 @@ pub(super) enum Part {
     Gap(Gap),
     Notice(Control),
     Information(String),
-    Image(Content),
+    // Ephemeral text projections share the retained image until MCP rendering.
+    Image(Arc<Content>),
     ImageGap,
     Source(Source),
     Summary(Summary),
@@ -42,11 +44,34 @@ pub(super) struct Preview {
     omitted_images: u64,
     omitted_image_bytes: u64,
     recorded_omitted_images: u64,
+    omitted_artifacts: Location,
     omitted_controls: u64,
     omitted_control_bytes: u64,
 }
 
 impl Preview {
+    pub(super) fn phase_before_terminal(&mut self, phase: &str, cell_clock: bool) {
+        if let Some(progress) = self.parts.iter_mut().rev().find_map(|part| match part {
+            Part::Notice(control) if cell_clock && control.head.starts_with("\n[elapsed: ") => {
+                Some(control)
+            }
+            _ => None,
+        }) {
+            assert!(
+                progress.head.ends_with(']') && progress.tail.is_empty() && progress.omitted == 0
+            );
+            progress.head.pop();
+            progress.head.push_str(&format!("; phase: {phase}]"));
+            return;
+        }
+        let Some(Part::Notice(terminal)) = self.parts.pop() else {
+            unreachable!("a phase response has a terminal banner");
+        };
+        let prefix = if self.ends_with_newline() { "" } else { "\n" };
+        self.notice(format!("{prefix}[phase: {phase}]"));
+        self.control(terminal);
+    }
+
     pub(super) fn text(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -161,17 +186,20 @@ impl Preview {
         self.omitted_image_bytes = self.omitted_image_bytes.saturating_add(bytes as u64);
     }
 
-    pub(super) fn image(&mut self, content: Content) {
+    pub(super) fn image(&mut self, content: Arc<Content>) {
         let Content::Image {
             data,
             mime_type,
             artifact,
-        } = &content
+        } = content.as_ref()
         else {
             unreachable!("only image content enters the independent image budget")
         };
         if !self.admits_image(data, mime_type) {
             self.recorded_omitted_images += u64::from(artifact.is_some());
+            if let Some(artifact) = artifact {
+                self.omitted_artifacts.add(&artifact.public_path, false);
+            }
             self.omit_image(data.len());
             return;
         }
@@ -214,6 +242,8 @@ impl Preview {
                     self.omitted_images += other.omitted_images;
                     self.omitted_image_bytes += other.omitted_image_bytes;
                     self.recorded_omitted_images += other.recorded_omitted_images;
+                    self.omitted_artifacts
+                        .extend(other.omitted_artifacts.clone());
                 }
                 Part::Image(image) => self.image(image),
                 Part::Source(source) => self.source(source),
@@ -394,6 +424,11 @@ impl Preview {
 
     /// Reserve notices first, then divide ordinary text between its head and tail.
     pub(super) fn render(&mut self) -> Vec<Content> {
+        self.bound();
+        self.project(true).content.expect("rendered projection")
+    }
+
+    pub(super) fn bound(&mut self) {
         let mut allowance = TEXT_BYTES;
         loop {
             self.trim(allowance);
@@ -403,7 +438,7 @@ impl Preview {
                 bytes = self.project(false).text_bytes;
             }
             if bytes <= TEXT_BYTES {
-                return self.project(true).content.expect("rendered projection");
+                return;
             }
             assert!(
                 allowance > 0,
@@ -426,6 +461,41 @@ impl Preview {
                     self.omitted_controls, self.omitted_control_bytes,
                 ));
         }
+        // Recompute after each trim. Sizing and delivery use exactly the same
+        // combined notice, without retaining a list of omitted source paths.
+        let mut summary = Summary::default();
+        let mut gap = Gap::default();
+        for part in &self.parts {
+            match part {
+                Part::Gap(omitted) => {
+                    gap.bytes += omitted.bytes;
+                    gap.notices += omitted.notices;
+                }
+                Part::Source(source) => {
+                    if gap.bytes != 0 {
+                        summary.gap.bytes += gap.bytes;
+                        summary.gap.notices += gap.notices;
+                        summary.source(source);
+                    }
+                    gap = Gap::default();
+                }
+                Part::Summary(omitted) => summary.extend(omitted.clone()),
+                _ => {}
+            }
+        }
+        if gap.bytes != 0 {
+            summary.gap.bytes += gap.bytes;
+            summary.gap.notices += gap.notices;
+            summary.source(&Source::default());
+        }
+        let mut marker = (summary.gap.bytes != 0 || self.omitted_images != 0).then(|| {
+            summary.notice(
+                self.omitted_images,
+                self.omitted_image_bytes,
+                self.recorded_omitted_images,
+                &self.omitted_artifacts,
+            )
+        });
         let mut image_marker = true;
         let mut start = 0;
         for end in 0..=self.parts.len() {
@@ -445,38 +515,28 @@ impl Preview {
                     }
                 })
                 .sum();
-            let notices: u64 = parts
-                .iter()
-                .map(|part| match part {
-                    Part::Gap(gap) => gap.notices,
-                    _ => 0,
-                })
-                .sum();
-            let mut marker = (omitted != 0).then(|| source.notice(omitted, notices));
+            let mut text_marker = true;
             for part in parts {
                 match part {
                     Part::Text(text) | Part::Information(text) => projection.text(text),
                     Part::Notice(control) => projection.text(&control.render()),
                     Part::Gap(_) => {
-                        if let Some(marker) = marker.take() {
-                            projection.text(&marker);
+                        if text_marker {
+                            projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
+                            text_marker = false;
                         }
                     }
-                    Part::Summary(summary) => projection.text(&summary.notice()),
+                    Part::Summary(_) => {
+                        projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()))
+                    }
                     Part::Image(image) => {
                         if let Some(content) = &mut projection.content {
-                            content.push(image.clone());
+                            content.push(image.as_ref().clone());
                         }
                     }
                     Part::ImageGap => {
                         if image_marker {
-                            projection.text(&format!(
-                                    "\n[image limit: omitted {} images ({} encoded bytes); {} already recorded, {} not retained]\n",
-                                    self.omitted_images,
-                                    self.omitted_image_bytes,
-                                    self.recorded_omitted_images,
-                                    self.omitted_images - self.recorded_omitted_images
-                                ));
+                            projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
                             image_marker = false;
                         }
                     }

@@ -153,7 +153,6 @@ fn spawn_probe_with_configuration(
         ])
         .env("MCP_CONSOLE_NATIVE_PROBE", scenario)
         .env("MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION", "1")
-        .env_remove("MCP_CONSOLE_EXECUTION_COMPUTE")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -176,14 +175,19 @@ fn spawn_probe_with_configuration(
 
 #[test]
 fn native_python_setup_runs_cells_without_r() {
+    let storage = PythonFixture::new();
     let selected = Command::new("python3")
         .args([PYTHON_PATHS, "executable"])
         .output()
         .expect("find test Python executable");
     assert!(selected.status.success());
     let selected = String::from_utf8(selected.stdout).expect("selected executable");
-    let (mut child, mut reader, _writer) =
-        spawn_probe_with_configuration("python_setup", Some(selected.trim()), None, None);
+    let (mut child, mut reader, _writer) = spawn_probe_with_configuration(
+        "python_setup",
+        Some(selected.trim()),
+        Some(&storage.0),
+        None,
+    );
     assert!(matches!(
         receive_python_probe(&mut reader, &mut child),
         WorkerMessage::Ready
@@ -233,18 +237,16 @@ fn native_python_activation_preserves_runtime_without_r() {
         python_version: vec![],
         exclude_newer: None,
     };
-    let initial = crate::resolver::resolve_python_manifest_for_remote(
+    let initial = crate::resolver::resolve_python_manifest_for_host(
         manifest(vec!["duckdb".into()]),
         &resolver,
-        None,
         None,
         |_| Ok(()),
     )
     .expect("prepare initial managed Python environment");
-    let candidate = crate::resolver::resolve_python_manifest_for_remote(
+    let candidate = crate::resolver::resolve_python_manifest_for_host(
         manifest(vec!["duckdb".into(), "py-yaml12".into()]),
         &resolver,
-        None,
         None,
         |_| Ok(()),
     )

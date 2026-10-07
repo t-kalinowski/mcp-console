@@ -23,9 +23,6 @@ mod output;
 
 pub(crate) use output::{CellOutput, OutputRecord};
 
-// v2 includes startup events and nullable discovery metadata/artifact owners.
-const SCHEMA_VERSION: u64 = 2;
-
 #[derive(Clone)]
 pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 
@@ -35,7 +32,6 @@ struct TranscriptState {
     dynamic_resolution: bool,
     python_preparation: bool,
     r_available: bool,
-    target: Option<serde_json::Value>,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
     pending_calls: Option<Vec<PendingCall>>,
@@ -79,26 +75,20 @@ pub(crate) struct Artifact {
     id: u64,
     path: String,
     mime_type: String,
+    pub(crate) public_path: String,
 }
 
 impl Transcript {
     #[cfg(test)]
     pub(crate) fn new(dynamic_resolution: bool) -> Self {
-        Self::with_target(
-            std::env::current_dir(),
-            dynamic_resolution,
-            false,
-            true,
-            None,
-        )
+        Self::configured(std::env::current_dir(), dynamic_resolution, false, true)
     }
 
-    pub(crate) fn with_target(
+    pub(crate) fn configured(
         working_directory: std::io::Result<PathBuf>,
         dynamic_resolution: bool,
         python_preparation: bool,
         r_available: bool,
-        target: Option<serde_json::Value>,
     ) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
             started_at: Utc::now(),
@@ -107,7 +97,6 @@ impl Transcript {
             dynamic_resolution,
             python_preparation,
             r_available,
-            target,
             active: None,
             failure: None,
             pending_calls: None,
@@ -117,7 +106,7 @@ impl Transcript {
 
     /// Retain early tool records until discovery supplies the recording metadata.
     pub(crate) fn pending(working_directory: std::io::Result<PathBuf>) -> Self {
-        let transcript = Self::with_target(working_directory, false, false, false, None);
+        let transcript = Self::configured(working_directory, false, false, false);
         transcript.0.lock().expect("transcript lock").pending_calls = Some(Vec::new());
         transcript
     }
@@ -128,7 +117,6 @@ impl Transcript {
             state.dynamic_resolution = configuration.dynamic_resolution;
             state.python_preparation = configuration.python_preparation;
             state.r_available = configuration.r_available;
-            state.target = configuration.target.clone();
             let materialized_before_discovery = state.active.is_some();
             if let Some(projections) = state
                 .active
@@ -139,7 +127,6 @@ impl Transcript {
                     configuration.dynamic_resolution,
                     configuration.python_preparation,
                     configuration.r_available,
-                    configuration.target.as_ref(),
                 );
             }
             state.replay_pending()?;
@@ -149,7 +136,6 @@ impl Transcript {
                         dynamic_resolution: configuration.dynamic_resolution,
                         python_preparation: configuration.python_preparation,
                         r_available: configuration.r_available,
-                        target: configuration.target.as_ref(),
                     },
                     Utc::now(),
                 )?;
@@ -185,22 +171,6 @@ impl Transcript {
             state
                 .active()?
                 .append(Event::StartupFailed { message }, Utc::now())
-        });
-    }
-
-    pub(crate) fn target_generation(
-        &self,
-        container_id: Option<&str>,
-        sandbox: Option<&crate::target_launch::SandboxIdentity>,
-    ) {
-        self.update(|state| {
-            state.materialize()?.append(
-                Event::TargetGeneration {
-                    container_id,
-                    sandbox,
-                },
-                Utc::now(),
-            )
         });
     }
 
@@ -424,7 +394,6 @@ impl TranscriptState {
                 self.dynamic_resolution,
                 self.python_preparation,
                 self.r_available,
-                self.target.as_ref(),
                 self.pending_calls.is_none(),
             )?);
         }
@@ -455,7 +424,6 @@ impl ActiveTranscript {
         dynamic_resolution: bool,
         python_preparation: bool,
         r_available: bool,
-        target: Option<&serde_json::Value>,
         metadata_known: bool,
     ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
@@ -541,7 +509,6 @@ impl ActiveTranscript {
                 dynamic_resolution,
                 python_preparation,
                 r_available,
-                target,
             ))
         })();
         let (projections, pending_projection_failure) = match projections {
@@ -566,7 +533,6 @@ impl ActiveTranscript {
                 working_directory: &working_directory_text,
                 dynamic_resolution: metadata_known.then_some(dynamic_resolution),
                 python_preparation: metadata_known.then_some(python_preparation),
-                target,
             },
             started_at,
         )?;
@@ -616,7 +582,6 @@ impl ActiveTranscript {
         let sequence = self.sequence + 1;
         let event = Envelope {
             event,
-            schema_version: SCHEMA_VERSION,
             run_id: &self.run_id,
             sequence,
             at: timestamp(at),
@@ -697,6 +662,11 @@ impl ActiveTranscript {
         self.next_artifact_id = artifact_id;
         Ok(Artifact {
             id: artifact_id,
+            public_path: self
+                .public_directory
+                .join(&relative_path)
+                .display()
+                .to_string(),
             path: relative_path,
             mime_type: mime_type.to_string(),
         })

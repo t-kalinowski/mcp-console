@@ -8,16 +8,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, SQL, command, requires
 from support.assertions import assert_result_content
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript, TranscriptWithCompanions
-from support.requirements import command, requires
 from support.suites import run_this_suite
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_records_real_mixed_language_session(
     binary: Path,
@@ -128,6 +129,7 @@ def test_records_real_mixed_language_session(
         )
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(command("yamark"))
 def test_emits_yamark_formatted_documents(

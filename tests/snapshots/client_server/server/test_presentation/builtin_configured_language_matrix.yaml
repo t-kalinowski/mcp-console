@@ -1,0 +1,60 @@
+---
+languages: r,python,sql
+language_guidance: >-
+  For databases and structured files, consider DuckDB SQL first for
+  inspection, joins, and aggregation. Use R for vectorized data and string
+  operations, statistics, and plots. For a reusable R script, include
+  imports, data inputs, and `#| packages:`/`#| r-version:` metadata for
+  `ir run script.R`, which starts without live Console objects. Use Python
+  when its libraries or format-specific parsing simplify the task. Switch
+  languages when useful.
+preparation_error:
+  content:
+    - type: text
+      text: >-
+        Python sessions without R require `uv` on PATH; set python in
+        .agents/console/config.yaml to use an existing environment
+  isError: true
+stderr: >
+  Python sessions without R require `uv` on PATH; set python in
+  .agents/console/config.yaml to use an existing environment
+---
+languages: r
+language_guidance: >-
+  Use R for vectorized data and string operations, statistics, and plots.
+  For a reusable R script, include imports, data inputs, and `#|
+  packages:`/`#| r-version:` metadata for `ir run script.R`, which starts
+  without live Console objects.
+---
+languages: python
+language_guidance: >-
+  Use Python when its libraries or format-specific parsing simplify the
+  task.
+---
+languages: sql
+language_guidance: >-
+  For databases and structured files, consider DuckDB SQL first for
+  inspection, joins, and aggregation.
+---
+languages: r,python
+language_guidance: >-
+  Use R for vectorized data and string operations, statistics, and plots.
+  For a reusable R script, include imports, data inputs, and `#|
+  packages:`/`#| r-version:` metadata for `ir run script.R`, which starts
+  without live Console objects. Use Python when its libraries or
+  format-specific parsing simplify the task. Switch languages when useful.
+---
+languages: r,sql
+language_guidance: >-
+  For databases and structured files, consider DuckDB SQL first for
+  inspection, joins, and aggregation. Use R for vectorized data and string
+  operations, statistics, and plots. For a reusable R script, include
+  imports, data inputs, and `#| packages:`/`#| r-version:` metadata for
+  `ir run script.R`, which starts without live Console objects. Switch
+  languages when useful.
+---
+languages: python,sql
+language_guidance: >-
+  For databases and structured files, consider DuckDB SQL first for
+  inspection, joins, and aggregation. Use Python when its libraries or
+  format-specific parsing simplify the task. Switch languages when useful.

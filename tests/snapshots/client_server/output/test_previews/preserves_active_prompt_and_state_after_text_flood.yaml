@@ -7,17 +7,17 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8080
+        text_bytes: 8063
         concat:
           - |
             prompt output head
           - repeat: x
-            count: 3373
+            count: 3437
           - |
 
-            [output preview: omitted 16770471 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000001.log (Console server recording workspace; controller for remote targets); 16777255 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 16770343 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000001.log]
           - repeat: x
-            count: 3372
+            count: 3436
           - |-
 
             prompt output tail

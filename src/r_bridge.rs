@@ -131,6 +131,8 @@ impl Bridge {
                 (evaluation_error, interrupted, value)
             }
         });
+        #[cfg(windows)]
+        crate::windows::restore_worker_stdio().map_err(|error| error.to_string())?;
         let (evaluation_error, interrupted, value) = result
             .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
         if evaluation_error != 0 {
@@ -187,6 +189,8 @@ impl Bridge {
                 (evaluation_error, value)
             }
         });
+        #[cfg(windows)]
+        crate::windows::restore_worker_stdio().map_err(|error| error.to_string())?;
         let (evaluation_error, value) = result
             .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
         if evaluation_error != 0 {
@@ -226,6 +230,8 @@ impl Bridge {
                 (evaluation_error, value)
             }
         });
+        #[cfg(windows)]
+        crate::windows::restore_worker_stdio().map_err(|error| error.to_string())?;
         let (evaluation_error, value) = result
             .map_err(|error| format!("failed to call the {} bridge: {error}", self.language))?;
         if evaluation_error != 0 {

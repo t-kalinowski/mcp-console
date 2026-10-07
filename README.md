@@ -13,8 +13,7 @@ Responses keep large outputs out of the model context while retaining logs and a
 **Development preview:** interfaces may change.
 macOS and Linux are supported.
 Windows x64 has experimental [local R and Python support with a native sandbox](docs/WINDOWS.md).
-Local and [SSH](docs/SSH.md) sessions can prepare dependencies.
-[Docker](docs/DOCKER.md) images and [Docker Sandbox](docs/DOCKER_SANDBOX.md) templates use preinstalled runtimes and packages.
+Console runs local processes and prepares dependencies on the host where it is launched.
 
 ## Quickstart
 
@@ -55,9 +54,15 @@ Installation builds the pinned sandbox runner with its own toolchain.
 Initial runtime preparation can download interpreters, packages, and extensions.
 See [build prerequisites](RELEASE.md#private-sandbox-executable) and [dependency selection](docs/REQUIREMENTS.md).
 
-Without R, local and SSH sessions use `uv` to select Python.
+Without R, Console uses `uv` to select Python.
 To use an existing project environment instead, put `python: .venv/bin/python` in `.agents/console/config.yaml`; that environment's packages must already be installed.
 See [configuration](docs/CONFIGURATION.md).
+
+## Execution host
+
+Console runs local processes on the host where it is launched.
+For work on a remote host, run the MCP client and Console together on that host, alongside the client's shell and filesystem tools.
+The client or deployment tooling chooses the host, container, or VM; Console manages language sessions within it.
 
 ## Try an analysis
 
@@ -92,15 +97,17 @@ The default local native sandbox allows host-file reads, restricts direct networ
 **It does not protect readable secrets.** Trusted [policy configuration](docs/SANDBOX_CONFIGURATION.md) can change these defaults.
 There is no automatic unsandboxed fallback; constrained Linux hosts may lack the required [capabilities](docs/LINUX_COMPATIBILITY.md).
 
-**Dependency preparation runs outside the worker sandbox.** It may execute installation or build code with host permissions.
-Worker-writable resolver inputs can cross this boundary; use only trusted requirements and resolver configuration.
+**Dependency preparation uses a separate native sandbox on local macOS and Linux hosts.** Its default policy permits host reads, package cache writes, and downloads through a managed proxy.
+See [resolver configuration and expanded defaults](docs/RESOLVER.md).
+Local sandboxed sessions use Console-specific caches by default; `-c cache=host` opts into shared host caches, and `--no-sandbox` uses host caches by default.
+Configurable permissions and package execution still require trusted requirements and resolver configuration.
 Read the [trust boundary](docs/REQUIREMENTS.md#host-resolution-and-trust) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
 
 There is one implicit session and cells run sequentially.
 Cells are not transactional; an error can leave earlier changes in place.
 Restart discards live state across languages, but retains accepted requirements and recordings.
 Each response contains at most 8 KiB of text, with separate image limits; raw text retention is capped at 1 GiB per cell.
-Reading omitted output requires filesystem access to the controller's recording directory.
+Reading omitted output requires filesystem access to the server's recording directory.
 
 Recordings include source, stdin, requirements, and output **without redaction**.
 There is no aggregate retention quota or automatic cleanup.

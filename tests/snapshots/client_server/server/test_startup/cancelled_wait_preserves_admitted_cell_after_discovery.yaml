@@ -32,6 +32,17 @@ input:
 result: {}
 ---
 send:
+  timeout_ms: 250
+result:
+  content:
+    - type: text
+      text: |-
+
+        [elapsed: <elapsed>s since admission; no new output; phase: startup]
+        [running; poll with an empty send]
+  isError: false
+---
+send:
   timeout_ms: 600000
 result:
   content:

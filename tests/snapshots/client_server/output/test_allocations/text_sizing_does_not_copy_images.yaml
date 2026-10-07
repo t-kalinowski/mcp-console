@@ -45,17 +45,17 @@ result:
       mimeType: image/png
     - type: text
       text:
-        text_bytes: 8055
+        text_bytes: 8041
         concat:
           - |
             preview head
           - repeat: x
-            count: 3891
+            count: 3955
           - |
 
-            [output preview: omitted 24987 rendered UTF-8 bytes; raw cell log: .agents/console/sessions/<run ID>/outputs/call-000004.log (Console server recording workspace; controller for remote targets); 32795 raw bytes retained, 0 raw bytes not retained]
+            [output omitted: 24859 UTF-8 bytes; raw log: .agents/console/sessions/<run ID>/outputs/call-000004.log]
           - repeat: x
-            count: 3890
+            count: 3954
           - |
 
             preview tail

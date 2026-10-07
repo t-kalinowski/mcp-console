@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.requirements import POSIX, SQL, UNPRIVILEGED, requires
 from support.assertions import (
     assert_exact_interleaving,
     assert_result_content,
@@ -28,7 +29,9 @@ from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.records import Transcript, TranscriptWithCompanions
-from support.requirements import UNPRIVILEGED, requires
+from support.snapshots import execution_snapshots
+from support.python import virtualenv_python
+from support.resolvers import expose_uv
 from support.normalization import code, normalize_python_resolution_error
 from support.native import build_interposer
 from support.r import r_test_environment
@@ -50,11 +53,37 @@ def environment(path: Path) -> dict[str, str]:
 
 
 def selected_environment(path: Path) -> dict[str, str]:
-    return dict(environment(path), RETICULATE_PYTHON=str(path / "python3"))
+    selected = path / ("python.exe" if os.name == "nt" else "python3")
+    if os.name == "nt" and not selected.exists():
+        selected = Path(sys.executable)
+    return dict(environment(path), RETICULATE_PYTHON=str(selected))
 
 
 def preparation_directory():
     return tempfile.TemporaryDirectory(prefix="console-preparation-test-")
+
+
+def grant_resolver_cache(workspace: Path, cache: Path) -> None:
+    # uv config files select the cache; Console YAML supplies its permissions.
+    cache.mkdir()
+    config = workspace / ".agents/console/config.yaml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        json.dumps(
+            {
+                "cache": "host",
+                "resolver": {
+                    "environment": {
+                        "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY": str(cache / "duckdb"),
+                        "MPLCONFIGDIR": str(cache / "matplotlib"),
+                    },
+                    "sandbox": {
+                        "filesystem": {"read_only": ["/"], "read_write": [str(cache)]}
+                    },
+                },
+            }
+        )
+    )
 
 
 @contextmanager
@@ -163,6 +192,7 @@ def preparation_records(records: Transcript, root: Path) -> Transcript:
     return records[3:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_trusts_host_resolver(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
@@ -172,7 +202,11 @@ def test_trusts_host_resolver(binary: Path, execution: Execution) -> Transcript:
         config = workspace / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
         config.write_text(
-            json.dumps({"sandbox": {"filesystem": {"write": [str(workspace)]}}})
+            json.dumps(
+                {"sandbox": {"filesystem": {"read_write": [str(workspace)]}}}
+                if execution == SANDBOXED
+                else {}
+            )
         )
         uv = workspace / "uv"
         marker = root / "host-resolution"
@@ -183,9 +217,14 @@ exec "{shutil.which("uv")}" "$@"
 """)
         uv.chmod(0o755)
         env = dict(
-            environment(workspace), UV_OFFLINE="1", RETICULATE_UV="unused-selection"
+            environment(workspace),
+            UV_TOOL_DIR=str(root),
+            UV_OFFLINE="1",
+            RETICULATE_UV="unused-selection",
         )
-        with McpClient(binary, execution.serve(), env, workspace) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, workspace
+        ) as client:
             client.initialize_and_list_tools()
             prepared = client.send(requirements={"action": "get"})
             assert not prepared.get("isError", False), prepared
@@ -200,14 +239,16 @@ exec "{shutil.which("uv")}" "$@"
             return client.finish()[3:]
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_inspects_and_replaces_managed_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
     with preparation_directory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
-        with McpClient(binary, execution.serve(), environment(root)) as client:
+        expose_uv(root)
+        env = dict(environment(root), MCP_CONSOLE_LANGUAGES="python")
+        with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
 
             def declaration(extensions: tuple[str, ...] = ()) -> list[str]:
@@ -219,7 +260,8 @@ def test_inspects_and_replaces_managed_requirements(
                 assert snapshot["runtime_requirements"] == {"r": [], "python": []}
                 return snapshot["requirements"]["python"]
 
-            assert declaration(("sqlite",)) == ["numpy", "pandas", "duckdb"]
+            defaults = ["numpy", "pandas", "matplotlib", "plotnine", "duckdb"]
+            assert declaration(("sqlite",)) == defaults
             client.send(requirements={"action": "set", "python": ["six"]})
             assert declaration() == ["six"]
             client.expect("42\n", python="import six; retained = 42; retained")
@@ -229,15 +271,35 @@ def test_inspects_and_replaces_managed_requirements(
             client.send(
                 control="restart",
                 requirements={"action": "set"},
-                python="import importlib.util; importlib.util.find_spec('numpy') is None",
+                # fmt: python
+                python=code("""
+                    import importlib.util
+
+                    all(
+                        importlib.util.find_spec(package) is None
+                        for package in ("numpy", "pandas", "matplotlib", "plotnine")
+                    )
+                    """),
             )
             assert last_result_text(client).endswith("True\n[done]"), client.transcript[
                 -1
             ]
             assert declaration() == []
             client.send(control="restart", requirements={"action": "reset"})
-            assert declaration(("sqlite",)) == ["numpy", "pandas", "duckdb"]
-            client.expect("42\n", python="import numpy, pandas; 42")
+            assert declaration(("sqlite",)) == defaults
+            client.expect(
+                "42\n",
+                # fmt: python
+                python=code("""
+                    import importlib.metadata
+
+                    for package in ("numpy", "pandas", "matplotlib", "plotnine", "duckdb"):
+                        assert importlib.metadata.version(package)
+                    import numpy, pandas, matplotlib, plotnine
+
+                    42
+                    """),
+            )
             return client.finish()[3:]
 
 
@@ -261,15 +323,14 @@ def test_configured_python_expands_home(
         bin_dir.mkdir()
         env = environment(bin_dir) | {"HOME": str(home)}
         records = []
+        if os.name == "nt":
+            env["USERPROFILE"] = str(home)
+        selected = "~/" + virtualenv_python(home / ".venv").relative_to(home).as_posix()
         for source in ("project", "CLI"):
             config.write_text(
-                "python: ~/.venv/bin/python\n"
-                if source == "project"
-                else "python: missing\n"
+                f"python: {selected}\n" if source == "project" else "python: missing\n"
             )
-            arguments = (
-                () if source == "project" else ("-c", "python=~/.venv/bin/python")
-            )
+            arguments = () if source == "project" else ("-c", f"python={selected}")
             with McpClient(
                 binary, execution.serve(*arguments), env, workspace
             ) as client:
@@ -289,6 +350,7 @@ def test_configured_python_expands_home(
         return records
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_configured_python_bypasses_uv(
     binary: Path, execution: Execution
@@ -363,6 +425,7 @@ def test_configured_python_bypasses_uv(
         return records
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_captures_user_uv_configuration(
     binary: Path, execution: Execution
@@ -395,7 +458,11 @@ exec "{shutil.which("uv")}" "$@"
         (workspace / "uv.toml").write_text(
             'index-url = "https://invalid.example/project"\n'
         )
-        with McpClient(binary, execution.serve(), env, workspace) as client:
+        if execution is SANDBOXED:
+            grant_resolver_cache(workspace, cache)
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, workspace
+        ) as client:
             client.initialize_and_list_tools()
             client.expect(
                 "user cache selected\n",
@@ -427,12 +494,21 @@ exec "{shutil.which("uv")}" "$@"
 def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Transcript:
     records = []
     installations = subprocess.check_output(["uv", "python", "dir"], text=True).strip()
+    # Windows CI keeps the checkout and Python installations on different
+    # drives. A relative installation path needs a workspace on its drive.
+    temporary_parent = Path(installations).parent if os.name == "nt" else None
+    if temporary_parent is not None:
+        # `uv python dir` reports the path without creating its parents.
+        temporary_parent.mkdir(parents=True, exist_ok=True)
     for cache_setting in ("environment", "configuration"):
-        with preparation_directory() as directory:
+        with tempfile.TemporaryDirectory(
+            prefix="console-preparation-test-",
+            dir=temporary_parent,
+        ) as directory:
             root = Path(directory).resolve()
             workspace = root / "workspace"
             workspace.mkdir()
-            (root / "uv").symlink_to(shutil.which("uv"))
+            expose_uv(root)
             config = root / "uv.toml"
             config.write_text('cache-dir = "../shared-uv"\n')
             env = dict(
@@ -446,7 +522,11 @@ def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Trans
                 env["UV_CACHE_DIR"] = "../shared-uv"
             else:
                 env.pop("UV_CACHE_DIR", None)
-            with McpClient(binary, execution.serve(), env, workspace) as client:
+                if execution is SANDBOXED:
+                    grant_resolver_cache(workspace, root / "shared-uv")
+            with McpClient(
+                binary, execution.serve("-c", "cache=host"), env, workspace
+            ) as client:
                 client.initialize_and_list_tools()
                 client.expect(
                     "relative startup paths retained\n",
@@ -463,6 +543,7 @@ def test_captures_relative_uv_paths(binary: Path, execution: Execution) -> Trans
     return records
 
 
+@requires(POSIX)
 @executions(DIRECT)
 def test_ignores_unrelated_non_utf8_environment(
     binary: Path, execution: Execution
@@ -480,14 +561,35 @@ def test_prepares_after_native_non_utf8_environment_rejection(
 def non_utf8_environment_preparation(binary: Path, execution: Execution) -> Transcript:
     with preparation_directory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        expose_uv(root)
         env = environment(root)
         env["UNRELATED_STARTUP_VALUE"] = os.fsdecode(b"non-utf8-\xff")
         env[os.fsdecode(b"UNRELATED_STARTUP_NAME_\xff")] = "unused"
-        with McpClient(binary, execution.serve(), env) as client:
+        if execution is SANDBOXED:
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "resolver": {
+                            "environment": {
+                                "HOME": env["HOME"],
+                                "PATH": env["PATH"],
+                                "UV_CACHE_DIR": str(root / "uv-cache"),
+                                "UV_NO_CONFIG": "1",
+                            },
+                            "inherit_environment": False,
+                        }
+                    }
+                )
+            )
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, root
+        ) as client:
             client.initialize_and_list_tools()
-            # Preparation accepts unrelated non-UTF-8 values. Eager native
-            # launch still enforces its existing UTF-8 environment requirement.
+            # Host preparation accepts unrelated non-UTF-8 values. The explicit
+            # resolver environment keeps native preparation usable while the
+            # worker retains its UTF-8 environment requirement.
             startup = client.send(requirements={"action": "get"})
             assert startup["isError"] == (execution == SANDBOXED), startup
             if execution == SANDBOXED:
@@ -512,11 +614,14 @@ def test_prepares_managed_python_at_startup_and_restart(
         workspace = root / "workspace"
         workspace.mkdir()
         env = environment(root)
-        uv = root / "uv"
-        shutil.copy2(shutil.which("uv"), uv)
+        uv = expose_uv(root)
         config = workspace / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
-        config.write_text('extends: ":workspace"\n')
+        config.write_text(
+            "sandbox: {filesystem: {read_write: [.]}}\n"
+            if execution == SANDBOXED
+            else "{}\n"
+        )
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
             client.send(
@@ -531,9 +636,9 @@ def test_prepares_managed_python_at_startup_and_restart(
             assert not client.transcript[-1]["result"]["isError"], client.transcript[-1]
             schema = client.transcript[2]["result"]["tools"][0]["inputSchema"]
             assert "r" in schema["properties"]
-            assert "sql" in schema["properties"]
+            assert ("sql" in schema["properties"]) == SQL.available
             requirement_schema = schema["properties"]["requirements"]
-            assert set(requirement_schema["properties"]) == {
+            expected_fields = {
                 "r",
                 "python",
                 "duckdb",
@@ -541,6 +646,7 @@ def test_prepares_managed_python_at_startup_and_restart(
                 "python_version",
                 "exclude_newer",
             }
+            assert set(requirement_schema["properties"]) == expected_fields
             client.expect(
                 "startup packages available\n",
                 # fmt: python
@@ -663,13 +769,29 @@ def test_prepares_managed_python_at_startup_and_restart(
         assert "execute:\n  eval: false" not in quarto
         assert "\nknitr:" in quarto and "\nir:" in quarto
         assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
-        for package in ("numpy", "pandas", "duckdb", "py-yaml12", "more-itertools"):
+        packages = [
+            "numpy",
+            "pandas",
+            "matplotlib",
+            "plotnine",
+            "py-yaml12",
+            "more-itertools",
+        ]
+        if SQL.available:
+            packages.append("duckdb")
+        for package in packages:
             assert f"    - {package}\n" in quarto
     return TranscriptWithCompanions(
-        records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
+        records,
+        {
+            "qmd": quarto.replace(str(workspace.resolve()), "<workspace>").replace(
+                str(workspace), "<workspace>"
+            )
+        },
     )
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_adds_python_packages_to_idle_managed_worker(
     binary: Path, execution: Execution
@@ -679,7 +801,7 @@ def test_adds_python_packages_to_idle_managed_worker(
         tempfile.TemporaryDirectory() as workspace,
     ):
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        expose_uv(root)
         with McpClient(
             installed_console(binary),
             execution.serve(),
@@ -807,13 +929,14 @@ def test_adds_python_packages_to_idle_managed_worker(
         return records
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_resolves_reached_import_in_managed_worker(
     binary: Path, execution: Execution
 ) -> Transcript:
     with preparation_directory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        expose_uv(root)
         with McpClient(
             installed_console(binary),
             execution.serve(),
@@ -928,13 +1051,14 @@ def test_resolves_reached_import_in_managed_worker(
         return records
 
 
+@requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_combines_live_python_and_duckdb_additions(
     binary: Path, execution: Execution
 ) -> Transcript:
     with preparation_directory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        expose_uv(root)
         with McpClient(
             installed_console(binary), execution.serve(), environment(root)
         ) as client:
@@ -996,7 +1120,7 @@ def test_retains_automatic_additions_after_import_errors(
         unavailable_fixture_index() as (index, requests),
     ):
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        expose_uv(root)
         wheel_index = write_test_wheel(root, "mcp_console_test_empty_pkg", None)
         write_test_wheel(
             root,
@@ -1014,7 +1138,19 @@ def test_retains_automatic_additions_after_import_errors(
         )
         for name in ("UV_FIND_LINKS", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL"):
             env.pop(name, None)
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        # The index is a host loopback fixture, so preparation must share its
+        # network namespace. Worker network policy remains independently selected.
+        with McpClient(
+            installed_console(binary),
+            execution.serve(
+                *(
+                    ("-c", "resolver.sandbox.network=enabled")
+                    if execution == SANDBOXED
+                    else ()
+                )
+            ),
+            env,
+        ) as client:
             client.initialize_and_list_tools()
             client.send(
                 python="import os; worker_pid = os.getpid(); steps = []; identity = object()"
@@ -1032,8 +1168,8 @@ def test_retains_automatic_additions_after_import_errors(
                 output
             )
             normalized, count = re.subn(
-                r'File "[^"\n]*/archive-v0/[^/]+/lib/python\d+\.\d+/site-packages/(mcp_console_test_raises_pkg/__init__\.py)"',
-                r'File "<managed Python>/\1"',
+                r'File "[^"\n]*[/\\]archive-v0[/\\][^/\\]+[/\\](?:lib[/\\]python\d+\.\d+|Lib)[/\\]site-packages[/\\](mcp_console_test_raises_pkg)[/\\](__init__\.py)"',
+                r'File "<managed Python>/\1/\2"',
                 output,
             )
             assert count == 1, output
@@ -1045,6 +1181,15 @@ def test_retains_automatic_additions_after_import_errors(
                 "mcp_console_test_empty_pkg",
                 "mcp_console_test_raises_pkg",
             }.issubset(declaration["python"])
+            # Inspect the complete public response before recording the Python fields
+            # owned by this case; provider inventories have separate coverage.
+            assert (
+                json.loads(last_result_text(client))
+                == client.transcript[-1]["result"]["structuredContent"]
+            )
+            client.transcript[-1]["result"] = {
+                "accepted_python_requirements": declaration["python"]
+            }
             client.expect(
                 "failed imports did not replay cells\n",
                 python="assert steps == ['empty', 'raises']; assert os.getpid() == worker_pid; print('failed imports did not replay cells')",
@@ -1053,6 +1198,7 @@ def test_retains_automatic_additions_after_import_errors(
             return client.finish()[3:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_automatic_resolution_failure_and_cancel_keep_accepted_state(
     binary: Path, execution: Execution
@@ -1072,7 +1218,9 @@ def automatic_resolution_failure_and_cancel_keep_accepted_state(
         os.mkfifo(root / "alive")
         alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
         try:
-            with McpClient(installed_console(binary), execution.serve(), env) as client:
+            with McpClient(
+                installed_console(binary), execution.serve("-c", "cache=host"), env
+            ) as client:
                 client.initialize_and_list_tools()
                 client.send(
                     python="import os; worker_pid = os.getpid(); steps = []; identity = object()"
@@ -1123,6 +1271,7 @@ def automatic_resolution_failure_and_cancel_keep_accepted_state(
             os.close(alive)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_automatic_activation_failure_requires_restart(
     binary: Path, execution: Execution
@@ -1139,7 +1288,9 @@ def automatic_activation_failure_requires_restart(
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         (root / "mode").write_text("activation-failure")
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        with McpClient(
+            installed_console(binary), execution.serve("-c", "cache=host"), env
+        ) as client:
             client.initialize_and_list_tools()
             client.expect(python="identity = object(); steps = []")
             initial = client.send(requirements={"action": "get"})["structuredContent"][
@@ -1175,6 +1326,7 @@ def automatic_activation_failure_requires_restart(
             return preparation_records(client.finish(), root)
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_automatic_imports_stay_on_main_worker_thread_and_process(
     binary: Path, execution: Execution
@@ -1183,7 +1335,9 @@ def test_automatic_imports_stay_on_main_worker_thread_and_process(
         root = Path(directory)
         env = preparation_environment(root)
         (root / "mode").write_text("success")
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        with McpClient(
+            installed_console(binary), execution.serve("-c", "cache=host"), env
+        ) as client:
             client.initialize_and_list_tools()
             client.send(python="import os; worker_pid = os.getpid()")
             before = (root / "resolutions.log").read_text()
@@ -1267,6 +1421,7 @@ def test_automatic_imports_stay_on_main_worker_thread_and_process(
             return preparation_records(client.finish(), root)
 
 
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_limits_live_python_additions_to_new_idle_distributions(
     binary: Path, execution: Execution
@@ -1275,7 +1430,9 @@ def test_limits_live_python_additions_to_new_idle_distributions(
         root = Path(directory)
         env = preparation_environment(root)
         (root / "mode").write_text("success")
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        with McpClient(
+            installed_console(binary), execution.serve("-c", "cache=host"), env
+        ) as client:
             client.initialize_and_list_tools()
             client.expect(
                 python="import os; worker_pid = os.getpid(); identity = object()",
@@ -1287,15 +1444,14 @@ def test_limits_live_python_additions_to_new_idle_distributions(
             assert busy["isError"], busy
             assert "already evaluating" in last_result_text(client), busy
             client.expect("[prepared]", requirements={"python": ["numpy"]})
-            client.send(stdin="ready\n")
-            assert "ready" in last_result_text(client)
+            # Enqueuing stdin can return before the cell resumes or completes.
+            client.expect("'ready'\n", stdin="ready\n")
             client.send(python="import pdb; pdb.set_trace(); print('debugger resumed')")
             assert "(Pdb)" in last_result_text(client)
             busy = client.send(requirements={"python": ["py-yaml12"]})
             assert busy["isError"], busy
             assert "already evaluating" in last_result_text(client), busy
-            client.send(stdin="continue\n")
-            assert "debugger resumed" in last_result_text(client)
+            client.expect("debugger resumed\n", stdin="continue\n")
             for requirements in (
                 {"python": ["NumPy==0"]},
                 {"python_version": ["<3"]},
@@ -1339,6 +1495,7 @@ def test_limits_live_python_additions_to_new_idle_distributions(
             return preparation_records(client.finish(), root)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_live_python_failure_and_interrupt_preserve_accepted_state(
     binary: Path, execution: Execution
@@ -1350,7 +1507,9 @@ def test_live_python_failure_and_interrupt_preserve_accepted_state(
         os.mkfifo(root / "alive")
         alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
         try:
-            with McpClient(installed_console(binary), execution.serve(), env) as client:
+            with McpClient(
+                installed_console(binary), execution.serve("-c", "cache=host"), env
+            ) as client:
                 client.initialize_and_list_tools()
                 client.send(
                     python="import os; worker_pid = os.getpid(); identity = object()"
@@ -1408,6 +1567,7 @@ def test_live_python_failure_and_interrupt_preserve_accepted_state(
             os.close(alive)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_live_python_rejects_incompatible_library_before_activation(
     binary: Path, execution: Execution
@@ -1423,7 +1583,9 @@ def live_python_rejects_incompatible_library_before_activation(
     with preparation_directory() as directory:
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        with McpClient(
+            installed_console(binary), execution.serve("-c", "cache=host"), env
+        ) as client:
             client.initialize_and_list_tools()
             client.send(
                 # fmt: python
@@ -1469,6 +1631,7 @@ def live_python_rejects_incompatible_library_before_activation(
             return preparation_records(client.finish(), root)[1:]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_live_python_activation_failure_requires_restart(
     binary: Path, execution: Execution
@@ -1485,7 +1648,9 @@ def live_python_activation_failure_requires_restart(
         root = Path(directory)
         env = preparation_environment(root, with_r=with_r)
         (root / "mode").write_text("activation-failure")
-        with McpClient(installed_console(binary), execution.serve(), env) as client:
+        with McpClient(
+            installed_console(binary), execution.serve("-c", "cache=host"), env
+        ) as client:
             client.initialize_and_list_tools()
             # Separate fd 2 from the sideband deterministically. Activation
             # diagnostics must arrive before their preparation result even
@@ -1541,6 +1706,7 @@ def live_python_activation_failure_requires_restart(
             return preparation_records(client.finish(), root)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_failed_managed_preparation_preserves_worker_and_input(
     binary: Path, execution: Execution
@@ -1557,7 +1723,9 @@ def test_failed_managed_preparation_preserves_worker_and_input(
         os.mkfifo(root / "alive")
         alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
         try:
-            with McpClient(binary, execution.serve(), env, workspace) as client:
+            with McpClient(
+                binary, execution.serve("-c", "cache=host"), env, workspace
+            ) as client:
                 client.initialize_and_list_tools()
                 client.send(
                     # fmt: python
@@ -1705,6 +1873,8 @@ def test_failed_managed_preparation_preserves_worker_and_input(
             assert set(accepted[0]["packages"]) == {
                 "numpy",
                 "pandas",
+                "matplotlib",
+                "plotnine",
                 "duckdb",
                 "py-yaml12",
             }
@@ -1714,6 +1884,7 @@ def test_failed_managed_preparation_preserves_worker_and_input(
             os.close(alive)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_preparation_pins_result_files(
     binary: Path, execution: Execution
@@ -1726,7 +1897,9 @@ def test_preparation_pins_result_files(
         env = preparation_environment(root)
         unrelated = root / "unrelated"
         unrelated.write_text("unrelated host contents")
-        with McpClient(binary, execution.serve(), env, Path(workspace)) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, Path(workspace)
+        ) as client:
             client.initialize_and_list_tools()
             client.send(python="retained = 42")
             for mode in ("replace-output", "replace-inspection"):
@@ -1742,6 +1915,7 @@ def test_preparation_pins_result_files(
             return preparation_records(client.finish(), root)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_retries_failed_prestart_python_preparation(
     binary: Path, execution: Execution
@@ -1754,7 +1928,9 @@ def test_retries_failed_prestart_python_preparation(
         workspace = Path(directory) / "workspace"
         workspace.mkdir()
         env = preparation_environment(root)
-        with McpClient(binary, execution.serve(), env, workspace) as client:
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, workspace
+        ) as client:
             client.initialize_and_list_tools()
             for mode in ("failure", "inspection"):
                 (root / "mode").write_text(mode)
@@ -1789,6 +1965,7 @@ def test_retries_failed_prestart_python_preparation(
             return preparation_records(client.finish(), root)
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_shutdown_cancels_sans_r_python_preparation(
     binary: Path, execution: Execution
@@ -1813,7 +1990,9 @@ def test_shutdown_cancels_sans_r_python_preparation(
             os.mkfifo(root / "alive")
             alive = os.open(root / "alive", os.O_RDONLY | os.O_NONBLOCK)
             try:
-                with McpClient(binary, execution.serve(), env, workspace) as client:
+                with McpClient(
+                    binary, execution.serve("-c", "cache=host"), env, workspace
+                ) as client:
                     client.initialize_and_list_tools()
                     # MCP readiness precedes discovery. Wait for its retained
                     # result before measuring the operation's resolver checkpoint.
@@ -1882,6 +2061,7 @@ def test_shutdown_cancels_sans_r_python_preparation(
     return records
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_resolves_default_python_without_r(
     binary: Path, execution: Execution
@@ -1901,7 +2081,13 @@ def test_resolves_default_python_without_r(
                 "duckdb"
                 in schema["inputSchema"]["properties"]["requirements"]["properties"]
             )
-            assert "without R" in schema["description"]
+            python_description = schema["inputSchema"]["properties"]["python"][
+                "description"
+            ]
+            assert "on Python-owned DuckDB" in python_description
+            assert (
+                "_console.sql_connection().register(name, frame)" in python_description
+            )
             client.expect(
                 "42\n",
                 # fmt: python
@@ -2004,13 +2190,21 @@ def test_uses_selected_virtualenv(binary: Path, execution: Execution) -> Transcr
             check=True,
             capture_output=True,
         )
-        selected = venv / "bin/python3"
+        selected = virtualenv_python(venv)
         subprocess.run(
             ["uv", "pip", "install", "--python", selected, "matplotlib"],
             check=True,
             capture_output=True,
         )
-        env = selected_environment(venv / "bin")
+        env = selected_environment(selected.parent)
+        env["MPLCONFIGDIR"] = str(root / "matplotlib")
+        # Prepare this fixture's fonts before interpreting its path-only output.
+        subprocess.run(
+            [selected, "-I", "-c", "import matplotlib.font_manager"],
+            env=dict(os.environ, MPLCONFIGDIR=env["MPLCONFIGDIR"]),
+            check=True,
+            capture_output=True,
+        )
         with McpClient(binary, execution.serve(), env) as client:
             client.initialize_and_list_tools()
             client.send(
@@ -2088,7 +2282,8 @@ False
 @executions(DIRECT, SANDBOXED)
 def test_reports_missing_interpreters(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        (Path(directory) / "python3").symlink_to(sys.executable)
+        if os.name != "nt":
+            (Path(directory) / "python3").symlink_to(sys.executable)
         with McpClient(
             binary, execution.serve(), environment(Path(directory))
         ) as client:
@@ -2098,6 +2293,7 @@ def test_reports_missing_interpreters(binary: Path, execution: Execution) -> Tra
             return [{"error": error}]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_resolver_failure_does_not_fall_back(
     binary: Path, execution: Execution
@@ -2107,7 +2303,8 @@ def test_resolver_failure_does_not_fall_back(
         uv = path / "uv"
         uv.write_text("#!/bin/sh\necho 'fixture uv resolution failed' >&2\nexit 47\n")
         uv.chmod(0o755)
-        (path / "python3").symlink_to(sys.executable)
+        if os.name != "nt":
+            (path / "python3").symlink_to(sys.executable)
         with McpClient(binary, execution.serve(), environment(path)) as client:
             error = client.startup_error()
             assert "fixture uv resolution failed" in error, error
@@ -2115,13 +2312,15 @@ def test_resolver_failure_does_not_fall_back(
             return [{"error": error}]
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_rejects_broken_r_instead_of_selecting_python(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory)
-        (path / "python3").symlink_to(sys.executable)
+        if os.name != "nt":
+            (path / "python3").symlink_to(sys.executable)
         env = environment(path)
         env["R_HOME"] = str(path / "missing-r")
         with McpClient(binary, execution.serve(), env) as client:
@@ -2146,6 +2345,7 @@ def test_rejects_broken_r_instead_of_selecting_python(
             return [{"invalid_R_HOME": explicit}, {"broken_R": error}]
 
 
+@execution_snapshots
 @executions(DIRECT, SANDBOXED)
 def test_cleans_temporary_storage_after_startup_failure(
     binary: Path, execution: Execution
@@ -2158,10 +2358,14 @@ def test_cleans_temporary_storage_after_startup_failure(
             check=True,
             capture_output=True,
         )
-        selected = venv / "bin/python3"
+        selected = virtualenv_python(venv)
         site = Path(
             subprocess.check_output(
-                [selected, "-c", "import site; print(site.getsitepackages()[0])"],
+                [
+                    selected,
+                    "-c",
+                    "import sysconfig; print(sysconfig.get_path('purelib'))",
+                ],
                 text=True,
             ).strip()
         )
@@ -2172,7 +2376,9 @@ def test_cleans_temporary_storage_after_startup_failure(
             import os
             from pathlib import Path
 
-            if "MCP_CONSOLE_LOCAL_RUNTIME" in os.environ:
+            # Only the first worker fails; eager replacement must not overwrite
+            # the failed worker's recorded directory or fail a second time.
+            if "MCP_CONSOLE_LOCAL_RUNTIME" in os.environ and not Path("startup-temporary").exists():
                 Path("startup-temporary").write_text(os.environ["TMPDIR"])
                 Path(os.environ["TMPDIR"], "owned-before-failure").touch()
                 os._exit(47)
@@ -2183,7 +2389,7 @@ def test_cleans_temporary_storage_after_startup_failure(
             if execution == SANDBOXED
             else execution.serve()
         )
-        env = selected_environment(venv / "bin")
+        env = selected_environment(virtualenv_python(venv).parent)
         env["RETICULATE_PYTHON"] = str(selected)
         with McpClient(binary, arguments, env, current_directory=root) as client:
             client.initialize_and_list_tools()
@@ -2192,14 +2398,11 @@ def test_cleans_temporary_storage_after_startup_failure(
             )
             assert result["isError"] and "status 47" in last_result_text(client), result
             temporary = Path((root / "startup-temporary").read_text())
-            assert not temporary.exists(), "failed worker storage remains"
+            assert not temporary.exists(), f"failed worker storage remains: {temporary}"
             assert selected.exists(), "startup failure deleted the environment"
-            # Python now starts on cell demand after worker readiness. The
-            # replacement is idle and has not entered the failing hook again.
-            (site / "sitecustomize.py").unlink()
             client.expect(
-                "replacement initializes on demand\n",
-                python="print('replacement initializes on demand')",
+                "replacement initializes successfully\n",
+                python="print('replacement initializes successfully')",
             )
             return client.finish()
 
@@ -2221,7 +2424,8 @@ def test_describes_sandboxed_python_session(
 def describe_session(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory)
-        (path / "python3").symlink_to(sys.executable)
+        if os.name != "nt":
+            (path / "python3").symlink_to(sys.executable)
         with McpClient(binary, execution.serve(), selected_environment(path)) as client:
             client.initialize_and_list_tools()
             return client.finish()
@@ -2231,7 +2435,8 @@ def describe_session(binary: Path, execution: Execution) -> Transcript:
 def test_records_python_execution(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
-        (workspace / "python3").symlink_to(sys.executable)
+        if os.name != "nt":
+            (workspace / "python3").symlink_to(sys.executable)
         env = selected_environment(workspace)
         env["RETICULATE_PYTHON"] = sys.executable
         with McpClient(
@@ -2310,7 +2515,8 @@ def test_interrupts_python_and_replaces_a_failed_worker(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory)
-        (path / "python3").symlink_to(sys.executable)
+        if os.name != "nt":
+            (path / "python3").symlink_to(sys.executable)
         with McpClient(binary, execution.serve(), selected_environment(path)) as client:
             client.initialize_and_list_tools()
             client.send(python="retained = 41")
@@ -2357,19 +2563,19 @@ def test_preserves_explicit_selection_in_sandbox_environment(
             workspace = Path(directory)
             config = workspace / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
+            env = environment(workspace)
             config.write_text(
                 json.dumps(
                     {
-                        "sandbox": {
-                            "inherit_environment": inherit,
-                            "environment": {
-                                "RETICULATE_PYTHON": "/invalid/project/python"
-                            },
-                        }
+                        "environment": {
+                            "RETICULATE_PYTHON": "/invalid/project/python",
+                            "HOME": env["HOME"],
+                            "PATH": env["PATH"],
+                        },
+                        "inherit_environment": inherit,
                     }
                 )
             )
-            env = environment(workspace)
             env["RETICULATE_PYTHON"] = sys.executable
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
@@ -2396,7 +2602,8 @@ def test_inspection_excludes_workspace_and_pythonpath(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
-        (workspace / "python3").symlink_to(sys.executable)
+        if os.name != "nt":
+            (workspace / "python3").symlink_to(sys.executable)
         poisoned_path = workspace / "pythonpath"
         poisoned_path.mkdir()
         # fmt: python
@@ -2438,10 +2645,14 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             check=True,
             capture_output=True,
         )
-        selected = venv / "bin/python3"
+        selected = virtualenv_python(venv)
         site = Path(
             subprocess.check_output(
-                [selected, "-c", "import site; print(site.getsitepackages()[0])"],
+                [
+                    selected,
+                    "-c",
+                    "import sysconfig; print(sysconfig.get_path('purelib'))",
+                ],
                 text=True,
             ).strip()
         )
@@ -2465,7 +2676,7 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             if execution == SANDBOXED
             else execution.serve()
         )
-        env = selected_environment(venv / "bin")
+        env = selected_environment(virtualenv_python(venv).parent)
         env["RETICULATE_PYTHON"] = str(selected)
         with McpClient(binary, arguments, env, workspace) as client:
             client.initialize_and_list_tools()
@@ -2506,6 +2717,8 @@ def failed_native_startup(binary: Path, execution: Execution) -> Transcript:
             return records
 
 
+@execution_snapshots
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_startup_failure_restores_python_thread(
     binary: Path, execution: Execution
@@ -2517,6 +2730,8 @@ def test_startup_failure_restores_python_thread(
     return records
 
 
+@execution_snapshots
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_startup_failure_preserves_python_exception(
     binary: Path, execution: Execution
@@ -2533,6 +2748,7 @@ def test_startup_failure_preserves_python_exception(
     return records
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_uses_environment_through_directory_alias(
     binary: Path, execution: Execution
@@ -2580,7 +2796,8 @@ def test_consumes_idle_interrupt_before_next_python_cell(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory)
-        (path / "python3").symlink_to(sys.executable)
+        if os.name != "nt":
+            (path / "python3").symlink_to(sys.executable)
         with McpClient(binary, execution.serve(), selected_environment(path)) as client:
             client.initialize_and_list_tools()
             client.send(python="retained = 40")
@@ -2602,7 +2819,8 @@ def test_imports_workspace_modules_without_pythonpath(
         root = Path(directory)
         workspace = root / "workspace"
         workspace.mkdir()
-        (root / "python3").symlink_to(sys.executable)
+        if os.name != "nt":
+            (root / "python3").symlink_to(sys.executable)
         (workspace / "workspace_module.py").write_text("value = 20\n")
         package = workspace / "workspace_package"
         package.mkdir()
@@ -2669,17 +2887,19 @@ def ignores_python_layout_override(
             )
             config = workspace / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
+            env = selected_environment(virtualenv_python(venv).parent)
             config.write_text(
                 json.dumps(
                     {
-                        "sandbox": {
-                            "inherit_environment": inherit,
-                            "environment": {variable: "unavailable-configured-layout"},
-                        }
+                        "environment": {
+                            variable: "unavailable-configured-layout",
+                            "HOME": env["HOME"],
+                            "PATH": env["PATH"],
+                        },
+                        "inherit_environment": inherit,
                     }
                 )
             )
-            env = selected_environment(venv / "bin")
             env[variable] = "unavailable-inherited-layout"
             with McpClient(binary, execution.serve(), env, workspace) as client:
                 client.initialize_and_list_tools()
@@ -2723,9 +2943,11 @@ def test_accepts_parent_components_in_selected_executable(
             capture_output=True,
         )
         (workspace / "alias").mkdir()
-        selected = workspace / "alias/../environment/bin/python3"
+        selected = (
+            workspace / "alias/.." / virtualenv_python(venv).relative_to(workspace)
+        )
         env = environment(workspace)
-        env["RETICULATE_PYTHON"] = str(selected)
+        env["RETICULATE_PYTHON"] = selected.as_posix()
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
             for control in ({}, {"control": "restart"}):
@@ -2738,8 +2960,8 @@ def test_accepts_parent_components_in_selected_executable(
                         import sys
 
                         selected = os.environ["RETICULATE_PYTHON"]
-                        assert "/../" in selected
-                        assert sys.executable == selected
+                        assert "/../" in selected.replace(os.sep, "/")
+                        assert os.path.samefile(sys.executable, selected)
                         assert os.path.samefile(sys.prefix, "environment")
                         assert sys.prefix != sys.base_prefix
                         child = subprocess.check_output(
@@ -2772,19 +2994,24 @@ def test_excludes_executable_directory_from_imports(
             check=True,
             capture_output=True,
         )
-        selected = venv / "bin/python3"
+        selected = virtualenv_python(venv)
         site = Path(
             subprocess.check_output(
-                [selected, "-I", "-c", "import site; print(site.getsitepackages()[0])"],
+                [
+                    selected,
+                    "-I",
+                    "-c",
+                    "import sysconfig; print(sysconfig.get_path('purelib'))",
+                ],
                 text=True,
             ).strip()
         )
         (site / "selected_package.py").write_text("value = 42\n")
-        (venv / "bin/json.py").write_text(
+        (selected.parent / "json.py").write_text(
             "raise RuntimeError('imported executable directory')\n"
         )
-        (venv / "bin/selected_package.py").write_text("value = -1\n")
-        env = selected_environment(venv / "bin")
+        (selected.parent / "selected_package.py").write_text("value = -1\n")
+        env = selected_environment(virtualenv_python(venv).parent)
         env.pop("PYTHONPATH", None)
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
@@ -2817,7 +3044,7 @@ def test_records_managed_python_defaults(
 ) -> TranscriptWithCompanions:
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
-        (workspace / "uv").symlink_to(shutil.which("uv"))
+        expose_uv(workspace)
         with McpClient(
             binary, execution.serve(), environment(workspace), workspace
         ) as client:
@@ -2838,12 +3065,12 @@ def test_records_managed_python_defaults(
             records = client.finish()
         (session,) = (workspace / ".agents/console/sessions").iterdir()
         quarto = (session / "transcript.qmd").read_text()
+        defaults = ["numpy", "pandas", "matplotlib", "plotnine"]
+        if SQL.available:
+            defaults.append("duckdb")
         assert (
-            """  python-packages:
-    - numpy
-    - pandas
-    - duckdb
-"""
+            "  python-packages:\n"
+            + "".join(f"    - {package}\n" for package in defaults)
             in quarto
         ), quarto
         assert "\nknitr:" in quarto and "\nir:" in quarto, quarto
@@ -2856,7 +3083,12 @@ def test_records_managed_python_defaults(
         assert events[0]["dynamic_resolution"] is False
         assert events[0]["python_preparation"] is True
         return TranscriptWithCompanions(
-            records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
+            records,
+            {
+                "qmd": quarto.replace(str(workspace.resolve()), "<workspace>").replace(
+                    str(workspace), "<workspace>"
+                )
+            },
         )
 
 
@@ -2878,10 +3110,10 @@ def test_reports_direct_storage_retirement_failure(
             site = Path(
                 subprocess.check_output(
                     [
-                        venv / "bin/python3",
+                        virtualenv_python(venv),
                         "-I",
                         "-c",
-                        "import site; print(site.getsitepackages()[0])",
+                        "import sysconfig; print(sysconfig.get_path('purelib'))",
                     ],
                     text=True,
                 ).strip()
@@ -2918,7 +3150,7 @@ def test_reports_direct_storage_retirement_failure(
                 with McpClient(
                     binary,
                     execution.serve(),
-                    selected_environment(venv / "bin"),
+                    selected_environment(virtualenv_python(venv).parent),
                     workspace,
                 ) as client:
                     client.initialize_and_list_tools()
@@ -2946,7 +3178,7 @@ def test_reports_direct_storage_retirement_failure(
                     assert "cannot remove worker temporary directory" in stderr, stderr
                     temporary = Path((workspace / "worker-temporary").read_text())
                     assert temporary.exists()
-                    assert (venv / "bin/python3").exists()
+                    assert (virtualenv_python(venv)).exists()
                     records.append({"stage": stage})
                     records.extend(client.transcript)
                     records.append({"stderr": stderr})

@@ -9,6 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.progress import without_elapsed
 from support.assertions import last_tool_text
 from support.checkpoints import (
     FifoCheckpoint,
@@ -27,10 +28,12 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.suites import run_this_suite
+from support.requirements import POSIX, requires
 
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_separates_startup_omissions_from_retained_cell_text(
     binary: Path, execution: Execution
@@ -78,6 +81,7 @@ def test_separates_startup_omissions_from_retained_cell_text(
         return client.finish()
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_partial_retention_and_later_unretained_output(
     binary: Path, execution: Execution
@@ -112,8 +116,15 @@ def test_reports_partial_retention_and_later_unretained_output(
             current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
+            # Finish shared discovery and lazy worker startup before retention.
+            client.send(requirements={"action": "get"})
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="overflow cell output file", timeout_ms=0)
-            assert last_tool_text(client) == "\n[running; poll with an empty send]"
+            assert (
+                without_elapsed(last_tool_text(client))
+                == "\n[running; poll with an empty send]"
+            )
             release = wait_for_worker_file(
                 workspace, "zod-release-spooled-output", client
             )
@@ -134,20 +145,12 @@ def test_reports_partial_retention_and_later_unretained_output(
                 second_text = last_tool_text(client)
 
             session = next((workspace / ".agents/console" / "sessions").iterdir())
-            path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
+            path = f".agents/console/sessions/{session.name}/outputs/call-000003.log"
             assert (workspace / path).read_bytes() == b"x" * file_limit
             assert f"stopped after {file_limit} retained bytes" in first_text
             assert "later text is not retained in this file" in first_text
-            assert (
-                f"{file_limit} raw bytes retained, 4 raw bytes not retained"
-                in first_text
-            )
-            assert (
-                f"{file_limit} raw bytes retained, {PENDING_TEXT_BUDGET + 11} raw bytes not retained"
-                in second_text
-            )
-            assert "file contains only a prefix" in first_text
-            assert "omitted text beyond it is unavailable" in second_text
+            assert "logs contain prefixes" in first_text
+            assert "later raw text unavailable" in second_text
             assert first_text.endswith("\n[running; poll with an empty send]")
             # File-failure notices are separate from the emitted byte stream.
             failure_start = first_text.index("[cell output file ")
@@ -155,7 +158,7 @@ def test_reports_partial_retention_and_later_unretained_output(
             first_payload = (
                 first_text[:failure_start].removesuffix("\n") + first_text[failure_end:]
             )
-            first_payload = first_payload.removesuffix(
+            first_payload = without_elapsed(first_payload).removesuffix(
                 "\n[running; poll with an empty send]"
             )
             first_omitted = assert_preview(
@@ -172,7 +175,7 @@ def test_reports_partial_retention_and_later_unretained_output(
             client.send(r="echo after failure")
             assert last_tool_text(client) == "zod: after failure\n"
             assert (
-                session / "outputs/call-000004.log"
+                session / "outputs/call-000006.log"
             ).read_bytes() == b"zod: after failure\n"
             events = [
                 json.loads(line)
@@ -200,6 +203,7 @@ def test_reports_partial_retention_and_later_unretained_output(
             return transcript
 
 
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_reports_omitted_bytes_retained_at_the_file_limit(
     binary: Path, execution: Execution
@@ -217,7 +221,10 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
         client.send(r="complete silently")
         assert last_tool_text(client) == "[done]"
         client.send(r="overflow cell retention limit", timeout_ms=0)
-        assert last_tool_text(client) == "\n[running; poll with an empty send]"
+        assert (
+            without_elapsed(last_tool_text(client))
+            == "\n[running; poll with an empty send]"
+        )
         release = wait_for_worker_file(
             Path(temporary), "zod-release-retention-output", client
         )
@@ -246,8 +253,7 @@ def test_reports_omitted_bytes_retained_at_the_file_limit(
             assert retained.read(1) == b""
         assert len(output.encode()) <= TEXT_BUDGET
         assert "tail\n" in output, output[-1500:]
-        assert f"{limit} raw bytes retained, 5 raw bytes not retained" in output
-        assert "file contains only a prefix" in output
+        assert "logs contain prefixes; later raw text unavailable" in output
         assert f"cell output retention limit reached at {limit} bytes" in output
         omitted = sum(int(match[1]) for match in OMISSION.finditer(output))
         events = [
