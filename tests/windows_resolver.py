@@ -446,7 +446,9 @@ class WindowsResolverMaterialization(unittest.TestCase):
     def test_uv_bootstraps_ir_and_materializes_r_library(self):
         r_home = os.environ.get("R_HOME")
         if not r_home:
-            r_home = subprocess.check_output(["R", "RHOME"], text=True).strip()
+            r_home = subprocess.check_output(
+                [shutil.which("R") or "R", "RHOME"], text=True
+            ).strip()
         self.environment["R_HOME"] = r_home
         resolver = self.resolver("R")
         self.assertEqual(

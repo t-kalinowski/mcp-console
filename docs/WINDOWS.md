@@ -57,7 +57,9 @@ Recording follows the shared [recording directory discovery](RECORDING.md), incl
 
 `mcp-console sandbox-setup` explicitly provisions the Console sandbox accounts and network rules through Windows UAC.
 Run it interactively, then use `mcp-console sandbox-setup --status` to check readiness.
+The current runner requires setup version 6; older provisioning needs an approved setup refresh before elevated execution.
 Ordinary sandbox launches fail with setup guidance if provisioning is missing; they do not silently retry unsandboxed or choose a weaker backend.
+The native diagnostic names `mcp-console-sandbox setup`; installed Console users run its public equivalent, `mcp-console sandbox-setup`, with the same state directory.
 Setup uses Console accounts, separate from Codex accounts.
 Persistent state defaults to `%LOCALAPPDATA%\mcp-console`.
 

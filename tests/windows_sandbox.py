@@ -378,7 +378,8 @@ class WindowsSandbox(unittest.TestCase):
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(result.stdout, b"")
-            self.assertIn(b"mcp-console sandbox-setup", result.stderr)
+            self.assertIn(b"Windows sandbox setup is required", result.stderr)
+            self.assertIn(b"mcp-console-sandbox setup", result.stderr)
             self.assertFalse((root / "state").exists())
 
     def test_modified_helper_is_rejected_before_setup(self):

@@ -229,7 +229,7 @@ def stage(args: argparse.Namespace, pin: dict) -> None:
             *(
                 [
                     "-p",
-                    "codex-windows-sandbox",
+                    "mcp-console-sandbox-windows",
                     "--bin",
                     "mcp-console-sandbox-setup",
                     "--bin",
