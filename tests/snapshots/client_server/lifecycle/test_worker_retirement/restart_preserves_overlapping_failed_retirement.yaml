@@ -37,3 +37,7 @@ result:
     - type: text
       text: "[worker is shutting down]"
   isError: true
+---
+exit_status: 1
+stderr: |
+  scripted retirement failure

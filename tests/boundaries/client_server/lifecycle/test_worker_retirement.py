@@ -123,7 +123,9 @@ def test_restart_preserves_overlapping_failed_retirement(
         assert "[starting new worker]" not in restart_text, restart
         assert next_cell["isError"], next_cell
         assert last_result_text(client) == "[worker is shutting down]", next_cell
-        return client.finish()
+        transcript, stderr = client.finish_with_standard_error(expected_exit_status=1)
+        assert stderr == "scripted retirement failure\n", stderr
+        return transcript + [{"exit_status": 1, "stderr": stderr}]
 
 
 @requires(POSIX, NATIVE_FIXTURES, UNPRIVILEGED)
@@ -212,3 +214,101 @@ def test_failed_storage_retirement_blocks_replacement(binary: Path) -> Transcrip
         finally:
             if temporary is not None:
                 (temporary / "restricted").chmod(0o700)
+
+
+@requires(POSIX, NATIVE_FIXTURES)
+@executions(DIRECT, SANDBOXED)
+def test_eof_preserves_completed_failed_retirement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return _retirement_failure_at_eof(binary, execution, close_during_retirement=False)
+
+
+@requires(POSIX, NATIVE_FIXTURES)
+@executions(DIRECT, SANDBOXED)
+def test_eof_preserves_inflight_failed_retirement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return _retirement_failure_at_eof(binary, execution, close_during_retirement=True)
+
+
+def _retirement_failure_at_eof(
+    binary: Path, execution: Execution, *, close_during_retirement: bool
+) -> Transcript:
+    # fmt: python
+    launcher = code("""
+        import os
+        import sys
+
+        os.environ["MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_PID"] = str(os.getpid())
+        os.environ[os.environ.pop("MCP_CONSOLE_TEST_LOADER")] = os.environ.pop(
+            "MCP_CONSOLE_TEST_RETIREMENT_LIBRARY"
+        )
+        os.execv(sys.argv[1], sys.argv[1:])
+        """)
+    with tempfile.TemporaryDirectory() as temporary, ExitStack() as resources:
+        root = Path(temporary)
+        blocked, release, returned = [
+            resources.enter_context(closing(FifoCheckpoint.create(root / name)))
+            for name in ("blocked", "release", "returned")
+        ]
+        environment = {
+            **os.environ,
+            "TMPDIR": str(root),
+            "MCP_CONSOLE_TEST_LOADER": LOADER_VARIABLE,
+            "MCP_CONSOLE_TEST_RETIREMENT_LIBRARY": str(
+                build_interposer(root, "launcher_retirement_interposer")
+            ),
+            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_BLOCKED": str(blocked.path),
+            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RELEASE": str(release.path),
+            "MCP_CONSOLE_TEST_RETIREMENT_SIGNAL_RETURNED": str(returned.path),
+            "MCP_CONSOLE_TEST_GENERATION_FAILED": str(root / "failed"),
+        }
+        relay = (
+            Path(__file__).resolve().parents[3]
+            / "fixtures/server_relay/failed_retirement_restart.py"
+        )
+        client = resources.enter_context(
+            McpClient(
+                Path(sys.executable),
+                (
+                    "-c",
+                    launcher,
+                    str(binary),
+                    *execution.serve("--worker", str(binary), "--relay", str(relay)),
+                ),
+                environment,
+                root,
+            )
+        )
+        resources.callback(release.release)
+        client.initialize_and_list_tools()
+        failed = client.start_send(r="42")
+        checkpoint = wait_for_worker_file(root, "retirement-fault-sent", client)
+        fault_release, fault_sent = [
+            resources.enter_context(
+                closing(FifoCheckpoint.attach(checkpoint.with_name(name)))
+            )
+            for name in ("retirement-fault-release", "retirement-fault-sent")
+        ]
+        resources.callback(fault_release.release)
+        blocked.wait("failed-worker retirement crossed the dispatcher barrier")
+        if close_during_retirement:
+            client.stdin.close()
+        fault_release.release()
+        fault_sent.wait("relay published Fatal after the retirement barrier")
+        release.release()
+        returned.wait("native retirement signal completed")
+        # Receiving this response proves failed-worker retirement, including
+        # dispatcher/I/O joins, finished before EOF in the completed schedule.
+        client.receive(failed)
+        failure = failed["result"]
+        assert failure["isError"], failure
+        assert "scripted retirement failure" in last_result_text(client), failure
+        if not close_during_retirement:
+            rejected = client.send(r="42")
+            assert rejected["isError"], rejected
+            assert last_result_text(client) == "[worker is shutting down]", rejected
+        transcript, stderr = client.finish_with_standard_error(expected_exit_status=1)
+        assert stderr == "scripted retirement failure\n", stderr
+        return transcript + [{"exit_status": 1, "stderr": stderr}]

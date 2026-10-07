@@ -1448,7 +1448,17 @@ impl Client {
                 std::thread::spawn(move || preparation.close())
             });
             let stopped = stop_handles.finish_shutdown(errors);
-            let retired = client.finish_worker_retirement().map(|_| ());
+            let retired = client.finish_worker_retirement().and_then(|retirement| {
+                if matches!(retirement, WorkerRetirement::AlreadyStopped)
+                    && let Some(worker) = &stop_handles.worker
+                {
+                    // Failed-worker retirement can stop the logical worker
+                    // before EOF. Observe its launch's retained I/O result;
+                    // a running worker already reports that result above.
+                    worker.finish_retirement()?;
+                }
+                Ok(())
+            });
             let preparation = preparation.map_or(Ok(()), |task| {
                 task.join()
                     .map_err(|_| "preparation shutdown task panicked")?
