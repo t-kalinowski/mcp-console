@@ -13,6 +13,21 @@ Examples:
   mcp-console sandbox -- Rscript analysis.R
   mcp-console sandbox -- python script.py";
 
+#[cfg(windows)]
+pub const SANDBOX_SETUP_DETAILS: &str = "\
+Setup resources (created or reused):
+  Local accounts: McpConsoleSandboxOff (restricted networking) and
+    McpConsoleSandboxOn (network enabled).
+  Local security group: ConsoleSandboxUsers.
+  Account-scoped Windows Firewall rules and WFP loopback filters for the
+    restricted-network account.
+  Protected state directories: .sandbox (setup records), .sandbox-secrets
+    (encrypted credentials), and .sandbox-bin (helper storage).
+
+Missing or outdated setup requests administrator approval through Windows UAC.
+An up-to-date setup is reused without changes.
+Use sandbox-setup --status to inspect readiness without provisioning.";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "mcp-console",
@@ -39,8 +54,9 @@ pub struct ConfigOverrides {
 pub enum Command {
     /// Provision the native Windows sandbox accounts and network rules
     #[cfg(windows)]
+    #[command(after_help = SANDBOX_SETUP_DETAILS)]
     SandboxSetup {
-        /// Persistent Windows sandbox state directory
+        /// Persistent Windows sandbox state directory [default: %LOCALAPPDATA%\mcp-console]
         #[arg(long, value_name = "PATH")]
         state_dir: Option<PathBuf>,
         /// Report setup readiness without provisioning

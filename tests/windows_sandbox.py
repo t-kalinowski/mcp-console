@@ -333,6 +333,72 @@ class WindowsSandbox(unittest.TestCase):
             finally:
                 session.close()
 
+    def test_setup_help_describes_provisioned_resources(self):
+        for flag in ("--help", "-h"):
+            with self.subTest(flag=flag):
+                result = subprocess.run(
+                    [str(BINARY), "sandbox-setup", flag],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for detail in (
+                    "McpConsoleSandboxOff",
+                    "McpConsoleSandboxOn",
+                    "ConsoleSandboxUsers",
+                    "Windows Firewall",
+                    "loopback",
+                    ".sandbox-secrets",
+                    ".sandbox-bin",
+                    "UAC",
+                    "reused without changes",
+                    "%LOCALAPPDATA%",
+                ):
+                    self.assertIn(detail, result.stdout)
+
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "explicitly provisioned elevated Windows sandbox",
+    )
+    def test_current_setup_reports_resources_without_reprovisioning(self):
+        state = os.environ["MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"]
+        command = [str(BINARY), "sandbox-setup", "--state-dir", state]
+        before = subprocess.run(
+            [*command, "--status"], capture_output=True, text=True, timeout=30
+        )
+        self.assertEqual(before.returncode, 0, before.stderr)
+        self.assertTrue(json.loads(before.stdout)["configured"])
+        # Refuse to provision an unconfigured machine in acceptance tests.
+        # A current setup must reuse its records and credentials without UAC.
+        records = {
+            path: path.read_bytes()
+            for directory in (".sandbox", ".sandbox-secrets")
+            for path in (Path(state) / directory).rglob("*")
+            if path.is_file()
+        }
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"Console sandbox is configured at {state}", result.stdout)
+        for detail in (
+            "McpConsoleSandboxOff",
+            "McpConsoleSandboxOn",
+            "ConsoleSandboxUsers",
+            "Windows Firewall",
+            "loopback",
+            ".sandbox-secrets",
+            ".sandbox-bin",
+            "reused without changes",
+        ):
+            self.assertIn(detail, result.stdout)
+        for path, content in records.items():
+            self.assertEqual(path.read_bytes(), content, str(path))
+        after = subprocess.run(
+            [*command, "--status"], capture_output=True, text=True, timeout=30
+        )
+        self.assertEqual(after.returncode, 0, after.stderr)
+        self.assertEqual(json.loads(after.stdout), json.loads(before.stdout))
+
     def test_setup_status_is_read_only(self):
         with workspace() as root:
             state = root / "state"
