@@ -13,7 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.progress import without_elapsed
+from support.progress import phase_progress, without_elapsed
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
@@ -126,11 +126,15 @@ def test_interrupts_first_cell_before_resolver_registration(
         release,
         root,
     ):
-        client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
-        assert without_elapsed(last_tool_text(client)) == RUNNING
         started.wait("first resolver has not been spawned")
         assert not (root / "resolver.jsonl").exists()
+        # The preparation handle is registered, but its materializer is held
+        # before process creation. Observe that owner before and after interrupt.
+        client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
+        assert phase_progress(last_tool_text(client)) == "dependency preparation"
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         client.send(control="interrupt", timeout_ms=0)
+        assert phase_progress(last_tool_text(client)) == "dependency preparation"
         assert without_elapsed(last_tool_text(client)) == RUNNING
         (root / "armed").unlink()
         release.release()
@@ -154,8 +158,6 @@ def test_interrupts_first_cell_between_resolver_phases(
         release,
         root,
     ):
-        client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
-        assert without_elapsed(last_tool_text(client)) == RUNNING
         started.wait("default preparation has not been spawned")
         invocations = [
             json.loads(line)
@@ -164,7 +166,11 @@ def test_interrupts_first_cell_between_resolver_phases(
         assert len(invocations) == 1, invocations
         assert invocations[0]["program"] == "uv", invocations
         assert invocations[0]["arguments"][:2] == ["python", "list"], invocations
+        client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
+        assert phase_progress(last_tool_text(client)) == "dependency preparation"
+        assert without_elapsed(last_tool_text(client)) == RUNNING
         client.send(control="interrupt", timeout_ms=0)
+        assert phase_progress(last_tool_text(client)) == "dependency preparation"
         assert without_elapsed(last_tool_text(client)) == RUNNING
         (root / "armed").unlink()
         release.release()
@@ -189,13 +195,17 @@ def test_interrupts_first_cell_admitted_during_stdin_startup(
         release,
         root,
     ):
-        client.send(stdin="old input\n", timeout_ms=0)
-        assert last_tool_text(client) == "\n[phase: startup]\n[worker starting]"
         started.wait("stdin startup has not spawned its first resolver")
         assert not (root / "resolver.jsonl").exists()
+        client.send(stdin="old input\n", timeout_ms=0)
+        assert last_tool_text(client) == (
+            "\n[phase: dependency preparation]\n[worker starting]"
+        )
         client.send(r="startup_cell_ran <- TRUE", timeout_ms=0)
+        assert phase_progress(last_tool_text(client)) == "dependency preparation"
         assert without_elapsed(last_tool_text(client)) == RUNNING
         client.send(control="interrupt", timeout_ms=0)
+        assert phase_progress(last_tool_text(client)) == "dependency preparation"
         assert without_elapsed(last_tool_text(client)) == RUNNING
         (root / "armed").unlink()
         release.release()

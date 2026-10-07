@@ -10,7 +10,7 @@ result:
     - type: text
       text: |-
 
-        [phase: startup]
+        [phase: dependency preparation]
         [worker starting]
   isError: false
 ---
@@ -22,7 +22,7 @@ result:
     - type: text
       text: |-
 
-        [elapsed: <elapsed>s since admission; no new output; phase: startup]
+        [elapsed: <elapsed>s since admission; no new output; phase: dependency preparation]
         [running; poll with an empty send]
   isError: false
 ---
@@ -34,7 +34,7 @@ result:
     - type: text
       text: |-
 
-        [elapsed: <elapsed>s since admission; no new output; phase: startup]
+        [elapsed: <elapsed>s since admission; no new output; phase: dependency preparation]
         [running; poll with an empty send]
   isError: false
 ---
