@@ -19,7 +19,7 @@ from boundaries.client_server.python.test_startup import (
     isolated_python,
     selected_python,
 )
-from support.progress import elapsed_progress, without_elapsed
+from support.progress import elapsed_progress, phase_progress, without_elapsed
 from support.requirements import (
     NATIVE_FIXTURES,
     POSIX,
@@ -284,6 +284,9 @@ def test_invalid_early_cell_does_not_poison_default_startup(
                     timeout_ms=0,
                 )
                 assert without_elapsed(last_result_text(client)) == RUNNING
+                assert (
+                    phase_progress(last_result_text(client)) == "dependency preparation"
+                )
                 release.release()
                 failure = client.send()
                 assert failure["isError"]
@@ -493,10 +496,12 @@ def test_early_replacement_requirements_withholds_cell_until_prepared(
             timeout_ms=0,
         )
         assert without_elapsed(last_result_text(client)) == RUNNING
+        assert phase_progress(last_result_text(client)) == "dependency preparation"
         client.send(python="counter += 1", timeout_ms=20)
         assert client.transcript[-1]["result"]["isError"]
         client.send(timeout_ms=20)
         assert without_elapsed(last_result_text(client)) == RUNNING
+        assert phase_progress(last_result_text(client)) == "dependency preparation"
         fixture.release.release()
         client.response_timeout = 600
         client.send(timeout_ms=600_000)
@@ -597,6 +602,7 @@ def early_requirements_with_pending_poll(
                 )
                 client.receive(submitted)
                 assert without_elapsed(last_result_text(client)) == RUNNING
+                assert phase_progress(last_result_text(client)) == "startup"
                 release.release()
                 prepared.wait("initial polling does not block candidate preparation")
                 proceed.release()

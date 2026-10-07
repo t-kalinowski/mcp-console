@@ -1568,11 +1568,19 @@ def r_startup_with_python(
             # The startup package attaches to the interpreter selected by
             # bootstrap, including after an interrupted Python-first setup.
             if system_default_packages:
-                # Package startup supplies the readiness boundary. Dependency
-                # preparation may outlive a send's response timeout in CI.
-                startup = client.start_send(r="invisible(NULL)", timeout_ms=0)
+                # Eager R startup can be observed before admission. Python-first
+                # setup deliberately defers R until this cell reaches it.
                 try:
-                    ready.wait("R startup package", timeout=client.response_timeout)
+                    if not python_first:
+                        ready.wait("R startup package", timeout=client.response_timeout)
+                        inspected = client.send(requirements={"action": "get"})
+                        assert (
+                            not inspected["isError"]
+                            and "structuredContent" in inspected
+                        )
+                    startup = client.start_send(r="invisible(NULL)", timeout_ms=0)
+                    if python_first:
+                        ready.wait("R startup package", timeout=client.response_timeout)
                     client.receive(startup)
                     assert without_elapsed(last_result_text(client)) == (
                         "\n[running; poll with an empty send]"
@@ -1665,7 +1673,9 @@ def r_startup_with_python(
                     "structuredContent"
                 ]["requirements"]
                 assert retained == accepted, (retained, accepted)
-            records = client.finish()[3:]
+            records = client.finish()
+            if not system_default_packages:
+                records = records[3:]
             if managed:
                 records = json.loads(
                     json.dumps(records).replace(version, "<selected Python version>")
