@@ -70,7 +70,6 @@ def test_duplicate_keys_use_last_value(binary: Path) -> Transcript:
     return [{"yaml": yaml, "initialized": True} for yaml in cases]
 
 
-@platform_snapshots("win32")
 def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
     cases = (
         ("invalid tagged scalar", "sandbox: {network: !!int enabled}", "YAML"),
@@ -129,7 +128,9 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
     return transcript
 
 
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32", reason="Reading a directory reports the native OS filesystem error"
+)
 def test_discovers_only_launch_directory_configuration(binary: Path) -> Transcript:
     transcript = []
     with TemporaryDirectory() as directory:

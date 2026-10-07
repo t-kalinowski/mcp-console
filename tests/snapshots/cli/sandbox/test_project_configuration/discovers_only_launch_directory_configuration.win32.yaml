@@ -21,15 +21,17 @@ case: .agents/console/config.yaml
 command: serve
 stderr: >
   .agents/console/config.yaml: unknown: unknown field `unknown`, expected
-  one of `startup`, `cache`, `python`, `languages`, `extends`, `sandbox`,
-  `resolver`
+  one of `startup`, `cache`, `python`, `languages`, `inherit_environment`,
+  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
+  public format
 ---
 case: .agents/console/config.yaml
 command: sandbox
 stderr: >
   .agents/console/config.yaml: unknown: unknown field `unknown`, expected
-  one of `startup`, `cache`, `python`, `languages`, `extends`, `sandbox`,
-  `resolver`
+  one of `startup`, `cache`, `python`, `languages`, `inherit_environment`,
+  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
+  public format
 ---
 case: ancestors ignored
 initialized: true

@@ -14,9 +14,8 @@ from support.assertions import last_result_text, wait_for_evaluation_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
-from support.normalization import code
+from support.normalization import normalize_process_diagnostic, code
 from support.records import Transcript, TranscriptWithCompanions
-from support.snapshots import platform_snapshots
 from boundaries.client_server.python.test_without_r import (
     environment as without_r_environment,
 )
@@ -336,7 +335,6 @@ def test_no_r_sql_interrupt_and_worker_crash(
 
 
 @executions(DIRECT, SANDBOXED)
-@platform_snapshots("win32")
 def test_no_r_extension_preparation_uses_candidate_provider(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -366,8 +364,10 @@ def test_no_r_extension_preparation_uses_candidate_provider(
         assert platform is not None, output
         assert f"platform={platform[1]}&" in output, output
         assert client.transcript[-1]["result"]["isError"] is True
-        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
-            platform[1], "<duckdb platform>"
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            normalize_process_diagnostic(output).replace(
+                platform[1], "<duckdb platform>"
+            )
         )
         # fmt: python
         python = code("""

@@ -104,7 +104,9 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
         return client.finish()
 
 
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32", reason="Canonical tool schemas and control descriptions differ on Windows"
+)
 @executions(DIRECT, SANDBOXED)
 def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
@@ -269,6 +271,9 @@ def _initializes_and_lists_tools(
                         "Evaluate one complete"
                     )
             description = send["description"]
+            assert ("ir run script.R" in description) == (
+                not custom and "r" in send["inputSchema"]["properties"]
+            ), description
             assert "Run one cell at a time" in description
             assert "An error can leave earlier changes in place" in description
             assert "active host resolver" not in properties["control"]["description"]
@@ -486,20 +491,24 @@ def test_describes_captured_writable_locations(binary: Path) -> Transcript:
     return records
 
 
-@platform_snapshots("win32")
 def test_language_switching_guidance_matches_enabled_fields(binary: Path) -> Transcript:
+    return _language_switching_guidance(binary, ("r", "python", "r,python"))
+
+
+@requires(SQL)
+def test_sql_language_switching_guidance_matches_enabled_fields(
+    binary: Path,
+) -> Transcript:
+    return _language_switching_guidance(
+        binary, ("sql", "r,sql", "python,sql", "r,python,sql")
+    )
+
+
+def _language_switching_guidance(
+    binary: Path, selections: tuple[str, ...]
+) -> Transcript:
     transcript = []
-    for enabled in (
-        "r",
-        "python",
-        "sql",
-        "r,python",
-        "r,sql",
-        "python,sql",
-        "r,python,sql",
-    ):
-        if "sql" in enabled and not SQL.available:
-            continue
+    for enabled in selections:
         environment = dict(os.environ, MCP_CONSOLE_LANGUAGES=enabled)
         with McpClient(
             binary, DIRECT.serve("--worker", "unused-worker"), environment

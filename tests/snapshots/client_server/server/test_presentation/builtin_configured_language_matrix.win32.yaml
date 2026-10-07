@@ -4,7 +4,9 @@ language_guidance: >-
   Persistent R and Python workbench for local execution on Windows. SQL is not
   yet supported. Send one complete `r` or `python` cell per call. Inspect its
   output and reuse persistent objects. Results display automatically; supported
-  plots return as images.
+  plots return as images. For a reusable R script, include imports, data inputs,
+  and `#| packages:`/`#| r-version:` metadata for `ir run script.R`, which
+  starts without live Console objects.
 
 
   Run one cell at a time. Wait for its `send` to return before another call with
@@ -37,7 +39,9 @@ language_guidance: >-
   Persistent R and Python workbench for local execution on Windows. SQL is not
   yet supported. Send one complete `r` or `python` cell per call. Inspect its
   output and reuse persistent objects. Results display automatically; supported
-  plots return as images.
+  plots return as images. For a reusable R script, include imports, data inputs,
+  and `#| packages:`/`#| r-version:` metadata for `ir run script.R`, which
+  starts without live Console objects.
 
 
   Run one cell at a time. Wait for its `send` to return before another call with

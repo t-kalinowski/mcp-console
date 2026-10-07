@@ -144,6 +144,9 @@ impl Profile {
             if !cfg!(windows) || self.configured_visibility {
                 description.push_str("\n\n");
                 description.push_str(&self.language_guidance());
+            } else if self.languages.r {
+                description.push(' ');
+                description.push_str(sections::R_SCRIPT.trim_end());
             }
         } else {
             description.push_str("\n\n");
@@ -172,6 +175,7 @@ impl Profile {
         for (enabled, section) in [
             (self.languages.sql, sections::SQL_SELECTION),
             (self.languages.r, sections::R_SELECTION),
+            (self.languages.r, sections::R_SCRIPT),
             (self.languages.python, sections::PYTHON_SELECTION),
         ] {
             if enabled {

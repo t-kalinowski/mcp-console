@@ -12,6 +12,7 @@ result:
 ---
 send:
   r: |
+    options(useFancyQuotes = FALSE)
     conditionMessage(tryCatch(
       library(mcpConsoleDefinitelyMissingPackage),
       error = identity
@@ -20,7 +21,7 @@ result:
   content:
     - type: text
       text: |
-        [1] "there is no package called ‘mcpConsoleDefinitelyMissingPackage’"
+        [1] "there is no package called 'mcpConsoleDefinitelyMissingPackage'"
   isError: false
 ---
 send:

@@ -125,7 +125,9 @@ After implementation, rerun the focused case.
 Regenerate only intentional snapshot changes, then rerun without `--update`.
 Review the diff, embedded-program indentation, and `git diff --check` after formatting.
 Ruff emits LF line endings, including Python fences formatted through yamark, so CRLF Windows documents retain a separate closing fence.
-A shared fixture change may need snapshots from other platforms; a local skip does not validate them.
+Prefer shared transcripts for portable behavior; see the [snapshot policy](../tests/boundaries/README.md#snapshots).
+Retain platform variants only for the exact platform-specific contract being tested.
+A local skip does not validate another platform or capability.
 
 On macOS/Linux, the default `scripts/check` stages the companion, validates extracted runtime sources and architecture, checks Rust formatting and Clippy, runs debug Rust tests, builds the release executable, and runs the explicit smoke transcript profile.
 On Windows, it uses the previously staged companion, performs the same source and Rust checks, builds the debug executable, and runs the native acceptance suite.
@@ -148,7 +150,7 @@ Windows native cases use unittest assertions.
 Shared boundary cases support `--update`, `--jobs`, and transcript deadlines on Windows; these options require a boundary selector or an unscoped `--full`.
 Explicit selectors keep their scope with either profile.
 Only an unscoped full run audits orphan snapshots, and only a successful full update removes them.
-Focused updates preserve unselected snapshots.
+Focused updates preserve unselected snapshots and remove obsolete companions of successfully updated cases, including variants whose platform declaration was removed.
 
 Set `MCP_CONSOLE_TEST_BINARY` to an absolute installed executable to skip the checkout build for transcripts; sandboxed cases still need its companion bundle.
 Use `--jobs N` and `--timeout SECONDS` to control case concurrency and deadlines.
