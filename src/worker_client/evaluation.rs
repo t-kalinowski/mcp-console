@@ -202,17 +202,10 @@ impl Evaluation {
         ))
     }
 
-    /// True identifies owned replacement work; None leaves other owners observable.
+    /// None omits a busy observation; false leaves other owners observable.
     pub(super) fn replacement_observation(&self) -> Option<bool> {
         let state = self.state.try_lock().ok()?;
-        if state.retired {
-            return None;
-        }
-        match state.phase {
-            EvaluationPhase::Evaluating => Some(false),
-            EvaluationPhase::ReplacementStarting => Some(true),
-            EvaluationPhase::CellCompletionGrace(_) | EvaluationPhase::Complete(_) => None,
-        }
+        Some(!state.retired && matches!(state.phase, EvaluationPhase::ReplacementStarting))
     }
 
     pub(super) fn interrupt_bootstrap(&self) -> Result<(), String> {

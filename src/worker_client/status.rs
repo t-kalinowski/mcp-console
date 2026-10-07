@@ -24,10 +24,10 @@ impl Source {
     pub(super) fn phase(&self) -> Option<&'static str> {
         let client = self.client.upgrade()?;
         let replacing = match &self.owner {
-            Owner::Evaluation(evaluation) => evaluation
-                .upgrade()
-                .and_then(|evaluation| evaluation.replacement_observation())
-                .unwrap_or(false),
+            Owner::Evaluation(evaluation) => match evaluation.upgrade() {
+                Some(evaluation) => evaluation.replacement_observation()?,
+                None => false,
+            },
             _ => false,
         };
         // Status is disposable: contention must not extend a response deadline
