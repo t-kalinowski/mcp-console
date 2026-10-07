@@ -789,6 +789,20 @@ def test_cancelled_restart_shares_retry_and_preserves_next_cell(
 def test_cancelled_retry_preparation_withholds_bundled_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
+    return cancelled_retry_preparation(binary, execution, with_cell=True)
+
+
+@requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_cancelled_retry_preparation_withholds_stdin_only(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return cancelled_retry_preparation(binary, execution, with_cell=False)
+
+
+def cancelled_retry_preparation(
+    binary: Path, execution: Execution, *, with_cell: bool
+) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory).resolve()
         (root / "python3").symlink_to(FRAMEWORK_PYTHON)
@@ -823,20 +837,23 @@ def test_cancelled_retry_preparation_withholds_bundled_cell(
             assert failure.get("isError"), failure
             assert "require `uv` on PATH" in str(failure), failure
             (root / "uv").symlink_to(fixture["RETICULATE_UV"])
-            pending = client.start_send(
-                control="restart",
-                requirements={"action": "set", "python": ["six"]},
-                stdin="cancelled input\n",
+            following_cell: dict[str, str] = {}
+            if with_cell:
                 # fmt: python
-                python=code("""
+                following_cell["python"] = code("""
                     from pathlib import Path
 
                     Path("cancelled-cell").write_text("ran")
                     print("cancelled cell ran")
-                    """),
+                    """)
+            pending = client.start_send(
+                control="restart",
+                requirements={"action": "set", "python": ["six"]},
+                stdin="cancelled input\n",
+                **following_cell,
             )
             reached.wait(
-                "changed retry requirements are preparing before cell admission"
+                "changed retry requirements are preparing before input or cell admission"
             )
             client.notify("notifications/cancelled", requestId=pending["id"])
             client.request("ping")
@@ -906,14 +923,19 @@ def test_cancelled_retry_preparation_withholds_bundled_cell(
             )
             client.transcript[poll_start:] = [client.transcript[-1]]
             assert not (root / "cancelled-cell").exists(), last_result_text(client)
-            assert client.transcript[-1]["result"].get("isError"), client.transcript[-1]
-            assert last_result_text(client) == (
-                "[runtime discovery retried]\nrequest cancelled before cell admission; cell was not run"
-            )
+            retry_result = client.transcript[-1]["result"]
+            retry_text = last_result_text(client)
             retained = client.send(requirements={"action": "get"})
             assert retained["structuredContent"]["requirements"]["python"] == ["six"], (
                 retained
             )
+            if not with_cell:
+                client.send(python="answer = input('fresh> '); print(answer)")
+                assert last_tool_text(client) == (
+                    '[input requested: "fresh> "]\n[waiting for stdin]'
+                ), last_tool_text(client)
+                client.expect("fresh input\n", stdin="fresh input\n")
+                client.expect("'fresh input'\n", python="answer")
             client.expect(
                 "42\n",
                 # fmt: python
@@ -927,6 +949,12 @@ def test_cancelled_retry_preparation_withholds_bundled_cell(
                     """),
             )
             client.expect("43\n", python="answer + 1")
+            assert retry_result.get("isError"), retry_result
+            assert retry_text == (
+                "[runtime discovery retried]\nrequest cancelled before cell admission; cell was not run"
+                if with_cell
+                else "[runtime discovery retried]\n[request cancelled before stdin admission]"
+            ), retry_text
             return json.loads(
                 json.dumps(client.finish()).replace(str(root), "<workspace>")
             )

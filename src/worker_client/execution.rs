@@ -53,12 +53,10 @@ impl Client {
         let startup = self.reserve_worker_startup(&generation)?;
         // Serialize retry cancellation with publishing its accepted cell.
         // Its preparation has already committed and is not rolled back here.
-        let cell_cancelled = control
-            .and_then(|control| control.cell_cancelled.as_ref())
-            .map(|cancelled| cancelled.lock().expect("retry cell cancellation lock"));
-        if cell_cancelled.as_ref().is_some_and(|cancelled| **cancelled) {
-            return Err("request cancelled before cell admission".into());
-        }
+        let retry_admission = match control {
+            Some(control) => control.admit_retry_payload("cell")?,
+            None => None,
+        };
         let (idle_prelude, worker_revision) = self.0.output.take_admission_prelude();
         let evaluation = Arc::new(Evaluation::new(
             transcript,
@@ -85,7 +83,7 @@ impl Client {
         });
         let initial_requirements = active.as_ref().unwrap().initial_requirements.clone();
         let readiness = self.startup_result();
-        drop(cell_cancelled);
+        drop(retry_admission);
         drop(active);
 
         let client = self.clone();
@@ -195,12 +193,34 @@ impl Client {
         stdin: String,
         generation: WorkerGeneration,
     ) -> Result<(), SendFailure> {
+        self.write_idle_stdin_admitted(stdin, generation, None)
+    }
+
+    pub(super) fn write_idle_stdin_admitted(
+        &self,
+        stdin: String,
+        generation: WorkerGeneration,
+        control: Option<&ControlledSendAdmission>,
+    ) -> Result<(), SendFailure> {
         self.with_worker(&generation, |worker| {
+            // Startup may block; accept stdin only after it settles, using the
+            // same cancellation boundary as a retry's following cell.
+            let _admission = match control {
+                Some(control) => match control.admit_retry_payload("stdin") {
+                    Ok(admission) => admission,
+                    // Cancelled admission is not a worker transport failure.
+                    Err(error) => return Ok(Err(SendFailure::from(error))),
+                },
+                None => None,
+            };
             if !stdin.is_empty() {
                 self.0.unused_default.store(false, Ordering::Release);
             }
-            worker.write_stdin(stdin).map_err(SendFailure::from)
-        })
+            worker
+                .write_stdin(stdin)
+                .map(|()| Ok(()))
+                .map_err(SendFailure::from)
+        })?
     }
 
     fn evaluate_blocking(

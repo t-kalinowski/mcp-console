@@ -52,7 +52,7 @@ Closing the connection preserves completed setup failures in the server's exit s
 Connection closure that refuses pending startup admission exits quietly; that refusal is separate from a completed setup error.
 After correcting setup, an explicit `control="restart"` retries that failed readiness attempt using the server's captured configuration and current filesystem/tool availability.
 Concurrent restart callers share an in-flight retry; request cancellation and timeout leave it running, while connection closure cancels and retires it.
-Cancelling a restart before its bundled cell is admitted leaves that cell unaccepted.
+Cancelling a restart before its code or nonempty stdin is admitted leaves that work unaccepted, including stdin-only retries.
 If cancellation arrives during its bundled requirements preparation, preparation can commit, but that call's code and stdin stay unaccepted.
 If setup still fails, the retry reports and retains its new diagnostic.
 Previously rejected cells and their bundled stdin or requirements are not replayed; their diagnostics remain available for polling.

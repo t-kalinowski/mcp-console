@@ -33,13 +33,13 @@ enum ControlledStdinFailure {
     IdleWorker(SendFailure),
 }
 
-/// Dropping the retry's async wait must also close its pending cell admission.
-/// Preparation can finish independently; an already admitted cell keeps running.
-struct RetryCellCancellation(Arc<Mutex<bool>>);
+/// Dropping the retry's async wait closes pending code and stdin admission.
+/// Preparation and already admitted work can finish independently.
+struct RetryAdmissionCancellation(Arc<Mutex<bool>>);
 
-impl Drop for RetryCellCancellation {
+impl Drop for RetryAdmissionCancellation {
     fn drop(&mut self) {
-        *self.0.lock().expect("retry cell cancellation lock") = true;
+        *self.0.lock().expect("retry admission cancellation lock") = true;
     }
 }
 
@@ -81,12 +81,17 @@ impl Client {
         let direct_restart_error = matches!(control, SendControl::Restart)
             && request.requirements.is_some()
             && request.cell.is_none();
-        let cell_wait = (initial_restart && request.cell.is_some())
-            .then(|| RetryCellCancellation(Arc::new(Mutex::new(false))));
-        let cell_cancelled = cell_wait.as_ref().map(|wait| wait.0.clone());
+        let admission_wait = (initial_restart
+            && (request.cell.is_some()
+                || request
+                    .stdin
+                    .as_ref()
+                    .is_some_and(|stdin| !stdin.is_empty())))
+        .then(|| RetryAdmissionCancellation(Arc::new(Mutex::new(false))));
+        let retry_cancelled = admission_wait.as_ref().map(|wait| wait.0.clone());
         let client = self.clone();
         let admission = tokio::task::spawn_blocking(move || {
-            client.control_and_start_evaluation(control, request, initial_restart, cell_cancelled)
+            client.control_and_start_evaluation(control, request, initial_restart, retry_cancelled)
         })
         .await;
         let admission = match admission {
@@ -140,7 +145,7 @@ impl Client {
         requested: SendControl,
         request: SendRequest,
         initial_restart: bool,
-        cell_cancelled: Option<Arc<Mutex<bool>>>,
+        retry_cancelled: Option<Arc<Mutex<bool>>>,
     ) -> Result<ControlledEvaluation, String> {
         let SendRequest {
             cell,
@@ -183,7 +188,7 @@ impl Client {
             }
             Err(error) => return Err(error),
         };
-        control.cell_cancelled = cell_cancelled;
+        control.retry_cancelled = retry_cancelled;
         match requested {
             SendControl::Interrupt => self.interrupt_and_start_evaluation(
                 &control,
@@ -438,7 +443,13 @@ impl Client {
                     return Err("session restarted before the operation began".into());
                 }
                 let wait_claim = active.evaluation.claim()?;
-                if let Some(stdin) = stdin {
+                if let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) {
+                    let _admission = match control.admit_retry_payload("stdin") {
+                        Ok(admission) => admission,
+                        Err(error) => {
+                            return Ok(self.return_controlled_response(Response::tool_error(error)));
+                        }
+                    };
                     active.evaluation.submit_stdin(stdin)?;
                 }
                 return Ok(ControlledEvaluation::Observe {
@@ -489,7 +500,9 @@ impl Client {
         let Some(cell) = cell else {
             let response = restart.response;
             if let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) {
-                if let Err(failure) = self.write_idle_stdin_blocking(stdin, generation.clone()) {
+                if let Err(failure) =
+                    self.write_idle_stdin_admitted(stdin, generation.clone(), Some(control))
+                {
                     return Ok(self.return_controlled_failure(response, failure));
                 }
                 return Ok(self.return_controlled_response(output::render_response(
