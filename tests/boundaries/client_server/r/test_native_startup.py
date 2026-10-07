@@ -94,8 +94,10 @@ def test_native_order_and_captured_configuration(
             restored_value <- 42L
             save(restored_value, file = ".RData")
             """)
+        workspace_source = root / "save-workspace.R"
+        workspace_source.write_text(workspace)
         subprocess.run(
-            [rscript, "--vanilla", "-e", workspace],
+            [rscript, "--vanilla", str(workspace_source)],
             cwd=root,
             env=environment,
             check=True,
