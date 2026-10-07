@@ -1,6 +1,7 @@
 //! Bounded ordered text projection, independent of raw-file retention.
 
 use super::{Content, utf8_prefix_length};
+use std::sync::Arc;
 
 /// Complete rendered tool-result text, including all Console notices.
 pub(crate) const TEXT_BYTES: usize = 8 * 1024;
@@ -20,7 +21,8 @@ pub(super) enum Part {
     Gap(Gap),
     Notice(Control),
     Information(String),
-    Image(Content),
+    // Ephemeral text projections share the retained image until MCP rendering.
+    Image(Arc<Content>),
     ImageGap,
     Source(Source),
     Summary(Summary),
@@ -184,12 +186,12 @@ impl Preview {
         self.omitted_image_bytes = self.omitted_image_bytes.saturating_add(bytes as u64);
     }
 
-    pub(super) fn image(&mut self, content: Content) {
+    pub(super) fn image(&mut self, content: Arc<Content>) {
         let Content::Image {
             data,
             mime_type,
             artifact,
-        } = &content
+        } = content.as_ref()
         else {
             unreachable!("only image content enters the independent image budget")
         };
@@ -529,7 +531,7 @@ impl Preview {
                     }
                     Part::Image(image) => {
                         if let Some(content) = &mut projection.content {
-                            content.push(image.clone());
+                            content.push(image.as_ref().clone());
                         }
                     }
                     Part::ImageGap => {

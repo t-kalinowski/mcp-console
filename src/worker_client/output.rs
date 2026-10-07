@@ -163,7 +163,7 @@ impl Response {
                 data,
                 mime_type,
                 artifact,
-            } = content
+            } = Arc::get_mut(content).expect("retained image has one owner before projection")
             else {
                 continue;
             };
@@ -322,11 +322,11 @@ impl ResponseBuilder {
         mime_type: String,
         artifact: Option<crate::transcript::Artifact>,
     ) {
-        self.response.preview.image(Content::Image {
+        self.response.preview.image(Arc::new(Content::Image {
             data,
             mime_type,
             artifact,
-        });
+        }));
     }
 
     pub(super) fn append_response(&mut self, other: &mut Response) {

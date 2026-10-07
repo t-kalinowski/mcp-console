@@ -11,10 +11,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.progress import elapsed_progress, without_elapsed
+from support.progress import elapsed_progress, phase_progress, without_elapsed
 from support.allocations import AllocationProfile
 from support.assertions import last_tool_text
-from support.checkpoints import FifoCheckpoint
+from support.checkpoints import FifoCheckpoint, wait_for_path
 from support.client import McpClient
 from support.execution import DIRECT
 from support.previews import (
@@ -268,10 +268,13 @@ def recovery_client(
     binary: Path,
     *,
     recording_directory: Path | None = None,
+    block_replacement: bool = False,
 ) -> Iterator[tuple[McpClient, AllocationProfile, FifoCheckpoint, FifoCheckpoint]]:
     worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
+        if block_replacement:
+            (root / "startup-control").write_text("ready")
         with (
             closing(FifoCheckpoint.create(root / "result-reached")) as reached,
             closing(FifoCheckpoint.create(root / "result-release")) as release,
@@ -285,6 +288,15 @@ def recovery_client(
                     "MCP_CONSOLE_TEST_RESULT_REACHED": str(reached.path),
                     "MCP_CONSOLE_TEST_RESULT_RELEASE": str(release.path),
                     "MCP_CONSOLE_TEST_PREVIEW_DIRECTORY": str(root),
+                    **(
+                        {
+                            "ZOD_STARTUP_CONTROL": str(root / "startup-control"),
+                            "ZOD_STARTUP_STARTED": str(root / "startup-started"),
+                            "ZOD_STARTUP_RELEASE": str(root / "startup-release"),
+                        }
+                        if block_replacement
+                        else {}
+                    ),
                     **(
                         {"MCP_CONSOLE_HOME": str(recording_directory)}
                         if recording_directory is not None
@@ -303,6 +315,8 @@ def recovery_client(
             finally:
                 profile.pause_results(False)
                 release.release()
+                if block_replacement:
+                    (root / "startup-release").touch()
 
 
 def cancel_result(
@@ -459,6 +473,56 @@ def test_image_recovery_moves_the_retained_preview(binary: Path) -> Transcript:
         profile.pause_results(False)
         client.send()
         assert last_tool_text(client) == "\n[idle]"
+        return client.finish()
+
+
+@requires(NATIVE_FIXTURES)
+def test_phase_projection_copies_retained_image_once(binary: Path) -> Transcript:
+    with (
+        recovery_client(binary, block_replacement=True) as (
+            client,
+            profile,
+            reached,
+            release,
+        ),
+        closing(FifoCheckpoint.create(reached.path.parent / "image-release")) as emit,
+    ):
+        root = reached.path.parent
+        profile.pause_results(False)
+        client.send(r="preview allocation image then fail", timeout_ms=0)
+        assert without_elapsed(last_tool_text(client)) == (
+            "\n[running; poll with an empty send]"
+        )
+        emit.release()
+        wait_for_path(
+            root / "startup-started",
+            "failed worker replacement awaits ready",
+            client=client,
+        )
+        profile.pause_results(True)
+        profile.start()
+        pending = client.start_send(timeout_ms=0)
+        reached.wait("phase-bearing image result owns delivery before journaling")
+        allocated, _ = profile.stop()
+        profile.pause_results(False)
+        release.release()
+        client.receive(pending)
+        image, progress = pending["result"]["content"]
+        assert image == {
+            "type": "image",
+            "data": "A" * (8 * 1024 * 1024),
+            "mimeType": "image/png",
+        }
+        assert phase_progress(progress["text"]) == "replacement"
+        assert progress["text"].endswith("\n[worker starting]")
+        # MCP requires one encoded copy; the phase overlay must not add another.
+        assert allocated < 9 * 1024 * 1024, allocated
+        image["data"] = "<image byte-identical to 6 MiB of zero bytes>"
+        (root / "startup-release").touch()
+        client.send()
+        assert "phase:" not in last_tool_text(client)
+        client.send(r="echo after replacement")
+        assert last_tool_text(client) == "zod: after replacement\n"
         return client.finish()
 
 
