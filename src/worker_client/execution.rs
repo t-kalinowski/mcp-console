@@ -51,6 +51,14 @@ impl Client {
         }
         self.ensure_evaluation_admission(&generation, control)?;
         let startup = self.reserve_worker_startup(&generation)?;
+        // Serialize retry cancellation with publishing its accepted cell.
+        // Its preparation has already committed and is not rolled back here.
+        let cell_cancelled = control
+            .and_then(|control| control.cell_cancelled.as_ref())
+            .map(|cancelled| cancelled.lock().expect("retry cell cancellation lock"));
+        if cell_cancelled.as_ref().is_some_and(|cancelled| **cancelled) {
+            return Err("request cancelled before cell admission".into());
+        }
         let (idle_prelude, worker_revision) = self.0.output.take_admission_prelude();
         let evaluation = Arc::new(Evaluation::new(
             transcript,
@@ -77,6 +85,7 @@ impl Client {
         });
         let initial_requirements = active.as_ref().unwrap().initial_requirements.clone();
         let readiness = self.startup_result();
+        drop(cell_cancelled);
         drop(active);
 
         let client = self.clone();

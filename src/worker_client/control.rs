@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::environment::{PreparationIntent, PrepareResult};
@@ -31,6 +31,16 @@ enum PriorEvaluation {
 enum ControlledStdinFailure {
     ActiveEvaluation(String),
     IdleWorker(SendFailure),
+}
+
+/// Dropping the retry's async wait must also close its pending cell admission.
+/// Preparation can finish independently; an already admitted cell keeps running.
+struct RetryCellCancellation(Arc<Mutex<bool>>);
+
+impl Drop for RetryCellCancellation {
+    fn drop(&mut self) {
+        *self.0.lock().expect("retry cell cancellation lock") = true;
+    }
 }
 
 fn interrupted_cell_not_run_response(wait: EvaluationWait) -> Response {
@@ -71,9 +81,12 @@ impl Client {
         let direct_restart_error = matches!(control, SendControl::Restart)
             && request.requirements.is_some()
             && request.cell.is_none();
+        let cell_wait = (initial_restart && request.cell.is_some())
+            .then(|| RetryCellCancellation(Arc::new(Mutex::new(false))));
+        let cell_cancelled = cell_wait.as_ref().map(|wait| wait.0.clone());
         let client = self.clone();
         let admission = tokio::task::spawn_blocking(move || {
-            client.control_and_start_evaluation(control, request, initial_restart)
+            client.control_and_start_evaluation(control, request, initial_restart, cell_cancelled)
         })
         .await;
         let admission = match admission {
@@ -127,6 +140,7 @@ impl Client {
         requested: SendControl,
         request: SendRequest,
         initial_restart: bool,
+        cell_cancelled: Option<Arc<Mutex<bool>>>,
     ) -> Result<ControlledEvaluation, String> {
         let SendRequest {
             cell,
@@ -141,7 +155,7 @@ impl Client {
             && cell.is_none()
             && requirements.is_none()
             && stdin.as_ref().is_none_or(String::is_empty);
-        let control = match self.begin_controlled_send() {
+        let mut control = match self.begin_controlled_send() {
             Ok(control) => control,
             Err(_) if standalone_interrupt => {
                 // A controlled restart owns admission while its resolver is live.
@@ -169,6 +183,7 @@ impl Client {
             }
             Err(error) => return Err(error),
         };
+        control.cell_cancelled = cell_cancelled;
         match requested {
             SendControl::Interrupt => self.interrupt_and_start_evaluation(
                 &control,

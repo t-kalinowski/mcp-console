@@ -21,7 +21,7 @@ from boundaries.client_server.server.test_startup import (
     wait_for_send_admission,
 )
 from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
-from support.assertions import last_tool_text, wait_for_idle_output
+from support.assertions import last_result_text, last_tool_text, wait_for_idle_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
@@ -782,6 +782,154 @@ def test_cancelled_restart_shares_retry_and_preserves_next_cell(
         return json.loads(
             json.dumps(client.finish()).replace(str(attempts.parent), "<workspace>")
         )
+
+
+@requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_cancelled_retry_preparation_withholds_bundled_cell(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        (root / "python3").symlink_to(FRAMEWORK_PYTHON)
+        fixture, reached, release = checkpoint_uv_environment(root, "six")
+        environment = without_r(root)
+        environment.update(
+            {
+                name: value
+                for name, value in fixture.items()
+                if name.startswith("MCP_CONSOLE_TEST_") or name == "UV_TOOL_DIR"
+            }
+        )
+        environment.update(
+            {"UV_PYTHON_PREFERENCE": "only-system", "UV_PYTHON_DOWNLOADS": "never"}
+        )
+        with (
+            closing(reached),
+            closing(release),
+            McpClient(
+                binary,
+                execution.serve(
+                    "-c",
+                    "cache=host",
+                    *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+                ),
+                environment,
+                root,
+            ) as client,
+        ):
+            client.initialize_and_list_tools()
+            failure = client.send()
+            assert failure.get("isError"), failure
+            assert "require `uv` on PATH" in str(failure), failure
+            (root / "uv").symlink_to(fixture["RETICULATE_UV"])
+            pending = client.start_send(
+                control="restart",
+                requirements={"action": "set", "python": ["six"]},
+                stdin="cancelled input\n",
+                # fmt: python
+                python=code("""
+                    from pathlib import Path
+
+                    Path("cancelled-cell").write_text("ran")
+                    print("cancelled cell ran")
+                    """),
+            )
+            reached.wait(
+                "changed retry requirements are preparing before cell admission"
+            )
+            client.notify("notifications/cancelled", requestId=pending["id"])
+            client.request("ping")
+            (journal,) = root.glob(".agents/console/sessions/*/internal/events.jsonl")
+
+            def cancellation_recorded() -> Path | None:
+                events = [
+                    json.loads(line)
+                    for line in journal.read_text().rpartition("\n")[0].splitlines()
+                ]
+                call = next(
+                    event
+                    for event in events
+                    if event["event"] == "tool_call"
+                    and event["request_id"] == pending["id"]
+                )
+                for event in events:
+                    if (
+                        event["event"] == "tool_result"
+                        and event["call_id"] == call["call_id"]
+                    ):
+                        assert event["error"] == {
+                            "code": -32603,
+                            "message": "request cancelled; poll with an empty send for any admitted cell",
+                        }, event
+                        return journal
+                return None
+
+            wait_for_checkpoint(
+                cancellation_recorded,
+                "retry cancellation is recorded while changed preparation is gated",
+                root=journal.parent,
+                client=client,
+            )
+            release.release()
+            poll_start = len(client.transcript)
+
+            def retry_finished() -> Path | None:
+                # Observe the public commit before testing admission release;
+                # do not keep sending while the materializer is still running.
+                events = [
+                    json.loads(line)
+                    for line in journal.read_text().rpartition("\n")[0].splitlines()
+                ]
+                if not any(
+                    event["event"] == "requirements_selected"
+                    and event["action"] == "set"
+                    and event["snapshot"]["requirements"]["python"] == ["six"]
+                    for event in events
+                ):
+                    return None
+                result = client.send()
+                if result == {
+                    "content": [
+                        {"type": "text", "text": "[session control is in progress]"}
+                    ],
+                    "isError": True,
+                }:
+                    return None
+                return journal
+
+            wait_for_checkpoint(
+                retry_finished,
+                "retry preparation settles and releases controlled admission",
+                root=journal.parent,
+                client=client,
+            )
+            client.transcript[poll_start:] = [client.transcript[-1]]
+            assert not (root / "cancelled-cell").exists(), last_result_text(client)
+            assert client.transcript[-1]["result"].get("isError"), client.transcript[-1]
+            assert last_result_text(client) == (
+                "[runtime discovery retried]\nrequest cancelled before cell admission; cell was not run"
+            )
+            retained = client.send(requirements={"action": "get"})
+            assert retained["structuredContent"]["requirements"]["python"] == ["six"], (
+                retained
+            )
+            client.expect(
+                "42\n",
+                # fmt: python
+                python=code("""
+                    import six
+                    from pathlib import Path
+
+                    assert not Path("cancelled-cell").exists()
+                    answer = 42
+                    answer
+                    """),
+            )
+            client.expect("43\n", python="answer + 1")
+            return json.loads(
+                json.dumps(client.finish()).replace(str(root), "<workspace>")
+            )
 
 
 @requires(POSIX)

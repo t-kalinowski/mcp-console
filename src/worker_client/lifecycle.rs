@@ -1,4 +1,4 @@
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use super::environment::{Environment, RequirementDelta};
@@ -184,6 +184,7 @@ pub(super) struct ControlledSendAdmission {
     client: Client,
     token: Arc<()>,
     generation: WorkerGeneration,
+    pub(super) cell_cancelled: Option<Arc<Mutex<bool>>>,
 }
 
 impl ControlledSendAdmission {
@@ -946,6 +947,7 @@ impl Client {
             client: self.clone(),
             token,
             generation: lifecycle.generation.clone(),
+            cell_cancelled: None,
         })
     }
 
