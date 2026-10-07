@@ -420,6 +420,7 @@ class SocketGateMcpClient(McpClient):
 
         self.temporary_directory = None
         self.console_home = None
+        self.writable_roots = []
         self.process = process
         self.stdin = input_stream
         self.stdout = SocketTextReader(output_reader)

@@ -225,6 +225,7 @@ def test_custom_worker_captures_duckdb_cache_before_live_r(
             env.pop("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", None)
             env["MCP_CONSOLE_TEST_ZOD_PYTHON_CELLS"] = str(root / "cells.jsonl")
             home = root / "resolver-home"
+            home.mkdir()
             cache = root / "extensions" if explicit else home / ".duckdb/extensions"
             resolver_env = {
                 "HOME": str(home),
@@ -293,6 +294,7 @@ def duckdb_cache(
             (tools / "uv").symlink_to(shutil.which("uv"))
             env = r_test_environment()[0] if r else environment(tools)
             home = root / "resolver-home"
+            home.mkdir()
             cache = root / "extensions" if explicit else home / ".duckdb/extensions"
             resolver_env = {"HOME": str(home)}
             if r:
