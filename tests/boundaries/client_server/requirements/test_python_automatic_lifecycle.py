@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.progress import without_elapsed, without_elapsed_result
+from support.progress import phase_progress, without_elapsed, without_elapsed_result
 from support.requirements import POSIX, PROCESS_EVENTS, R, requires
 from support.assertions import entry_result_text, last_result_text
 from support.checkpoints import FifoCheckpoint
@@ -185,12 +185,17 @@ def test_times_out_and_polls_automatic_python_resolution(
         client = McpClient(binary, execution.serve("-c", "cache=host"), environment)
         resolver_released = False
         finished = False
+        begin = FifoCheckpoint.create(
+            Path(client.temporary_directory.name) / "automatic-import-release"
+        )
         try:
             client.initialize_and_list_tools()
             client.send(python="None")
             assert last_result_text(client) == "[done]"
             # fmt: python
             python = code("""
+                with open("automatic-import-release", "rb", buffering=0) as gate:
+                    assert gate.read(1) == b"1"
                 automatic_timeout_attempts = (
                     globals().get(
                         "automatic_timeout_attempts",
@@ -203,12 +208,20 @@ def test_times_out_and_polls_automatic_python_resolution(
                 (yaml12.__name__, automatic_timeout_attempts)
                 """)
             evaluation = client.start_send(python=python, timeout_ms=1)
-            started.wait("automatic Python resolver")
             client.receive(evaluation)
             assert (
                 without_elapsed(entry_result_text(evaluation))
                 == "\n[running; poll with an empty send]"
             )
+            assert "phase:" not in entry_result_text(evaluation), evaluation
+
+            begin.release()
+            started.wait("automatic Python resolver")
+            client.send(timeout_ms=0)
+            assert without_elapsed(last_result_text(client)) == (
+                "\n[running; poll with an empty send]"
+            )
+            assert phase_progress(last_result_text(client)) == "dependency preparation"
 
             release.release()
             resolver_released = True
@@ -221,6 +234,8 @@ def test_times_out_and_polls_automatic_python_resolution(
             finished = True
             return transcript
         finally:
+            begin.release()
+            begin.close()
             if not resolver_released:
                 release.release()
             started.close()

@@ -11,6 +11,8 @@ result:
 ---
 send:
   python: |
+    with open("automatic-import-release", "rb", buffering=0) as gate:
+        assert gate.read(1) == b"1"
     automatic_timeout_attempts = (
         globals().get(
             "automatic_timeout_attempts",
@@ -28,6 +30,17 @@ result:
       text: |-
 
         [elapsed: <elapsed>s since admission; no new output]
+        [running; poll with an empty send]
+  isError: false
+---
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [elapsed: <elapsed>s since admission; no new output; phase: dependency preparation]
         [running; poll with an empty send]
   isError: false
 ---
