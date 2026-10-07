@@ -1456,7 +1456,9 @@ class WindowsConsole(unittest.TestCase):
                 environ = home / ".Renviron"
                 profile = home / ".Rprofile"
                 environ.write_text(
-                    "CONSOLE_NATIVE_ENV=first\nR_DEFAULT_PACKAGES=utils\n"
+                    "CONSOLE_NATIVE_ENV=first\n"
+                    "CONSOLE_NATIVE_ENV_READS=${CONSOLE_NATIVE_ENV_READS}x\n"
+                    "R_DEFAULT_PACKAGES=utils\n"
                 )
                 profile.write_text(
                     # fmt: r
@@ -1477,6 +1479,7 @@ class WindowsConsole(unittest.TestCase):
                     MCP_CONSOLE_LANGUAGES="r",
                 )
                 environment.pop("R_DEFAULT_PACKAGES", None)
+                environment.pop("CONSOLE_NATIVE_ENV_READS", None)
                 session = Session(
                     environment,
                     bare_r=True,
@@ -1495,7 +1498,9 @@ class WindowsConsole(unittest.TestCase):
                                 f"r:\n  vanilla: {str(not vanilla).lower()}\n"
                             )
                             environ.write_text(
-                                "CONSOLE_NATIVE_ENV=edited\nR_DEFAULT_PACKAGES=utils\n"
+                                "CONSOLE_NATIVE_ENV=edited\n"
+                                "CONSOLE_NATIVE_ENV_READS=${CONSOLE_NATIVE_ENV_READS}x\n"
+                                "R_DEFAULT_PACKAGES=utils\n"
                             )
                             session.send(control="restart")
                         if vanilla:
@@ -1504,6 +1509,7 @@ class WindowsConsole(unittest.TestCase):
                                 stopifnot(
                                   "--vanilla" %in% commandArgs(),
                                   Sys.getenv("CONSOLE_NATIVE_ENV") == "",
+                                  Sys.getenv("CONSOLE_NATIVE_ENV_READS") == "",
                                   !exists("native_value"),
                                   !exists("native_first"),
                                   "package:stats" %in% search()
@@ -1518,6 +1524,7 @@ class WindowsConsole(unittest.TestCase):
                                   !("--vanilla" %in% commandArgs()),
                                   "--no-save" %in% commandArgs(),
                                   identical(native_value, "{value}"),
+                                  identical(Sys.getenv("CONSOLE_NATIVE_ENV_READS"), "x"),
                                   native_first,
                                   identical(getOption("width"), 73L),
                                   "package:utils" %in% search(),

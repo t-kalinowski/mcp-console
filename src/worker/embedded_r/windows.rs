@@ -1,7 +1,7 @@
 //! Windows R startup and message events. R calls stay on the coordinator thread.
 
 use std::error::Error;
-use std::ffi::{CString, c_char, c_int};
+use std::ffi::{CStr, CString, c_char, c_int};
 use std::io;
 use std::sync::OnceLock;
 
@@ -81,15 +81,29 @@ pub(super) fn initialize_r(
     };
     unsafe {
         libr::set(libr::R_SignalHandlers, 0);
-        libr::cmdlineoptions(1, arguments.as_mut_ptr());
-        // cmdlineoptions records only its minimal bootstrap arguments. Preserve
-        // the full interactive identity before common option parsing mutates it.
+        // cmdlineoptions reads environment files before common option parsing,
+        // so it must see --vanilla. Windows expresses interactive embedding in
+        // Rstart rather than accepting the Unix --interactive flag.
+        let mut native_arguments = arguments
+            .iter()
+            .copied()
+            .filter(|argument| CStr::from_ptr(*argument).to_bytes() != b"--interactive")
+            .collect::<Vec<_>>();
+        libr::cmdlineoptions(
+            native_arguments.len() as c_int,
+            native_arguments.as_mut_ptr(),
+        );
+        // Preserve the full interactive identity before common option parsing
+        // mutates the original argument array.
         set_arguments(arguments.len() as c_int, arguments.as_mut_ptr());
         let mut params = MaybeUninit::<libr::structRstart>::uninit();
         libr::R_DefParamsEx(params.as_mut_ptr(), 0);
         let mut params = params.assume_init();
         let mut count = arguments.len() as c_int;
         libr::R_common_command_line(&mut count, arguments.as_mut_ptr(), &mut params);
+        // R's cmdlineoptions has already processed or suppressed environment
+        // files. Installing embedding callbacks must not process them twice.
+        params.set_NoRenviron(libr::Rboolean_TRUE);
         params.R_Interactive = 1;
         params.CharacterMode = libr::UImode_RGui;
         // Console transports plain UTF-8, not RGui's marked UTF-8 spans.
