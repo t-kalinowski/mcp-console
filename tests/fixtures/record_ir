@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -89,7 +90,18 @@ def main() -> None:
 
     block = os.environ.get("MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT")
     if block is not None and block in arguments:
+        interrupted = os.environ.get("MCP_CONSOLE_TEST_IR_INTERRUPTED")
+        if interrupted is not None:
+            # Receive SIGINT synchronously, independent of Python callbacks
+            # deferred during FIFO I/O. Block it before publishing readiness.
+            previous = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+            assert signal.SIGINT not in previous
         notify(os.environ["MCP_CONSOLE_TEST_IR_STARTED"])
+        if interrupted is not None:
+            signum = signal.sigwait({signal.SIGINT})
+            assert signum == signal.SIGINT
+            notify(interrupted)
+            raise SystemExit(128 + signum)
         wait(os.environ["MCP_CONSOLE_TEST_IR_RELEASE"])
 
     if library := fixture_library(arguments):

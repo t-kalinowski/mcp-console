@@ -2893,8 +2893,11 @@ def ignores_python_layout_override(
                     {
                         "environment": {
                             variable: "unavailable-configured-layout",
-                            "HOME": env["HOME"],
+                            "HOME": env.get("HOME") or str(Path.home()),
                             "PATH": env["PATH"],
+                            "TMPDIR": str(root),
+                            "TEMP": str(root),
+                            "TMP": str(root),
                         },
                         "inherit_environment": inherit,
                     }

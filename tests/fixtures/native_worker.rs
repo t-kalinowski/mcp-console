@@ -513,7 +513,8 @@ fn native_probe() {
     let (reader, writer) = crate::sideband::connect_from_env().expect("connect sideband");
     interrupt::normalize_signal().expect("normalize worker signal");
     core::initialize(reader, writer.clone()).expect("initialize sideband");
-    let integration = Integration::new(None).expect("initialize native integration");
+    let integration =
+        Integration::new(None, Default::default()).expect("initialize native integration");
     writer
         .send(&WorkerMessage::Ready)
         .expect("report readiness");
@@ -542,6 +543,7 @@ fn native_probe() {
         ))
         .expect("configure native worker environment");
         let mut runtime = crate::python::Runtime::new(crate::local_runtime::WorkerSelection {
+            r_settings: Default::default(),
             r: false,
             python: Some(crate::local_runtime::Python {
                 selected: Box::new(initial.clone()),

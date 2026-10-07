@@ -44,10 +44,13 @@ result:
 send:
   r: |
     incompatible <- tryCatch(
-        reticulate::use_python("/incompatible-python", required = TRUE),
-        error = conditionMessage
+      reticulate::use_python("/incompatible-python", required = TRUE),
+      error = conditionMessage
     )
-    stopifnot(identical(incompatible, "Python is already initialized with another selection; restart required"))
+    stopifnot(identical(
+      incompatible,
+      "Python is already initialized with another selection; restart required"
+    ))
 result:
   content:
     - type: text

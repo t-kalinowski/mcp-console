@@ -5,7 +5,10 @@ send: {}
 result:
   content:
     - type: text
-      text: resolver sandbox requires HOME
+      text: >-
+        resolver.environment: preparation requires an absolute HOME or
+        MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY; configure one when
+        inherit_environment is false
   isError: true
 ---
 send:
@@ -14,7 +17,10 @@ send:
 result:
   content:
     - type: text
-      text: "[worker starting]"
+      text: |-
+
+        [phase: startup]
+        [worker starting]
   isError: false
 ---
 exit_status: 0

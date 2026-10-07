@@ -7,17 +7,26 @@ use super::evaluation::{EvaluationReservation, RestartDelivery};
 use super::output::{Response, ResponseAcknowledgment, SendFailure};
 use super::{Client, WorkerRetirement, WorkerRetirementFailure, WorkerState, platform};
 
-/// Identifies work admitted against one worker without exposing an epoch counter.
+/// Identifies admitted work and retains incomplete R startup across automatic
+/// replacement. Explicit restart creates a fresh identity and startup attempt.
 #[derive(Clone)]
-pub(crate) struct WorkerGeneration(Arc<()>);
+pub(crate) struct WorkerGeneration(Arc<AtomicBool>);
 
 impl WorkerGeneration {
     fn new() -> Self {
-        Self(Arc::new(()))
+        Self(Arc::new(AtomicBool::new(true)))
     }
 
     pub(super) fn is(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    pub(super) fn r_initialization(&self, complete: bool) {
+        self.0.store(complete, Ordering::Release);
+    }
+
+    pub(super) fn r_startup_permitted(&self) -> bool {
+        self.0.load(Ordering::Acquire)
     }
 }
 

@@ -49,9 +49,7 @@ pub(crate) enum SqlProvider {
 
 pub(crate) use platform::configure_worker_environment as configure_native_worker_environment;
 
-pub(crate) use reticulate::{
-    configure_worker_environment as configure_r_environment, defer_r_startup, finish_r_startup,
-};
+pub(crate) use reticulate::configure_worker_environment as configure_r_environment;
 
 thread_local! {
     static ADAPTER: std::cell::RefCell<Option<std::rc::Rc<reticulate::Adapter>>> = const { std::cell::RefCell::new(None) };

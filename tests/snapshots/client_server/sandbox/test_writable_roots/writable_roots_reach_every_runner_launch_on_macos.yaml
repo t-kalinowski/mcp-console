@@ -270,6 +270,7 @@ send:
     print(
         "both grants and subprocess writes verified; neighboring and symlink writes denied"
     )
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -340,6 +341,7 @@ send:
     print(
         "both grants and subprocess writes verified; neighboring and symlink writes denied"
     )
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -407,6 +409,7 @@ send:
     print(
         "both grants and subprocess writes verified; neighboring and symlink writes denied"
     )
+  timeout_ms: 600000
 result:
   content:
     - type: text

@@ -109,6 +109,52 @@ Without R or an explicit selection, Console uses uv on the local host.
 A broken selected interpreter is an error, not a reason to fall back.
 See [runtime selection](BUILTIN_RUNTIME.md).
 
+## Native R startup
+
+The built-in R interpreter uses R's normal startup by default:
+
+```yaml
+r:
+  vanilla: false
+```
+
+Omitting `r` or `r.vanilla` has the same effect.
+R reads environment files and site/user profiles, restores `.RData`, runs `.First()`, and attaches default packages with its native discovery and ordering.
+Console passes `--quiet`, `--interactive`, and `--no-save`; ordinary shutdown does not save a workspace or prompt to save one.
+Profile settings such as `options(width = ...)` are preserved.
+Console still installs its transport, interrupt, graphics, and runtime integration.
+Its managed `device` option captures cell plots; presentation preferences such as width remain under R's control.
+Startup hooks run before Console's runtime bridges and managed plot device attach.
+Console-managed dependency resolution becomes available after those bridges attach.
+Startup plots use R's native device and its ordinary filesystem permissions.
+R/Python attachment must retain the running Python interpreter; a conflicting selection requires explicit restart.
+
+Use R's native `--vanilla` behavior as an explicit escape hatch:
+
+```sh
+mcp-console serve -c r.vanilla=true
+```
+
+`r.vanilla` accepts a boolean and controls only the built-in R interpreter.
+Explicit `r` settings are rejected with custom workers or relays.
+It does not require R in a Python-only session or change discovery and dependency preparation, which remain profile-free.
+
+Native startup runs inside each worker after sandbox entry, with that worker's ordinary permissions.
+Startup files receive no additional grants.
+With `--no-sandbox`, native startup runs without worker sandbox enforcement.
+Console does not discover, capture, source, or replay the files itself.
+
+Startup output and diagnostics use the ordinary MCP output path.
+A profile error that R survives leaves R usable; Console does not interpret diagnostic text as a fatal error.
+If R exits, fails initialization, or is interrupted during initialization, fix the startup file externally and send `control: "restart"` in the same MCP connection to authorize one new attempt after retirement.
+Calls, polls, and dependency preparation do not automatically retry that startup.
+MCP initialization, discovery, and controls remain available while R starts or after the worker fails.
+
+The boolean setting is captured at server launch and retained across worker restarts.
+Changing `config.yaml` requires a new server connection.
+Editing `.Rprofile` takes effect on the next worker restart because R reads it again in the new worker.
+Native R startup precedes the separately configured Console startup source below; the two retain distinct roles.
+
 ## Session startup source
 
 The built-in worker can run one captured R or Python program after its interpreter and session helpers are ready, before the first SQL cell:

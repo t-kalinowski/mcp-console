@@ -52,6 +52,12 @@ impl IrCommand {
     fn command(&self) -> Command {
         let mut command = resolver_command(Path::new(&self.program));
         command.args(&self.arguments);
+        // --vanilla controls ir's final R invocation; its dependency drivers
+        // also start Rscript. No preparation child may execute ambient startup.
+        let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
+        for name in ["R_ENVIRON", "R_ENVIRON_USER", "R_PROFILE", "R_PROFILE_USER"] {
+            command.env(name, null);
+        }
         command
     }
 
@@ -411,6 +417,14 @@ fn resolve_r_with_process(
     // `ir` uses the preparation process's cache and network permissions.
     // Requirement strings are process arguments, never R source.
     let mut command = configuration.ir.command();
+    // Pak's callr subprocess explicitly sources cwd/.Rprofile even when the
+    // outer Rscript has --vanilla and R_PROFILE_USER is disabled. Local source
+    // references are already forbidden; preparation has no project cwd input.
+    let directory = tempfile::Builder::new()
+        .prefix("mcp-console-r-preparation-")
+        .tempdir()
+        .map_err(|error| error.to_string())?;
+    command.current_dir(directory.path());
     command
         .arg("run")
         .arg("--rscript")

@@ -13,6 +13,7 @@ from support.requirements import POSIX, R_EVENT_LOOP, command, requires
 from support.assertions import (
     last_result_text,
     release_worker_callback_gate,
+    wait_for_evaluation_output,
     wait_for_idle_output,
 )
 from support.client import McpClient, stop_client
@@ -256,7 +257,14 @@ def test_sends_r_cell_with_initial_requirements(
         )
         praise::praise("ready")
         """)
-    client.send(r=r, requirements={"r": ["praise"]})
+    wait_for_evaluation_output(
+        client,
+        None,
+        "R cell with initial requirements",
+        completion_timeout_seconds=client.response_timeout,
+        r=r,
+        requirements={"r": ["praise"]},
+    )
     output = last_result_text(client)
     assert output.startswith('[1] "') and "ready" in output, output
     assert "[prepared]" not in output, output

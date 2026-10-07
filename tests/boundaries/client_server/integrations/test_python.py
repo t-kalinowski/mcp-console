@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -577,11 +578,14 @@ def test_native_openai_agents_waits_for_console_output(
             **settings, params=parameters
         ) as server:
             # The fixture stays blocked beyond the SDK's five-second default.
+            started = time.monotonic()
             result = await server.call_tool("send", {"r": "stall", "timeout_ms": 6_000})
+            assert time.monotonic() - started >= 5.9
             recorded = result.model_dump(mode="json", by_alias=True, exclude_none=True)
             text = recorded["content"][0]["text"]
-            age, silent = elapsed_progress(text)
-            assert age >= 5.9 and silent
+            # Startup consumes the call budget before the admission clock begins.
+            _, silent = elapsed_progress(text)
+            assert silent
             recorded["content"][0]["text"] = normalize_elapsed(text)
             return [recorded]
 

@@ -46,6 +46,7 @@ After its cap or a write failure, Console still drains output and counts discard
 These counts are not interchangeable: stream normalization can change byte counts, and discarded raw text can still appear in a preview.
 The latest summary for a cell owns its cumulative totals.
 `session_output` events provide the same counts for startup and idle text; startup images have no call owner.
+Native R startup runs before Console's plot device attaches; its plots use R's native device rather than recorded Console images.
 Failed discovery and explicit retries share the same session log, preserving earlier bytes and appending later preparation, startup and idle output until connection closure.
 
 A journal or artifact failure disables further recording without stopping the worker.
