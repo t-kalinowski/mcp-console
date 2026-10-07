@@ -30,7 +30,7 @@ Console preserves `MCP_CONSOLE_SANDBOX=1` and removes `DYLD_INSERT_LIBRARIES` / 
 
 Configuration is captured once, including absence of a file.
 Restarts cannot rediscover changed YAML.
-`:workspace` adds workspace writes with metadata protections; these are overridable defaults, not denial ceilings.
+`sandbox.filesystem.read_write: [.]` adds workspace writes with metadata protections; these are overridable defaults, not denial ceilings.
 See [configuration](SANDBOX_CONFIGURATION.md) for composition and complete policies.
 
 The server owns one ordinary launcher child per generation.
