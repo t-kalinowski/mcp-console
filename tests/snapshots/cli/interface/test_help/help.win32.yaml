@@ -14,6 +14,7 @@ stderr: |
     help           Print this message or the help of the given subcommand(s)
 
   Options:
+        --no-project-config   Skip launch-directory project configuration; still load home configuration and apply -c overrides
     -c, --config <KEY=VALUE>  Override project configuration; repeat for multiple dotted KEY=VALUE assignments
     -h, --help                Print help
     -V, --version             Print version
@@ -35,6 +36,7 @@ stdout: |
     help           Print this message or the help of the given subcommand(s)
 
   Options:
+        --no-project-config   Skip launch-directory project configuration; still load home configuration and apply -c overrides
     -c, --config <KEY=VALUE>  Override project configuration; repeat for multiple dotted KEY=VALUE assignments
     -h, --help                Print help
     -V, --version             Print version
@@ -50,6 +52,7 @@ stdout: |
   Usage: mcp-console.exe serve [OPTIONS]
 
   Options:
+        --no-project-config     Skip launch-directory project configuration; still load home configuration and apply -c overrides
     -c, --config <KEY=VALUE>    Override project configuration; repeat for multiple dotted KEY=VALUE assignments
         --no-sandbox            Run evaluated code and dependency resolution with host permissions
         --writable-root <PATH>  Allow writes to an additional path (temporary launch option)
@@ -85,6 +88,7 @@ stdout: |
     <COMMAND>...  Command and arguments to run
 
   Options:
+        --no-project-config     Skip launch-directory project configuration; still load home configuration and apply -c overrides
     -c, --config <KEY=VALUE>    Override project configuration; repeat for multiple dotted KEY=VALUE assignments
         --config-env <NAME>     Read the runner configuration as JSON from this launch environment variable
         --writable-root <PATH>  Allow writes to an additional path (temporary launch option)

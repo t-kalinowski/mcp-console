@@ -2,9 +2,20 @@
 languages:
   - r
   - python
+  - sql
 fields:
   - r
   - python
+  - sql
+  - timeout_ms
+  - control
+  - stdin
+  - requirements
+---
+languages:
+  - sql
+fields:
+  - sql
   - timeout_ms
   - control
   - stdin
@@ -12,8 +23,10 @@ fields:
 ---
 languages:
   - r
+  - sql
 fields:
   - r
+  - sql
   - timeout_ms
   - control
   - stdin
@@ -21,8 +34,10 @@ fields:
 ---
 languages:
   - python
+  - sql
 fields:
   - python
+  - sql
   - timeout_ms
   - control
   - stdin

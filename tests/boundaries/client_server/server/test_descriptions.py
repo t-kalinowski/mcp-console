@@ -19,7 +19,6 @@ from support.normalization import code
 from support.records import Transcript
 from support.requirements import POSIX, R, SQL, requires
 from support.resolvers import expose_uv
-from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 
@@ -76,19 +75,11 @@ def _assert_guidance(tool: dict, languages: set[str], *, custom: bool) -> None:
                 assert "requires Python-owned DuckDB" in python
 
 
-def _matrix(binary: Path, *, custom: bool) -> Transcript:
+def _matrix(binary: Path, *, custom: bool, sql: bool = False) -> Transcript:
     records = []
     subsets = (
-        (
-            ("r", "python", "sql"),
-            ("r",),
-            ("python",),
-            ("sql",),
-            ("r", "python"),
-            ("r", "sql"),
-            ("python", "sql"),
-        )
-        if SQL.available
+        (("r", "python", "sql"), ("sql",), ("r", "sql"), ("python", "sql"))
+        if sql
         else (("r", "python"), ("r",), ("python",))
     )
     for languages in subsets:
@@ -129,14 +120,22 @@ def _matrix(binary: Path, *, custom: bool) -> Transcript:
     return records
 
 
-@platform_snapshots("win32")
 def test_builtin_visible_language_descriptions(binary: Path) -> Transcript:
     return _matrix(binary, custom=False)
 
 
-@platform_snapshots("win32")
 def test_custom_visible_language_descriptions(binary: Path) -> Transcript:
     return _matrix(binary, custom=True)
+
+
+@requires(SQL)
+def test_builtin_visible_sql_descriptions(binary: Path) -> Transcript:
+    return _matrix(binary, custom=False, sql=True)
+
+
+@requires(SQL)
+def test_custom_visible_sql_descriptions(binary: Path) -> Transcript:
+    return _matrix(binary, custom=True, sql=True)
 
 
 @requires(SQL, R, POSIX)
@@ -226,22 +225,19 @@ def test_hidden_sql_provider_guidance(binary: Path, execution: Execution) -> Tra
     return records
 
 
-@platform_snapshots("win32")
 def test_missing_runtimes_keep_configured_descriptions(binary: Path) -> Transcript:
-    records = []
-    subsets = (
-        (
-            ("r",),
-            ("python",),
-            ("sql",),
-            ("r", "python"),
-            ("r", "sql"),
-            ("python", "sql"),
-            ("r", "python", "sql"),
-        )
-        if SQL.available
-        else (("r",), ("python",), ("r", "python"))
+    return _missing_runtimes(binary, (("r",), ("python",), ("r", "python")))
+
+
+@requires(SQL)
+def test_missing_runtimes_keep_configured_sql_descriptions(binary: Path) -> Transcript:
+    return _missing_runtimes(
+        binary, (("sql",), ("r", "sql"), ("python", "sql"), ("r", "python", "sql"))
     )
+
+
+def _missing_runtimes(binary: Path, subsets: tuple[tuple[str, ...], ...]) -> Transcript:
+    records = []
     for languages in subsets:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

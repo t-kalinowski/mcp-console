@@ -51,6 +51,11 @@ See the [boundary test guide](tests/boundaries/README.md) for fixtures and snaps
 
 Never hand-edit `tests/snapshots/`.
 Update them through `scripts/test --update` or formatting.
+Use one shared transcript across platforms by default.
+Make fixtures deterministic, normalize incidental paths and presentation only after assertions, and split capability-specific coverage into separate cases with declared requirements.
+Reserve platform snapshots for the exact platform-specific behavior under test; document that behavior in the decorator's `reason`.
+A different handshake, dependency default, newline, or executable suffix alone does not justify a variant of an otherwise portable case.
+Preserve complete errors and tracebacks.
 Client/server transcripts should generally include initialization and tool discovery before ordinary calls.
 Generally keep one `mcp-console` invocation per YAML transcript.
 Include initialization once near the top, normally via a matching canonical `!same-as` reference; use separate transcript files for additional invocations.

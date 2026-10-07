@@ -57,7 +57,10 @@ def bootstrap_diagnostic(client: McpClient, ending: str) -> str:
 
 @executions(DIRECT, SANDBOXED)
 @requires(R)
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32",
+    reason="Windows rejects an invalid explicit Python before interpreter startup",
+)
 def test_preserves_configured_python_environment(
     binary: Path, execution: Execution
 ) -> Transcript:

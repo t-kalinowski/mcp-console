@@ -185,7 +185,9 @@ def test_layers_ordered_overrides_on_home_and_defaults(binary: Path) -> Transcri
     return records
 
 
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32", reason="Unreadable project configuration reports the native OS error"
+)
 def test_skips_invalid_project_configuration(binary: Path) -> Transcript:
     records = []
     with TemporaryDirectory() as temporary:
@@ -237,7 +239,9 @@ def test_skips_invalid_project_configuration(binary: Path) -> Transcript:
     return records
 
 
-@platform_snapshots("win32")
+@platform_snapshots(
+    "win32", reason="Unreadable home configuration reports the native OS error"
+)
 def test_retains_home_errors_and_final_validation(binary: Path) -> Transcript:
     records = []
     with TemporaryDirectory() as temporary:

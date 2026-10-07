@@ -29,7 +29,7 @@ def record(binary: Path, *arguments: str) -> TranscriptEntry:
     return entry
 
 
-@platform_snapshots("win32")
+@platform_snapshots("win32", reason="Windows exposes sandbox-setup in CLI help")
 def test_help(binary: Path) -> Transcript:
     return [
         record(binary),

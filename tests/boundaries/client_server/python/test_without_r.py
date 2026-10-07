@@ -29,7 +29,7 @@ from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.records import Transcript, TranscriptWithCompanions
-from support.snapshots import execution_snapshots, platform_snapshots
+from support.snapshots import execution_snapshots
 from support.python import virtualenv_python
 from support.resolvers import expose_uv
 from support.normalization import code, normalize_python_resolution_error
@@ -605,7 +605,6 @@ def non_utf8_environment_preparation(binary: Path, execution: Execution) -> Tran
             return transcript[3:]
 
 
-@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_prepares_managed_python_at_startup_and_restart(
     binary: Path, execution: Execution
@@ -1112,7 +1111,6 @@ def test_combines_live_python_and_duckdb_additions(
             return client.finish()[3:]
 
 
-@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_retains_automatic_additions_after_import_errors(
     binary: Path, execution: Execution
@@ -1183,6 +1181,15 @@ def test_retains_automatic_additions_after_import_errors(
                 "mcp_console_test_empty_pkg",
                 "mcp_console_test_raises_pkg",
             }.issubset(declaration["python"])
+            # Inspect the complete public response before recording the Python fields
+            # owned by this case; provider inventories have separate coverage.
+            assert (
+                json.loads(last_result_text(client))
+                == client.transcript[-1]["result"]["structuredContent"]
+            )
+            client.transcript[-1]["result"] = {
+                "accepted_python_requirements": declaration["python"]
+            }
             client.expect(
                 "failed imports did not replay cells\n",
                 python="assert steps == ['empty', 'raises']; assert os.getpid() == worker_pid; print('failed imports did not replay cells')",
@@ -3029,7 +3036,6 @@ def test_excludes_executable_directory_from_imports(
             return client.finish()
 
 
-@platform_snapshots("win32")
 @executions(DIRECT, SANDBOXED)
 def test_records_managed_python_defaults(
     binary: Path, execution: Execution
