@@ -233,9 +233,9 @@ stderr: >
 path: extends
 stderr: >
   configuration with CLI overrides: extends: unknown field `extends`,
-  expected one of `cache`, `python`, `languages`, `inherit_environment`,
-  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
-  public format
+  expected one of `startup`, `cache`, `python`, `languages`,
+  `inherit_environment`, `environment`, `sandbox`, `resolver`; see
+  docs/CONFIGURATION.md for the public format
 ---
 path: sandbox.windows_sandbox_level
 stderr: >
