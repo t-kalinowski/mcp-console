@@ -19,13 +19,30 @@ from support.native import build_interposer
 from support.normalization import (
     code,
     normalize_duckdb_progress,
+    normalize_process_diagnostic,
     normalize_trailing_spaces,
 )
-from support.r import r_test_environment
+from support.r import isolated_r_home, r_test_environment
 from support.records import Transcript
 from support.previews import assert_preview, cell_text, normalize_preview_paths
-from support.resolvers import normalize_duckdb_resolution_error
 from support.suites import run_this_suite
+
+
+def extension_failure_environment(workspace: Path) -> dict[str, str]:
+    environment, real_rscript = r_test_environment()
+    environment["RETICULATE_PYTHON"] = ""
+    selected_home = isolated_r_home(workspace, environment)
+    selected_rscript = selected_home / "bin/Rscript"
+    selected_rscript.unlink()
+    selected_rscript.symlink_to(
+        Path(__file__).resolve().parents[3] / "fixtures/fail_duckdb_rscript.py"
+    )
+    # Give transaction rollback a deterministic materializer failure.
+    environment["MCP_CONSOLE_TEST_REAL_RSCRIPT"] = str(real_rscript)
+    environment["MCP_CONSOLE_TEST_DUCKDB_FAIL_EXTENSION"] = (
+        "not_a_real_duckdb_extension"
+    )
+    return environment
 
 
 @requires(SQL)
@@ -86,15 +103,14 @@ def test_uses_default_duckdb_extensions(
         return client.finish()
 
 
-@requires(SQL)
+@requires(SQL, POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_adds_r_and_duckdb_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
+        environment = extension_failure_environment(workspace)
         ambient_library = workspace / "ambient-library"
         ambient_library.mkdir()
         environment["R_LIBS"] = str(ambient_library)
@@ -120,12 +136,10 @@ def test_restart_adds_r_and_duckdb_requirements(
         result = client.transcript[-1]["result"]
         assert result["isError"] is True, result
         failure = result["content"][0]["text"]
-        assert (
-            'Failed to download extension "not_a_real_duckdb_extension"' in failure
+        assert failure.endswith(
+            "fixture DuckDB extension not_a_real_duckdb_extension is unavailable"
         ), failure
-        result["content"][0]["text"] = normalize_duckdb_resolution_error(
-            failure, "not_a_real_duckdb_extension"
-        )
+        result["content"][0]["text"] = normalize_process_diagnostic(failure)
 
         client.send(r="identical(restart_marker, 42L)")
         assert last_tool_text(client) == "[1] TRUE\n"
@@ -165,15 +179,14 @@ def test_restart_adds_r_and_duckdb_requirements(
         return client.finish()
 
 
-@requires(SQL)
+@requires(SQL, POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_prepares_and_loads_duckdb_extensions(
     binary: Path, execution: Execution
 ) -> Transcript:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
+        environment = extension_failure_environment(workspace)
         client = McpClient(
             binary,
             execution.serve(),
@@ -211,13 +224,10 @@ def test_prepares_and_loads_duckdb_extensions(
         assert result["isError"] is True, result
         failure = result["content"][0]["text"]
         assert failure.startswith("DuckDB extension resolution failed with "), failure
-        assert (
-            'Failed to download extension "not_a_real_duckdb_extension"' in failure
+        assert failure.endswith(
+            "fixture DuckDB extension not_a_real_duckdb_extension is unavailable"
         ), failure
-        assert "unknown core DuckDB extension" not in failure, failure
-        result["content"][0]["text"] = normalize_duckdb_resolution_error(
-            failure, "not_a_real_duckdb_extension"
-        )
+        result["content"][0]["text"] = normalize_process_diagnostic(failure)
 
         client.send(
             sql=(
