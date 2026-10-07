@@ -204,13 +204,16 @@ def test_prepares_python_before_r_bootstrap_validation(
     with startup_fixture(binary, execution, phase="discovery") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        fixture.wait_for_resolver()
         # fmt: r
         r = code(r"""
             cat("ready\n")
             """)
         client.send(r=r, timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         assert fixture.invocations()[-1] == {
             "program": "ir",
             "arguments": ["--version"],
@@ -239,6 +242,7 @@ def test_first_cell_prepares_defaults_after_running_response(
     with startup_fixture(binary, execution, phase="preparation") as fixture:
         client = fixture.client
         client.initialize_and_list_tools()
+        fixture.wait_for_resolver()
         # fmt: r
         r = code(r"""
             defaults <- c(
@@ -261,7 +265,9 @@ def test_first_cell_prepares_defaults_after_running_response(
             """)
         client.send(r=r, timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
-        fixture.wait_for_resolver()
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         storage = list(fixture.root.glob("sandbox-*"))
         assert len(storage) == (1 if execution is SANDBOXED else 0), storage
         assert any(
@@ -291,6 +297,9 @@ def test_first_cell_prepares_defaults_after_running_response(
         }, preparation
         client.send(timeout_ms=0)
         assert without_elapsed(last_tool_text(client)) == RUNNING
+        assert phase_progress(last_tool_text(client)) == "dependency preparation", (
+            last_tool_text(client)
+        )
         fixture.release.release()
         client.response_timeout = 600
         assert collect_running_output(client, "first cell", timeouts_ms=(600_000,)) == (
