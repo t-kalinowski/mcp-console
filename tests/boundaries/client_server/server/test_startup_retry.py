@@ -379,8 +379,8 @@ def test_restart_repairs_missing_selected_python(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         python = root / "selected-python"
-        environment = selected_python(root, python)
-        environment["PATH"] = str(root)
+        environment = without_r(root)
+        environment["RETICULATE_PYTHON"] = str(python)
         with McpClient(binary, execution.serve(), environment, root) as client:
             client.initialize_and_list_tools()
             tools = client.transcript[2]["result"]
@@ -455,8 +455,8 @@ def test_restart_refreshes_failed_inspection_evidence(
         root = Path(directory)
         python = root / "selected-python"
         attempts = root / "attempts"
-        environment = selected_python(root, python)
-        environment["PATH"] = str(root)
+        environment = without_r(root)
+        environment["RETICULATE_PYTHON"] = str(python)
         environment["UV_TOOL_DIR"] = str(root)
 
         def break_inspection(evidence: str) -> None:
@@ -557,8 +557,8 @@ def retry_inspection(
         attempts = root / "attempts"
         mode = root / "inspection-mode"
         mode.write_text("interrupt" if interruptible else "block")
-        environment = selected_python(root, python)
-        environment["PATH"] = str(root)
+        environment = without_r(root)
+        environment["RETICULATE_PYTHON"] = str(python)
         environment["UV_TOOL_DIR"] = str(root)
         with (
             closing(FifoCheckpoint.create(root / "reached")) as reached,
