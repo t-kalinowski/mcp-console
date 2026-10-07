@@ -9,7 +9,7 @@ send:
       file.exists(normalizePath(arguments[[1L]], winslash = "/")),
       identical(normalizePath(arguments[[1L]], winslash = "/"), normalizePath(file.path(R.home(), "bin", "R.exe"), winslash = "/")),
       interactive(),
-      identical(arguments[-1L], c("--quiet", "--interactive", "--vanilla")),
+      identical(arguments[-1L], c("--quiet", "--interactive", "--no-save")),
       identical(commandArgs(TRUE), character())
     )
     environment_names <- c(
