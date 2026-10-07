@@ -116,6 +116,10 @@ def test_reports_partial_retention_and_later_unretained_output(
             current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
+            # Finish shared discovery and lazy worker startup before retention.
+            client.send(requirements={"action": "get"})
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="overflow cell output file", timeout_ms=0)
             assert (
                 without_elapsed(last_tool_text(client))
@@ -141,7 +145,7 @@ def test_reports_partial_retention_and_later_unretained_output(
                 second_text = last_tool_text(client)
 
             session = next((workspace / ".agents/console" / "sessions").iterdir())
-            path = f".agents/console/sessions/{session.name}/outputs/call-000001.log"
+            path = f".agents/console/sessions/{session.name}/outputs/call-000003.log"
             assert (workspace / path).read_bytes() == b"x" * file_limit
             assert f"stopped after {file_limit} retained bytes" in first_text
             assert "later text is not retained in this file" in first_text
@@ -171,7 +175,7 @@ def test_reports_partial_retention_and_later_unretained_output(
             client.send(r="echo after failure")
             assert last_tool_text(client) == "zod: after failure\n"
             assert (
-                session / "outputs/call-000004.log"
+                session / "outputs/call-000006.log"
             ).read_bytes() == b"zod: after failure\n"
             events = [
                 json.loads(line)
