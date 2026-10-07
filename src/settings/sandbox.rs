@@ -327,15 +327,19 @@ fn validate_domain(host: &str) -> Result<(), &'static str> {
         .strip_prefix('[')
         .and_then(|host| host.strip_suffix(']'))
         .unwrap_or(host);
-    let ip = literal
-        .split('%')
-        .next()
-        .unwrap_or(literal)
-        .parse::<std::net::IpAddr>()
-        .is_ok();
+    let ip = if let Some((address, zone)) = literal.split_once('%') {
+        let zone = zone.strip_prefix("25").unwrap_or(zone);
+        address.parse::<std::net::Ipv6Addr>().is_ok()
+            && !zone.is_empty()
+            && zone
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte))
+    } else {
+        literal.parse::<std::net::IpAddr>().is_ok()
+    };
     if host.is_empty()
         || host.contains(['/', '@'])
-        || ((host.contains(':') || host.starts_with('[')) && !ip)
+        || ((host.contains([':', '%']) || host.starts_with('[')) && !ip)
     {
         return Err(
             "expected a hostname pattern or IP literal without a port; native rules do not restrict destination ports or URL paths",

@@ -99,6 +99,55 @@ stderr: >
   IP literal without a port; native rules do not restrict destination
   ports or URL paths
 ---
+path: sandbox.network.proxy.domains.allow
+stderr: >
+  configuration with CLI overrides:
+  sandbox.network.proxy.domains.allow[0]: expected a hostname pattern or
+  IP literal without a port; native rules do not restrict destination
+  ports or URL paths
+---
+path: sandbox.network.proxy.domains.allow
+stderr: >
+  configuration with CLI overrides:
+  sandbox.network.proxy.domains.allow[0]: expected a hostname pattern or
+  IP literal without a port; native rules do not restrict destination
+  ports or URL paths
+---
+path: sandbox.network.proxy.domains.allow
+stderr: >
+  configuration with CLI overrides:
+  sandbox.network.proxy.domains.allow[0]: expected a hostname pattern or
+  IP literal without a port; native rules do not restrict destination
+  ports or URL paths
+---
+path: sandbox.network.proxy.domains.allow
+stderr: >
+  configuration with CLI overrides:
+  sandbox.network.proxy.domains.allow[0]: expected a hostname pattern or
+  IP literal without a port; native rules do not restrict destination
+  ports or URL paths
+---
+path: sandbox.network.proxy.domains.allow
+stderr: >
+  configuration with CLI overrides:
+  sandbox.network.proxy.domains.allow[0]: expected a hostname pattern or
+  IP literal without a port; native rules do not restrict destination
+  ports or URL paths
+---
+path: sandbox.network.proxy.domains.allow
+stderr: >
+  configuration with CLI overrides:
+  sandbox.network.proxy.domains.allow[0]: expected a hostname pattern or
+  IP literal without a port; native rules do not restrict destination
+  ports or URL paths
+---
+path: sandbox.network.proxy.domains.allow
+stderr: >
+  configuration with CLI overrides:
+  sandbox.network.proxy.domains.allow[0]: expected a hostname pattern or
+  IP literal without a port; native rules do not restrict destination
+  ports or URL paths
+---
 path: sandbox.network.sockets.unix_sockets
 stderr: >
   configuration with CLI overrides: sandbox: network: sockets:
