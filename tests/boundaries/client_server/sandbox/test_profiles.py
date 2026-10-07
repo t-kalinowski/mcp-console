@@ -126,6 +126,12 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
             {"path": {"type": "path", "path": str(host / ".claude")}, "access": "read"},
             {"path": {"type": "path", "path": str(host)}, "access": "write"},
         ], policy
+        for entry in transcript:
+            if isinstance(result := entry.get("result"), dict):
+                for tool in result.get("tools", []):
+                    tool["description"] = tool["description"].replace(
+                        json.dumps(str(host)), '"<workspace>"'
+                    )
         return TranscriptWithCompanions(
             transcript,
             {
