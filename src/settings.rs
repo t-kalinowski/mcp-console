@@ -6,9 +6,24 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+mod sandbox;
 pub(crate) mod startup;
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
+
+/// Apply workload environment controls to a child, never the supervisor.
+pub fn configure_environment(command: &mut std::process::Command, settings: &SandboxSettings) {
+    if settings.get("inherit_environment") == Some(&Value::Bool(false)) {
+        command.env_clear();
+    }
+    if let Some(Value::Object(environment)) = settings.get("environment") {
+        command.envs(
+            environment
+                .iter()
+                .map(|(name, value)| (name, value.as_str().expect("captured string environment"))),
+        );
+    }
+}
 
 /// Native policy values; application additions materialize on the execution host.
 pub type SandboxSettings = Map<String, Value>;
@@ -77,9 +92,45 @@ struct Project {
     cache: Option<Cache>,
     python: Option<std::path::PathBuf>,
     languages: Option<Vec<crate::cell::Language>>,
-    extends: Option<String>,
-    sandbox: Map<String, Value>,
-    resolver: Map<String, Value>,
+    #[serde(default = "inherit_by_default")]
+    inherit_environment: bool,
+    #[serde(deserialize_with = "environment")]
+    environment: std::collections::BTreeMap<String, String>,
+    #[serde(deserialize_with = "sandbox::supplied_mapping")]
+    sandbox: Option<sandbox::Sandbox>,
+    #[serde(deserialize_with = "sandbox::mapping")]
+    resolver: Resolver,
+}
+
+fn inherit_by_default() -> bool {
+    true
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Resolver {
+    #[serde(deserialize_with = "sandbox::supplied")]
+    inherit_environment: Option<bool>,
+    #[serde(deserialize_with = "environment")]
+    environment: std::collections::BTreeMap<String, String>,
+    #[serde(deserialize_with = "sandbox::supplied_mapping")]
+    sandbox: Option<sandbox::Sandbox>,
+}
+
+fn environment<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<std::collections::BTreeMap<String, String>, D::Error> {
+    use serde::de::Error as _;
+    let values: std::collections::BTreeMap<String, Value> = sandbox::mapping(deserializer)?;
+    values
+        .into_iter()
+        .map(|(name, value)| {
+            let value = value.as_str().ok_or_else(|| {
+                D::Error::custom(format!("{name}: environment values must be strings"))
+            })?;
+            Ok((name, value.to_owned()))
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -91,35 +142,47 @@ pub(crate) struct Captured {
     pub source: Option<String>,
     pub policy: SandboxSettings,
     pub resolver: SandboxSettings,
+    pub sandbox_requested: bool,
+    pub resolver_sandbox_requested: bool,
 }
 
-pub fn discover(overrides: &[String]) -> Result<Captured, String> {
+pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Captured, String> {
     let project = Path::new(".agents/console/config.yaml");
-    let path = match std::fs::symlink_metadata(project) {
-        Ok(_) => Some(PathBuf::from(project)),
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            crate::console_paths::home_console_directory()?
-                .map(|directory| directory.join("config.yaml"))
+    let use_project = if no_project_config {
+        false
+    } else {
+        match std::fs::symlink_metadata(project) {
+            Ok(_) => true,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                false
+            }
+            Err(error) => return Err(format!("cannot inspect '{}': {error}", project.display())),
         }
-        Err(error) => return Err(format!("cannot inspect '{}': {error}", project.display())),
     };
-    let Some(value) = crate::config::load(path.as_deref(), overrides)? else {
-        return Ok(Captured::default());
+    let path = if use_project {
+        Some(PathBuf::from(project))
+    } else {
+        crate::console_paths::home_console_directory()?
+            .map(|directory| directory.join("config.yaml"))
     };
-    let name = if overrides.is_empty() {
+    let value = crate::config::load(path.as_deref(), overrides)?;
+    let configured = value.is_some();
+    let name = if overrides.is_empty() && configured {
         path.expect("configuration came from a file")
             .to_string_lossy()
             .into_owned()
     } else {
         "configuration with CLI overrides".into()
     };
-    let mut project: Project =
-        serde_path_to_error::deserialize(value).map_err(|error| format!("{name}: {error}"))?;
+    let project: Project = serde_path_to_error::deserialize(
+        value.unwrap_or_else(|| serde_json::json!({})),
+    )
+    .map_err(|error| format!("{name}: {error}; see docs/CONFIGURATION.md for the public format"))?;
     if let Some(startup) = &project.startup {
         startup
             .validate()
@@ -151,19 +214,50 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
             Ok(languages)
         })
         .transpose()?;
-    // These fields belong to Console's launch protocol and worker lifetime.
-    // Keep the obsolete version field reserved to reject it before startup.
-    // All other sandbox fields and values are interpreted by the native runner.
-    for field in ["version", "lifecycle", "extends", "workspace"] {
-        if project.sandbox.contains_key(field) {
-            return Err(format!("{name}: sandbox.{field} is managed by Console"));
-        }
-        if project.resolver.contains_key(field) {
-            return Err(format!("{name}: resolver.{field} is managed by Console"));
-        }
+    let sandbox_requested = project.sandbox.is_some();
+    let resolver_sandbox_requested = project.resolver.sandbox.is_some();
+    if cfg!(windows) && resolver_sandbox_requested {
+        return Err(format!(
+            "{name}: resolver.sandbox: explicit permissions are unsupported because Windows preparation runs with host permissions"
+        ));
     }
-    if let Some(profile) = project.extends {
-        project.sandbox.insert("extends".into(), profile.into());
+    let mut policy = project
+        .sandbox
+        .unwrap_or_default()
+        .compile(false)
+        .map_err(|error| format!("{name}: {error}"))?;
+    let mut resolver = project
+        .resolver
+        .sandbox
+        .unwrap_or_default()
+        .compile(true)
+        .map_err(|error| format!("{name}: {error}"))?;
+    let mut resolver_environment = project.environment.clone();
+    resolver_environment.extend(project.resolver.environment);
+    for (settings, inherit, environment) in [
+        (
+            &mut policy,
+            project.inherit_environment,
+            project.environment,
+        ),
+        (
+            &mut resolver,
+            project
+                .resolver
+                .inherit_environment
+                .unwrap_or(project.inherit_environment),
+            resolver_environment,
+        ),
+    ] {
+        if !inherit {
+            settings.insert("inherit_environment".into(), false.into());
+        }
+        if !environment.is_empty() {
+            settings.insert(
+                "environment".into(),
+                serde_json::to_value(environment).expect("string environment"),
+            );
+        }
     }
     Ok(Captured {
         startup: project.startup,
@@ -188,9 +282,11 @@ pub fn discover(overrides: &[String]) -> Result<Captured, String> {
                     .map_err(|error| format!("cannot locate configured Python: {error}"))
             })
             .transpose()?,
-        source: Some(name),
-        policy: project.sandbox,
-        resolver: project.resolver,
+        source: configured.then_some(name),
+        policy,
+        resolver,
+        sandbox_requested,
+        resolver_sandbox_requested,
     })
 }
 

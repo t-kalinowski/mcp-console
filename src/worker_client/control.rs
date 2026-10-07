@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use super::environment::{PreparationIntent, PrepareResult};
@@ -31,6 +31,16 @@ enum PriorEvaluation {
 enum ControlledStdinFailure {
     ActiveEvaluation(String),
     IdleWorker(SendFailure),
+}
+
+/// Dropping the retry's async wait closes pending code and stdin admission.
+/// Preparation and already admitted work can finish independently.
+struct RetryAdmissionCancellation(Arc<Mutex<bool>>);
+
+impl Drop for RetryAdmissionCancellation {
+    fn drop(&mut self) {
+        *self.0.lock().expect("retry admission cancellation lock") = true;
+    }
 }
 
 fn interrupted_cell_not_run_response(wait: EvaluationWait) -> Response {
@@ -65,14 +75,23 @@ impl Client {
         &self,
         control: SendControl,
         request: SendRequest,
+        initial_restart: bool,
     ) -> Result<Response, String> {
         let deadline = request.deadline;
         let direct_restart_error = matches!(control, SendControl::Restart)
             && request.requirements.is_some()
             && request.cell.is_none();
+        let admission_wait = (initial_restart
+            && (request.cell.is_some()
+                || request
+                    .stdin
+                    .as_ref()
+                    .is_some_and(|stdin| !stdin.is_empty())))
+        .then(|| RetryAdmissionCancellation(Arc::new(Mutex::new(false))));
+        let retry_cancelled = admission_wait.as_ref().map(|wait| wait.0.clone());
         let client = self.clone();
         let admission = tokio::task::spawn_blocking(move || {
-            client.control_and_start_evaluation(control, request)
+            client.control_and_start_evaluation(control, request, initial_restart, retry_cancelled)
         })
         .await;
         let admission = match admission {
@@ -125,6 +144,8 @@ impl Client {
         &self,
         requested: SendControl,
         request: SendRequest,
+        initial_restart: bool,
+        retry_cancelled: Option<Arc<Mutex<bool>>>,
     ) -> Result<ControlledEvaluation, String> {
         let SendRequest {
             cell,
@@ -139,7 +160,7 @@ impl Client {
             && cell.is_none()
             && requirements.is_none()
             && stdin.as_ref().is_none_or(String::is_empty);
-        let control = match self.begin_controlled_send() {
+        let mut control = match self.begin_controlled_send() {
             Ok(control) => control,
             Err(_) if standalone_interrupt => {
                 // A controlled restart owns admission while its resolver is live.
@@ -167,6 +188,7 @@ impl Client {
             }
             Err(error) => return Err(error),
         };
+        control.retry_cancelled = retry_cancelled;
         match requested {
             SendControl::Interrupt => self.interrupt_and_start_evaluation(
                 &control,
@@ -183,6 +205,7 @@ impl Client {
                 requirements,
                 transcript,
                 call_id,
+                initial_restart,
             ),
         }
     }
@@ -378,6 +401,7 @@ impl Client {
         Ok(ControlledEvaluation::Started(evaluation, wait_claim))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn restart_and_start_evaluation(
         &self,
         control: &ControlledSendAdmission,
@@ -386,16 +410,81 @@ impl Client {
         requirements: Option<Requirements>,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
+        initial_restart: bool,
     ) -> Result<ControlledEvaluation, String> {
-        let requirements = requirements.unwrap_or_default();
         let stdin_follows = stdin.as_ref().is_some_and(|stdin| !stdin.is_empty());
-        let restart = self.restart_blocking(
-            requirements,
-            WORKER_SHUTDOWN_GRACE,
-            cell.is_some() || stdin_follows,
-            Some(control),
-        )?;
-        let _operation = self.admit_controlled_operation();
+        let operation = initial_restart.then(|| self.admit_controlled_operation());
+        let restart = if initial_restart {
+            let generation = control.generation();
+            if let Some(requirements) = requirements {
+                let preparation = self.admit_preparation()?;
+                match self.prepare_admitted(
+                    requirements,
+                    &generation,
+                    &preparation,
+                    PreparationIntent::BeforeEvaluation,
+                )? {
+                    PrepareResult::Prepared => {}
+                    PrepareResult::RestartRequired => {
+                        return Err("requirements require session restart; cell was not run".into());
+                    }
+                    PrepareResult::Failed(response) | PrepareResult::WorkerStopped(response) => {
+                        return Ok(self.return_controlled_response(response));
+                    }
+                }
+            }
+            if cell.is_none()
+                && let Some(active) = self.current_evaluation()?
+            {
+                // No-op preparation preserves the accepted cell. Its input
+                // and observation must not wait for its worker lock.
+                self.ensure_controlled_generation(control, &generation)?;
+                if !active.generation.is(&generation) {
+                    return Err("session restarted before the operation began".into());
+                }
+                let wait_claim = active.evaluation.claim()?;
+                if let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) {
+                    let _admission = match control.admit_retry_payload("stdin") {
+                        Ok(admission) => admission,
+                        Err(error) => {
+                            return Ok(self.return_controlled_response(Response::tool_error(error)));
+                        }
+                    };
+                    active.evaluation.submit_stdin(stdin)?;
+                }
+                return Ok(ControlledEvaluation::Observe {
+                    evaluation: active.evaluation,
+                    wait_claim,
+                    cell_not_run: false,
+                });
+            }
+            // Cell admission owns its idle output cut. Do not consume output
+            // from an evaluation accepted by another caller during readiness.
+            let mut response = Response::default();
+            response.push_notice("runtime discovery retried");
+            if cell.is_none() && !stdin_follows {
+                // Changed requirements can retire the unused prewarmed worker.
+                // Empty stdin starts its prepared replacement without using it.
+                if let Err(failure) =
+                    self.write_idle_stdin_blocking(String::new(), generation.clone())
+                {
+                    return Ok(self.return_controlled_failure(response, failure));
+                }
+                response = output::project_replacement_ready(response);
+            }
+            super::lifecycle::RestartAttempt {
+                response,
+                generation: Some(generation),
+            }
+        } else {
+            self.restart_blocking(
+                requirements.unwrap_or_default(),
+                WORKER_SHUTDOWN_GRACE,
+                cell.is_some() || stdin_follows,
+                Some(control),
+            )?
+        };
+        let _operation = operation.unwrap_or_else(|| self.admit_controlled_operation());
         let Some(generation) = restart.generation else {
             let mut response = restart.response;
             if cell.is_some() {
@@ -403,13 +492,17 @@ impl Client {
             }
             return Ok(self.return_controlled_response(response));
         };
-        self.0.startup_failed.store(false, Ordering::Release);
-        self.finish_startup(Ok(()));
+        if !initial_restart {
+            self.0.startup_failed.store(false, Ordering::Release);
+            self.finish_startup(Ok(()));
+        }
         self.ensure_controlled_generation(control, &generation)?;
         let Some(cell) = cell else {
             let response = restart.response;
             if let Some(stdin) = stdin.filter(|stdin| !stdin.is_empty()) {
-                if let Err(failure) = self.write_idle_stdin_blocking(stdin, generation.clone()) {
+                if let Err(failure) =
+                    self.write_idle_stdin_admitted(stdin, generation.clone(), Some(control))
+                {
                     return Ok(self.return_controlled_failure(response, failure));
                 }
                 return Ok(self.return_controlled_response(output::render_response(

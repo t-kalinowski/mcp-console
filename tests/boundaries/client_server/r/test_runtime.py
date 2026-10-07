@@ -328,7 +328,13 @@ def test_shows_interactive_interpreter_identity(
                 print("sys.argv:", sys.argv)
                 print("sys.orig_argv == [sys.executable]:", sys.orig_argv == [sys.executable])
                 print("sys.argv[0] == sys.executable:", sys.argv[0] == sys.executable)
-                child = subprocess.run([sys.executable, "identity.py", "two words"], check=True)
+                child = subprocess.run(
+                    [sys.executable, "identity.py", "two words"],
+                    stdout=subprocess.PIPE,
+                    text=True,
+                )
+                sys.stdout.write(child.stdout)
+                child.check_returncode()
                 """),
         )
         assert last_tool_text(client).replace("\r\n", "\n") == (

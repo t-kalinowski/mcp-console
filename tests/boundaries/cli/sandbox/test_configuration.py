@@ -278,10 +278,8 @@ def test_disabled_inheritance_ignores_non_utf8_host_environment(
         config.write_text(
             json.dumps(
                 {
-                    "sandbox": {
-                        "inherit_environment": False,
-                        "environment": {"VALUE": "controlled"},
-                    }
+                    "inherit_environment": False,
+                    "environment": {"VALUE": "controlled"},
                 }
             )
         )

@@ -24,7 +24,8 @@ config:
       console_sql_connection(native)
 overrides:
   - startup.language=python
-  - sandbox.inherit_environment=false
+  - inherit_environment=false
+  - resolver.inherit_environment=true
 ---
 !same-as MCP initialization for this execution mode
 ---

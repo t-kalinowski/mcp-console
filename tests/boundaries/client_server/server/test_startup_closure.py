@@ -1,5 +1,5 @@
 #!/usr/bin/env -S uv run --script
-"""MCP closure between completed discovery and the next preparation stage."""
+"""MCP closure preserves setup failures and retires unfinished preparation."""
 
 import os
 import sys
@@ -13,8 +13,82 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
-from support.requirements import NATIVE_FIXTURES, POSIX, requires
+from support.records import Transcript
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PTHREAD_RUNTIME_PARKING,
+    requires,
+)
 from support.suites import run_this_suite
+
+
+@requires(POSIX, NATIVE_FIXTURES, PTHREAD_RUNTIME_PARKING)
+def test_eof_before_retry_admission_exits_cleanly(binary: Path) -> Transcript:
+    with TemporaryDirectory(dir="/tmp") as directory, ExitStack() as resources:
+        root = Path(directory)
+        reached = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "admission-reached"))
+        )
+        release = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "admission-release"))
+        )
+        shutdown = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "shutdown"))
+        )
+        environment = dict(
+            os.environ,
+            **{
+                LOADER_VARIABLE: str(
+                    build_interposer(root, "startup_admission_checkpoint")
+                ),
+                "MCP_CONSOLE_TEST_ADMISSION_REACHED": str(reached.path),
+                "MCP_CONSOLE_TEST_ADMISSION_RELEASE": str(release.path),
+                "MCP_CONSOLE_TEST_ADMISSION_SHUTDOWN": str(shutdown.path),
+            },
+        )
+        with McpClient(
+            binary,
+            ("serve", "-c", "cache=host", "-c", "resolver.inherit_environment=false"),
+            environment,
+            root,
+        ) as client:
+            try:
+                client.initialize_and_list_tools()
+                failure = client.send()
+                assert failure["isError"] is True, failure
+                assert "resolver sandbox requires HOME" in str(failure), failure
+                restart = client.start_send(control="restart", timeout_ms=0)
+                reached.wait("retry started before worker/resolver admission")
+                client.receive(restart)
+                assert not restart["result"].get("isError"), restart
+                client.stdin.close()
+                shutdown.wait("EOF dispatched; shutdown awaits pending admission")
+                release.release()
+                transcript, stderr = client.finish_with_standard_error()
+                assert stderr == "", stderr
+                return transcript + [{"exit_status": 0, "stderr": stderr}]
+            finally:
+                release.release()
+
+
+@requires(POSIX)
+def test_eof_preserves_completed_setup_failure_without_resolver(
+    binary: Path,
+) -> Transcript:
+    with McpClient(
+        binary,
+        ("serve", "-c", "cache=host", "-c", "resolver.inherit_environment=false"),
+    ) as client:
+        client.initialize_and_list_tools()
+        failure = client.send(python="raise AssertionError('must not execute')")
+        assert failure["isError"] is True, failure
+        assert "resolver sandbox requires HOME" in str(failure), failure
+        assert client.request("tools/list")["result"] == client.transcript[2]["result"]
+        client.transcript[-1] = {"tools_schema_unchanged": True}
+        transcript, stderr = client.finish_with_standard_error(expected_exit_status=1)
+        assert stderr == "resolver sandbox requires HOME\n", stderr
+        return transcript + [{"exit_status": 1, "stderr": stderr}]
 
 
 @contextmanager

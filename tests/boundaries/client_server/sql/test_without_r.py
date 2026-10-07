@@ -102,7 +102,11 @@ def test_prepares_builtin_extensions_without_downloads(
         assert not list((root / "extensions").glob("**/json.duckdb_extension"))
         config = root / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True, exist_ok=True)
-        config.write_text(json.dumps({"resolver": {"proxy": {"domains": {}}}}))
+        config.write_text(
+            json.dumps(
+                {"resolver": {"sandbox": {"network": {"proxy": {"domains": {}}}}}}
+            )
+        )
         env["UV_OFFLINE"] = "1"
         with sql_client(binary, execution, env, root, arguments=arguments) as client:
             client.expect(
@@ -168,7 +172,9 @@ def test_managed_python_requires_home_for_default_extensions(
             failure = client.send(sql="SELECT 42 AS answer")
             assert failure.get("isError"), failure
             diagnostic = (
-                "resolver sandbox requires HOME"
+                "resolver.environment: preparation requires an absolute HOME or "
+                "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY; configure one when "
+                "inherit_environment is false"
                 if execution is SANDBOXED
                 else "DuckDB extension preparation requires an absolute HOME at server startup"
             )
@@ -222,20 +228,11 @@ def test_default_extension_failure_preserves_close_failure(
                                 "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY": str(cache),
                                 LOADER_VARIABLE: env[LOADER_VARIABLE],
                             },
-                            "filesystem": {
-                                "entries": [
-                                    {
-                                        "path": {
-                                            "type": "special",
-                                            "value": {"kind": "root"},
-                                        },
-                                        "access": "read",
-                                    },
-                                    {
-                                        "path": {"type": "path", "path": str(root)},
-                                        "access": "write",
-                                    },
-                                ]
+                            "sandbox": {
+                                "filesystem": {
+                                    "read_only": ["/"],
+                                    "read_write": [str(root)],
+                                }
                             },
                         }
                     }

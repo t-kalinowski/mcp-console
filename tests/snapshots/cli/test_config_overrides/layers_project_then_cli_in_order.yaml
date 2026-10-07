@@ -2,49 +2,35 @@
 command: serve
 overrides:
   - -c
-  - sandbox.environment.BEFORE=first
+  - environment.BEFORE=first
   - -c
-  - sandbox.environment.CHANGE=first
+  - environment.CHANGE=first
   - -c
-  - >-
-    sandbox={environment: {CHANGE=last, ADD: cli}, filesystem: {entries:
-    [{path={type=path, path='./cli'}, access=write}], glob_scan_max_depth:
-    3}}
+  - "environment={CHANGE=last, ADD: cli}"
   - -c
-  - extends=null
-  - -c
-  - sandbox.workspace_options=null
+  - sandbox.filesystem.read_write=[./cli]
 environment:
-  KEEP: project
-  CHANGE: last
-  BEFORE: first
   ADD: cli
-workspace_options: ~
-glob_scan_max_depth: 3
+  BEFORE: first
+  CHANGE: last
+  KEEP: project
 paths:
   - cli
 ---
 command: sandbox
 overrides:
   - -c
-  - sandbox.environment.BEFORE=first
+  - environment.BEFORE=first
   - -c
-  - sandbox.environment.CHANGE=first
+  - environment.CHANGE=first
   - -c
-  - >-
-    sandbox={environment: {CHANGE=last, ADD: cli}, filesystem: {entries:
-    [{path={type=path, path='./cli'}, access=write}], glob_scan_max_depth:
-    3}}
+  - "environment={CHANGE=last, ADD: cli}"
   - -c
-  - extends=null
-  - -c
-  - sandbox.workspace_options=null
+  - sandbox.filesystem.read_write=[./cli]
 environment:
-  KEEP: project
-  CHANGE: last
-  BEFORE: first
   ADD: cli
-workspace_options: ~
-glob_scan_max_depth: 3
+  BEFORE: first
+  CHANGE: last
+  KEEP: project
 paths:
   - cli

@@ -29,6 +29,7 @@ from support.records import (
 )
 from support.requirements import POSIX, PROCESS_EVENTS, R, SQL, command, requires
 from support.resolvers import matplotlib_test_environment
+from support.snapshots import execution_snapshots
 from boundaries.client_server.python.test_startup import isolated_python
 from boundaries.client_server.server.test_no_r import no_r_environment
 
@@ -396,7 +397,8 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
         configuration = captured_configuration(config)
         configuration["overrides"] = [
             "startup.language=python",
-            "sandbox.inherit_environment=false",
+            "inherit_environment=false",
+            "resolver.inherit_environment=true",
         ]
         with McpClient(
             binary,
@@ -404,7 +406,9 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
                 "-c",
                 "startup.language=python",
                 "-c",
-                "sandbox.inherit_environment=false",
+                "inherit_environment=false",
+                "-c",
+                "resolver.inherit_environment=true",
             ),
             os.environ,
             workspace,
@@ -1005,6 +1009,7 @@ def test_startup_gate_preserves_discovery_ordering_and_interrupt(
 
 @requires(POSIX, R, SQL)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_crashed_startup_is_not_automatically_replayed(
     binary: Path, execution: Execution
 ) -> Transcript:

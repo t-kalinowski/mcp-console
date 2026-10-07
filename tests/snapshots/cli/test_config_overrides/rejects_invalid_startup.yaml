@@ -2,12 +2,14 @@
 override: startup.language=sql
 error: >
   configuration with CLI overrides: startup.language: unknown variant
-  `sql`, expected `r` or `python`
+  `sql`, expected `r` or `python`; see docs/CONFIGURATION.md for the
+  public format
 ---
 override: startup.language=unknown
 error: >
   configuration with CLI overrides: startup.language: unknown variant
-  `unknown`, expected `r` or `python`
+  `unknown`, expected `r` or `python`; see docs/CONFIGURATION.md for the
+  public format
 ---
 override: startup.code=''
 error: >
@@ -17,23 +19,25 @@ error: >
 override: startup.code=42
 error: >
   configuration with CLI overrides: startup.code: invalid type: integer
-  `42`, expected a string
+  `42`, expected a string; see docs/CONFIGURATION.md for the public format
 ---
 override: startup.code=null
 error: >
   configuration with CLI overrides: startup.code: invalid type: null,
-  expected a string
+  expected a string; see docs/CONFIGURATION.md for the public format
 ---
 override: startup.extra=true
 error: >
   configuration with CLI overrides: startup.extra: unknown field `extra`,
-  expected `language` or `code`
+  expected `language` or `code`; see docs/CONFIGURATION.md for the public
+  format
 ---
 override: sql.provider=python
 error: >
   configuration with CLI overrides: sql: unknown field `sql`, expected one
-  of `startup`, `cache`, `python`, `languages`, `extends`, `sandbox`,
-  `resolver`
+  of `startup`, `cache`, `python`, `languages`, `inherit_environment`,
+  `environment`, `sandbox`, `resolver`; see docs/CONFIGURATION.md for the
+  public format
 ---
 custom_worker_error: |
   startup requires the built-in worker and relay

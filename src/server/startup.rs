@@ -1,4 +1,4 @@
-//! Share one preparation outcome while the MCP connection owns cancellation.
+//! Share initial preparation attempts while the MCP connection owns cancellation.
 #[cfg(unix)]
 use std::mem::MaybeUninit;
 #[cfg(unix)]
@@ -23,13 +23,25 @@ pub(super) struct PreparedRuntime {
 pub(super) struct Startup {
     runtime: Arc<Runtime>,
     cancellation: Arc<Mutex<Cancellation>>,
+    input_closed: super::InputClosed,
+    prelaunch: bool,
+    initialize: Arc<Initializer>,
 }
+
+type Initializer = dyn Fn(
+        &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
+        crate::process_output::Diagnostics,
+    ) -> Result<PreparedRuntime, String>
+    + Send
+    + Sync;
 
 #[derive(Default)]
 struct Cancellation {
     closed: bool,
+    admission_cancelled: bool,
     registration_closed: bool,
     resolver: Option<crate::resolver::ResolverStopHandle>,
+    retrying: bool,
 }
 
 impl Startup {
@@ -37,26 +49,52 @@ impl Startup {
         input_closed: super::InputClosed,
         runtime: Arc<Runtime>,
         prelaunch: bool,
-        initialize: impl FnOnce(
+        initialize: impl Fn(
             &dyn Fn(crate::resolver::ResolverStopHandle) -> Result<(), String>,
             crate::process_output::Diagnostics,
         ) -> Result<PreparedRuntime, String>
         + Send
+        + Sync
         + 'static,
     ) -> Self {
-        let cancellation = Arc::new(Mutex::new(Cancellation::default()));
-        let control = Arc::clone(&cancellation);
-        let worker = runtime.worker.clone();
-        let recording = runtime.transcript.clone();
-        worker.record_with(recording.clone());
+        runtime.worker.record_with(runtime.transcript.clone());
+        let startup = Self {
+            runtime,
+            cancellation: Arc::new(Mutex::new(Cancellation::default())),
+            input_closed,
+            prelaunch,
+            initialize: Arc::new(initialize),
+        };
+        startup.start();
+        startup
+    }
+
+    fn start(&self) {
+        let control = self.cancellation.clone();
+        let completion = control.clone();
+        let worker = self.runtime.worker.clone();
+        let recording = self.runtime.transcript.clone();
         let diagnostics = worker.diagnostics();
         let task_recording = recording.clone();
         let initialize_worker = worker.clone();
+        let initialize = self.initialize.clone();
+        let input_closed = self.input_closed.clone();
+        let prelaunch = self.prelaunch;
         tokio::spawn(async move {
             let result = tokio::task::spawn_blocking(move || {
                 observe_input(input_closed, || {
-                    let generation = initialize_worker.admit()?;
-                    let startup = initialize_worker.reserve_worker_startup(&generation)?;
+                    let (generation, startup) = {
+                        let mut control = control.lock().expect("startup cancellation lock");
+                        // Admission and connection closure share this owner. A refused
+                        // attempt has no resolver to carry cancellation evidence.
+                        if control.closed {
+                            control.admission_cancelled = true;
+                            return Err(REGISTRATION_CLOSED.into());
+                        }
+                        let generation = initialize_worker.admit()?;
+                        let startup = initialize_worker.reserve_worker_startup(&generation)?;
+                        (generation, startup)
+                    };
                     let prepared = initialize(
                         &|resolver| {
                             let mut control = control.lock().expect("startup cancellation lock");
@@ -87,16 +125,43 @@ impl Startup {
             .await
             .map_err(|error| format!("runtime preparation task failed: {error}"))
             .and_then(|result| result);
+            // Recording belongs to the connection, including later setup retries.
             if let Err(error) = &result {
                 recording.startup_failed(error);
-                worker.finish_recording();
             }
+            let mut control = completion.lock().expect("startup cancellation lock");
             worker.finish_startup(result);
+            control.retrying = false;
         });
-        Self {
-            runtime,
-            cancellation,
+    }
+
+    /// Failed initial setup is retried under the connection's existing owner.
+    /// Callers joining it must not restart its subsequently accepted worker.
+    pub fn retry_failed(&self) -> Result<bool, String> {
+        let mut control = self.cancellation.lock().expect("startup cancellation lock");
+        if control.closed {
+            return Err(REGISTRATION_CLOSED.into());
         }
+        if control.retrying {
+            return Ok(true);
+        }
+        if self.runtime.worker.is_configured() || !self.runtime.worker.startup_finished() {
+            return Ok(false);
+        }
+        if control.resolver.as_ref().is_some_and(|resolver| {
+            !resolver.cleanup_confirmed() || !resolver.retirement_confirmed()
+        }) {
+            return Err("runtime discovery retry requires confirmed preparation cleanup".into());
+        }
+        if !self.runtime.worker.retry_failed_startup() {
+            return Ok(false);
+        }
+        control.resolver = None;
+        control.admission_cancelled = false;
+        control.registration_closed = false;
+        control.retrying = true;
+        self.start();
+        Ok(true)
     }
 
     pub async fn ready(&self) -> Result<Arc<Runtime>, String> {
@@ -109,13 +174,13 @@ impl Startup {
     }
 
     pub async fn cancel(&self) -> Result<(), String> {
-        if self.runtime.worker.startup_finished() {
-            return Ok(());
+        {
+            let mut control = self.cancellation.lock().expect("startup cancellation lock");
+            control.closed = true;
+            if self.runtime.worker.startup_finished() {
+                return Ok(());
+            }
         }
-        self.cancellation
-            .lock()
-            .expect("startup cancellation lock")
-            .closed = true;
         self.runtime
             .worker
             .cancel_startup(std::time::Instant::now() + crate::worker_client::WORKER_SHUTDOWN_GRACE)
@@ -124,11 +189,14 @@ impl Startup {
 
     pub fn finish_failed_preparation(&self, error: String) -> Result<(), String> {
         // A failed initializer has no installed configuration to own shutdown. Suppress only
-        // connection cancellation with confirmed cleanup; retain other failures.
+        // connection refusal before admission or resolver cancellation with confirmed
+        // cleanup. Completed setup errors must survive even without a resolver handle.
         let control = self.cancellation.lock().expect("startup cancellation lock");
         if control.closed
-            && control.resolver.as_ref().is_none_or(|resolver| {
-                resolver.cleanup_confirmed()
+            && ((control.admission_cancelled && error == REGISTRATION_CLOSED)
+                || control.resolver.as_ref().is_some_and(|resolver| {
+                    resolver.cleanup_confirmed()
+                    && resolver.retirement_confirmed()
                     // A close/retirement failure appended by the initializer is
                     // independent of the registration refusal and must survive.
                     && if control.registration_closed {
@@ -138,7 +206,7 @@ impl Startup {
                             == Some(crate::resolver::ResolverControlOutcome::Cancelled)
                             && resolver.failure_is_controlled()
                     }
-            })
+                }))
         {
             Ok(())
         } else {

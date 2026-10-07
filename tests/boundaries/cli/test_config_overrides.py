@@ -30,9 +30,7 @@ def test_ignores_yaml_tags_recursively(binary: Path) -> Transcript:
     yaml = code("""
         !configuration
         !key cache: !cache host
-        sandbox: !policy
-          environment: !environment {LABEL: !text tagged}
-          filesystem: !filesystem {entries: !entries []}
+        environment: !environment {LABEL: !text tagged}
         """)
     with TemporaryDirectory() as temporary:
         workspace = Path(temporary).resolve()
@@ -47,7 +45,7 @@ def test_ignores_yaml_tags_recursively(binary: Path) -> Transcript:
                 "--worker",
                 "unused-worker",
                 "-c",
-                "sandbox.environment.ADDED=override",
+                "environment.ADDED=override",
             ),
             current_directory=workspace,
         ) as client:
@@ -68,20 +66,8 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
             workspace,
             {
                 "cache": "host",
-                "extends": ":read-only",
-                "sandbox": {
-                    "environment": {"KEEP": "project", "CHANGE": "project"},
-                    "workspace_options": {"exclude_slash_tmp": True},
-                    "filesystem": {
-                        "kind": "restricted",
-                        "entries": [
-                            {
-                                "path": {"type": "path", "path": "./project"},
-                                "access": "write",
-                            }
-                        ],
-                    },
-                },
+                "environment": {"KEEP": "project", "CHANGE": "project"},
+                "sandbox": {"filesystem": {"read_write": ["./project"]}},
             },
         )
         capture = workspace / "payloads.jsonl"
@@ -92,17 +78,13 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
         }
         overrides = [
             "-c",
-            "sandbox.environment.BEFORE=first",
+            "environment.BEFORE=first",
             "-c",
-            "sandbox.environment.CHANGE=first",
+            "environment.CHANGE=first",
             "-c",
-            "sandbox={environment: {CHANGE=last, ADD: cli}, filesystem: "
-            "{entries: [{path={type=path, path='./cli'}, access=write}], "
-            "glob_scan_max_depth: 3}}",
+            "environment={CHANGE=last, ADD: cli}",
             "-c",
-            "extends=null",
-            "-c",
-            "sandbox.workspace_options=null",
+            "sandbox.filesystem.read_write=[./cli]",
         ]
         for command in ("serve", "sandbox"):
             arguments = [*overrides[:2], command, *overrides[2:]]
@@ -139,14 +121,12 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
                     "ADD": "cli",
                     "BEFORE": "first",
                 }, payload
-                assert payload["workspace_options"] is None, payload
                 filesystem = payload["filesystem"]
                 assert filesystem["kind"] == "restricted", filesystem
-                assert filesystem["glob_scan_max_depth"] == 3, filesystem
                 paths = [
                     entry["path"]["path"]
                     for entry in filesystem["entries"]
-                    if entry["path"]["type"] == "path"
+                    if entry["access"] == "write"
                 ]
                 assert paths == [str(workspace / "cli")], filesystem
             records.append(
@@ -154,8 +134,6 @@ def test_layers_project_then_cli_in_order(binary: Path) -> Transcript:
                     "command": command,
                     "overrides": overrides,
                     "environment": payloads[-1]["environment"],
-                    "workspace_options": payloads[-1]["workspace_options"],
-                    "glob_scan_max_depth": filesystem["glob_scan_max_depth"],
                     "paths": [str(Path(path).relative_to(workspace)) for path in paths],
                 }
             )
@@ -189,7 +167,7 @@ def test_inline_strings_and_objects_without_project_file(binary: Path) -> Transc
                     binary,
                     "sandbox",
                     "--config",
-                    f"sandbox.environment={value}",
+                    f"environment={value}",
                     "--",
                     sys.executable,
                     "-c",
@@ -218,14 +196,14 @@ def test_inline_strings_and_objects_without_project_file(binary: Path) -> Transc
 def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        configure(workspace, {"sandbox": False, "python": ["invalid"]})
+        configure(workspace, {"environment": False, "python": ["invalid"]})
         overrides = (
             "-c",
-            "sandbox.environment.KEEP=first",
+            "environment.KEEP=first",
             "-c",
-            "sandbox.environment=null",
+            "environment=null",
             "-c",
-            "sandbox.environment={FINAL: last}",
+            "environment={FINAL: last}",
             "-c",
             "python=null",
         )
@@ -238,7 +216,7 @@ def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
             _, stderr = client.finish_with_standard_error()
             assert stderr == "", stderr
         assert json.loads((workspace / CONFIG).read_text()) == {
-            "sandbox": False,
+            "environment": False,
             "python": ["invalid"],
         }
     return [{"overrides": list(overrides), "initialized": True}]
@@ -479,9 +457,9 @@ def test_python_home_expansion_requires_absolute_home(binary: Path) -> Transcrip
 
 def test_validates_effective_configuration(binary: Path) -> Transcript:
     cases = (
-        ("extends=true", "boolean"),
-        ("extends=42", "integer"),
-        ("extends=1.5", "floating point"),
+        ("inherit_environment=wrong", "boolean"),
+        ("inherit_environment=42", "integer"),
+        ("inherit_environment=1.5", "floating point"),
         ("target.command=[far, faz]", "unknown field"),
         ("unknown={baz: [far, faz]}", "unknown field"),
     )

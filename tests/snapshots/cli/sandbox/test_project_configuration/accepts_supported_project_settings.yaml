@@ -1,25 +1,4 @@
 ---
-configuration:
-  sandbox:
-    proxy:
-      enabled: true
-      enableSocks5: true
-      enableSocks5Udp: false
-      allowUpstreamProxy: false
-      dangerouslyAllowAllUnixSockets: false
-      mode: full
-      allowLocalBinding: false
-command:
-  - mcp-console
-  - serve
-  - --worker
-  - unused-worker
-  - --writable-root
-  - future CLI
-initialized: true
-exit_status: 0
-stderr: ""
----
 configuration: {}
 command:
   - mcp-console
@@ -47,7 +26,8 @@ stderr: ""
 ---
 configuration:
   sandbox:
-    proxy: ~
+    network:
+      proxy: {}
 command:
   - mcp-console
   - serve
@@ -62,8 +42,8 @@ stderr: ""
 configuration:
   sandbox:
     filesystem:
-      kind:
-        restricted: ~
+      read_write:
+        - ./out
 command:
   - mcp-console
   - serve
@@ -78,12 +58,8 @@ stderr: ""
 configuration:
   sandbox:
     filesystem:
-      entries:
-        - path:
-            type: path
-            path: ./out
-          access:
-            write: ~
+      read_write:
+        - ./future café 雪
 command:
   - mcp-console
   - serve
@@ -97,38 +73,16 @@ stderr: ""
 ---
 configuration:
   sandbox:
-    filesystem:
-      entries:
-        - path:
-            type: path
-            path: ./future café 雪
-          access: write
-command:
-  - mcp-console
-  - serve
-  - --worker
-  - unused-worker
-  - --writable-root
-  - future CLI
-initialized: true
-exit_status: 0
-stderr: ""
----
-configuration:
-  sandbox:
-    network: enabled
-    proxy:
-      enabled: true
-      enableSocks5: false
-      enableSocks5Udp: false
-      allowUpstreamProxy: true
-      dangerouslyAllowAllUnixSockets: false
-      mode: limited
-      allowLocalBinding: true
-      domains:
-        "*.example.com": allow
-        blocked.example.com: deny
-        ignored.example.com: none
+    network:
+      proxy:
+        mode: limited
+        allow_upstream_proxy: true
+        domains:
+          allow:
+            - "*.example.com"
+          deny:
+            - blocked.example.com
+      allow_local_binding: true
 command:
   - mcp-console
   - serve

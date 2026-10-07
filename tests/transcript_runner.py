@@ -1851,104 +1851,6 @@ runner: orphan
         self.assertIn("fixture failed before snapshot update", retried.stderr)
         self.assertNotIn("orphan snapshot:", retried.stderr)
 
-    def test_default_concurrency_reserves_one_logical_cpu(self) -> None:
-        self.suite.write_text(
-            PUBLIC_SUITE
-            # fmt: python
-            + code("""
-                def concurrent_case(binary: Path) -> list[dict[str, str]]:
-                    root = binary.parents[2]
-                    with (root / "started").open("wb", buffering=0) as started:
-                        assert started.write(b"1") == 1
-                    with (root / "release").open("rb", buffering=0) as release:
-                        assert release.read(1) == b"1"
-                    return [{"runner": "concurrent"}]
-
-
-                test_selected = concurrent_case
-                test_unselected = concurrent_case
-                test_third = concurrent_case
-                test_fourth = concurrent_case
-                """),
-            encoding="utf-8",
-        )
-        for name in ("selected", "unselected", "third", "fourth"):
-            (self.snapshots / f"{name}.yaml").write_text(
-                "---\nrunner: concurrent\n...\n", encoding="utf-8"
-            )
-        launcher = self.root / "five_cpu_host.py"
-        launcher.write_text(
-            # fmt: python
-            code("""
-                import runpy
-                import sys
-                from unittest.mock import patch
-
-                runner = sys.argv.pop(1)
-                with patch("os.cpu_count", return_value=5):
-                    runpy.run_path(runner, run_name="__main__")
-                """),
-            encoding="utf-8",
-        )
-        os.mkfifo(self.root / "started")
-        os.mkfifo(self.root / "release")
-        started = os.open(self.root / "started", os.O_RDWR | os.O_NONBLOCK)
-        release = os.open(self.root / "release", os.O_RDWR)
-        process = subprocess.Popen(
-            [sys.executable, launcher, self.boundaries / "_run.py", "--full"],
-            cwd=self.root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
-        try:
-            acknowledgements = b""
-            while len(acknowledgements) < 4:
-                ready, _, _ = select.select([started], [], [], 10)
-                self.assertTrue(
-                    ready,
-                    f"only {len(acknowledgements)} of four cases started on a five-CPU host",
-                )
-                acknowledgements += os.read(started, 4 - len(acknowledgements))
-            self.assertEqual(os.write(release, b"1111"), 4)
-            stdout, stderr = process.communicate(timeout=10)
-            self.assertEqual(process.returncode, 0, stdout + stderr)
-        finally:
-            os.close(started)
-            os.close(release)
-            if process.poll() is None:
-                with suppress(ProcessLookupError):
-                    os.killpg(process.pid, signal.SIGKILL)
-            process.communicate()
-
-        self.suite.write_text(
-            PUBLIC_SUITE
-            # fmt: python
-            + code("""
-                def test_selected(binary):
-                    raise RuntimeError("default concurrency fixture failed")
-                """),
-            encoding="utf-8",
-        )
-        result = subprocess.run(
-            [
-                sys.executable,
-                launcher,
-                self.boundaries / "_run.py",
-                "--full",
-                "--update",
-                "--jobs",
-                "4",
-            ],
-            cwd=self.root,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        self.assertNotEqual(result.returncode, 0, result.stderr)
-        self.assertIn("rerun: scripts/test --full --update\n", result.stderr)
-
     def write_failure_collection_suite(self, failures: set[int]) -> list[str]:
         names = ["initializes_and_lists_tools", *[f"case_{i:02}" for i in range(1, 20)]]
         for snapshot in self.snapshots.glob("*.yaml"):
@@ -2095,6 +1997,42 @@ class TranscriptDiscoveryTests(TranscriptRunnerFixture):
             text=True,
             timeout=10,
         )
+
+    def test_help_reports_default_concurrency_for_available_cpus(self) -> None:
+        for cpu_count, jobs in ((None, 2), (0, 2), (1, 2), (2, 4), (8, 16), (64, 128)):
+            with self.subTest(cpu_count=cpu_count):
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        # fmt: python
+                        code("""
+                            import json
+                            import runpy
+                            import sys
+                            from unittest.mock import patch
+
+                            cpu_count = json.loads(sys.argv.pop(1))
+                            runner = sys.argv.pop(1)
+                            with patch("os.cpu_count", return_value=cpu_count):
+                                runpy.run_path(runner, run_name="__main__")
+                            """),
+                        json.dumps(cpu_count),
+                        self.boundaries / "_run.py",
+                        "--bootstrap",
+                        "--help",
+                    ],
+                    cwd=self.root,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(
+                    f"concurrent transcript cases (default: {jobs}; "
+                    "twice the logical CPU count, at least 2)",
+                    " ".join(result.stdout.split()),
+                )
 
     def test_runner_metadata_does_not_require_a_binary(self) -> None:
         (self.root / "target/release/mcp-console").unlink()

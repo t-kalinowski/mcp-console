@@ -429,10 +429,8 @@ def test_r_hooks_run_before_send(binary: Path, execution: Execution) -> list:
             configuration.write_text(
                 json.dumps(
                     {
-                        "sandbox": {
-                            "inherit_environment": False,
-                            "environment": workload,
-                        }
+                        "inherit_environment": False,
+                        "environment": workload,
                     }
                 )
             )
