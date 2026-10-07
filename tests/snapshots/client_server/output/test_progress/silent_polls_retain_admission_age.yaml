@@ -43,6 +43,16 @@ result:
   isError: false
 ---
 send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
   r: "42"
   timeout_ms: 250
 result:

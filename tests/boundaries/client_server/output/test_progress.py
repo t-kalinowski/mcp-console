@@ -60,6 +60,9 @@ def test_silent_polls_retain_admission_age(
             # Resolve connection startup before measuring the admitted cell's
             # age; discovery time precedes that clock.
             client.send(requirements={"action": "get"})
+            # A public restart also waits for this lazy relay's transport.
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="42", timeout_ms=250)
             first_age, silent = elapsed_progress(last_tool_text(client))
             assert first_age >= 0.2 and silent
