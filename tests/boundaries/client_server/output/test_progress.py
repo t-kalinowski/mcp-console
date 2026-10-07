@@ -178,8 +178,14 @@ def test_worker_activity_survives_preview_projection(
             ) as client,
         ):
             client.initialize_and_list_tools()
+            # Finish connection discovery and this lazy relay's transport
+            # startup before observing the admitted cell's activity.
+            client.send(requirements={"action": "get"})
+            client.send(control="restart")
+            assert last_tool_text(client) == "[starting new worker]\n[idle]"
             client.send(r="42", timeout_ms=0)
             assert elapsed_progress(last_tool_text(client))[1]
+            assert without_elapsed(last_tool_text(client)) == RUNNING
             for name, (_, expected, worker_activity) in intervals.items():
                 release.release()
                 processed.wait(f"{name} interval ingested before its response cut")
@@ -224,7 +230,7 @@ def test_worker_activity_survives_preview_projection(
             release.release()
             client.send()
             assert last_tool_text(client) == "[done]"
-            assert cell_text(client, 1) == (
+            assert cell_text(client, 3) == (
                 "worker text\nworker diagnostic\n€\nworker stderr\nerase\r\x1b[2K"
                 + overflow
                 + "native diagnostic\n"
