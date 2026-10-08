@@ -85,7 +85,7 @@ else:
     def child_process_identities(
         parent: ProcessIdentity,
     ) -> tuple[ProcessIdentity, ...]:
-        while True:
+        for _ in range(10):
             assert current_process_identity(parent[0]) == parent
             children = set()
             for task in Path(f"/proc/{parent[0]}/task").iterdir():
@@ -99,6 +99,9 @@ else:
             else:
                 assert current_process_identity(parent[0]) == parent
                 return tuple(capture_process_identity(pid) for pid in sorted(children))
+        raise RuntimeError(
+            f"could not observe children of process {parent[0]} after 10 task scans"
+        )
 
     def process_file_descriptors(identity: ProcessIdentity) -> set[int]:
         assert current_process_identity(identity[0]) == identity
