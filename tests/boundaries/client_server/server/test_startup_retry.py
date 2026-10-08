@@ -469,7 +469,6 @@ def test_restart_repairs_failed_r_discovery(binary: Path) -> Transcript:
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_restart_refreshes_failed_inspection_evidence(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -636,7 +635,6 @@ def retry_inspection(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_retry_stdin_reaches_early_input_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -734,7 +732,6 @@ def test_requirements_retry_stdin_reaches_early_input_cell(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_cancelled_restart_shares_retry_and_preserves_next_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1005,7 +1002,6 @@ def cancelled_retry_preparation(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_interrupted_retry_can_be_restarted(
     binary: Path, execution: Execution
 ) -> Transcript:

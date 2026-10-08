@@ -222,7 +222,11 @@ def normalize_request_ids(transcript: Transcript) -> Transcript:
 
 
 def compact_initializations(
-    actual: Transcript, references: list[Path], *, execution: str | None
+    actual: Transcript,
+    references: list[Path],
+    *,
+    execution: str | None,
+    execution_specific: bool,
 ) -> YamlStream:
     expected = [
         (path, normalize_request_ids(read_yaml(path, multi=True)))
@@ -240,6 +244,11 @@ def compact_initializations(
                     .removeprefix(".")
                 )
                 variant = variant.replace(".win32", "").removeprefix("win32")
+                if execution is not None and not execution_specific:
+                    # Fixture write grants are checked in full above, but their
+                    # reference label need not split a portable transcript.
+                    if variant == "writable" or variant.endswith("-writable"):
+                        variant = variant.removesuffix("writable").removesuffix("-")
                 target = (
                     f"{variant + ' ' if variant else ''}MCP initialization for this execution mode"
                     if execution is not None
@@ -325,7 +334,12 @@ def check_recording(
                 if ("win32" in path.stem.split(".")) == (sys.platform == "win32")
             ]
         assert references, f"no initialization reference for {execution}"
-        actual = compact_initializations(actual, references, execution=execution)
+        actual = compact_initializations(
+            actual,
+            references,
+            execution=execution,
+            execution_specific=execution_specific,
+        )
     check_snapshot(primary, actual, case, update=update)
     checked = {primary}
     for companion, contents in companions:
@@ -337,7 +351,10 @@ def check_recording(
                 contents = normalize_request_ids(contents.transcript)
                 if not initialization:
                     contents = compact_initializations(
-                        contents, references, execution=execution
+                        contents,
+                        references,
+                        execution=execution,
+                        execution_specific=execution_specific,
                     )
             elif initialization:
                 # Canonical companions are MCP handshakes; ordinary YAML
