@@ -206,6 +206,30 @@ class WebsiteTests(unittest.TestCase):
                 }
                 self.assertIn(home, destinations)
 
+    def test_python_methods_are_inline(self) -> None:
+        for name, context_methods in (
+            ("MCPConsole", ("__enter__", "__exit__")),
+            ("AsyncMCPConsole", ("__aenter__", "__aexit__")),
+        ):
+            with self.subTest(client=name):
+                path = self.site / f"python/reference/{name}.html"
+                page = self.pages[path]
+                for method in (
+                    "connect",
+                    "close",
+                    "send",
+                    "send_tool",
+                    *context_methods,
+                ):
+                    self.assertIn(f"mcp_console.{name}.{method}", page.ids)
+                    self.assertEqual(
+                        path.read_text().count(f'id="mcp_console.{name}.{method}"'), 1
+                    )
+                    self.assertFalse(
+                        (self.site / f"python/reference/{name}.{method}.html").exists(),
+                        "methods should be documented on the class page",
+                    )
+
     def test_local_links_and_anchors_resolve(self) -> None:
         self.assertTrue(self.pages, "the website has no rendered pages")
         for path, page in self.pages.items():

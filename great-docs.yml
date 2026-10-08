@@ -2,6 +2,7 @@ module: mcp_console
 display_name: MCP Console Python
 parser: google
 dynamic: false
+inline_methods: true
 site_url: https://t-kalinowski.github.io/mcp-console/python/
 github_style: icon
 pypi: false
@@ -27,8 +28,10 @@ reference:
   sections:
     - title: Clients
       contents:
-      - MCPConsole
-      - AsyncMCPConsole
+      - name: MCPConsole
+        members: [connect, close, send, send_tool, __enter__, __exit__]
+      - name: AsyncMCPConsole
+        members: [connect, close, send, send_tool, __aenter__, __aexit__]
       - name: Requirements
         members: false
     - title: chatlas
