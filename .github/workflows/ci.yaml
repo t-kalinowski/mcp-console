@@ -586,6 +586,9 @@ jobs:
             -o "$RUNNER_TEMP/transcript-metrics/resource-usage.txt" \
             uv run --script tests/boundaries/_run.py --full --jobs 6
 
+      - name: Run allocation stress regressions
+        run: uv run --script tests/boundaries/_run.py --stress --jobs 6
+
       - name: Summarize transcript measurements
         if: ${{ !cancelled() && steps.transcripts.outcome != 'skipped' }}
         run: |

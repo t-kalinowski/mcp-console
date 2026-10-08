@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
@@ -16,7 +16,7 @@ from support.suites import run_this_suite
 
 
 @requires(R)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_direct_py_access_attaches_on_demand(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -82,7 +82,7 @@ def test_direct_py_access_attaches_on_demand(
 
 
 @requires(R)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_loading_reticulate_does_not_start_python(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -104,7 +104,7 @@ def test_loading_reticulate_does_not_start_python(
 
 
 @requires(R)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_py_reads_in_initialization_hooks_do_not_reenter(
     binary: Path, execution: Execution
 ) -> Transcript:

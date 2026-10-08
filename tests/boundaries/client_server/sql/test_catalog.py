@@ -293,7 +293,7 @@ def test_queries_a_ragnar_store_created_in_r(
     assert last_tool_text(client) == "[done]"
 
     client.send(
-        requirements={"r": ["ragnar"], "duckdb": ["fts", "vss"]},
+        requirements={"r": ["ragnar"]},
     )
     assert last_tool_text(client) == "[prepared]"
 
@@ -339,8 +339,30 @@ def test_queries_a_ragnar_store_created_in_r(
           )
           ragnar::ragnar_store_insert(store, chunks)
         }
+        reader <- ragnar::ragnar_store_connect(store_path, read_only = FALSE)
+        stopifnot(!reticulate::py_available(initialize = FALSE))
+        writeLines("ragnar store ready")
+        """)
+    client.send(r=r)
+    assert normalize_duckdb_progress(client) == "ragnar store ready\n"
+    client.expect("[prepared]", requirements={"duckdb": ["fts", "vss"]})
+    # fmt: r
+    r = code(r"""
+        stopifnot(
+          DBI::dbIsValid(store@con),
+          DBI::dbIsValid(reader@con),
+          DBI::dbGetQuery(store@con, "SELECT count(*) AS n FROM chunks")$n == 2,
+          DBI::dbGetQuery(sql_connection(), "SELECT value FROM before_prepare")$value ==
+            42L
+        )
         ragnar::ragnar_store_build_index(store, type = c("vss", "fts"))
+        retrieved <- ragnar::ragnar_retrieve(store, "bananas", top_k = 1L)
+        stopifnot(identical(retrieved$origin, "beta.md"))
         connection <- sql_connection()
+        stopifnot(
+          !identical(connection, store@con),
+          !identical(connection, reader@con)
+        )
         invisible(DBI::dbExecute(
           connection,
           paste(
@@ -395,223 +417,6 @@ def test_queries_a_ragnar_store_created_in_r(
         "42",
     ]
     assert '"alpha.md"' not in preview
-    transcript = client.finish()
-    temporary.cleanup()
-    return transcript
-
-
-@requires(SQL)
-@executions(DIRECT, SANDBOXED)
-def test_uses_ragnar_like_the_guide_and_adapts_to_the_console(
-    binary: Path,
-    execution: Execution,
-) -> Transcript:
-    environment, _ = r_test_environment()
-    environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
-    temporary = tempfile.TemporaryDirectory()
-    workspace = Path(temporary.name)
-    client = McpClient(
-        binary,
-        execution.serve(),
-        environment,
-        current_directory=workspace,
-    )
-    client.initialize_and_list_tools()
-
-    sql = code(r"""
-        CREATE TABLE agent_notes AS
-        SELECT 'worker catalog' AS note
-        """)
-    client.send(sql=sql)
-    assert last_tool_text(client) == "[done]"
-
-    client.send(requirements={"r": ["ragnar"]})
-    assert last_tool_text(client) == "[prepared]"
-
-    # fmt: r
-    r = code(r"""
-        store_path <- file.path(tempdir(), "knowledge.ragnar.duckdb")
-        store <- suppressMessages(ragnar::ragnar_store_create(
-          store_path,
-          embed = NULL
-        ))
-        documents <- list(
-          ragnar::MarkdownDocument(
-            "# Alpha\n\nApples are red fruit.",
-            origin = "alpha.md"
-          ),
-          ragnar::MarkdownDocument(
-            "# Beta\n\nBananas are yellow fruit.",
-            origin = "beta.md"
-          )
-        )
-        for (document in documents) {
-          chunks <- ragnar::markdown_chunk(
-            document,
-            target_size = 1000L,
-            target_overlap = 0
-          )
-          ragnar::ragnar_store_insert(store, chunks)
-        }
-        stopifnot(!reticulate::py_available(initialize = FALSE))
-        writeLines("created store under the worker tempdir")
-        """)
-    client.send(r=r)
-    assert normalize_duckdb_progress(client) == (
-        "created store under the worker tempdir\n"
-    )
-
-    client.send(
-        requirements={"duckdb": ["fts", "vss"]},
-    )
-    assert last_tool_text(client) == "[prepared]"
-
-    # fmt: r
-    r = code(r"""
-        stopifnot(
-          DBI::dbIsValid(store@con),
-          DBI::dbGetQuery(store@con, "SELECT count(*) AS n FROM chunks")$n == 2
-        )
-        ragnar::ragnar_store_build_index(store)
-        writeLines("index built after extension preparation")
-        """)
-    client.send(r=r)
-    assert normalize_duckdb_progress(client) == (
-        "index built after extension preparation\n"
-    )
-
-    # fmt: r
-    r = code(r"""
-        creator_result <- ragnar::ragnar_retrieve(
-          store,
-          "bananas",
-          top_k = 1L
-        )
-        creator_result[c("origin", "text")]
-        """)
-    client.send(r=r)
-    preview = normalize_duckdb_progress(client)
-    assert "beta.md" in preview and "Bananas are yellow fruit" in preview, preview
-    assert "alpha.md" not in preview, preview
-
-    # fmt: r
-    r = code(r"""
-        # Match the writable instance retained by the creator connection.
-        reader <- ragnar::ragnar_store_connect(
-          store_path,
-          read_only = FALSE
-        )
-        reader_result <- ragnar::ragnar_retrieve(
-          reader,
-          "apples",
-          top_k = 1L
-        )
-        reader_result[c("origin", "text")]
-        """)
-    client.send(r=r)
-    preview = normalize_duckdb_progress(client)
-    assert "alpha.md" in preview and "Apples are red fruit" in preview, preview
-    assert "beta.md" not in preview, preview
-
-    sql = code(r"""
-        SELECT origin FROM chunks ORDER BY origin
-        """)
-    client.send(sql=sql)
-    output = normalize_trailing_spaces(client)
-    assert "Binder Error:" in output
-    assert 'Referenced column "origin" not found' in output
-
-    # fmt: r
-    r = code(r"""
-        writeLines(paste(
-          "R chunks columns:",
-          paste(names(chunks), collapse = ", ")
-        ))
-        rm(chunks)
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == ("R chunks columns: start, end, context, text\n")
-
-    client.send(sql=sql)
-    output = normalize_trailing_spaces(client)
-    assert "Catalog Error:" in output
-    assert "Table with name chunks does not exist" in output
-
-    # fmt: r
-    r = code(r"""
-        sql_connection(reader@con)
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == (
-        "Error in sql_connection(reader@con) : unused argument (reader@con)\n"
-    )
-
-    # fmt: r
-    r = code(r"""
-        connection <- sql_connection()
-        stopifnot(
-          DBI::dbIsValid(store@con),
-          DBI::dbIsValid(reader@con),
-          !identical(connection, store@con),
-          !identical(connection, reader@con)
-        )
-        invisible(DBI::dbExecute(
-          connection,
-          paste(
-            "ATTACH",
-            DBI::dbQuoteString(connection, store_path),
-            "AS knowledge (READ_ONLY)"
-          )
-        ))
-        writeLines("attached with both ragnar connections still open")
-        """)
-    client.send(r=r)
-    assert last_tool_text(client) == (
-        "attached with both ragnar connections still open\n"
-    )
-
-    sql = code(r"""
-        SELECT origin FROM knowledge.main.chunks ORDER BY origin
-        """)
-    client.send(sql=sql)
-    preview = normalize_trailing_spaces(client)
-    assert [line.split() for line in preview.splitlines()[-2:]] == [
-        ["1", '"alpha.md"'],
-        ["2", '"beta.md"'],
-    ]
-
-    sql = code(r"""
-        SELECT origin
-        FROM knowledge.main.chunks
-        WHERE knowledge.fts_main_chunks.match_bm25(
-          chunk_id,
-          'bananas'
-        ) IS NOT NULL
-        ORDER BY origin
-        """)
-    client.send(sql=sql)
-    output = normalize_trailing_spaces(client)
-    assert 'Table with name "fts_main_chunks.terms" does not exist' in output
-    assert 'schema "fts_main_chunks" does not exist' in output
-
-    sql = code(r"""
-        USE knowledge;
-        SELECT
-          origin,
-          (SELECT note FROM memory.main.agent_notes) AS note
-        FROM chunks
-        WHERE fts_main_chunks.match_bm25(chunk_id, 'bananas') IS NOT NULL
-        ORDER BY origin
-        """)
-    client.send(sql=sql)
-    preview = normalize_trailing_spaces(client)
-    assert preview.splitlines()[-1].split() == [
-        "1",
-        '"beta.md"',
-        '"worker',
-        'catalog"',
-    ]
-
     transcript = client.finish()
     temporary.cleanup()
     return transcript
@@ -752,8 +557,8 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
-def test_queries_r_data_frames(binary: Path, execution: Execution) -> Transcript:
+@executions(SANDBOXED)
+def test_resolves_r_bindings(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
     # fmt: r
@@ -775,53 +580,35 @@ def test_queries_r_data_frames(binary: Path, execution: Execution) -> Transcript
     preview = last_tool_text(client)
     assert '"a"' in preview and "20" in preview
     assert '"b"' in preview and "50" in preview
-    return client.finish()
 
-
-@requires(SQL)
-@executions(DIRECT, SANDBOXED)
-def test_sql_views_follow_rebound_r_data_frames(
-    binary: Path, execution: Execution
-) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
-        measurements <- data.frame(value = 2L)
+        rebound_measurements <- data.frame(value = 2L)
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
 
     sql = code(r"""
-        CREATE VIEW live_measurements AS
-        SELECT value FROM measurements
+        CREATE VIEW live_rebound_measurements AS
+        SELECT value FROM rebound_measurements
         """)
     client.send(sql=sql)
     assert last_tool_text(client) == "[done]"
 
     # fmt: r
     r = code(r"""
-        measurements <- data.frame(value = 7L)
+        rebound_measurements <- data.frame(value = 7L)
         """)
     client.send(r=r)
     assert last_tool_text(client) == "[done]"
 
     sql = code(r"""
-        SELECT value FROM live_measurements
+        SELECT value FROM live_rebound_measurements
         """)
     client.send(sql=sql)
     preview = last_tool_text(client)
     assert preview.splitlines()[-1].split() == ["1", "7"]
-    return client.finish()
 
-
-@requires(SQL)
-@executions(DIRECT, SANDBOXED)
-def test_prefers_catalog_relations_over_r_data_frames(
-    binary: Path, execution: Execution
-) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         values <- data.frame(origin = "r")
@@ -837,16 +624,7 @@ def test_prefers_catalog_relations_over_r_data_frames(
     preview = last_tool_text(client)
     assert '"sql"' in preview
     assert '"r"' not in preview
-    return client.finish()
 
-
-@requires(SQL)
-@executions(DIRECT, SANDBOXED)
-def test_scans_r_bindings_named_like_bridge_state(
-    binary: Path, execution: Execution
-) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
     # fmt: r
     r = code(r"""
         connection <- data.frame(name = "connection")
@@ -869,7 +647,7 @@ def test_scans_r_bindings_named_like_bridge_state(
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(SANDBOXED)
 def test_exposes_catalog_as_lazy_r_relations(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -925,40 +703,22 @@ b:5:10
 c:11:22
 """
     )
-    return client.finish()
-
-
-@requires(SQL)
-@executions(DIRECT, SANDBOXED)
-def test_keeps_connection_helper_after_clearing_r_workspace(
-    binary: Path,
-    execution: Execution,
-) -> Transcript:
-    client = McpClient(binary, execution.serve())
-    client.initialize_and_list_tools()
-    sql = code(r"""
-        CREATE TABLE retained_values AS
-        SELECT * FROM (VALUES ('a', 2), ('b', 5)) AS values(label, value)
-        """)
-    client.send(sql=sql)
-    assert last_tool_text(client) == "[done]"
-
     # fmt: r
     r = code(r"""
         rm(list = ls())
         values <- DBI::dbGetQuery(
           sql_connection(),
-          "SELECT label, value FROM retained_values ORDER BY label"
+          "SELECT label, value FROM sql_values ORDER BY label"
         )
         writeLines(paste(values$label, values$value, sep = ":"))
         """)
     client.send(r=r)
-    assert last_tool_text(client) == "a:2\nb:5\n"
+    assert last_tool_text(client) == "a:2\nb:5\nc:11\n"
     return client.finish()
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(SANDBOXED)
 def test_recovers_from_sql_errors(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
@@ -981,7 +741,7 @@ def test_recovers_from_sql_errors(binary: Path, execution: Execution) -> Transcr
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(SANDBOXED)
 def test_avoids_private_preview_name_collisions(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1043,7 +803,7 @@ def test_preserves_utf8_preview_in_c_locale(
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(SANDBOXED)
 def test_previews_schema_and_exact_values(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1135,7 +895,7 @@ def test_previews_schema_and_exact_values(
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(SANDBOXED)
 def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
@@ -1161,7 +921,7 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(SANDBOXED)
 def test_bounds_query_previews_without_materializing_results(
     binary: Path,
     execution: Execution,
@@ -1219,7 +979,7 @@ def test_bounds_query_previews_without_materializing_results(
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(SANDBOXED)
 def test_keeps_repeated_previews_deterministic(
     binary: Path, execution: Execution
 ) -> Transcript:

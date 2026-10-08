@@ -15,9 +15,6 @@ send:
   requirements:
     r:
       - ragnar
-    duckdb:
-      - fts
-      - vss
 result:
   content:
     - type: text
@@ -66,8 +63,44 @@ send:
       )
       ragnar::ragnar_store_insert(store, chunks)
     }
+    reader <- ragnar::ragnar_store_connect(store_path, read_only = FALSE)
+    stopifnot(!reticulate::py_available(initialize = FALSE))
+    writeLines("ragnar store ready")
+result:
+  content:
+    - type: text
+      text: |
+        ragnar store ready
+  isError: false
+---
+send:
+  requirements:
+    duckdb:
+      - fts
+      - vss
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  r: |
+    stopifnot(
+      DBI::dbIsValid(store@con),
+      DBI::dbIsValid(reader@con),
+      DBI::dbGetQuery(store@con, "SELECT count(*) AS n FROM chunks")$n == 2,
+      DBI::dbGetQuery(sql_connection(), "SELECT value FROM before_prepare")$value ==
+        42L
+    )
     ragnar::ragnar_store_build_index(store, type = c("vss", "fts"))
+    retrieved <- ragnar::ragnar_retrieve(store, "bananas", top_k = 1L)
+    stopifnot(identical(retrieved$origin, "beta.md"))
     connection <- sql_connection()
+    stopifnot(
+      !identical(connection, store@con),
+      !identical(connection, reader@con)
+    )
     invisible(DBI::dbExecute(
       connection,
       paste(

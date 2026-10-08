@@ -24,7 +24,7 @@ from support.assertions import (
 )
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.native import build_interposer
@@ -473,7 +473,7 @@ def test_idle_preparation_keeps_r_uninitialized(
             return client.finish()[3:]
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_standalone_python_contract(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -491,7 +491,7 @@ def test_standalone_python_contract(binary: Path, execution: Execution) -> Trans
 
 
 @requires(R, command("uv"))
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_shared_module_configuration(binary: Path, execution: Execution) -> Transcript:
     records = None
     for with_r in (False, True):
@@ -601,7 +601,7 @@ def exercise_python(client: McpClient) -> tuple[str, ...]:
 
 
 @requires(R)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_python_contract_with_and_without_r(
     binary: Path, execution: Execution
 ) -> Transcript:
