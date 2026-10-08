@@ -250,8 +250,18 @@ impl ResolverProcess {
             primary,
             cleanup: Vec::new(),
         };
+        #[cfg(windows)]
+        let interrupt_requested = invocation.child.interrupt_requested();
         let retirement = invocation.retire(program, kind);
         self.cleanup.store(retirement.confirmed(), Ordering::SeqCst);
+        // Job termination can race with a natural exit. Its accepted request
+        // alone is not evidence that it supplied the final process exit code.
+        #[cfg(windows)]
+        if interrupt_requested && retirement.process.as_ref().is_ok_and(native::interrupted) {
+            failure
+                .primary
+                .get_or_insert_with(|| format!("{kind} resolution interrupted"));
+        }
         if let Err(error) = &retirement.process {
             failure.record_cleanup(error.clone());
         }
@@ -522,11 +532,10 @@ fn wait_for_resolver_exit(
             }) => match interrupt_resolver(child) {
                 Ok(ResolverInterrupt::Signaled) => {
                     let _ = reply.send(Ok(()));
-                    // Windows interruption terminates the owned Job rather
-                    // than asking the resolver to unwind cooperatively. Retain
-                    // that cause before a domain adapter formats its exit code.
+                    // Windows terminates the owned Job. Retirement confirms
+                    // the final status before attributing it to interruption.
                     #[cfg(windows)]
-                    return Err(format!("{kind} resolution interrupted"));
+                    return Ok(());
                 }
                 Ok(ResolverInterrupt::AlreadyExited) => {
                     let _ = reply.send(Ok(()));

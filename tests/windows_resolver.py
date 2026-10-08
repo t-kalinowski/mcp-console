@@ -181,9 +181,10 @@ class WindowsResolver(unittest.TestCase):
         self.assertIn("fixture resolver failure", result["result"]["Err"])
 
     def blocked_resolver(
-        self, mode: str = "blocked", *, release: bool = True
+        self, mode: str = "blocked", *, release: bool = True, gate: Gate | None = None
     ) -> tuple[Resolver, dict[int, int]]:
-        gate = Gate()
+        if gate is None:
+            gate = Gate()
         self.addCleanup(gate.close)
         self.environment["TEST_RESOLVER_GATE"] = gate.name
         self.environment["TEST_RESOLVER_MODE"] = mode
@@ -285,10 +286,7 @@ class WindowsResolver(unittest.TestCase):
                     )
                 self.assert_retired(processes)
 
-    def test_delayed_exit_reports_unconfirmed_retirement(self) -> None:
-        # A held EXIT_PROCESS_DEBUG_EVENT delays kernel shutdown and process
-        # handle signaling, without depending on a slow or faulty I/O driver.
-        # https://learn.microsoft.com/en-us/windows/win32/debug/debugging-events
+    def resolver_debugger(self):
         class ExceptionRecord(ctypes.Structure):
             _fields_ = [
                 ("code", ctypes.c_uint32),
@@ -305,7 +303,11 @@ class WindowsResolver(unittest.TestCase):
         class DebugInfo(ctypes.Union):
             # The exception member determines the union's native size/alignment.
             # CREATE_PROCESS and LOAD_DLL both begin with an owned file handle.
-            _fields_ = [("exception", ExceptionInfo), ("file", ctypes.c_void_p)]
+            _fields_ = [
+                ("exception", ExceptionInfo),
+                ("file", ctypes.c_void_p),
+                ("exit_code", ctypes.c_uint32),
+            ]
 
         class DebugEvent(ctypes.Structure):
             _fields_ = [
@@ -340,6 +342,61 @@ class WindowsResolver(unittest.TestCase):
         def resume(event: DebugEvent) -> None:
             checked(kernel.ContinueDebugEvent(event.pid, event.tid, 0x00010002))
 
+        return kernel, checked, next_event, resume
+
+    def test_interrupt_preserves_natural_exit_diagnostics(self) -> None:
+        # Hold a natural EXIT_PROCESS_DEBUG_EVENT: try_wait still reports live,
+        # but Job termination must not replace the resolver's original failure.
+        # https://learn.microsoft.com/en-us/windows/win32/debug/debugging-events
+        kernel, checked, next_event, resume = self.resolver_debugger()
+        for exit_code in (1, 23):
+            with self.subTest(exit_code=exit_code):
+                self.environment["TEST_RESOLVER_EXIT_CODE"] = str(exit_code)
+                gate = Gate()
+                resolver, processes = self.blocked_resolver(
+                    "failed", release=False, gate=gate
+                )
+                pid, handle = next(iter(processes.items()))
+                checked(kernel.DebugActiveProcess(pid))
+                held = None
+                try:
+                    while True:
+                        event = next_event()
+                        resume(event)
+                        if event.code == 1:
+                            break
+                    gate.sendall(b"\x01")
+                    while True:
+                        event = next_event()
+                        if event.code == 5:
+                            held = event
+                            break
+                        resume(event)
+                    self.assertEqual(held.info.exit_code, exit_code)
+                    self.assertEqual(kernel.WaitForSingleObject(handle, 0), 258)
+                    resolver.send({"Control": {"id": 1, "control": "Interrupted"}})
+                    self.assertEqual(
+                        resolver.receive(),
+                        {"Controlled": {"id": 1, "result": {"Ok": True}}},
+                    )
+                finally:
+                    if held is not None:
+                        resume(held)
+                    else:
+                        checked(kernel.DebugActiveProcessStop(pid))
+                completed = resolver.receive()["Completed"]
+                self.assertTrue(completed["confirmed"], completed)
+                diagnostic = completed["result"]["Err"]
+                self.assertIn("managed Python resolution failed", diagnostic)
+                self.assertIn("fixture resolver failure", diagnostic)
+                self.assertNotIn("resolution interrupted", diagnostic)
+                self.assert_retired(processes)
+
+    def test_delayed_exit_reports_unconfirmed_retirement(self) -> None:
+        # A held EXIT_PROCESS_DEBUG_EVENT delays kernel shutdown and process
+        # handle signaling, without depending on a slow or faulty I/O driver.
+        # https://learn.microsoft.com/en-us/windows/win32/debug/debugging-events
+        kernel, checked, next_event, resume = self.resolver_debugger()
         for action in ("Cancelled", "Close"):
             with self.subTest(action=action):
                 resolver, processes = self.blocked_resolver()

@@ -175,7 +175,9 @@ class Session:
                 python="raise AssertionError('interrupted bootstrap ran fixture cell')",
                 timeout_ms=0,
             )
-            deadline = time.monotonic() + self.timeout
+            # This checkpoint follows cold host dependency preparation, which
+            # can exceed an ordinary runtime response allowance on CI.
+            deadline = time.monotonic() + 600
             while (
                 "waiting for stdin" not in json.dumps(result)
                 and time.monotonic() < deadline
@@ -306,6 +308,9 @@ def exercise_r_sql(session: Session) -> None:
             """),
     )
     session.expect("7654321", sql="SELECT * FROM frame")
+    # Result rows can arrive before the cell's completion receipt.
+    settled = session.send()
+    assert not settled.get("isError") and "running;" not in json.dumps(settled), settled
     result = session.send(
         sql="SELECT sum(i::DOUBLE) FROM range(1000000000000) AS values(i)",
         timeout_ms=1000,

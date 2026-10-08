@@ -57,6 +57,7 @@ pub(crate) struct Child {
     process: Process,
     job: OwnedHandle,
     completion: OwnedHandle,
+    interrupt_requested: bool,
 }
 
 impl Deref for Child {
@@ -132,6 +133,7 @@ pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
             process,
             job,
             completion,
+            interrupt_requested: false,
         })
     }
 }
@@ -169,10 +171,16 @@ fn resume_initial_thread(pid: u32) -> io::Result<()> {
 
 impl Child {
     fn terminate(&self) -> io::Result<()> {
-        if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
+        if unsafe { TerminateJobObject(self.job.as_raw_handle(), STATUS_CONTROL_C_EXIT as u32) }
+            == 0
+        {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    pub(super) fn interrupt_requested(&self) -> bool {
+        self.interrupt_requested
     }
 
     fn retire(
@@ -236,7 +244,12 @@ pub(super) fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterr
         return Ok(ResolverInterrupt::AlreadyExited);
     }
     child.terminate()?;
+    child.interrupt_requested = true;
     Ok(ResolverInterrupt::Signaled)
+}
+
+pub(super) fn interrupted(status: &ExitStatus) -> bool {
+    status.code() == Some(STATUS_CONTROL_C_EXIT)
 }
 
 pub(super) fn stop_resolver(
