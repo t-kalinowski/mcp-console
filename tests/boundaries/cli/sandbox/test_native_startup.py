@@ -6,11 +6,12 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, POSIX, SANDBOX, requires
+from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
 
 
 def constructor(
@@ -112,10 +113,16 @@ def test_denials_apply_through_aliases_before_main(binary: Path) -> Transcript:
     return constructor(binary, restricted_reads=False, denied_alias=True)
 
 
-@requires(POSIX)
+@requires(SANDBOX)
 def test_rejects_native_external_resolver_mode(binary: Path) -> Transcript:
-    with TemporaryDirectory() as directory:
+    with (
+        TemporaryDirectory() as directory,
+        patch.dict(os.environ, MCP_CONSOLE_HOME=str(Path(directory) / "caller-home")),
+    ):
         root = Path(directory).resolve()
+        caller_config = root / "caller-home/config.yaml"
+        caller_config.parent.mkdir()
+        caller_config.write_text("{")
         config = root / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
         config.write_text(
@@ -124,6 +131,7 @@ def test_rejects_native_external_resolver_mode(binary: Path) -> Transcript:
         result = subprocess.run(
             [binary, "serve"],
             cwd=root,
+            env={**os.environ, "MCP_CONSOLE_HOME": str(root / "console-home")},
             input="",
             capture_output=True,
             text=True,
