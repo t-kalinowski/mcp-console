@@ -133,6 +133,15 @@ def test_initializes_and_lists_tools(
         "configured-r-sql.yaml": _initializes_and_lists_tools(
             binary, execution, languages=("r", "sql")
         ),
+        "configured-r.yaml": _initializes_and_lists_tools(
+            binary, execution, languages=("r",)
+        ),
+        "configured-python.yaml": _initializes_and_lists_tools(
+            binary, execution, languages=("python",)
+        ),
+        "configured-r-python.yaml": _initializes_and_lists_tools(
+            binary, execution, languages=("r", "python")
+        ),
         "r-only.yaml": _initializes_and_lists_tools(
             binary, execution, bootstrap_languages="r"
         ),
