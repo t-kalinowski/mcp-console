@@ -366,7 +366,7 @@ result:
         Error: DuckDB is unavailable; add duckdb with requirements.python and
         control: restart in a managed session, install it before starting a
         selected Python environment, or select a DB-API connection with
-        console_sql_connection(connection)
+        _console.sql_connection(connection)
   isError: false
 ---
 send:
@@ -376,7 +376,7 @@ send:
 
     assert importlib.util.find_spec("duckdb") is None
     selected = sqlite3.connect(":memory:")
-    console_sql_connection(selected)
+    _console.sql_connection(selected)
     print("Python remains available")
 result:
   content:
@@ -397,7 +397,7 @@ result:
   isError: false
 ---
 send:
-  python: console_sql_connection(None); selected.execute('SELECT 1').fetchone()
+  python: _console.sql_connection(None); selected.execute('SELECT 1').fetchone()
 result:
   content:
     - type: text
@@ -414,7 +414,7 @@ result:
         Error: DuckDB is unavailable; add duckdb with requirements.python and
         control: restart in a managed session, install it before starting a
         selected Python environment, or select a DB-API connection with
-        console_sql_connection(connection)
+        _console.sql_connection(connection)
   isError: false
 ---
 send:

@@ -241,7 +241,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
 
             connection = sqlite3.connect(":memory:")
             connection.create_function("sql_requires_package", 0, r.sql_requires_package)
-            console_sql_connection(connection)
+            _console.sql_connection(connection)
             """)
         client.expect(python=python)
         baseline = len(ir_run_records(record))

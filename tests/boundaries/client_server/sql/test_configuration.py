@@ -47,7 +47,7 @@ def test_selected_r_connection_does_not_initialize_python(
                 invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
                 DBI::dbBegin(native)
                 invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
-                console_sql_connection(native)
+                .console$sql_connection(native)
                 stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 42)
                 invisible()
                 """),
@@ -66,7 +66,7 @@ def test_selected_r_connection_does_not_initialize_python(
                 stopifnot(
                   Sys.getpid() == retained_pid,
                   retained_state$answer == 42L,
-                  identical(sql_connection(), native),
+                  identical(.console$sql_connection(), native),
                   !reticulate::py_available(initialize = FALSE),
                   DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 43
                 )
@@ -90,12 +90,17 @@ def test_selected_r_connection_does_not_initialize_python(
             python=code("""
                 user = sqlite3.connect(":memory:")
                 _ = user.execute("CREATE TABLE selected AS SELECT 7 AS answer")
-                console_sql_connection(user)
+                _console.sql_connection(user)
                 """),
         )
         client.expect("answer\n------\n7\n", sql="SELECT answer FROM selected")
         client.expect(
-            r="stopifnot(identical(sql_connection(), native), DBI::dbIsValid(native))"
+            # fmt: r
+            r=code("""
+                stopifnot(DBI::dbIsValid(native))
+                error <- tryCatch(.console$sql_connection(), error = conditionMessage)
+                stopifnot(grepl("active SQL connection belongs to Python", error, fixed = TRUE))
+                """),
         )
         client.finish()
     return [
@@ -155,7 +160,7 @@ def test_interrupted_selection_replay_preserves_r_connection(
                     invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
                     DBI::dbBegin(native)
                     invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 43"))
-                    console_sql_connection(native)
+                    .console$sql_connection(native)
                     stopifnot(!reticulate::py_available(initialize = FALSE))
                     """),
             )
@@ -183,7 +188,7 @@ def test_interrupted_selection_replay_preserves_r_connection(
                     stopifnot(
                       Sys.getpid() == retained_pid,
                       retained_state$answer == 42L,
-                      identical(sql_connection(), native),
+                      identical(.console$sql_connection(), native),
                       DBI::dbIsValid(native),
                       DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 43
                     )
@@ -248,7 +253,7 @@ def test_selected_r_bypasses_incomplete_python_setup(
                     native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
                     invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
                     DBI::dbBegin(native)
-                    console_sql_connection(native)
+                    .console$sql_connection(native)
                     """),
             )
             client.expect(
@@ -264,7 +269,10 @@ def test_selected_r_bypasses_incomplete_python_setup(
             client.expect(
                 # fmt: r
                 r=code("""
-                    stopifnot(Sys.getpid() == retained_pid, identical(sql_connection(), native))
+                    stopifnot(
+                      Sys.getpid() == retained_pid,
+                      identical(.console$sql_connection(), native)
+                    )
                     DBI::dbRollback(native)
                     stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
                     """),

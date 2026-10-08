@@ -18,7 +18,7 @@ result:
   isError: false
 ---
 send:
-  python: _ = sql_connection().register("visible_frame", frame)
+  python: _ = _console.sql_connection().register("visible_frame", frame)
 result:
   content:
     - type: text

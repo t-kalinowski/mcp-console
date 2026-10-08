@@ -3,6 +3,7 @@ import _mcp_console as _runtime
 import builtins as _builtins
 import traceback as _traceback
 import unicodedata as _unicodedata
+from types import SimpleNamespace as _SimpleNamespace
 
 _PREVIEW_ROWS = 20
 _PREVIEW_COLUMNS = 12
@@ -12,6 +13,7 @@ _RESPONSE_BYTES = 12 * 1024
 _PROVIDER_R = 0
 _PROVIDER_MANAGED = 1
 _PROVIDER_HANDLED = 2
+_UNSET = object()
 _r_selected = False
 
 try:
@@ -33,8 +35,17 @@ def _validate_connection(connection):
         )
 
 
-def console_sql_connection(connection=None):
+def sql_connection(connection: object = _UNSET) -> object:
     global _connection, _restore_managed, _r_selected
+
+    if connection is _UNSET:
+        if _connection is None:
+            if _native_storage is None:
+                raise RuntimeError(
+                    "The active SQL connection belongs to R; use .console$sql_connection() in R"
+                )
+            _connection = _ensure_managed_connection()
+        return _connection
 
     if connection is None:
         _r_selected = False
@@ -47,6 +58,10 @@ def console_sql_connection(connection=None):
     _connection = connection
     _restore_managed = False
     return None
+
+
+def has_selected_connection() -> bool:
+    return _connection is not None
 
 
 def use_r():
@@ -262,7 +277,7 @@ def dispatch(source):
     return _runtime.without_automatic_resolution(_dispatch, source)
 
 
-_builtins.console_sql_connection = console_sql_connection
+_builtins._console = _SimpleNamespace(sql_connection=sql_connection)
 
 
 def take_managed_restore_request():
@@ -290,7 +305,6 @@ def enable_native() -> None:
     _native_extension_directory = _os.environ.get(
         "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", ""
     )
-    _builtins.sql_connection = sql_connection
 
 
 def _ensure_managed_connection():
@@ -303,7 +317,7 @@ def _ensure_managed_connection():
             message = (
                 "DuckDB is unavailable; add duckdb with requirements.python and control: restart "
                 "in a managed session, install it before starting a selected Python environment, "
-                "or select a DB-API connection with console_sql_connection(connection)"
+                "or select a DB-API connection with _console.sql_connection(connection)"
             )
             raise RuntimeError(message) from error
         config = {
@@ -364,15 +378,6 @@ def _select_native_connection():
     return True
 
 
-def sql_connection():
-    global _connection
-
-    assert _native_storage is not None
-    if _connection is None:
-        _connection = _ensure_managed_connection()
-    return _connection
-
-
 def initialize_connection(source: str) -> int:
     import __main__
 
@@ -380,7 +385,7 @@ def initialize_connection(source: str) -> int:
         exec(compile(source, "<console startup>", "exec"), __main__.__dict__)
         if _connection is None or _connection is _managed_connection or _r_selected:
             raise RuntimeError(
-                "startup must select a native connection with console_sql_connection(connection)"
+                "startup must select a native connection with _console.sql_connection(connection)"
             )
         # DB-API has no common is-open predicate. Probe without executing a query,
         # and close only cursors distinct from the user-owned connection.

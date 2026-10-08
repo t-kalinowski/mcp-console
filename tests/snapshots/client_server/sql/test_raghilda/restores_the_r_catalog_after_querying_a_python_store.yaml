@@ -66,7 +66,7 @@ send:
         ("beta.md", "Bananas are yellow fruit.")
     ]
     print(f"{hits[0].origin}: {hits[0].text}")
-    console_sql_connection(store.con)
+    _console.sql_connection(store.con)
 result:
   content:
     - type: text
@@ -114,7 +114,7 @@ result:
   isError: false
 ---
 send:
-  python: console_sql_connection(None)
+  python: _console.sql_connection(None)
 result:
   content:
     - type: text
@@ -123,7 +123,7 @@ result:
 ---
 send:
   r: |
-    restored <- sql_connection()
+    restored <- .console$sql_connection()
     stopifnot(
       inherits(restored, "duckdb_connection"),
       DBI::dbGetQuery(restored, "SELECT value FROM managed_marker")$value == 7

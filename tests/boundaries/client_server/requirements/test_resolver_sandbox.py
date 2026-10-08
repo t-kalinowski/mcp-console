@@ -162,7 +162,7 @@ def test_duckdb_cache_waits_for_terminal_sql_results(binary: Path) -> Transcript
                         return True
 
 
-                    _ = sql_connection().create_function(
+                    _ = _console.sql_connection().create_function(
                         "resolver_cache_gate", resolver_cache_gate, [], "BOOLEAN", side_effects=True
                     )
                     """),

@@ -34,7 +34,8 @@ result:
 ---
 send:
   python: >-
-    sql_connection().execute('SELECT value FROM selected_state').fetchone()
+    _console.sql_connection().execute('SELECT value FROM
+    selected_state').fetchone()
 result:
   content:
     - type: text

@@ -32,7 +32,7 @@ config:
       native = AliasedConnection()
       _ = native.execute("CREATE TABLE selected (answer INTEGER)")
       _ = native.execute("INSERT INTO selected VALUES (42)")
-      console_sql_connection(native)
+      _console.sql_connection(native)
 overrides:
   - python=<running Python>
 ---

@@ -115,7 +115,7 @@ def deferred_selection_client(
             "-c",
             "startup.code="
             + json.dumps(
-                "console_sql_connection(DBI::dbConnect(duckdb::duckdb(), ':memory:'))"
+                ".console$sql_connection(DBI::dbConnect(duckdb::duckdb(), ':memory:'))"
             ),
         )
         with McpClient(binary, serve, environment, directory) as client:

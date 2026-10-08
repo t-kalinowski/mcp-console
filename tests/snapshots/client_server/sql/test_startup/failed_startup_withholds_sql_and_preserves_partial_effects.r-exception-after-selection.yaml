@@ -4,7 +4,7 @@ config:
     language: r
     code: >-
       native <- DBI::dbConnect(duckdb::duckdb());
-      console_sql_connection(native); startup_count <- 1L; stop("after
+      .console$sql_connection(native); startup_count <- 1L; stop("after
       selection")
 ---
 !same-as MCP initialization for this execution mode
@@ -39,7 +39,7 @@ result:
   isError: false
 ---
 send:
-  r: console_sql_connection(NULL)
+  r: .console$sql_connection(NULL)
 result:
   content:
     - type: text

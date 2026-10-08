@@ -7,7 +7,7 @@ config:
       native <- DBI::dbConnect(duckdb::duckdb())
       invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
       DBI::dbBegin(native)
-      console_sql_connection(native)
+      .console$sql_connection(native)
       invisible(readline("R startup gate> "))
       invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
 ---
@@ -36,7 +36,7 @@ result:
 ---
 send:
   r: |
-    stopifnot(startup_count == 1L, identical(sql_connection(), native))
+    stopifnot(startup_count == 1L, identical(.console$sql_connection(), native))
     stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
     DBI::dbRollback(native)
 result:

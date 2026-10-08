@@ -7,7 +7,7 @@ config:
 
       startup_count = globals().get("startup_count", 0) + 1
       native = sqlite3.connect(":memory:")
-      console_sql_connection(native)
+      _console.sql_connection(native)
       input("Startup gate> ")
       _ = native.execute("CREATE TABLE selected AS SELECT 42 AS answer")
 ---
@@ -37,7 +37,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 380, in initialize_connection
+          File "<string>", line 385, in initialize_connection
           File "<console startup>", line 6, in <module>
           File "<string>", line 50, in _console_input
         KeyboardInterrupt

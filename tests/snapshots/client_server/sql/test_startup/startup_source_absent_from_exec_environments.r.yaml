@@ -5,7 +5,7 @@ config:
     code: |
       # captured-startup-credential-marker
       native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
-      console_sql_connection(native)
+      .console$sql_connection(native)
 ---
 !same-as MCP initialization for this execution mode
 ---

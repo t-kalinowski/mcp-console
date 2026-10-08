@@ -5,7 +5,7 @@ config:
     code: |-
       import sqlite3
       native = sqlite3.connect(':memory:')
-      console_sql_connection(native)
+      _console.sql_connection(native)
       startup_count = 1
       raise RuntimeError('after selection')
 ---
@@ -18,7 +18,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 380, in initialize_connection
+          File "<string>", line 385, in initialize_connection
           File "<console startup>", line 5, in <module>
         RuntimeError: after selection
         Error: configured startup did not complete; SQL withheld; explicit restart required
@@ -44,7 +44,7 @@ result:
   isError: false
 ---
 send:
-  python: console_sql_connection(None)
+  python: _console.sql_connection(None)
 result:
   content:
     - type: text
@@ -65,7 +65,7 @@ language: python
 failure: after selection
 first_sql: |
   Traceback (most recent call last):
-    File "<string>", line 380, in initialize_connection
+    File "<string>", line 385, in initialize_connection
     File "<console startup>", line 5, in <module>
   RuntimeError: after selection
   Error: configured startup did not complete; SQL withheld; explicit restart required

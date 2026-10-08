@@ -12,10 +12,10 @@ result:
 send:
   r: |
     sqlite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
-    console_sql_connection(connection = sqlite)
+    .console$sql_connection(connection = sqlite)
     cat(
-      c("selected: ", identical(sql_connection(), sqlite), "\n"),
-      c("valid: ", DBI::dbIsValid(sql_connection()), "\n"),
+      c("selected: ", identical(.console$sql_connection(), sqlite), "\n"),
+      c("valid: ", DBI::dbIsValid(.console$sql_connection()), "\n"),
       sep = ""
     )
   requirements:
@@ -31,14 +31,14 @@ result:
 ---
 send:
   r: |
-    selected <- sql_connection()
+    selected <- .console$sql_connection()
     message <- tryCatch(
-      console_sql_connection("not a connection"),
+      .console$sql_connection("not a connection"),
       error = conditionMessage
     )
     cat(
       c("rejected: ", message, "\n"),
-      c("unchanged: ", identical(sql_connection(), selected), "\n"),
+      c("unchanged: ", identical(.console$sql_connection(), selected), "\n"),
       sep = ""
     )
 result:
@@ -198,7 +198,7 @@ result:
 ---
 send:
   r: |
-    selected <- sql_connection()
+    selected <- .console$sql_connection()
     invisible(DBI::dbDisconnect(selected))
     cat(
       c("disconnected: ", !DBI::dbIsValid(selected), "\n"),
@@ -218,14 +218,14 @@ result:
     - type: text
       text: >
         Error: The selected SQL connection is no longer valid; call
-        console_sql_connection(NULL) to restore DuckDB
+        .console$sql_connection(NULL) to restore DuckDB
   isError: false
 ---
 send:
   r: |
-    console_sql_connection(NULL)
+    .console$sql_connection(NULL)
     cat(
-      c("restored: ", !identical(sql_connection(), selected), "\n"),
+      c("restored: ", !identical(.console$sql_connection(), selected), "\n"),
       sep = ""
     )
 result:
