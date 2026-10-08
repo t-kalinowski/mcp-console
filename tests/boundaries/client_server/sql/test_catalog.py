@@ -9,7 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.progress import without_elapsed
-from support.requirements import POSIX, SQL, requires
+from support.requirements import POSIX, R, SQL, requires
 from support.assertions import last_tool_text
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient, stop_client
@@ -44,7 +44,7 @@ def extension_failure_environment(workspace: Path) -> dict[str, str]:
     return environment
 
 
-@requires(SQL, POSIX)
+@requires(R, SQL, POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_restart_adds_r_and_duckdb_requirements(
     binary: Path, execution: Execution
@@ -120,7 +120,7 @@ def test_restart_adds_r_and_duckdb_requirements(
         return client.finish()
 
 
-@requires(SQL, POSIX)
+@requires(R, SQL, POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_prepares_and_loads_duckdb_extensions(
     binary: Path, execution: Execution
@@ -243,7 +243,7 @@ def test_prepares_and_loads_duckdb_extensions(
         return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_sends_sql_cell_with_initial_requirements(
     binary: Path, execution: Execution
@@ -267,7 +267,7 @@ def test_sends_sql_cell_with_initial_requirements(
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_queries_a_ragnar_store_created_in_r(
     binary: Path, execution: Execution
@@ -443,7 +443,7 @@ def test_queries_a_ragnar_store_created_in_r(
     return transcript
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_evaluates_queries_in_a_persistent_catalog(
     binary: Path, execution: Execution
@@ -486,7 +486,7 @@ def test_evaluates_queries_in_a_persistent_catalog(
         return client.finish()
 
 
-@requires(POSIX, SQL)
+@requires(R, POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -583,7 +583,7 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
                 started.close()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(SANDBOXED)
 def test_resolves_r_bindings(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -673,7 +673,7 @@ def test_resolves_r_bindings(binary: Path, execution: Execution) -> Transcript:
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(SANDBOXED)
 def test_exposes_catalog_as_lazy_r_relations(
     binary: Path, execution: Execution
@@ -748,7 +748,7 @@ c:11:22
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(SANDBOXED)
 def test_recovers_from_sql_errors(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -771,7 +771,7 @@ def test_recovers_from_sql_errors(binary: Path, execution: Execution) -> Transcr
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(SANDBOXED)
 def test_avoids_private_preview_name_collisions(
     binary: Path, execution: Execution
@@ -802,7 +802,7 @@ def test_avoids_private_preview_name_collisions(
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_preserves_utf8_preview_in_c_locale(
     binary: Path, execution: Execution
@@ -833,7 +833,7 @@ def test_preserves_utf8_preview_in_c_locale(
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(SANDBOXED)
 def test_previews_schema_and_exact_values(
     binary: Path, execution: Execution
@@ -925,7 +925,7 @@ def test_previews_schema_and_exact_values(
     return transcript
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(SANDBOXED)
 def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
@@ -951,7 +951,7 @@ def test_uses_200_column_default(binary: Path, execution: Execution) -> Transcri
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(SANDBOXED)
 def test_bounds_query_previews_without_materializing_results(
     binary: Path,
@@ -1009,7 +1009,7 @@ def test_bounds_query_previews_without_materializing_results(
     return transcript
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(SANDBOXED)
 def test_keeps_repeated_previews_deterministic(
     binary: Path, execution: Execution
