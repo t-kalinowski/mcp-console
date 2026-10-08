@@ -502,7 +502,11 @@ def _mcp_console_print_exception(
 
 
 def _mcp_console_collect_plots(
+    close=True,
+    propagate_interrupt=False,
     _BaseException=_builtins.BaseException,
+    _KeyboardInterrupt=_builtins.KeyboardInterrupt,
+    _isinstance=_builtins.isinstance,
     _base64=_base64,
     _io=_io,
     _print_exception=_mcp_console_print_exception,
@@ -514,6 +518,7 @@ def _mcp_console_collect_plots(
         return ()
 
     images = []
+    active_number = pyplot.gcf().number if not close and pyplot.get_fignums() else None
     try:
         for number in _sorted(pyplot.get_fignums()):
             if number not in pyplot.get_fignums():
@@ -524,25 +529,38 @@ def _mcp_console_collect_plots(
                 figure.savefig(output, format="png")
                 images.append(_base64.b64encode(output.getvalue()).decode("ascii"))
             except _BaseException as error:
+                if propagate_interrupt and _isinstance(error, _KeyboardInterrupt):
+                    raise
                 _print_exception(error)
     finally:
-        try:
-            pyplot.close("all")
-        except _BaseException as error:
-            _print_exception(error)
+        if close:
+            try:
+                pyplot.close("all")
+            except _BaseException as error:
+                if propagate_interrupt and _isinstance(error, _KeyboardInterrupt):
+                    raise
+                _print_exception(error)
+        elif active_number in pyplot.get_fignums():
+            pyplot.figure(active_number)
     return tuple(images)
 
 
 def _mcp_console_finalize_plots(
+    close=True,
+    propagate_interrupt=False,
     _collect_plots=_mcp_console_collect_plots,
     _publish_plot=_services.publish_plot,
     _BaseException=_builtins.BaseException,
+    _KeyboardInterrupt=_builtins.KeyboardInterrupt,
+    _isinstance=_builtins.isinstance,
     _print_exception=_mcp_console_print_exception,
 ):
     try:
-        for image in _collect_plots():
+        for image in _collect_plots(close, propagate_interrupt):
             _publish_plot(image)
     except _BaseException as error:
+        if propagate_interrupt and _isinstance(error, _KeyboardInterrupt):
+            raise
         _print_exception(error)
     return None
 
@@ -550,13 +568,22 @@ def _mcp_console_finalize_plots(
 def _mcp_console_install_matplotlib_show(
     _finalize_plots=_mcp_console_finalize_plots,
     _setattr=_builtins.setattr,
+    _getattr=_builtins.getattr,
     _sys=_sys,
 ):
     pyplot = _sys.modules.get("matplotlib.pyplot")
     if pyplot is not None:
-        # Explicit show is a display boundary, like an inline notebook backend.
-        # Closing after capture also prevents a duplicate at cell end.
-        _setattr(pyplot, "show", lambda *args, **kwargs: _finalize_plots())
+        pause_code = _getattr(_getattr(pyplot, "pause", None), "__code__", None)
+
+        def show(*args, **kwargs):
+            # pause() uses show(block=False) before running its canvas event loop.
+            # Keep that manager alive; ordinary show closes to avoid duplicates.
+            return _finalize_plots(
+                close=_sys._getframe(1).f_code is not pause_code,
+                propagate_interrupt=True,
+            )
+
+        _setattr(pyplot, "show", show)
     return None
 
 

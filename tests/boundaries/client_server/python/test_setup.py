@@ -1263,9 +1263,7 @@ def test_retries_matplotlib_setup_after_interrupt(
 ) -> Transcript:
     configuration_line = runtime_source_line("_defaults.apply(name)")
     apply_line = runtime_source_line("self._install_show()")
-    show_line = runtime_source_line(
-        '_setattr(pyplot, "show", lambda *args, **kwargs: _finalize_plots())'
-    )
+    show_line = runtime_source_line('_setattr(pyplot, "show", show)')
     # A module attribute setter blocks first-cell setup on managed input.
     # Its public input request is the checkpoint for a real interrupt.
     source = code("""

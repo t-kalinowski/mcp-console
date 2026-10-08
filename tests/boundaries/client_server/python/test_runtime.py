@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -214,6 +214,109 @@ def test_returns_no_r_matplotlib_plots(
     binary: Path, execution: Execution
 ) -> Transcript:
     return returns_matplotlib_plots(binary, execution, with_r=False)
+
+
+@contextmanager
+def no_r_matplotlib_client(binary: Path, execution: Execution):
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        environment = no_r_environment(temporary)
+        environment["TMPDIR"] = temporary_directory
+        with McpClient(binary, execution.serve(), environment) as client:
+            client.initialize_and_list_tools()
+            wait_for_worker_ready(client, "Matplotlib declaration readiness")
+            client.expect("[prepared]", requirements={"python": ["matplotlib"]})
+            yield client, temporary
+
+
+@executions(DIRECT, SANDBOXED)
+def test_preserves_matplotlib_pause_figures(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with no_r_matplotlib_client(binary, execution) as (client, temporary):
+        client.send(
+            # fmt: python
+            python=code("""
+                import os
+                from pathlib import Path
+                import matplotlib.pyplot as plt
+
+                other_figure = plt.figure(num=20)
+                other_figure.savefig(Path(os.environ["TMPDIR"]) / "pause-other.png")
+                figure, axes = plt.subplots(num=10)
+                (line,) = axes.plot([0, 1], [0, 1])
+                original_event_loop = figure.canvas.start_event_loop
+
+
+                def checked_event_loop(interval):
+                    assert plt.get_fignums() == [10, 20]
+                    assert plt.gcf() is figure
+                    original_event_loop(interval)
+
+
+                figure.canvas.start_event_loop = checked_event_loop
+                for index in range(3):
+                    line.set_ydata([index, 1])
+                    figure.savefig(Path(os.environ["TMPDIR"]) / f"pause-{index}.png")
+                    plt.pause(0.001)
+                    assert plt.get_fignums() == [10, 20]
+                    assert plt.gcf() is figure
+                plt.close("all")
+                "pause loop finished"
+                """),
+        )
+        assert_result_content(
+            client,
+            [
+                wait_for_worker_file(temporary, filename, client).read_bytes()
+                for index in range(3)
+                for filename in (f"pause-{index}.png", "pause-other.png")
+            ]
+            + ["'pause loop finished'\n"],
+            image_reference="live pause matplotlib savefig {page}",
+        )
+        client.expect("[]\n", python="plt.get_fignums()")
+        return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
+def test_interrupts_explicit_matplotlib_show(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with no_r_matplotlib_client(binary, execution) as (client, _temporary):
+        wait_for_evaluation_output(
+            client,
+            '[input requested: "render> "]\n[waiting for stdin]',
+            "explicit show render checkpoint",
+            # fmt: python
+            python=code("""
+                import matplotlib.pyplot as plt
+
+
+                def blocked_savefig(*args, **kwargs):
+                    input("render> ")
+
+
+                figure = plt.figure()
+                figure.savefig = blocked_savefig
+                continued_after_show = False
+                plt.show()
+                continued_after_show = True
+                """),
+            timeout_ms=0,
+        )
+        output = wait_for_evaluation_output(
+            client,
+            lambda text: (
+                text.startswith("Traceback (most recent call last):\n")
+                and text.endswith("KeyboardInterrupt\n")
+            ),
+            "explicit show interruption",
+            control="interrupt",
+        )
+        assert output.count("KeyboardInterrupt") == 1, output
+        client.expect("(False, [])\n", python="continued_after_show, plt.get_fignums()")
+        return client.finish()
 
 
 def returns_matplotlib_plots(
