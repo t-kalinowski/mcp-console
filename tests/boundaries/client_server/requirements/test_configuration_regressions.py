@@ -1,5 +1,6 @@
 """Runtime selection and implicit defaults through public MCP sessions."""
 
+import json
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,6 +19,76 @@ from support.records import Transcript
 from support.requirements import POSIX, R, SANDBOX, requires
 from support.resolvers import bare_runtime_environment, expose_uv
 from support.suites import run_this_suite
+
+
+@requires(POSIX, R)
+@executions(DIRECT, SANDBOXED)
+def test_locked_r_defaults_require_available_preparation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    for policy in ("explicit", "startup_only"):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            environment, _ = r_test_environment()
+            environment = bare_runtime_environment(environment, root / "r-library")
+            configure(root, {"r": {"resolution": policy}, "python": sys.executable})
+            with McpClient(binary, execution.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                result = client.send(r='cat("must not run\\n")')
+                assert (
+                    result.get("isError")
+                    and "R preparation is unavailable" in result["content"][0]["text"]
+                ), result
+                client.finish_with_standard_error(expected_exit_status=1)
+    return [{"r_defaults": "explicit and startup_only require startup preparation"}]
+
+
+@requires(POSIX, R)
+@executions(DIRECT, SANDBOXED)
+def test_bare_r_reset_keeps_empty_startup_declaration(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment, _ = r_test_environment()
+        environment = bare_runtime_environment(environment, root / "r-library")
+        environment.pop("RETICULATE_PYTHON", None)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            inspected = client.send(requirements={"action": "get"})["structuredContent"]
+            empty = {
+                "r": [],
+                "python": [],
+                "duckdb": [],
+                "python_version": [],
+                "exclude_newer": None,
+            }
+            assert (
+                inspected["requirements"] == inspected["startup_requirements"] == empty
+            ), inspected
+            reset = client.send(requirements={"action": "reset"})
+            assert not reset.get("isError"), reset
+            client.expect("bare reset retained\n", r='cat("bare reset retained\\n")')
+            client.finish()
+        (session,) = (root / ".agents/console/sessions").iterdir()
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        declarations = [
+            event["startup_requirements"]
+            for event in events
+            if event.get("startup_requirements") is not None
+        ]
+        assert declarations and all(
+            declaration == empty for declaration in declarations
+        ), declarations
+        assert "  python-packages: []\n" in (session / "transcript.qmd").read_text()
+    return [
+        {
+            "bare_r_baseline": "empty startup declaration, unchanged reset, and no recorded Python defaults"
+        }
+    ]
 
 
 @requires(POSIX, R)

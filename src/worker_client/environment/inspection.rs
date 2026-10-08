@@ -48,7 +48,7 @@ const R_RUNTIME_REQUIREMENTS: &[&str] = &[
 ];
 
 impl Environment {
-    pub(super) fn manages_python(&self) -> bool {
+    pub(in crate::worker_client) fn manages_python(&self) -> bool {
         match &self.r_resolver {
             RResolver::Pending(setup) => {
                 PythonEnvironment::uses_managed(setup.configured_python.as_deref())

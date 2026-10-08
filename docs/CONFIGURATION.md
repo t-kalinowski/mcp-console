@@ -246,6 +246,7 @@ When R is available but Python preparation is unavailable, omitting Python confi
 
 R accepts `automatic`, `explicit`, `startup_only`, and `disabled`; managed Python accepts the first three.
 Both default to `automatic`.
+R `explicit` and `startup_only` require startup preparation support even when `packages` is omitted and selects the bundled defaults.
 `explicit` prepares startup requirements and deliberate MCP requirements changes, without automatic missing-package preparation.
 `startup_only` prepares the captured startup declaration and rejects later changes.
 Unchanged requirements remain no-ops.

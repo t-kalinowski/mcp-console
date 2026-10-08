@@ -203,11 +203,14 @@ impl ClientConfiguration {
                 return Err("r.packages: configured R requirements need an available R installation; configure r.executable".into());
             }
             if !discovery.managed
+                && home.is_some()
                 && r_settings.resolution.enabled()
                 && r_settings
                     .packages
                     .as_ref()
-                    .is_some_and(|packages| !packages.is_empty())
+                    .map_or(!r_settings.resolution.automatic(), |packages| {
+                        !packages.is_empty()
+                    })
             {
                 return Err("r.packages: R preparation is unavailable; install ir or uv, or use preinstalled packages with resolution: disabled".into());
             }
@@ -261,7 +264,9 @@ impl ClientConfiguration {
                     .map(|name| (*name).into())
                     .collect();
             }
-            if let Some(manifest) = &manifest {
+            if let Some(manifest) = &manifest
+                && (resolver.has_uv() || matches!(r_resolver, RResolver::Pending(_)))
+            {
                 startup.python = manifest.packages.clone();
                 startup.python_version = manifest.python_version.clone();
                 startup.exclude_newer = manifest.exclude_newer.clone();
@@ -403,11 +408,7 @@ impl ClientConfiguration {
             .local_runtime
             .as_ref()
             .is_some_and(crate::local_runtime::Selection::python_only);
-        let python_preparation = environment
-            .python
-            .as_ref()
-            .and_then(PythonEnvironment::managed)
-            .is_some();
+        let python_preparation = environment.manages_python();
         Self {
             runtime: platform::WorkerRuntime,
             program,
