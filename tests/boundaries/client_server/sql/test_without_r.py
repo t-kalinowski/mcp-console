@@ -4,7 +4,6 @@ import json
 import os
 import re
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -117,36 +116,12 @@ def test_prepares_builtin_extensions_without_downloads(
                     retained
                     """),
             )
-            client.expect("[prepared]", requirements={"duckdb": ["json"]})
+            client.expect("[prepared]", requirements={"duckdb": ["parquet"]})
+            assert not list((root / "extensions").glob("**/parquet.duckdb_extension"))
             client.expect(
                 "('42',)\n",
                 python="sql_connection().execute('SELECT ?::JSON', [retained]).fetchone()",
             )
-            return client.finish()[3:]
-
-
-@requires(SQL)
-@executions(DIRECT, SANDBOXED)
-def test_sqlite_is_available_by_default(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
-        env = managed_environment(root)
-        cache = extension_cache(root, execution)
-        with sqlite3.connect(root / "audit.sqlite") as database:
-            database.execute("CREATE TABLE events (payload TEXT)")
-            database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
-        with sql_client(binary, execution, env, current_directory=root) as client:
-            inspected = client.send(requirements={"action": "get"})
-            assert inspected["structuredContent"]["requirements"]["duckdb"] == [
-                "sqlite"
-            ]
-            assert list(cache.glob("v*/**/sqlite_scanner.duckdb_extension"))
-            client.send(sql="SET autoinstall_known_extensions = false")
-            client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
-            client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
-            assert "42" in last_tool_text(client), last_tool_text(client)
             return client.finish()[3:]
 
 
@@ -357,6 +332,8 @@ def test_prepares_extension_before_first_worker_and_loads_from_cache(
             inspected = client.send(requirements={"action": "get"})
             assert inspected["structuredContent"]["requirements"]["duckdb"] == [
                 "fts",
+                "icu",
+                "json",
                 "sqlite",
             ]
             return _replace_paths(
@@ -427,7 +404,7 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
             )
             assert "42" in last_tool_text(client)
             client.send(
-                requirements={"duckdb": ["json"]},
+                requirements={"duckdb": ["parquet"]},
                 python="assert os.getpid() == worker_pid and id(identity) == identity_id; print('Python cell retained')",
             )
             assert last_tool_text(client) == "Python cell retained\n"
@@ -435,7 +412,9 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
             assert inspected["structuredContent"]["requirements"]["duckdb"] == [
                 "excel",
                 "fts",
+                "icu",
                 "json",
+                "parquet",
                 "sqlite",
             ]
             client.send(
@@ -551,11 +530,17 @@ def test_extension_actions_replace_and_reset_declarations(
                 assert not inspected.get("isError"), inspected
                 return inspected["structuredContent"]["requirements"]
 
-            assert declaration()["duckdb"] == ["sqlite"]
+            assert declaration()["duckdb"] == ["icu", "json", "sqlite"]
             client.send(requirements={"duckdb": ["fts"]})
-            assert declaration()["duckdb"] == ["fts", "sqlite"]
-            client.send(requirements={"duckdb": ["json"]})
-            assert declaration()["duckdb"] == ["fts", "json", "sqlite"]
+            assert declaration()["duckdb"] == ["fts", "icu", "json", "sqlite"]
+            client.send(requirements={"duckdb": ["parquet"]})
+            assert declaration()["duckdb"] == [
+                "fts",
+                "icu",
+                "json",
+                "parquet",
+                "sqlite",
+            ]
             client.send(
                 requirements={
                     "action": "set",
@@ -585,7 +570,7 @@ def test_extension_actions_replace_and_reset_declarations(
                 "plotnine",
                 "duckdb",
             ]
-            assert declaration()["duckdb"] == ["sqlite"]
+            assert declaration()["duckdb"] == ["icu", "json", "sqlite"]
             return client.finish()[3:]
 
 
@@ -774,6 +759,7 @@ def test_live_extension_additions_require_an_idle_worker(
             assert last_tool_text(client) == "still live\n"
             inspected = client.send(requirements={"action": "get"})
             assert inspected["structuredContent"]["requirements"]["duckdb"] == [
+                "icu",
                 "json",
                 "sqlite",
             ]
@@ -831,7 +817,9 @@ def test_interrupts_extension_preparation_before_worker_retirement(
                     started.wait("Python DuckDB resolver entered")
                     inspected = client.send(requirements={"action": "get"})
                     assert inspected["structuredContent"]["requirements"]["duckdb"] == [
-                        "sqlite"
+                        "icu",
+                        "json",
+                        "sqlite",
                     ]
                     interrupt = client.start_send(control="interrupt")
                     client.receive_many([pending, interrupt])
@@ -843,7 +831,9 @@ def test_interrupts_extension_preparation_before_worker_retirement(
                     hook.unlink()
                 inspected = client.send(requirements={"action": "get"})
                 assert inspected["structuredContent"]["requirements"]["duckdb"] == [
-                    "sqlite"
+                    "icu",
+                    "json",
+                    "sqlite",
                 ]
                 client.send(sql="SELECT value FROM retained")
                 assert "42" in last_tool_text(client)

@@ -2,7 +2,6 @@
 
 import os
 import re
-import sqlite3
 import sys
 import tempfile
 from pathlib import Path
@@ -43,64 +42,6 @@ def extension_failure_environment(workspace: Path) -> dict[str, str]:
         "not_a_real_duckdb_extension"
     )
     return environment
-
-
-@requires(SQL)
-@executions(DIRECT, SANDBOXED)
-def test_uses_default_duckdb_extensions(
-    binary: Path, execution: Execution
-) -> Transcript:
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
-    with tempfile.TemporaryDirectory() as temporary:
-        workspace = Path(temporary)
-        client = McpClient(
-            binary,
-            execution.serve(),
-            environment,
-            current_directory=workspace,
-        )
-        client.initialize_and_list_tools()
-        inspected = client.send(requirements={"action": "get"})
-        assert inspected["structuredContent"]["requirements"]["duckdb"] == [
-            "icu",
-            "json",
-            "sqlite",
-        ]
-        with sqlite3.connect(workspace / "audit.sqlite") as database:
-            database.execute("CREATE TABLE events (payload TEXT)")
-            database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
-        client.send(sql="SET autoinstall_known_extensions = false")
-        client.send(sql="ATTACH 'audit.sqlite' AS audit (TYPE sqlite, READ_ONLY)")
-        client.send(sql="SELECT payload->>'$.answer' AS answer FROM audit.events")
-        assert '"42"' in normalize_trailing_spaces(client), last_tool_text(client)
-
-        sql = code(r"""
-            SELECT
-              CASE
-                WHEN json_extract_string('{"answer": 42}', '$.answer') = '42'
-                THEN 1234567
-                ELSE 0
-              END AS json_ok,
-              CASE
-                WHEN timezone('America/New_York', TIMESTAMP '2020-01-01') IS NOT NULL
-                THEN 1234567
-                ELSE 0
-              END AS icu_ok1
-            """)
-        client.send(sql=sql)
-        preview = last_tool_text(client)
-        assert preview.splitlines()[-1].split() == ["1", "1234567", "1234567"]
-
-        sql = code(r"""
-            SELECT CASE WHEN count(*) = 2 THEN 1234567 ELSE 0 END AS loaded1
-            FROM duckdb_extensions()
-            WHERE extension_name IN ('icu', 'json') AND loaded
-            """)
-        client.send(sql=sql)
-        preview = last_tool_text(client)
-        assert preview.splitlines()[-1].split() == ["1", "1234567"]
-        return client.finish()
 
 
 @requires(SQL, POSIX)

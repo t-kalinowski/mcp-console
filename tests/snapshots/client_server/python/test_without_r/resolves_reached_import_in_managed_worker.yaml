@@ -60,6 +60,8 @@ result:
               "py-yaml12"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -82,6 +84,8 @@ result:
         - duckdb
         - py-yaml12
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -137,6 +141,8 @@ result:
               "pydash"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -160,6 +166,8 @@ result:
         - py-yaml12
         - pydash
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~

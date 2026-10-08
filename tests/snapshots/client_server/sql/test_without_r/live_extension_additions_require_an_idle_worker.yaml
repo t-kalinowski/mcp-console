@@ -139,6 +139,7 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
               "json",
               "sqlite"
             ],
@@ -161,6 +162,7 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
         - json
         - sqlite
       python_version: []
