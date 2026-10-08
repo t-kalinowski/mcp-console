@@ -11,9 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import large_output, last_tool_text
 from support.previews import (
+    TEXT_BUDGET,
     assert_preview,
     cell_text,
-    compact_previews,
     normalize_preview_paths,
 )
 from support.client import McpClient
@@ -29,7 +29,7 @@ CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-def test_bounds_pending_output_and_resets_after_completion(
+def test_bounds_mcp_preview_and_retains_raw_stream_after_overflow(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
@@ -101,7 +101,6 @@ def test_bounds_pending_output_and_resets_after_completion(
         assert (session / "outputs" / "call-000002.log").read_text(
             encoding="utf-8"
         ) == "zod: echo\n"
-        compact_previews(client, "x", "y", "z", "s", "p", "ab")
         return client.finish()
 
 
@@ -156,6 +155,7 @@ def test_orders_failure_and_replacement_output(
             assert result["isError"] is True, result
             assert len(result["content"]) == 1, result
             output = result["content"][0]["text"]
+            assert len(output.encode("utf-8")) <= TEXT_BUDGET
             raw = large_output("zod old stdout\n") + "zod stdout tail\n"
             notices = [
                 "[worker sent an unexpected ready message]",
@@ -175,7 +175,6 @@ def test_orders_failure_and_replacement_output(
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
-            compact_previews(client, "x", "y", "z", "s", "p", "ab")
             return client.finish()
 
 
@@ -222,7 +221,6 @@ def test_preserves_raw_output_during_forced_stop(
 
     client.send(r="echo echo")
     assert last_tool_text(client) == "zod: echo\n"
-    compact_previews(client, "x", "y", "z", "s", "p", "ab")
     return client.finish()
 
 
