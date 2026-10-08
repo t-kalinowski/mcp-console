@@ -25,7 +25,7 @@ send:
   python: |
     import pandas as pd
 
-    managed = sql_connection()
+    managed = _console.sql_connection()
     assert managed.execute("SELECT value FROM retained").fetchone() == (7,)
     frame = pd.DataFrame({"value": [3, 4]})
     managed.register("registered", frame)
@@ -64,13 +64,16 @@ result:
 ---
 send:
   python: |
+    import builtins
     import sqlite3
 
+    assert "sql_connection" not in vars(builtins)
+    assert "console_sql_connection" not in vars(builtins)
     selected = sqlite3.connect(":memory:")
     selected.execute("CREATE TABLE chosen(value INTEGER)")
     selected.execute("INSERT INTO chosen VALUES (11)")
-    console_sql_connection(selected)
-    assert sql_connection() is selected
+    assert _console.sql_connection(connection=selected) is None
+    assert _console.sql_connection() is selected
     print("selected SQLite")
 result:
   content:
@@ -92,8 +95,8 @@ result:
 ---
 send:
   python: |
-    console_sql_connection(None)
-    assert sql_connection() is managed
+    assert _console.sql_connection(None) is None
+    assert _console.sql_connection() is managed
     assert selected.execute("SELECT value FROM chosen").fetchone() == (11,)
     print("managed restored; SQLite remains open")
 result:
@@ -165,4 +168,82 @@ result:
     - type: text
       text: |
         (7,)
+  isError: false
+---
+send:
+  python: |
+    _console.sql_connection(selected)
+    try:
+        _console.sql_connection(object())
+    except TypeError as error:
+        print(error)
+    assert _console.sql_connection() is selected
+    selected.close()
+result:
+  content:
+    - type: text
+      text: |
+        `connection` must provide a callable cursor() method or be None
+  isError: false
+---
+send:
+  sql: SELECT value FROM chosen
+result:
+  content:
+    - type: text
+      text: |
+        Error: Cannot operate on a closed database.
+  isError: false
+---
+send:
+  python: >-
+    assert _console.sql_connection() is selected;
+    _console.sql_connection(None)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: >-
+    del managed, selected; assert _console.sql_connection().execute('SELECT
+    value FROM retained').fetchone() == (7,)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: _console.sql_connection(sqlite3.connect(':memory:'))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  control: restart
+  python: assert callable(_console.sql_connection)
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [done]
+  isError: false
+---
+send:
+  sql: SELECT value FROM retained
+result:
+  content:
+    - type: text
+      text: |
+        Error: Catalog Error: Table with name retained does not exist!
+        Did you mean "pg_settings"?
+
+        LINE 1: SELECT value FROM retained
+                                  ^
   isError: false

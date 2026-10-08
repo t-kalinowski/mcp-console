@@ -11,7 +11,7 @@ config:
 
       startup_count = globals().get("startup_count", 0) + 1
       native = sqlite3.connect(":memory:")
-      console_sql_connection(native)
+      _console.sql_connection(native)
       figure, axes = plt.subplots(figsize=(3, 2), dpi=100)
       _ = axes.plot([1, 2, 3], [3, 1, 2])
       figure.savefig(Path(os.environ["TMPDIR"]) / "startup.png", format="png")

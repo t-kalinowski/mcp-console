@@ -21,7 +21,7 @@ result:
   isError: false
 ---
 send:
-  python: sql_connection().execute("SELECT 1").fetchone()
+  python: _console.sql_connection().execute("SELECT 1").fetchone()
 result:
   content:
     - type: text

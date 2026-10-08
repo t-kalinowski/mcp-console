@@ -76,7 +76,7 @@ def exercise_store(client: McpClient) -> None:
                 ("beta.md", "Bananas are yellow fruit.")
             ]
             print(f"{hits[0].origin}: {hits[0].text}")
-            console_sql_connection(store.con)
+            _console.sql_connection(store.con)
             """),
     )
     output = normalize_onnx_device_probe(output)
@@ -163,7 +163,7 @@ def test_queries_a_python_created_store_without_r(
             client.send(sql="CREATE TABLE managed_marker AS SELECT 7 AS value")
             assert last_tool_text(client).splitlines()[-1] == "1"
             exercise_store(client)
-            client.expect(python="console_sql_connection(None)")
+            client.expect(python="_console.sql_connection(None)")
             client.send(sql="SELECT value FROM managed_marker")
             assert last_tool_text(client).splitlines()[-1] == "7"
             close_store(client)
@@ -182,12 +182,12 @@ def test_restores_the_r_catalog_after_querying_a_python_store(
         client.initialize_and_list_tools()
         client.expect(sql="CREATE TABLE managed_marker AS SELECT 7 AS value")
         exercise_store(client)
-        client.expect(python="console_sql_connection(None)")
+        client.expect(python="_console.sql_connection(None)")
         client.expect(
             "R-owned managed catalog restored: 7\n",
             # fmt: r
             r=code("""
-                restored <- sql_connection()
+                restored <- .console$sql_connection()
                 stopifnot(
                   inherits(restored, "duckdb_connection"),
                   DBI::dbGetQuery(restored, "SELECT value FROM managed_marker")$value == 7

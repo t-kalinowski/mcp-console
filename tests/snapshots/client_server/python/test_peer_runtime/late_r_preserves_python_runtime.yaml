@@ -21,7 +21,7 @@ send:
     connection = sqlite3.connect(":memory:")
     connection.execute("create table peer(value integer)")
     connection.execute("insert into peer values (42)")
-    console_sql_connection(connection)
+    _console.sql_connection(connection)
     np.set_printoptions(linewidth=73)
     before = (id(persistent), id(connection), sys.executable, sys.prefix,
               os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"])

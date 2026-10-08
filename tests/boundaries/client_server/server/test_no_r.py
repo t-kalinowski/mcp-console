@@ -165,9 +165,11 @@ def test_python_and_sql_without_r(binary: Path, execution: Execution) -> Transcr
             import pandas as pd
 
             registered = pd.DataFrame({"value": np.array([20, 22])})
-            sql_connection().register("registered", registered)
+            _console.sql_connection().register("registered", registered)
             assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")
-            assert sql_connection().execute("SELECT answer FROM answers").fetchone() == (42,)
+            assert _console.sql_connection().execute("SELECT answer FROM answers").fetchone() == (
+                42,
+            )
             answer + 1
             """)
         client.send(python=python)
@@ -179,12 +181,12 @@ def test_python_and_sql_without_r(binary: Path, execution: Execution) -> Transcr
             python=code("""
                 import sqlite3
 
-                console_sql_connection(sqlite3.connect(":memory:"))
+                _console.sql_connection(sqlite3.connect(":memory:"))
                 """)
         )
         client.send(sql="SELECT 7 AS temporary_answer")
         assert "7" in last_result_text(client)
-        client.send(python="console_sql_connection(None)")
+        client.send(python="_console.sql_connection(None)")
         client.send(sql="SELECT answer FROM answers")
         assert "42" in last_result_text(client), last_result_text(client)
         client.send(r="1 + 1")
@@ -285,7 +287,9 @@ def test_no_r_sql_interrupt_and_worker_crash(
                 return value
 
 
-            _ = sql_connection().create_function("sql_gate", sql_gate, ["BIGINT"], "BIGINT")
+            _ = _console.sql_connection().create_function(
+                "sql_gate", sql_gate, ["BIGINT"], "BIGINT"
+            )
             """)
         client.send(python=python)
         client.send(sql="SELECT sql_gate(answer) FROM answers")
@@ -348,7 +352,7 @@ def test_no_r_extension_preparation_uses_candidate_provider(
             original_pid = os.getpid()
             original_executable = sys.executable
             answer = 41
-            original_connection = sql_connection()
+            original_connection = _console.sql_connection()
             """)
         client.send(python=python)
         client.send(
@@ -373,7 +377,7 @@ def test_no_r_extension_preparation_uses_candidate_provider(
         python = code("""
             assert os.getpid() == original_pid
             assert sys.executable == original_executable
-            assert sql_connection() is original_connection
+            assert _console.sql_connection() is original_connection
             answer + 1
             """)
         client.send(python=python)

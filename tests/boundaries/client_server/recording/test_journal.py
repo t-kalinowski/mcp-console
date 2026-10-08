@@ -980,7 +980,7 @@ def configure_r_startup(
     # Its existing contract includes selecting the SQL connection.
     # fmt: r
     connection = code("""
-        console_sql_connection(DBI::dbConnect(duckdb::duckdb()))
+        .console$sql_connection(DBI::dbConnect(duckdb::duckdb()))
         """)
     configuration = root / ".agents/console/config.yaml"
     configuration.parent.mkdir(parents=True)

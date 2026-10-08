@@ -82,7 +82,7 @@ send:
             return 42
     selected = sqlite3.connect(":memory:")
     selected.create_function("missing_from_sql", 0, missing_from_sql)
-    console_sql_connection(selected)
+    _console.sql_connection(selected)
 result:
   content:
     - type: text

@@ -2,7 +2,7 @@
 config:
   startup:
     language: r
-    code: console_sql_connection(new.env())
+    code: .console$sql_connection(new.env())
 ---
 !same-as MCP initialization for this execution mode
 ---

@@ -23,7 +23,9 @@ def exercise_no_r_catalog(client: McpClient) -> None:
         assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")
         original_pid = os.getpid()
         answer = 41
-        assert sql_connection().execute("SELECT answer FROM answers").fetchone() == (42,)
+        assert _console.sql_connection().execute("SELECT answer FROM answers").fetchone() == (
+            42,
+        )
         answer + 1
         """)
     client.send(python=python)

@@ -23,7 +23,7 @@ send:
             return CleanupCursor()
 
 
-    console_sql_connection(CleanupConnection())
+    _console.sql_connection(CleanupConnection())
 result:
   content:
     - type: text

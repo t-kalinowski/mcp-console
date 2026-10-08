@@ -34,7 +34,7 @@ result:
         Error: DuckDB is unavailable; add duckdb with requirements.python and
         control: restart in a managed session, install it before starting a
         selected Python environment, or select a DB-API connection with
-        console_sql_connection(connection)
+        _console.sql_connection(connection)
   isError: false
 ---
 send:
