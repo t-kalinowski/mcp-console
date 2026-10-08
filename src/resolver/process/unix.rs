@@ -73,11 +73,68 @@ pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
 
 pub(super) fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
     let pid = child.id();
-    // Linux can report successful signaling for an unreaped, exited leader.
-    // Such an acknowledgment must not attribute its earlier failure to control.
-    if crate::process_exit::direct_child_has_exited(pid)? {
+    // A liveness probe followed by killpg races natural exit; Linux accepts
+    // signaling an unreaped zombie. Confirm suspension or exit before SIGINT
+    // so a still-live leader cannot exit independently in that gap.
+    if !stop_before_interrupt(pid)? {
         return Ok(ResolverInterrupt::AlreadyExited);
     }
+    let interrupted = signal_interrupt(pid);
+    // Resume even if signaling failed. Collection owns subsequent retirement.
+    // SAFETY: the unreaped direct child retains `pid` throughout this call.
+    let resumed = unsafe { libc::kill(pid as libc::pid_t, libc::SIGCONT) };
+    let resume_error = (resumed < 0).then(io::Error::last_os_error);
+    let result = interrupted?;
+    if let Some(error) = resume_error {
+        return Err(error);
+    }
+    Ok(result)
+}
+
+fn stop_before_interrupt(pid: u32) -> io::Result<bool> {
+    // Stop only the leader. Its observed stop prevents exit until SIGCONT;
+    // WNOWAIT leaves terminal status and process identity with the exit owner.
+    // SAFETY: the unreaped direct child retains `pid` throughout this call.
+    if unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) } < 0 {
+        let error = io::Error::last_os_error();
+        if matches!(error.raw_os_error(), Some(libc::EPERM) | Some(libc::ESRCH))
+            && crate::process_exit::direct_child_has_exited(pid)?
+        {
+            return Ok(false);
+        }
+        return Err(error);
+    }
+    loop {
+        let mut information = std::mem::MaybeUninit::<libc::siginfo_t>::zeroed();
+        // SAFETY: `information` is writable and `pid` is our unreaped child.
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                pid as libc::id_t,
+                information.as_mut_ptr(),
+                libc::WSTOPPED | libc::WEXITED | libc::WNOWAIT,
+            )
+        };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        // SAFETY: successful blocking waitid initialized the status.
+        let information = unsafe { information.assume_init() };
+        return match information.si_code {
+            libc::CLD_STOPPED => Ok(true),
+            libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED => Ok(false),
+            code => Err(io::Error::other(format!(
+                "unexpected resolver status before interrupt: {code}"
+            ))),
+        };
+    }
+}
+
+fn signal_interrupt(pid: u32) -> io::Result<ResolverInterrupt> {
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
     if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) } == 0 {
         return Ok(ResolverInterrupt::Signaled);

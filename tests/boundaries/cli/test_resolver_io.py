@@ -287,6 +287,13 @@ def test_interrupt_after_failed_exit_preserves_independent_failure(
     return inherited_output(binary, "interrupt-failed")
 
 
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_exit_between_liveness_probe_and_interrupt_preserves_failure(
+    binary: Path,
+) -> Transcript:
+    return inherited_output(binary, "interrupt-race")
+
+
 @requires(MACOS_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_exit_during_registration_waits_for_terminal_status_before_reaping(
     binary: Path,
@@ -496,6 +503,8 @@ def inherited_output(
                 "streaming",
                 "pending",
                 "status",
+                "signal-entered",
+                "signal-release",
             )
         }
         uv = root / "uv"
@@ -508,7 +517,9 @@ def inherited_output(
             environment = {
                 "PATH": str(root),
                 "TEST_RESOLVER_ROOT": str(root),
-                "TEST_RESOLVER_MODE": "failed" if mode == "interrupt-failed" else mode,
+                "TEST_RESOLVER_MODE": (
+                    "failed" if mode in ("interrupt-failed", "interrupt-race") else mode
+                ),
             }
             if mode == "stdin":
                 environment.update(
@@ -518,7 +529,8 @@ def inherited_output(
                     }
                 )
             elif (
-                mode in ("interrupt", "interrupt-failed", "registration")
+                mode
+                in ("interrupt", "interrupt-failed", "interrupt-race", "registration")
                 or pidfd_error is not None
             ):
                 environment.update(
@@ -540,6 +552,14 @@ def inherited_output(
                         "MCP_CONSOLE_TEST_OBSERVER_DELAY_STATUS": "1",
                         "MCP_CONSOLE_TEST_STATUS_PENDING": str(root / "pending"),
                         "MCP_CONSOLE_TEST_STATUS_RELEASE": str(root / "status"),
+                    }
+                )
+            if mode == "interrupt-race":
+                environment.update(
+                    {
+                        "MCP_CONSOLE_TEST_INTERRUPT_RACE": "1",
+                        "MCP_CONSOLE_TEST_SIGNAL_ENTERED": str(root / "signal-entered"),
+                        "MCP_CONSOLE_TEST_SIGNAL_RELEASE": str(root / "signal-release"),
                     }
                 )
             if pidfd_error is not None:
@@ -565,7 +585,13 @@ def inherited_output(
                         "materializer stdin writer reached actual backpressure"
                     )
                 elif (
-                    mode in ("interrupt", "interrupt-failed", "registration")
+                    mode
+                    in (
+                        "interrupt",
+                        "interrupt-failed",
+                        "interrupt-race",
+                        "registration",
+                    )
                     or pidfd_error is not None
                 ):
                     gates["entered"].wait("live-child exit probe held")
@@ -574,6 +600,9 @@ def inherited_output(
                 elif mode == "stream":
                     gates["streaming"].wait("descendant is continuously writing stderr")
                 leader = int((root / "leader").read_text())
+                if mode == "interrupt-race":
+                    send({"Control": {"id": 1, "control": "Interrupted"}})
+                    gates["signal-entered"].wait("control signal held before delivery")
                 with Events() as exits:
                     exits.watch_process(leader)
                     if mode in ("cancel", "stdin"):
@@ -585,8 +614,11 @@ def inherited_output(
                         gates["exit"].release()
                     assert exits.wait(10) == {leader}
                     retired.add("leader")
-                if mode in ("interrupt", "interrupt-failed"):
-                    send({"Control": {"id": 1, "control": "Interrupted"}})
+                if mode in ("interrupt", "interrupt-failed", "interrupt-race"):
+                    if mode == "interrupt-race":
+                        gates["signal-release"].release()
+                    else:
+                        send({"Control": {"id": 1, "control": "Interrupted"}})
                     assert receive("accepted interrupt after leader exit") == {
                         "Controlled": {"id": 1, "result": {"Ok": True}}
                     }
@@ -611,7 +643,7 @@ def inherited_output(
                         "Err": "managed Python version resolution interrupted"
                     }, completed
                     assert completed["control"] == "Interrupted", completed
-                elif mode in ("failed", "interrupt-failed"):
+                elif mode in ("failed", "interrupt-failed", "interrupt-race"):
                     assert (
                         "fixture materialization failed before replying"
                         in completed["result"]["Err"]
