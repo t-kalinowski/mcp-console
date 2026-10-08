@@ -160,6 +160,18 @@ class WindowsSandbox(unittest.TestCase):
                 capture_output=True,
             )
             python = selected / "Scripts/python.exe"
+            # Exercise host preparation through a managed candidate. Explicit
+            # interpreter inspection now runs with worker permissions.
+            uv = root / "uv.exe"
+            subprocess.run(
+                [
+                    "rustc",
+                    str(ROOT / "tests/fixtures/windows_resolver.rs"),
+                    "-o",
+                    str(uv),
+                ],
+                check=True,
+            )
             local = (
                 root / "account/AppData/Local" if profile_fallback else root / "local"
             )
@@ -171,35 +183,30 @@ class WindowsSandbox(unittest.TestCase):
                 UV_CACHE_DIR=str(root / "host-uv"),
                 IR_CACHE_DIR=str(root / "host-ir"),
                 CACHE_TEST_ROOT=str(cache),
+                TEST_RESOLVER_CACHE_PROBE="1",
+                TEST_RESOLVER_RECORD=str(root / "resolver-commands.jsonl"),
+                TEST_RESOLVER_PYTHON=str(python),
             )
-            for name in ("XDG_CACHE_HOME", "R_HOME", "RETICULATE_PYTHON"):
+            for name in (
+                "XDG_CACHE_HOME",
+                "R_HOME",
+                "RETICULATE_PYTHON",
+                "RETICULATE_UV",
+            ):
                 environment.pop(name, None)
             if profile_fallback:
                 environment.pop("LOCALAPPDATA")
                 environment.update(
                     HOME="relative-home", USERPROFILE=str(root / "account")
                 )
-            (selected / "Lib/site-packages/sitecustomize.py").write_text(
-                dedent("""
-                    import os
-                    from pathlib import Path
-
-                    if "MCP_CONSOLE_LOCAL_RUNTIME" not in os.environ:
-                        root = Path(os.environ["CACHE_TEST_ROOT"])
-                        cache = Path(os.environ["UV_CACHE_DIR"])
-                        assert cache.is_relative_to(root)
-                        cache.mkdir(parents=True, exist_ok=True)
-                        cache.joinpath("resolver-probe").write_text("prepared")
-                    """)
-            )
             # Keep the cwd under the explicit read grant too. The native
             # runner's background read-ACL traversal can still be in progress.
             session = Session(
                 os.environ,
-                python=python,
                 sandbox=True,
                 temporary_root=root,
                 overrides=[
+                    'python={"managed":{"packages":[],"resolution":"explicit"}}',
                     'sandbox.network="enabled"',
                     "inherit_environment=false",
                     "environment=" + json.dumps(environment),

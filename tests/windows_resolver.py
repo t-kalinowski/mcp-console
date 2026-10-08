@@ -150,10 +150,19 @@ class WindowsResolver(unittest.TestCase):
         ]
         invocation = commands[-1]
         self.assertEqual(
-            invocation[:6],
-            ["tool", "run", "--isolated", "--python", "3.12.7", "--exclude-newer"],
+            invocation[:8],
+            [
+                "tool",
+                "run",
+                "--isolated",
+                "--python-preference",
+                "only-managed",
+                "--python",
+                "3.12.7",
+                "--exclude-newer",
+            ],
         )
-        self.assertEqual(invocation[6:9], ["2026-01-01", "--with", "six>=1"])
+        self.assertEqual(invocation[8:11], ["2026-01-01", "--with", "six>=1"])
         resolver.send("Close")
         self.assertEqual(resolver.receive(), "Closed")
         self.assertEqual(resolver.process.wait(timeout=10), 0)

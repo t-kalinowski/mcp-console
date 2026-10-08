@@ -210,6 +210,7 @@ Preparation retains the operation's terminal result, control cause and cleanup c
 The subprocess owner captures its cause when collection finishes; a later control acknowledgment cannot replace an independent setup failure.
 Preparation that consumes control after successful collection retains that cause before publishing its terminal result.
 For multistage preparation, only a subprocess report matching the operation's final result supplies its control cause; cleanup confirmation still includes every stage.
+An interrupt that signals a running resolver supplies its terminal cause even when the signal or forced termination produces a nonzero exit status.
 Errors closing the preparation connection remain visible.
 Cancellation of a preparation operation does not suppress an independent failure of the preparation connection's close handshake.
 

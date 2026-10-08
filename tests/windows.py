@@ -669,7 +669,7 @@ class WindowsConsole(unittest.TestCase):
                         RETICULATE_UV=uv,
                         # uv-installed acceptance interpreters are also valid;
                         # downloads stay disabled so discovery uses local installs.
-                        UV_PYTHON_PREFERENCE="system",
+                        UV_PYTHON_PREFERENCE="only-managed",
                         UV_PYTHON_DOWNLOADS="never",
                     )
                 session = Session(environment, bare_r=not with_python)
@@ -708,6 +708,33 @@ class WindowsConsole(unittest.TestCase):
             },
         )
         self.assertEqual(session.process.wait(timeout=10), 0)
+
+    def test_explicit_r_selections_use_windows_installation(self):
+        selected = shutil.which("R")
+        self.assertIsNotNone(selected, "Windows R selection acceptance requires R")
+        home = Path(subprocess.check_output([selected, "RHOME"], text=True).strip())
+        self.assertTrue((home / "etc/Rcmd_environ").is_file())
+        for selection in (selected, {"executable": selected, "resolution": "disabled"}):
+            with self.subTest(selection=selection):
+                session = Session(
+                    overrides=["r=" + json.dumps(selection), "r.resolution=disabled"]
+                )
+                try:
+                    session.initialize()
+                    self.assertIn(
+                        "selected R ready",
+                        json.dumps(session.send(r='cat("selected R ready")')),
+                    )
+                    self.assertIn(
+                        "selected R retained",
+                        json.dumps(
+                            session.send(
+                                control="restart", r='cat("selected R retained")'
+                            )
+                        ),
+                    )
+                finally:
+                    session.close()
 
     def test_r_without_python(self):
         # Capture R before removing the interpreter launchers from PATH.
@@ -1183,7 +1210,9 @@ class WindowsConsole(unittest.TestCase):
         self.assertNotIn("SIGINT", control)
         result = session.send(requirements={"action": "add", "python": ["six"]})
         self.assertTrue(result.get("isError"), result)
-        self.assertIn("unavailable", json.dumps(result))
+        self.assertIn(
+            "Python resolution is disabled by configuration", json.dumps(result)
+        )
         self.assertIn("42", json.dumps(session.send(python="42")))
 
     def test_sql_without_r(self):

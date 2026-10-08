@@ -513,6 +513,7 @@ fn wait_for_resolver_exit(
     program: &Path,
     kind: &str,
 ) -> Result<(), String> {
+    let mut interrupted = false;
     loop {
         match resolver.event_receiver.recv() {
             Ok(ResolverEvent::Cancel) => return Err(format!("{kind} resolution cancelled")),
@@ -520,7 +521,11 @@ fn wait_for_resolver_exit(
                 reply,
                 clear_marker,
             }) => match interrupt_resolver(child) {
-                Ok(ResolverInterrupt::Signaled | ResolverInterrupt::AlreadyExited) => {
+                Ok(ResolverInterrupt::Signaled) => {
+                    interrupted = true;
+                    let _ = reply.send(Ok(()));
+                }
+                Ok(ResolverInterrupt::AlreadyExited) => {
                     let _ = reply.send(Ok(()));
                 }
                 Err(error) => {
@@ -536,12 +541,17 @@ fn wait_for_resolver_exit(
                 }
             },
             Ok(ResolverEvent::Exited(result)) => {
-                return result.map_err(|error| {
+                result.map_err(|error| {
                     format!(
                         "failed to wait for {kind} resolver `{}`: {error}",
                         program.display()
                     )
-                });
+                })?;
+                return if interrupted {
+                    Err(format!("{kind} resolution interrupted"))
+                } else {
+                    Ok(())
+                };
             }
             Ok(ResolverEvent::IoFailed(error)) => return Err(error),
             Err(_) => return Err(format!("{kind} resolver exit task stopped")),

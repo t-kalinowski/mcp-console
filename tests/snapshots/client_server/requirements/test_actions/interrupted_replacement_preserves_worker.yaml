@@ -141,17 +141,7 @@ send:
 result:
   content:
     - type: text
-      text: |-
-        [managed Python resolution failed:
-        resolver input:
-        {
-          "python": "3.12.XX (reticulate default)",
-          "packages": [
-            "six"
-          ]
-        }
-        uv output:
-        ]
+      text: "[managed Python resolution interrupted]"
   isError: true
 ---
 send:

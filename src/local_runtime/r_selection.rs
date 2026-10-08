@@ -153,7 +153,11 @@ impl RInstallation {
             }
             // Resource directory targets, rather than directory timestamps, are
             // retained; installing unrelated packages does not change identity.
-            identity.push(FileIdentity::capture(&home.join("etc/Renviron"))?);
+            identity.push(FileIdentity::capture(&home.join(if cfg!(windows) {
+                "etc/Rcmd_environ"
+            } else {
+                "etc/Renviron"
+            }))?);
             Self {
                 home,
                 resources,
