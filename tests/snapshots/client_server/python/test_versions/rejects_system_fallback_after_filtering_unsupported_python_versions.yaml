@@ -16,5 +16,7 @@ send:
 result:
   content:
     - type: text
-      text: "[prepared]"
-  isError: false
+      text: >-
+        managed Python version resolution failed: uv did not report a supported
+        CPython interpreter
+  isError: true

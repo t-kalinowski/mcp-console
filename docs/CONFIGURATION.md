@@ -106,6 +106,7 @@ Missing, empty, or relative `HOME` is an error when expansion is requested; `~us
 
 Explicit selection uses preinstalled Python packages and bypasses managed Python preparation.
 Without R or an explicit selection, Console uses uv on the local host.
+Managed environments use uv-managed CPython; Console does not fall back to a system interpreter.
 A broken selected interpreter is an error, not a reason to fall back.
 See [runtime selection](BUILTIN_RUNTIME.md).
 
