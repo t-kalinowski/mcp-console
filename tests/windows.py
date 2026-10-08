@@ -27,6 +27,7 @@ from windows_gate import Gate
 from support.checkpoints import wait_for_path
 from support.installation import native_console
 from support.normalization import code
+from support.r import r_test_environment
 
 from windows_cargo import WindowsCargo  # noqa: F401 -- include build acceptance
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
@@ -1338,21 +1339,58 @@ class WindowsConsole(unittest.TestCase):
         exercise_r_sql(session)
 
     def test_startup_without_processor_architecture(self):
-        # MCP clients can filter this ordinary Windows variable. R's native
-        # DuckDB teardown crashes when it is absent, before any cell can run.
-        environment = dict(os.environ, RETICULATE_PYTHON=sys.executable)
-        environment.pop("PROCESSOR_ARCHITECTURE", None)
+        # Codex clears the inherited environment and keeps WINDOWS_CORE_ENV_VARS:
+        # https://github.com/openai/codex/blob/ca466061d64f0b44f416135c7fd06aa7af850bbc/codex-rs/protocol/src/shell_environment.rs#L170-L201
+        # Use its core allowlist without optional certificate/config overrides.
+        # R DuckDB teardown can crash without PROCESSOR_ARCHITECTURE, before a cell.
+        allowed = {
+            "PATH",
+            "PATHEXT",
+            "SHELL",
+            "COMSPEC",
+            "SYSTEMROOT",
+            "WINDIR",
+            "SYSTEMDRIVE",
+            "USERNAME",
+            "USERDOMAIN",
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "PROGRAMFILES",
+            "PROGRAMFILES(X86)",
+            "PROGRAMW6432",
+            "PROGRAMDATA",
+            "LOCALAPPDATA",
+            "APPDATA",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+            "POWERSHELL",
+            "PWSH",
+        }
+        environment = {
+            name: value for name, value in os.environ.items() if name.upper() in allowed
+        }
+        # Make the configured test R discoverable through the retained PATH;
+        # R_HOME and explicit Python selections must not mask client filtering.
+        _, rscript = r_test_environment()
+        environment["PATH"] = os.pathsep.join(
+            (str(rscript.parent), environment.get("PATH", ""))
+        )
+        for name in ("PROCESSOR_ARCHITECTURE", "R_HOME", "RETICULATE_PYTHON"):
+            self.assertNotIn(name, environment)
         for filtered, value in ((False, None), (True, None), (False, "")):
             with self.subTest(filtered=filtered, value=value):
+                launch_environment = environment.copy()
                 if value is not None:
-                    environment["PROCESSOR_ARCHITECTURE"] = value
+                    launch_environment["PROCESSOR_ARCHITECTURE"] = value
                 overrides = ()
                 if filtered:
                     overrides = (
                         "inherit_environment=false",
-                        "environment=" + json.dumps(environment),
+                        "environment=" + json.dumps(launch_environment),
                     )
-                session = Session(environment, overrides=overrides)
+                session = Session(launch_environment, overrides=overrides)
                 try:
                     session.initialize()
                     session.request("tools/list", {})
