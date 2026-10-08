@@ -18,6 +18,7 @@ from support.python import write_test_wheel
 from support.records import Transcript
 from support.requirements import R, SANDBOX, command, requires
 from support.r import r_test_environment
+from support.resolvers import preseeded_duckdb_python, probing_uv
 
 
 CACHE_VARIABLES = (
@@ -43,29 +44,29 @@ CACHE_VARIABLES = (
 )
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_default_caches_are_console_owned(binary: Path) -> Transcript:
     return cache_locations(
         binary, host=False, sources=("default", "platform", "isolated")
     )
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_absolute_xdg_cache_starts_without_home(binary: Path) -> Transcript:
     return cache_locations(binary, host=False, sources=("xdg_without_home",))
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_console_root_is_created_with_explicit_entries(binary: Path) -> Transcript:
     return cache_locations(binary, host=False, sources=("explicit_entries",))
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_host_cache_opt_out(binary: Path) -> Transcript:
     return cache_locations(binary, host=True, sources=("direct", "config", "cli"))
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_host_matplotlib_cache_uses_platform_default(binary: Path) -> Transcript:
     return cache_locations(binary, host=True, sources=("platform",))
 
@@ -149,7 +150,7 @@ def test_selected_python_preserves_user_site_packages(binary: Path) -> Transcrip
     ]
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_resolver_cannot_write_companion_build_cache(binary: Path) -> Transcript:
     cache_locations(binary, host=False, sources=("default", "platform"))
     cache_locations(binary, host=True, sources=("cli",))
@@ -279,14 +280,14 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
     ]
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_resolver_cache_roots_keep_metadata_read_only(binary: Path) -> Transcript:
     for host, source in ((False, "environment"), (True, "config")):
         cache_locations(binary, host=host, sources=(source,), metadata=True)
     return [{"resolver_cache_root_metadata_read_only": True}]
 
 
-@requires(SANDBOX, command("git"))
+@requires(SANDBOX, command("git"), command("uv"))
 def test_uv_git_cache_works_without_root_metadata_grants(binary: Path) -> Transcript:
     with TemporaryDirectory(prefix="console-git-cache-", dir=Path.home()) as temporary:
         root = Path(temporary).resolve()
@@ -366,35 +367,17 @@ def cache_locations(
             if git_dependency is not None:
                 (tools / "git").symlink_to(shutil.which("git"))
                 (tools / "uv").symlink_to(shutil.which("uv"))
-            selected = root / "python"
-            subprocess.run(
-                [sys.executable, "-m", "venv", "--without-pip", selected],
-                check=True,
-                capture_output=True,
-            )
-            python = selected / "bin/python3"
-            site = Path(
-                subprocess.check_output(
-                    [
-                        python,
-                        "-I",
-                        "-c",
-                        "import site; print(site.getsitepackages()[0])",
-                    ],
-                    text=True,
-                ).strip()
-            )
+            python = preseeded_duckdb_python(root)
             env = environment(tools)
             if git_dependency is not None:
                 env["PATH"] += os.pathsep + os.defpath
-            env["RETICULATE_PYTHON"] = str(python)
             env["XDG_CACHE_HOME"] = str(root / "cache-base")
             env["CACHE_TEST_ROOT"] = str(root)
             for name in CACHE_VARIABLES:
                 env[name] = str(root / "host" / name)
             config = root / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
-            settings = {"languages": ["python"]} if git_dependency is not None else {}
+            settings = {"python": {"managed": {}}}
             console_base = root / "cache-base/mcp-console"
             if source == "platform":
                 env.pop("XDG_CACHE_HOME")
@@ -431,7 +414,7 @@ def cache_locations(
             if source == "config":
                 settings["cache"] = "host"
             if source == "isolated":
-                settings = {"inherit_environment": False, "environment": dict(env)}
+                settings.update(inherit_environment=False, environment=dict(env))
             if source == "xdg_without_home":
                 env.pop("HOME", None)
             if source == "explicit_entries":
@@ -446,9 +429,7 @@ def cache_locations(
                 assert not console_root.exists()
             config.write_text(json.dumps(settings))
             expected = {
-                name: env[name]
-                if host or name == "PYTHONUSERBASE"
-                else str(console_root)
+                name: env[name] if host else str(console_root)
                 for name in CACHE_VARIABLES
             }
             env["CACHE_TEST_EXPECTED"] = json.dumps(expected)
@@ -464,8 +445,8 @@ def cache_locations(
                     "CACHE_TEST_EXPECTED"
                 ]
                 config.write_text(json.dumps(settings))
-            # Selected Python inspection runs in the resolver before the worker.
-            # The hook tests real cache permissions, without requiring downloads.
+            # Existing interpreter hooks use worker permissions. Probe trusted
+            # preparation through uv, with the real DuckDB provider preseeded.
             # fmt: python
             probe = code(f"""
                 import errno
@@ -531,7 +512,7 @@ def cache_locations(
                         assert result.stdout == "42\\n", result
                         cache.joinpath("git-check-passed").write_text("checked")
                 """)
-            (site / "sitecustomize.py").write_text(probe)
+            probing_uv(root, python, probe)
             arguments = ["serve"]
             if source == "direct":
                 arguments.append("--no-sandbox")
@@ -554,7 +535,7 @@ def cache_locations(
                         from pathlib import Path
 
                         expected = json.loads(os.environ["CACHE_TEST_EXPECTED"])
-                        # Explicit Python uses its preinstalled DuckDB extensions.
+                        # Extension preparation has its own cache coverage.
                         expected.pop("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY")
                         for name, value in expected.items():
                             actual = Path(os.environ[name])

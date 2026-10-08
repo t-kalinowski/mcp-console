@@ -20,24 +20,65 @@ The same short example is available as [config.yaml](../examples/config.yaml).
 
 `serve` and ordinary `sandbox` launches load configuration in this order:
 
-1. `.agents/console/config.yaml` in the launch directory, or the home Console `config.yaml` **only if the project file is absent**.
-2. Each `-c KEY=VALUE` / `--config KEY=VALUE`, in command-line order.
+1. Global `config.yaml` in `$MCP_CONSOLE_HOME`, when set, otherwise `~/.agents/console/config.yaml`.
+2. Project `.agents/console/config.yaml` in the captured launch directory.
+3. Each `-c KEY=VALUE` / `--config KEY=VALUE`, in command-line order.
 
 No ancestor directories are searched.
-An unreadable or invalid project file fails launch rather than falling back.
-With neither file, configuration starts empty.
+Missing files are normal; with neither file, Console uses its built-in defaults.
+Each selected file must be a supported YAML mapping.
+Unreadable or malformed files fail launch, even if a later override could replace their contents.
+Symlinks to regular files are allowed; dangling links and non-regular targets are errors.
+If both locations resolve to the same file, Console reads it once, after excluding disabled sources.
+Application settings are validated and defaults supplied only after all layers and overrides have been merged.
 Overrides may appear before or after the subcommand and do not edit files.
 
-Use `--no-project-config` before or after `serve` or `sandbox` to skip the launch-directory project file, including an unreadable or invalid one.
-Home configuration is still discovered, and `-c` overrides still apply in order.
-The flag does not change recording location.
+Use discovery flags before or after `serve` or ordinary `sandbox`:
+
+| Invocation            | Configuration inputs                |
+| --------------------- | ----------------------------------- |
+| Normal launch         | Global, project, then CLI overrides |
+| `--no-project-config` | Global, then CLI overrides          |
+| `--no-global-config`  | Project, then CLI overrides         |
+| `--no-config`         | CLI overrides only                  |
+
+Combining `--no-global-config` and `--no-project-config` behaves like `--no-config`.
+Excluded files are not inspected or read, including invalid or unreadable files.
+`--no-global-config` and `--no-config` do not resolve the global Console directory for configuration discovery; recording and other storage operations may still require it.
+These flags do not change recording-location selection.
+
+Use `--config-file PATH` to select one YAML or JSON mapping as the sole file source.
+It skips both automatic locations, including global path resolution, and applies any `-c` overrides afterward.
+The selected file must exist and be readable; a missing file is an error.
+An empty mapping (`{}`) uses built-in defaults.
+The option works before or after `serve` or ordinary `sandbox`, may be supplied only once, and cannot be combined with discovery exclusions.
+Relative paths are resolved from the launch directory; `~` and environment-variable references are not expanded.
+
+Automatic project loading treats project configuration as trusted launcher input.
+It can affect executable selection, child environments, and requested sandbox permissions.
+Trusting code to run inside a sandbox is not equivalent to trusting it to define the sandbox.
+Global configuration supplies defaults, not a mandatory security ceiling: project settings may override global settings under the ordinary merge rules.
+Integrations opening unfamiliar projects should use `--no-project-config` until they authorize project configuration.
+
+Paths keep their existing launch-relative meaning, including paths supplied by global configuration.
+They are not rebased onto the configuration file's directory.
+Console captures effective settings once before runtime preparation and reuses them across worker restarts and resolver operations.
+Restart Console after editing `config.yaml`; restarting a worker does not reload it.
 
 ```sh
 mcp-console serve -c 'sandbox.filesystem.read_write=[.]'
 mcp-console serve --no-project-config -c 'sandbox.filesystem.read_write=[.]'
+mcp-console serve --no-global-config
+mcp-console serve --no-config -c 'sandbox.filesystem.read_write=[.]'
+mcp-console serve --config-file ./session.yaml
 mcp-console -c 'sandbox.filesystem.read_write=[.]' serve -c sandbox.network=enabled
 mcp-console sandbox -c 'environment={LABEL: analysis}' -- Rscript analysis.R
 ```
+
+`-c/--config` accepts dotted `KEY=VALUE` assignments, including structured inline values; it does not accept a file path or a complete root mapping.
+Console has no application-config blob or config-file environment variable.
+`MCP_CONSOLE_HOME` selects the global directory, and ordinary `sandbox --config-env NAME` accepts the separate native runner's JSON policy rather than application configuration.
+Application discovery flags, `--config-file`, and `-c` overrides cannot be combined with `--config-env` or internal `--settings-env`.
 
 See [resolver settings](RESOLVER.md) and [sandbox settings](SANDBOX_CONFIGURATION.md) for available keys.
 
@@ -52,10 +93,14 @@ See [cache locations](RESOLVER.md#cache-locations) for platform paths.
 ## Console home
 
 The home Console directory is `~/.agents/console`.
-Set `MCP_CONSOLE_HOME` to an absolute directory to relocate fallback `config.yaml` and `sessions/` without changing `HOME` or R, Python, or uv storage.
-Empty or relative values are errors when fallback is needed; `~` is not expanded.
+Set `MCP_CONSOLE_HOME` to an absolute directory to relocate global `config.yaml` and `sessions/` without changing `HOME` or R, Python, or uv storage.
+It selects the global location rather than adding a layer.
+Empty or relative values are errors when that directory is needed; `~` is not expanded.
+Without `MCP_CONSOLE_HOME`, Console uses an absolute, nonempty `HOME`.
+On Windows, an absent or empty `HOME` uses native user-home discovery (`USERPROFILE`, then the Windows user-profile API).
+A supplied relative home path remains an error.
 
-Project configuration and project recordings take precedence independently: configuration requires the project file, while recordings require only an existing project `.agents/console` directory.
+Configuration layering and recording-location selection are independent; project recordings require only an existing project `.agents/console` directory.
 See [recording](RECORDING.md).
 
 ## Model-visible languages
@@ -92,14 +137,19 @@ It does not restrict what SQL can do or change the sandbox and dependency trust 
 
 ## Python environment selection
 
-Select an existing interpreter with:
+Select an existing interpreter or standard virtual environment with:
 
 ```yaml
-python: .venv/bin/python
+python: .venv
 ```
 
 This overrides inherited `RETICULATE_PYTHON`, is retained across restarts, and is unavailable with custom workers.
 Paths, including bare filenames, are relative to the launch directory.
+The equivalent mapping is `python: {existing: .venv}`.
+Directories require `pyvenv.cfg` and `bin/python` on Unix or `Scripts/python.exe` on Windows.
+Executable paths retain their spelling and symlinks so a selected venv keeps its package environment.
+Recognized Conda installations are unsupported; unrelated Conda environment variables do not exclude ordinary venvs.
+Interpreter symlink targets are checked for Conda installations without changing the selected executable path.
 
 A leading `~` expands using the server's absolute `HOME`, including in a quoted override such as `-c 'python=~/.venv/bin/python'`.
 Missing, empty, or relative `HOME` is an error when expansion is requested; `~user` and environment-variable references are not expanded.
@@ -108,7 +158,65 @@ Explicit selection uses preinstalled Python packages and bypasses managed Python
 Without R or an explicit selection, Console uses uv on the local host.
 Managed environments use uv-managed CPython; Console does not fall back to a system interpreter.
 A broken selected interpreter is an error, not a reason to fall back.
+Existing interpreter inspection, including any environment startup hooks, uses the worker's captured permissions.
 See [runtime selection](BUILTIN_RUNTIME.md).
+
+Choose the first available Python candidate with:
+
+```yaml
+python:
+  first_available:
+    - existing: .venv
+    - active_venv
+    - managed: {}
+```
+
+Only an absent existing path advances the list.
+A present broken environment, dangling interpreter symlink, or invalid activation path fails selection.
+`active_venv` reads the incoming `VIRTUAL_ENV`; unset or empty means absent.
+Launchers must preserve this variable, or select an explicit path.
+The selected interpreter is captured once, including across worker restarts; later candidates are never inspected or prepared.
+
+The list is flat and nonempty, with at most one `active_venv` and one optional managed candidate last.
+Exhausting the list fails startup.
+`managed: {}` uses the existing managed Python defaults and also works at the top level to override an inherited `RETICULATE_PYTHON`.
+Managed selection currently accepts an empty options mapping.
+An explicit managed choice requires available managed preparation; it does not select a PATH interpreter when preparation is unavailable.
+When `python` is omitted, Console retains the launch-time `RETICULATE_PYTHON` compatibility behavior.
+
+## R executable selection
+
+Select an installed R executable or its ordinary launcher:
+
+```yaml
+r: /opt/R/4.6.1/bin/R
+```
+
+The scalar expands to `r: {executable: PATH}` before configuration layers merge.
+A mapping can combine selection with the existing startup setting:
+
+```yaml
+r:
+  executable: /opt/R/4.6.1/bin/R
+  vanilla: true
+```
+
+Paths, including bare filenames, are relative to the captured launch directory.
+A leading `~` uses the server's absolute `HOME`; `~user` and variable references are not expanded.
+On Windows, select an installed launcher such as `r: 'C:\Program Files\R\R-4.6.1\bin\R.exe'`.
+Directories, Rscript selectors, commands with arguments, and incompatible installations are errors.
+An explicit selection overrides inherited R installation hints and PATH discovery.
+Omitting `executable` preserves ordinary discovery; `r: null` clears the R settings before subsequent overrides.
+
+Console captures the installation's matching Rscript, runtime library, and resource directories for workers and preparation across restarts.
+It checks selected installation file contents and resource directory targets before each worker launch and preparation operation; detected changes require a new server connection.
+Ordinary changes within resource directories remain allowed.
+Failed initial discovery can be retried with explicit restart after repairing the captured path.
+Inspection uses worker permissions and suppresses startup files; native R startup retains the behavior below.
+
+The installation and all code it loads remain [trusted preparation inputs](REQUIREMENTS.md#host-resolution-and-trust).
+These checks do not protect against concurrent file replacement or changes to uncaptured dependencies.
+Keep those inputs outside worker-writable paths when relying on worker isolation.
 
 ## Native R startup
 
@@ -240,6 +348,8 @@ Quote the whole assignment for the shell when it contains spaces or punctuation.
 Mappings merge recursively.
 Lists, scalars, and explicit `null` replace the previous value.
 A mapping replaces a non-mapping, but an empty mapping does **not** clear an existing mapping.
+An empty project file mapping (`{}`) preserves all global settings; an empty list replaces an existing list with an empty list.
+For example, global `environment: {KEEP: global, CHANGE: global}` and project `environment: {CHANGE: project}` produce `environment: {KEEP: global, CHANGE: project}`.
 To clear and rebuild one, assign `null`, then the new mapping in a later override.
 Only the final result is validated.
 
@@ -249,7 +359,7 @@ The final document is validated before selecting variants, supplying defaults, a
 
 Settings are captured once and reused across worker generations.
 Worker and resolver launches consume that captured input without rediscovering YAML.
-Explicit native `--config-env` and internal `--settings-env` inputs are already complete and reject `-c` overrides and `--no-project-config`.
+Explicit native `--config-env` and internal `--settings-env` inputs are already complete and reject `-c` overrides, `--no-project-config`, and `--no-config`.
 
 The layering code is in [`src/config.rs`](../src/config.rs) and `src/config/`; application decoding belongs to [`src/settings.rs`](../src/settings.rs).
 
@@ -319,6 +429,10 @@ Host paths and process IDs are normalized; other policy values are retained.
 They record normalization and native launches on the exercised platform; capability limits remain described in [sandbox configuration](SANDBOX_CONFIGURATION.md#native-capabilities).
 
 ## Migration
+
+Global configuration previously served only as a fallback when the project file was absent.
+It now supplies the first layer even when a project file exists, so unrelated global settings survive sparse project configuration.
+Use `--no-config` with CLI overrides when neither automatic file should contribute settings.
 
 The public format deliberately replaces the previous native-shaped YAML.
 Unknown fields, old shapes, camelCase aliases, null permission selectors, and incompatible explicit settings fail with a configuration path.

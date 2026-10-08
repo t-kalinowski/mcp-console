@@ -30,8 +30,8 @@ mod platform;
 use crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS;
 pub(crate) use configuration::ClientConfiguration;
 use configuration::RResolver;
+pub(crate) use environment::{Declaration, Requirements, RequirementsAction};
 use environment::{Environment, PythonEnvironment, RuntimeRResolutionFailure};
-pub(crate) use environment::{Requirements, RequirementsAction};
 use evaluation::Evaluation;
 use lifecycle::{LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration};
 pub(crate) use output::{Content, Response, ResponseDelivery};
@@ -39,6 +39,8 @@ use output::{OutputTape, SendFailure};
 
 pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "tidyverse",
+    "dplyr",
+    "dbplyr",
     "reticulate",
     "DBI",
     "duckdb",

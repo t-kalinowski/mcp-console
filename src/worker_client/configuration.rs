@@ -91,7 +91,7 @@ impl ClientConfiguration {
     pub(crate) fn builtin(
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
-        python: Option<PathBuf>,
+        python: Option<crate::settings::PythonChoice>,
         r_settings: crate::settings::R,
         resolver_settings: crate::settings::SandboxSettings,
         diagnostics: crate::process_output::Diagnostics,
@@ -102,11 +102,38 @@ impl ClientConfiguration {
         let duckdb_extension_directory =
             crate::resolver::cache::duckdb_extension_directory(&resolver_settings)?;
         let languages = crate::cell::Languages::from_environment()?;
+        let legacy_python = python.is_none();
+        let explicit_managed = python
+            .as_ref()
+            .is_some_and(|python| python.executable.is_none());
+        let inspect_explicit = python.is_some() || cfg!(windows);
         let configured_python = python
-            .map(PathBuf::into_os_string)
+            .map(|python| {
+                python
+                    .executable
+                    .map(PathBuf::into_os_string)
+                    .unwrap_or_else(|| "managed".into())
+            })
             .or_else(|| std::env::var_os("RETICULATE_PYTHON"));
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
+        let installation = r_settings
+            .executable
+            .as_ref()
+            .map(|executable| {
+                crate::resolver::preparation::Preparation::inspect::<
+                    crate::local_runtime::RInstallation,
+                >(
+                    crate::resolver::preparation::Operation::InspectR {
+                        executable: executable.clone(),
+                    },
+                    sandbox_settings.clone(),
+                    no_sandbox,
+                    diagnostics.clone(),
+                    on_started,
+                )
+            })
+            .transpose()?;
         let local_runtime;
         #[cfg(any(unix, windows))]
         let resolver_preparation;
@@ -116,6 +143,7 @@ impl ClientConfiguration {
             resolver_settings.clone(),
             no_sandbox,
             configured_python.as_deref(),
+            installation.clone(),
             diagnostics.clone(),
             on_started,
         )?;
@@ -131,6 +159,17 @@ impl ClientConfiguration {
                 configured_python.clone(),
                 &resolver,
                 duckdb_extension_directory.clone(),
+                |executable, started| {
+                    crate::resolver::preparation::Preparation::inspect(
+                        crate::resolver::preparation::Operation::InspectPython {
+                            executable: executable.to_owned(),
+                        },
+                        sandbox_settings.clone(),
+                        no_sandbox,
+                        diagnostics.clone(),
+                        started,
+                    )
+                },
                 on_started,
             )
             .and_then(|(selection, managed)| {
@@ -159,6 +198,13 @@ impl ClientConfiguration {
             });
             (None, extensions, python, RResolver::Disabled)
         } else {
+            if explicit_managed && !discovery.managed {
+                let error = crate::local_runtime::RESOLUTION_UNAVAILABLE;
+                preparation
+                    .close()
+                    .map_err(|cleanup| format!("{error}; {cleanup}"))?;
+                return Err(error.into());
+            }
             #[cfg(unix)]
             use std::os::unix::ffi::OsStringExt;
             #[cfg(unix)]
@@ -177,6 +223,7 @@ impl ClientConfiguration {
             );
             local_runtime = Some(crate::local_runtime::Selection {
                 r_home: Some(home),
+                installation,
                 r_settings,
                 python: None,
             });
@@ -206,18 +253,17 @@ impl ClientConfiguration {
                 )
             }
         };
-        // Preserve Windows' independent peer runtimes even in a bare R session. An
-        // explicit Python selection is inspected by the same preparation owner.
-        #[cfg(windows)]
+        // Configured environments are captured before either interpreter starts.
+        // Windows also retains its independent legacy peer-runtime selection.
         let mut local_runtime = local_runtime;
-        #[cfg(windows)]
         if let Some(runtime) = &mut local_runtime
             && runtime.python.is_none()
+            && inspect_explicit
         {
             let explicit = configured_python
                 .filter(|value| !value.is_empty() && value != "managed")
                 .or_else(|| {
-                    matches!(r_resolver, RResolver::Disabled)
+                    (legacy_python && cfg!(windows) && matches!(r_resolver, RResolver::Disabled))
                         .then(|| {
                             crate::resolver::find_path_entry("python").map(PathBuf::into_os_string)
                         })
@@ -227,8 +273,11 @@ impl ClientConfiguration {
                 let preparation = resolver_preparation.as_ref().expect("local preparation");
                 let selected = crate::python::explicit_executable(&explicit)
                     .and_then(|executable| {
-                        preparation.call(
+                        crate::resolver::preparation::Preparation::inspect(
                             crate::resolver::preparation::Operation::InspectPython { executable },
+                            sandbox_settings.clone(),
+                            no_sandbox,
+                            diagnostics.clone(),
                             on_started,
                         )
                     })
@@ -323,6 +372,15 @@ impl ClientConfiguration {
 
     pub(crate) fn python_preparation(&self) -> bool {
         self.python_preparation
+    }
+
+    pub(crate) fn startup_declaration(&self) -> super::Declaration {
+        self.environment
+            .as_ref()
+            .expect("captured environment")
+            .lock()
+            .expect("environment lock")
+            .startup_declaration()
     }
 
     pub(crate) fn dynamic_resolution(&self) -> bool {

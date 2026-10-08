@@ -24,6 +24,13 @@ fn main() {
             r#"[{{"version":"3.12.7","version_parts":{{"major":3,"minor":12,"patch":7}},"symlink":null,"variant":"default","implementation":"cpython"}}]"#
         );
     } else {
+        if std::env::var_os("TEST_RESOLVER_CACHE_PROBE").is_some() {
+            let root = std::path::PathBuf::from(std::env::var_os("CACHE_TEST_ROOT").unwrap());
+            let cache = std::path::PathBuf::from(std::env::var_os("UV_CACHE_DIR").unwrap());
+            assert!(cache.starts_with(root));
+            std::fs::create_dir_all(&cache).unwrap();
+            std::fs::write(cache.join("resolver-probe"), "prepared").unwrap();
+        }
         if let Ok(gate) = std::env::var("TEST_RESOLVER_GATE") {
             let child = Command::new(&program).arg("--descendant").spawn().unwrap();
             let mut gate = Gate::connect(gate).unwrap();
@@ -39,7 +46,10 @@ fn main() {
         }
         if std::env::var("TEST_RESOLVER_MODE").as_deref() == Ok("failed") {
             eprintln!("fixture resolver failure");
-            std::process::exit(23);
+            let code = std::env::var("TEST_RESOLVER_EXIT_CODE")
+                .map(|code| code.parse().unwrap())
+                .unwrap_or(23);
+            std::process::exit(code);
         }
         if program.file_stem().unwrap() == "ir" || args.iter().any(|arg| arg == "ir") {
             print!("{}", std::env::var("TEST_RESOLVER_LIBRARY").unwrap());

@@ -15,10 +15,11 @@ from support.suites import run_this_suite
 def record(binary: Path, *arguments: str) -> TranscriptEntry:
     result = subprocess.run(
         [binary, *arguments],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
         encoding="utf-8",
-        env={**os.environ, "NO_COLOR": "1"},
+        env={**os.environ, "NO_COLOR": "1", "COLUMNS": "80"},
     )
     entry: TranscriptEntry = {"command": " ".join(("mcp-console", *arguments))}
     if result.returncode != 0:
@@ -31,7 +32,7 @@ def record(binary: Path, *arguments: str) -> TranscriptEntry:
 
 @platform_snapshots("win32", reason="Windows exposes sandbox-setup in CLI help")
 def test_help(binary: Path) -> Transcript:
-    return [
+    entries = [
         record(binary),
         record(binary, "--help"),
         record(binary, "serve", "--help"),
@@ -39,6 +40,10 @@ def test_help(binary: Path) -> Transcript:
         record(binary, "sandbox"),
         record(binary, "sandbox", "--help"),
     ]
+    for entry in entries:
+        output = entry.get("stdout", "") + entry.get("stderr", "")
+        assert all(len(line) <= 80 for line in output.splitlines()), entry
+    return entries
 
 
 def test_version(binary: Path) -> Transcript:

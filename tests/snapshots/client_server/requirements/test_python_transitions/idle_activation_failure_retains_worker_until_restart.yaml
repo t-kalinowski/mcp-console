@@ -45,6 +45,8 @@ result:
             "r": [
               "DBI",
               "arrow",
+              "dbplyr",
+              "dplyr",
               "duckdb",
               "ggplot2",
               "later",
@@ -88,6 +90,8 @@ result:
       r:
         - DBI
         - arrow
+        - dbplyr
+        - dplyr
         - duckdb
         - ggplot2
         - later
@@ -188,6 +192,8 @@ result:
             "r": [
               "DBI",
               "arrow",
+              "dbplyr",
+              "dplyr",
               "duckdb",
               "ggplot2",
               "later",
@@ -231,6 +237,8 @@ result:
       r:
         - DBI
         - arrow
+        - dbplyr
+        - dplyr
         - duckdb
         - ggplot2
         - later

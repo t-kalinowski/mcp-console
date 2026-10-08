@@ -8,14 +8,16 @@ knitr:
 ir:
   isolated: true
   packages:
-    - tidyverse
-    - reticulate
     - DBI
-    - duckdb
     - arrow
-    - nanoarrow
-    - yyjsonr
+    - dbplyr
+    - dplyr
+    - duckdb
     - ggplot2
+    - nanoarrow
+    - reticulate
+    - tidyverse
+    - yyjsonr
   python-packages:
     - numpy
     - pandas

@@ -5,6 +5,8 @@ send:
   r: |
     defaults <- c(
       "tidyverse",
+      "dplyr",
+      "dbplyr",
       "reticulate",
       "DBI",
       "duckdb",

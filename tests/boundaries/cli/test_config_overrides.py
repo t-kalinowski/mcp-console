@@ -222,7 +222,7 @@ def test_overrides_precede_schema_validation(binary: Path) -> Transcript:
     return [{"overrides": list(overrides), "initialized": True}]
 
 
-def test_discovers_home_configuration_with_project_precedence(
+def test_discovers_home_configuration_with_project_layering(
     binary: Path,
 ) -> Transcript:
     with TemporaryDirectory() as temporary:
@@ -281,6 +281,9 @@ def test_discovers_home_configuration_with_project_precedence(
         assert not (opt_out_workspace / ".agents").exists()
 
         configure(workspace, {})
+        # An empty project mapping preserves the invalid global setting.
+        assert str(home / CONFIG) in launch_error()
+        configure(home, {})
         with McpClient(
             binary,
             ("serve", "--no-sandbox"),
@@ -293,9 +296,10 @@ def test_discovers_home_configuration_with_project_precedence(
 
         configure(workspace, {"unknown": "project"})
         error = launch_error()
-        assert CONFIG in error and str(home / CONFIG) not in error, error
+        assert CONFIG in error and str(home / CONFIG) in error, error
 
         (workspace / CONFIG).unlink()
+        configure(home, {"unknown": "home"})
         assert str(home / CONFIG).replace("\\", "/") in launch_error().replace(
             "\\", "/"
         )
@@ -312,7 +316,7 @@ def test_discovers_home_configuration_with_project_precedence(
             _, stderr = client.finish_with_standard_error()
             assert stderr == "", stderr
 
-    return [{"home_fallback": True, "project_precedence": True}]
+    return [{"home_discovery": True, "project_layering": True}]
 
 
 def test_discovers_explicit_console_home(binary: Path) -> Transcript:
@@ -345,6 +349,17 @@ def test_discovers_explicit_console_home(binary: Path) -> Transcript:
             assert str(home / CONFIG) not in result.stderr, result.stderr
 
         configure(workspace, {})
+        result = subprocess.run(
+            [binary, "serve", "--no-sandbox"],
+            cwd=workspace,
+            env=environment,
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 1 and str(selected_config) in result.stderr, result
+        selected_config.write_text("{}", encoding="utf-8")
         with McpClient(
             binary,
             ("serve", "--no-sandbox"),
@@ -388,7 +403,7 @@ def test_discovers_explicit_console_home(binary: Path) -> Transcript:
     return [
         {
             "console_home_override": True,
-            "project_precedence": True,
+            "project_layering": True,
             "invalid_console_home_rejected": True,
         }
     ]
@@ -434,6 +449,7 @@ def test_python_home_expansion_requires_absolute_home(binary: Path) -> Transcrip
         configure(workspace, {"python": "~/.venv/bin/python"})
         for home in (None, "", "relative/home"):
             environment = dict(os.environ)
+            environment["MCP_CONSOLE_HOME"] = str(workspace / "console-home")
             environment.pop("HOME", None)
             if home is not None:
                 environment["HOME"] = home

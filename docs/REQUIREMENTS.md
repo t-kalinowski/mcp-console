@@ -23,11 +23,11 @@ A plain restart reuses accepted requirements, including successful automatic add
 
 The default optional declarations are:
 
-| Environment | Defaults                                                                               |
-| ----------- | -------------------------------------------------------------------------------------- |
-| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
-| Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                   |
-| DuckDB      | `icu`, `json`, `sqlite` with or without R                                              |
+| Environment | Defaults                                                                                                  |
+| ----------- | --------------------------------------------------------------------------------------------------------- |
+| R           | `tidyverse`, `dplyr`, `dbplyr`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
+| Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                                      |
+| DuckDB      | `icu`, `json`, `sqlite` with or without R                                                                 |
 
 Managed DuckDB defaults provide JSON extraction, named-timezone operations, and SQLite attachment with either native provider.
 Preparation skips extensions identified as built-in by the selected engine, including their catalog aliases, and installs the others in the shared extension cache.
@@ -145,6 +145,9 @@ Failed automatic resolution preserves the original operation's behavior, includi
 
 The host resolves the complete candidate and retained extensions.
 The worker applies the candidate `.libPaths()` and reports `RActivated`; only a matching current-generation receipt commits it.
+It replaces Console's managed library at its current position, preserving native project and ambient libraries and their order.
+If native startup removed the managed entry, activation adds the candidate ahead of those libraries without removing them.
+If the candidate already exists as a project or ambient entry, activation preserves its position and does not claim ownership of it.
 The original load then resumes, attaching only when that operation normally attaches.
 A later namespace/cell failure does not undo acceptance.
 An activation failure leaves recoverable state available but requires restart before further requirement changes.
@@ -187,6 +190,7 @@ Finish interactive work before preparing dependencies.
 ### Live R preparation
 
 The worker replaces its managed library entry, preserving other paths and live objects.
+Preparation before R initializes updates the library selection and ownership together, so later activation can replace the prepared entry.
 A sandbox's temporary writable library remains first.
 The server commits only the confirmed normalized path.
 Ordinary activation failure can leave live library state different from retained state: preserve the worker for recovery, but require restart for further changes.
@@ -276,6 +280,10 @@ That code runs under the resolver policy in local sandboxed preparation.
 Local sandboxed sessions redirect preparation and worker cache paths to Console-specific storage.
 With `cache: host`, shared cache writes can also affect other users of those artifacts.
 Cache separation does not protect cache contents from processes explicitly granted writes.
+
+Explicit R selection hashes selected files and checks resource directory targets to detect changes between operations.
+Validation and execution open paths separately, and the captured files do not cover every loader or launcher dependency.
+R installations and all code loaded during preparation remain trusted inputs; granting a worker write access to them can influence later preparation, including through concurrent file replacement.
 
 ### Host resolver uv configuration
 
