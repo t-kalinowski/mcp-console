@@ -54,7 +54,10 @@ __attribute__((constructor)) static void initialize(void) {
     const char *command = args + next;
 #endif
     bool drop_receipt = getenv("MCP_CONSOLE_TEST_STARTUP_LOSE_CLOSE") != NULL;
-    if (strcmp(command, "resolve") == 0) lose_close_receipt = drop_receipt;
+    if (strcmp(command, "resolve") == 0)
+        // Lose only the worker-policy inspection peer's receipt. The retained
+        // dependency peer still closes normally after inspection cancellation.
+        lose_close_receipt = drop_receipt && getenv("RETICULATE_PYTHON") == NULL;
     else if (strcmp(command, "serve") == 0) selected = path;
     else return;
     // Discovery and inspection children retain real process/I/O behavior.

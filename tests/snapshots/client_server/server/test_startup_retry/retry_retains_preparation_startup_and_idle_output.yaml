@@ -18,7 +18,6 @@ result:
     - type: text
       text: |-
         preparation detail
-        preparation detail
 
         [idle]
   isError: false
@@ -85,7 +84,7 @@ result:
 ---
 session_output:
   path: outputs/session.log
-  retained_bytes: 32870
+  retained_bytes: 32851
   discarded_bytes: 0
   inline_omitted_bytes: 24853
 original_log_preserved: true

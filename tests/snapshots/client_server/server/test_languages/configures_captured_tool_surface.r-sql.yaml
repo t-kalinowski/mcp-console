@@ -109,18 +109,18 @@ result:
             description: >-
               Inspect declarations or prepare dependencies on the execution host
               without importing, attaching, or loading them. Configured resolution
-              policies apply before controls, input, or code. Requires host
-              preparation support; bare runtimes use installed packages. Alone,
-              performs standalone preparation. With a cell, preparation precedes code;
-              without control it also precedes bundled stdin. Failure or a required
-              restart withholds the cell. Compatible additions preserve live state on
-              an idle worker; other changes need restart. With restart, candidate
-              resolution precedes replacement; resolution failure preserves the
-              current worker and sends no stdin/code. Standalone preparation rejects
-              nonempty stdin. Only add can accompany interrupt, with a following cell;
-              providers without this preparation support reject the combination before
-              signaling or input. Otherwise interrupt and stdin precede deferred
-              validation/preparation and are not rolled back on failure.
+              policies govern preparation. Requires host preparation support; bare
+              runtimes use installed packages. Alone, performs standalone preparation.
+              With a cell, preparation precedes code; without control it also precedes
+              bundled stdin. Failure or a required restart withholds the cell.
+              Compatible additions preserve live state on an idle worker; other
+              changes need restart. With restart, candidate resolution precedes
+              replacement; resolution failure preserves the current worker and sends
+              no stdin/code. Standalone preparation rejects nonempty stdin. Only add
+              can accompany interrupt, with a following cell; providers without this
+              preparation support reject the combination before signaling or input.
+              Otherwise interrupt and stdin precede deferred validation/preparation
+              and are not rolled back on failure.
             type:
               - object
               - "null"

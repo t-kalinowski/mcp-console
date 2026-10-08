@@ -137,7 +137,7 @@ def test_retry_retains_preparation_startup_and_idle_output(
             python.symlink_to(sys.executable)
             restart = client.start_send(control="restart", timeout_ms=60_000)
             wait_for_checkpoint(
-                lambda: log if log.read_bytes() == preparation * 3 else None,
+                lambda: log if log.read_bytes() == preparation * 2 else None,
                 "retry preparation appends to the original session log",
                 root=log.parent,
                 client=client,
@@ -145,14 +145,12 @@ def test_retry_retains_preparation_startup_and_idle_output(
             client.receive(restart)
             repaired = restart["result"]
             assert not repaired.get("isError"), repaired
-            assert last_tool_text(client) == preparation.decode() * 2 + "\n[idle]", (
-                repaired
-            )
+            assert last_tool_text(client) == preparation.decode() + "\n[idle]", repaired
             startup.release()
             wait_for_idle_output(
                 client, startup_text + "\n[idle]", "repaired startup output"
             )
-            assert log.read_bytes() == preparation * 3 + startup_text.encode()
+            assert log.read_bytes() == preparation * 2 + startup_text.encode()
 
             client.expect(
                 "[done]",
@@ -171,7 +169,7 @@ def test_retry_retains_preparation_startup_and_idle_output(
                     """),
             )
             idle.release()
-            expected_raw = preparation * 3 + startup_text.encode() + idle_text.encode()
+            expected_raw = preparation * 2 + startup_text.encode() + idle_text.encode()
             wait_for_checkpoint(
                 lambda: log if log.read_bytes() == expected_raw else None,
                 "post-repair idle text is retained outside the completed cell",

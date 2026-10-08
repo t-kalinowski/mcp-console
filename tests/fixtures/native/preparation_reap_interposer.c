@@ -42,7 +42,9 @@ static ssize_t native_write(int fd, const void *bytes, size_t count) {
 }
 
 static ssize_t observe_write(int fd, const void *bytes, size_t count) {
-    if (count == 8 && memcmp(bytes, "\"Closed\"", 8) == 0) {
+    // Inspection clears this selection; fault the retained dependency peer.
+    if (getenv("RETICULATE_PYTHON") != NULL &&
+        count == 8 && memcmp(bytes, "\"Closed\"", 8) == 0) {
         const char *armed = getenv("MCP_CONSOLE_TEST_REAP_ARMED");
         if (armed != NULL && access(armed, F_OK) != 0) return native_write(fd, bytes, count);
         int marker = open(getenv("MCP_CONSOLE_TEST_REAP_PID"), O_WRONLY | O_CREAT | O_TRUNC, 0600);

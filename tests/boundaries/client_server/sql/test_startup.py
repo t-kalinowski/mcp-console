@@ -945,15 +945,17 @@ def test_missing_selected_python_has_no_sql_fallback(
             [binary, *execution.serve()],
             cwd=workspace,
             env=os.environ,
+            input="",
             capture_output=True,
             text=True,
+            timeout=10,
         )
         assert result.returncode == 1 and result.stdout == "", result
         assert result.stderr == (
             "cannot use existing Python /mcp-console-startup-missing-python: "
             "No such file or directory (os error 2)\n"
         ), result.stderr
-    return [configuration, {"exit_status": result.returncode, "stderr": result.stderr}]
+    return [configuration, {"exit_status": 1, "stderr": result.stderr}]
 
 
 @requires(POSIX, R, SQL)
