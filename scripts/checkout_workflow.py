@@ -510,9 +510,11 @@ def main() -> None:
         for argument in arguments:
             if argument in {"--jobs", "--timeout"}:
                 next(arguments)
-            elif argument not in {"--full", "--quick", "--update"}:
+            elif argument not in {"--full", "--quick", "--stress", "--update"}:
                 native_arguments.append(argument)
-        boundary_selection = any("/" in argument for argument in options.arguments)
+        boundary_selection = "--stress" in options.arguments or any(
+            "/" in argument for argument in options.arguments
+        )
         if boundary_selection:
             plans["test"] = [
                 phase for phase in plans["test"] if phase[0] != "native-tests"

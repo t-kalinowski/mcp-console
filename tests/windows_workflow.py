@@ -385,6 +385,7 @@ class WindowsWorkflow(unittest.TestCase):
                 ["transcripts"],
             ),
             (("--full",), ["native-tests", "transcripts"]),
+            (("--stress",), ["transcripts"]),
         ):
             with self.subTest(arguments=arguments):
                 result = self.run_command(

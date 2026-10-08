@@ -116,7 +116,7 @@ def test_startup_source_absent_from_exec_environments(
 
 
 @requires(R, SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(SANDBOXED)
 def test_python_startup_preserves_aliased_connection(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
@@ -124,7 +124,7 @@ def test_python_startup_preserves_aliased_connection(
 
 
 @requires(POSIX, SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(DIRECT)
 def test_python_startup_preserves_aliased_connection_without_r(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
@@ -210,7 +210,7 @@ def aliased_connection(
 
 
 @requires(R, SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(SANDBOXED)
 def test_python_startup_publishes_plots_before_sql(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
@@ -218,7 +218,7 @@ def test_python_startup_publishes_plots_before_sql(
 
 
 @requires(POSIX, SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(DIRECT)
 def test_python_startup_publishes_plots_without_r(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
@@ -304,6 +304,9 @@ def startup_plots(
             config = configure(workspace, "python", source)
             settings = json.loads(config.read_text())
             settings["python"] = str(python)
+            # Isolate plot files, not R dependency downloads. Console cache
+            # selection otherwise redirects IR into each fresh XDG directory.
+            settings["cache"] = "host"
             config.write_text(json.dumps(settings))
             configuration = captured_configuration(config, python=python)
             with McpClient(binary, execution.serve(), environment, workspace) as client:
@@ -940,12 +943,21 @@ def test_missing_selected_python_has_no_sql_fallback(
         configuration = captured_configuration(config)
         with McpClient(binary, execution.serve(), os.environ, workspace) as client:
             client.initialize_and_list_tools()
+            wait_for_idle_output(
+                client,
+                "Error: selected Python executable is not an absolute file: "
+                "/mcp-console-startup-missing-python\n"
+                "Error: Python initialization is incomplete; SQL withheld; "
+                "explicit restart required\n\n[idle]",
+                "missing selected Python startup diagnostics",
+                completion_timeout_seconds=client.response_timeout,
+            )
             client.send(sql="SELECT 42 AS answer")
             output = client.transcript[-1]["result"]["content"][0]["text"]
-            assert "mcp-console-startup-missing-python" in output, output
-            assert "source must not execute" not in output and "42" not in output, (
-                output
-            )
+            assert output == (
+                "Error: SQL unavailable: Python initialization is incomplete; "
+                "explicit restart required\n"
+            ), output
             transcript = client.finish()
     return [configuration, *transcript, {"missing_selected_python": output}]
 

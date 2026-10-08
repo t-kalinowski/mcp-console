@@ -17,6 +17,7 @@ config:
       figure.savefig(Path(os.environ["TMPDIR"]) / "startup.png", format="png")
       plt.show()
   python: <configured Python>
+  cache: host
 ---
 failed_startup: false
 ---

@@ -20,7 +20,7 @@ from support.assertions import (
 )
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.processes import (
     capture_process_identity,
@@ -210,7 +210,7 @@ def test_resolves_missing_r_packages_during_evaluation(
 
 
 @requires(POSIX, SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 @requires(command("ir"))
 def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
     binary: Path,
@@ -539,7 +539,7 @@ def test_matches_base_r_missing_package_error_display(
 
 
 @requires(POSIX)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 @requires(command("ir"))
 def test_does_not_resolve_unreached_package_loads(
     binary: Path, execution: Execution
@@ -571,7 +571,7 @@ def test_does_not_resolve_unreached_package_loads(
 
 
 @requires(POSIX)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 @requires(command("ir"))
 def test_rejects_non_package_runtime_names_before_ir(
     binary: Path, execution: Execution
