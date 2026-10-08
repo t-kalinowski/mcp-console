@@ -39,5 +39,5 @@ stderr: >
 setting: r.profiles=true
 stderr: >
   configuration with CLI overrides: r: profiles: unknown field `profiles`,
-  expected `executable` or `vanilla`; see docs/CONFIGURATION.md for the
-  public format
+  expected one of `executable`, `packages`, `vanilla`; see
+  docs/CONFIGURATION.md for the public format
