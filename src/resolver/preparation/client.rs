@@ -96,6 +96,7 @@ impl Drop for Connection {
 
 #[derive(Default)]
 struct State {
+    terminal: Mutex<Option<crate::resolver::ResolverTerminalReport>>,
     outcome: Mutex<Option<ResolverControlOutcome>>,
     confirmed: AtomicBool,
     finished: AtomicBool,
@@ -105,7 +106,6 @@ struct Control {
     id: u64,
     events: mpsc::Sender<Event>,
     state: Arc<State>,
-    blocked: Arc<Mutex<Option<String>>>,
     retired: Arc<AtomicBool>,
 }
 
@@ -161,14 +161,12 @@ impl ResolverControl for Control {
     fn retirement_confirmed(&self) -> bool {
         self.retired.load(Ordering::SeqCst)
     }
-    fn failure_is_controlled(&self) -> bool {
-        // Cancellation cannot account for a separate connection-close failure.
-        self.control_outcome().is_some()
-            && self
-                .blocked
-                .lock()
-                .expect("preparation session lock")
-                .is_none()
+    fn terminal_report(&self) -> Option<crate::resolver::ResolverTerminalReport> {
+        self.state
+            .terminal
+            .lock()
+            .expect("preparation terminal report lock")
+            .clone()
     }
 }
 
@@ -517,7 +515,6 @@ impl Preparation {
             id: 0,
             events,
             state,
-            blocked: connection.0.blocked.clone(),
             retired: connection.0.retired.clone(),
         });
         if let Err(error) = on_started(handle.clone()) {
@@ -565,7 +562,6 @@ impl Preparation {
             id,
             events: self.0.events.clone(),
             state: state.clone(),
-            blocked: self.0.blocked.clone(),
             retired: self.0.retired.clone(),
         });
         let (reply, response) = mpsc::channel();
@@ -722,8 +718,6 @@ fn run(
                     if !confirmed {
                         return Err("local resolver process cleanup failed".into());
                     }
-                    pending.state.confirmed.store(true, Ordering::SeqCst);
-                    pending.state.finished.store(true, Ordering::SeqCst);
                     if let Some(control) = control {
                         pending
                             .state
@@ -737,6 +731,10 @@ fn run(
                         .outcome
                         .lock()
                         .expect("preparation control lock");
+                    // An acknowledged control can settle otherwise successful
+                    // work, but cannot replace an independent terminal error.
+                    // For an error, the owner's terminal control is authoritative.
+                    let cause = if result.is_err() { control } else { outcome };
                     let control_label = LABEL;
                     let result = result.and_then(|value| match outcome {
                         Some(ResolverControlOutcome::Cancelled) => {
@@ -747,6 +745,18 @@ fn run(
                         }
                         None => Ok(value),
                     });
+                    *pending
+                        .state
+                        .terminal
+                        .lock()
+                        .expect("preparation terminal report lock") =
+                        Some(crate::resolver::ResolverTerminalReport {
+                            result: result.as_ref().map(|_| ()).map_err(Clone::clone),
+                            control: cause,
+                            confirmed,
+                        });
+                    pending.state.confirmed.store(true, Ordering::SeqCst);
+                    pending.state.finished.store(true, Ordering::SeqCst);
                     let _ = active
                         .take()
                         .expect("active preparation")

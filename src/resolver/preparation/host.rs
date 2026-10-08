@@ -255,7 +255,16 @@ fn perform<T>(
     });
     let handles = handles.into_inner().expect("preparation handles lock");
     let confirmed = handles.iter().all(ResolverStopHandle::cleanup_confirmed);
-    let control = handles.iter().find_map(ResolverStopHandle::control_outcome);
+    // Only a stage with the operation's final result can supply its cause.
+    // Earlier controlled stages and later acknowledgments cannot relabel an
+    // independent failure, including one constructed after collection.
+    let outcome = result.as_ref().map(|_| ());
+    let control = handles.iter().find_map(|handle| {
+        handle
+            .terminal_report()
+            .filter(|report| report.result.as_ref().map(|_| ()) == outcome)
+            .and_then(|report| report.control)
+    });
     events
         .send(Event::Completed(Output::Completed {
             id,

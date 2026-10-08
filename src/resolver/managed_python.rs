@@ -102,7 +102,7 @@ uv output:
 {error}"
         ));
     }
-    check_resolver_control(&resolver, "managed Python resolution")?;
+    resolver.check_control("managed Python resolution")?;
     let output = String::from_utf8(output_path.read(4096)?)
         .map_err(|_| "managed Python resolver returned a non-UTF-8 path".to_string())?;
     let python = PathBuf::from(output.trim());
@@ -200,7 +200,7 @@ where
             resolver_error(&output)
         ));
     }
-    check_resolver_control(resolver, "managed Python version resolution")?;
+    resolver.check_control("managed Python version resolution")?;
     super::python_version::PythonVersions::parse(&output.stdout).map_err(|error| {
         format!("managed Python version resolver returned invalid output: {error}")
     })
@@ -276,16 +276,8 @@ where
         python,
         "managed Python cache warmup",
     )?;
-    check_resolver_control(resolver, "managed Python cache warmup")?;
+    resolver.check_control("managed Python cache warmup")?;
     Ok(())
-}
-
-fn check_resolver_control(resolver: &ResolverProcess, operation: &str) -> Result<(), String> {
-    match resolver.stop_handle().control_outcome() {
-        Some(super::ResolverControlOutcome::Interrupted) => Err(format!("{operation} interrupted")),
-        Some(super::ResolverControlOutcome::Cancelled) => Err(format!("{operation} cancelled")),
-        None => Ok(()),
-    }
 }
 
 fn resolver_error(output: &ResolverOutput) -> String {

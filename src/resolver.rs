@@ -4,6 +4,15 @@ pub(crate) enum ResolverControlOutcome {
     Cancelled,
 }
 
+/// Retained terminal evidence from one preparation operation, distinct from
+/// control acknowledgment and from its connection's retirement receipt.
+#[derive(Clone)]
+pub(crate) struct ResolverTerminalReport {
+    pub(crate) result: Result<(), String>,
+    pub(crate) control: Option<ResolverControlOutcome>,
+    pub(crate) confirmed: bool,
+}
+
 mod environment;
 pub(crate) use environment::{ManagedPython, ManagedR};
 pub(crate) mod cache;

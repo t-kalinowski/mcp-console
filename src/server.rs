@@ -514,7 +514,7 @@ pub async fn run(
             .await
             .unwrap_or_else(|_| Instant::now());
         let deadline = shutdown_started + WORKER_SHUTDOWN_GRACE;
-        let cancellation = startup.cancel().await;
+        let cancellation = startup.cancel(deadline).await;
         let result = match startup.ready().await {
             Ok(runtime) => runtime.worker.shutdown(deadline).await,
             Err(error) => {
