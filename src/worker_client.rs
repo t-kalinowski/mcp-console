@@ -39,6 +39,8 @@ use output::{OutputTape, SendFailure};
 
 pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "tidyverse",
+    "dplyr",
+    "dbplyr",
     "reticulate",
     "DBI",
     "duckdb",

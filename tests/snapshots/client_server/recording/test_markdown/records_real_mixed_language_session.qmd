@@ -9,6 +9,8 @@ ir:
   isolated: true
   packages:
     - tidyverse
+    - dplyr
+    - dbplyr
     - reticulate
     - DBI
     - duckdb
