@@ -328,7 +328,7 @@ impl TemporaryDirectory {
             // for its base-package view. Only unlock owned temporary
             // directories after retirement; package symlinks stay untouched.
             #[cfg(unix)]
-            unlock_temporary_directories(&path)?;
+            temporary_directories::unlock(&path)?;
             std::fs::remove_dir_all(&path)
         };
         match remove() {
@@ -346,20 +346,6 @@ impl TemporaryDirectory {
             )),
         }
     }
-}
-
-#[cfg(unix)]
-fn unlock_temporary_directories(path: &Path) -> std::io::Result<()> {
-    use std::os::fd::AsRawFd;
-    use std::os::unix::ffi::OsStrExt;
-
-    let parent = std::fs::File::open(path.parent().expect("temporary directory parent"))?;
-    let name = std::ffi::CString::new(
-        path.file_name()
-            .expect("temporary directory name")
-            .as_bytes(),
-    )?;
-    temporary_directories::unlock(parent.as_raw_fd(), &name)
 }
 
 #[cfg(unix)]

@@ -204,6 +204,15 @@ def _overlapping_failed_retirement(
 def test_readonly_temporary_directories_retire_without_following_symlinks(
     binary: Path,
 ) -> Transcript:
+    return _readonly_temporary_directories(binary, parent_mode=0o700)
+
+
+@requires(POSIX, UNPRIVILEGED)
+def test_search_only_temporary_parent_allows_retirement(binary: Path) -> Transcript:
+    return _readonly_temporary_directories(binary, parent_mode=0o300)
+
+
+def _readonly_temporary_directories(binary: Path, *, parent_mode: int) -> Transcript:
     # Direct built-in launches own private TMPDIR; the sandbox runner owns its
     # own storage. Retirement must remove private children, not linked libraries.
     with tempfile.TemporaryDirectory() as directory:
@@ -221,6 +230,7 @@ def test_readonly_temporary_directories_retire_without_following_symlinks(
             TMPDIR=str(owned),
         )
         environment.pop("R_HOME", None)
+        owned.chmod(parent_mode)
         try:
             with McpClient(binary, DIRECT.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
@@ -254,6 +264,7 @@ def test_readonly_temporary_directories_retire_without_following_symlinks(
                 assert (external / "retained.txt").read_text() == "external contents"
                 return transcript
         finally:
+            owned.chmod(0o700)
             external.chmod(0o700)
 
 
@@ -269,6 +280,18 @@ def test_vanished_temporary_child_does_not_confirm_root_retirement(
     binary: Path,
 ) -> Transcript:
     return _temporary_directory_race(binary, "vanished")
+
+
+@requires(POSIX, NATIVE_FIXTURES, UNPRIVILEGED)
+def test_readable_storage_retires_without_nofollow_chmod(binary: Path) -> Transcript:
+    # Inject libc's unsupported-operation result without requiring an older
+    # Linux kernel or an unmounted procfs on the test host.
+    return _temporary_directory_race(binary, "unavailable-chmodat")
+
+
+@requires(POSIX, NATIVE_FIXTURES, UNPRIVILEGED)
+def test_temporary_symlink_open_loop_allows_retirement(binary: Path) -> Transcript:
+    return _temporary_directory_race(binary, "nofollow-loop")
 
 
 def _temporary_directory_race(binary: Path, race: str) -> Transcript:
@@ -314,7 +337,12 @@ def _temporary_directory_race(binary: Path, race: str) -> Transcript:
                 assert temporary.is_relative_to(owned), temporary
                 restarted = client.send(control="restart")
                 assert not restarted.get("isError"), restarted
-                assert (root / "mutated").read_text() == race
+                if race == "unavailable-chmodat":
+                    assert not (root / "mutated").exists(), (
+                        "unsupported chmod was called"
+                    )
+                else:
+                    assert (root / "mutated").read_text() == race
                 assert external.stat().st_mode & 0o777 == 0o500
                 assert (external / "retained.txt").read_text() == "external contents"
                 assert not temporary.exists(), temporary

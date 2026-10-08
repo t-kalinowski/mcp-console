@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,18 +43,19 @@ static void receipt(void) {
     close(descriptor);
 }
 
-static void replace_with_symlink(int parent, const char *path) {
+static bool replace_with_symlink(int parent, const char *path, const char *kind) {
     const char *name = strrchr(path, '/');
-    if (strcmp(name == NULL ? path : name + 1, "raced") != 0 || !armed("symlink")) return;
+    if (strcmp(name == NULL ? path : name + 1, "raced") != 0 || !armed(kind)) return false;
     char saved[4096], external[4096];
     if (snprintf(saved, sizeof(saved), "%s-saved", path) >= (int)sizeof(saved) ||
         snprintf(external, sizeof(external), "%s/external-library", root) >= (int)sizeof(external)) _exit(125);
     if (renameat(parent, path, parent, saved) < 0 || symlinkat(external, parent, path) < 0) _exit(125);
     receipt();
+    return true;
 }
 
 static int race_chmod(const char *path, mode_t mode) {
-    replace_with_symlink(AT_FDCWD, path);
+    replace_with_symlink(AT_FDCWD, path, "symlink");
 #ifdef __APPLE__
     return chmod(path, mode);
 #else
@@ -62,11 +64,68 @@ static int race_chmod(const char *path, mode_t mode) {
 }
 
 static int race_fchmodat(int parent, const char *path, mode_t mode, int flags) {
-    replace_with_symlink(parent, path);
+    if ((flags & AT_SYMLINK_NOFOLLOW) && armed("unavailable-chmodat")) {
+        receipt();
+        errno = EOPNOTSUPP;
+        return -1;
+    }
+    replace_with_symlink(parent, path, "symlink");
 #ifdef __APPLE__
     return fchmodat(parent, path, mode, flags);
 #else
     return ((int (*)(int, const char *, mode_t, int))dlsym(RTLD_NEXT, "fchmodat"))(parent, path, mode, flags);
+#endif
+}
+
+static int race_openat(int parent, const char *path, int flags, ...) {
+    mode_t mode = 0;
+    bool creates = flags & O_CREAT;
+#ifdef O_TMPFILE
+    creates = creates || (flags & O_TMPFILE) == O_TMPFILE;
+#endif
+    if (creates) {
+        va_list arguments;
+        va_start(arguments, flags);
+        mode = (mode_t)va_arg(arguments, int);
+        va_end(arguments);
+    }
+    bool replaced = (flags & O_NOFOLLOW) && (flags & O_DIRECTORY) &&
+        replace_with_symlink(parent, path, "nofollow-loop");
+#ifdef __APPLE__
+    int descriptor = openat(parent, path, flags, mode);
+#else
+    int descriptor = ((int (*)(int, const char *, int, ...))dlsym(RTLD_NEXT, "openat"))(parent, path, flags, mode);
+#endif
+    if (replaced) {
+        // Observe a real no-follow refusal, then report the alternative errno
+        // produced by supported Unix implementations and older Linux kernels.
+        if (descriptor >= 0 || (errno != ENOTDIR && errno != ELOOP)) _exit(125);
+        errno = ELOOP;
+    }
+    return descriptor;
+}
+
+static int race_fchmod(int descriptor, mode_t mode) {
+    if (server && root != NULL && race != NULL && strcmp(race, "symlink") == 0) {
+        char marker[4096], path[4096];
+        if (snprintf(marker, sizeof(marker), "%s/worker-temporary", root) >= (int)sizeof(marker)) _exit(125);
+        FILE *file = fopen(marker, "r");
+        if (file != NULL) {
+            size_t length = fread(path, 1, sizeof(path) - sizeof("/raced"), file);
+            if (ferror(file) || !feof(file)) _exit(125);
+            fclose(file);
+            memcpy(path + length, "/raced", sizeof("/raced"));
+            struct stat actual, expected;
+            if (fstat(descriptor, &actual) == 0 && lstat(path, &expected) == 0 &&
+                actual.st_dev == expected.st_dev && actual.st_ino == expected.st_ino) {
+                replace_with_symlink(AT_FDCWD, path, "symlink");
+            }
+        }
+    }
+#ifdef __APPLE__
+    return fchmod(descriptor, mode);
+#else
+    return ((int (*)(int, mode_t))dlsym(RTLD_NEXT, "fchmod"))(descriptor, mode);
 #endif
 }
 
@@ -91,10 +150,27 @@ static struct dirent *race_readdir(DIR *directory) {
     };
 INTERPOSE(race_chmod, chmod)
 INTERPOSE(race_fchmodat, fchmodat)
+INTERPOSE(race_fchmod, fchmod)
+INTERPOSE(race_openat, openat)
 INTERPOSE(race_readdir, readdir)
 #else
 int chmod(const char *path, mode_t mode) { return race_chmod(path, mode); }
 int fchmodat(int parent, const char *path, mode_t mode, int flags) { return race_fchmodat(parent, path, mode, flags); }
+int fchmod(int descriptor, mode_t mode) { return race_fchmod(descriptor, mode); }
+int openat(int parent, const char *path, int flags, ...) {
+    mode_t mode = 0;
+    bool creates = flags & O_CREAT;
+#ifdef O_TMPFILE
+    creates = creates || (flags & O_TMPFILE) == O_TMPFILE;
+#endif
+    if (creates) {
+        va_list arguments;
+        va_start(arguments, flags);
+        mode = (mode_t)va_arg(arguments, int);
+        va_end(arguments);
+    }
+    return race_openat(parent, path, flags, mode);
+}
 struct dirent *readdir(DIR *directory) { return race_readdir(directory); }
 struct dirent64 *readdir64(DIR *directory) {
     struct dirent64 *entry = ((struct dirent64 *(*)(DIR *))dlsym(RTLD_NEXT, "readdir64"))(directory);
