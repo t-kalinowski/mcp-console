@@ -48,10 +48,20 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
         UV_NO_CONFIG="1",
         UV_PYTHON_PREFERENCE="only-managed",
     )
+    # The fixture owns its package sources, including cases that supply a config.
+    for name in (
+        "UV_INDEX",
+        "UV_DEFAULT_INDEX",
+        "UV_EXTRA_INDEX_URL",
+        "UV_FIND_LINKS",
+        "UV_NO_INDEX",
+        "UV_CONFIG_FILE",
+    ):
+        env.pop(name, None)
     return working, env
 
 
-@requires(POSIX, SANDBOX)
+@requires(POSIX, SANDBOX, command("uv"))
 def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
     # A home-relative fixture stays outside macOS's writable user temp directory.
     with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
@@ -95,7 +105,7 @@ def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
     return [{"worker_replaced_selected_wrapper": True, **EVIDENCE}]
 
 
-@requires(POSIX, SANDBOX)
+@requires(POSIX, SANDBOX, command("uv"))
 def test_worker_replaces_uv_configuration_and_wheel(binary: Path) -> Transcript:
     with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
         root = Path(directory).resolve()
@@ -160,7 +170,7 @@ def test_worker_replaces_uv_configuration_and_wheel(binary: Path) -> Transcript:
     return [{"worker_replaced_configuration_and_wheel": True, **EVIDENCE}]
 
 
-@requires(POSIX, SANDBOX)
+@requires(POSIX, SANDBOX, command("uv"))
 def test_worker_poisons_explicitly_writable_python_cache(binary: Path) -> Transcript:
     with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
         root = Path(directory).resolve()
@@ -218,7 +228,7 @@ def test_worker_poisons_explicitly_writable_python_cache(binary: Path) -> Transc
     ]
 
 
-@requires(POSIX, SANDBOX)
+@requires(POSIX, SANDBOX, command("uv"))
 def test_worker_supplies_package_build_backend(binary: Path) -> Transcript:
     with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
         root = Path(directory).resolve()
@@ -283,7 +293,7 @@ def test_worker_supplies_package_build_backend(binary: Path) -> Transcript:
     return [{"real_package_build_backend": True, **EVIDENCE}]
 
 
-@requires(POSIX, SANDBOX, R, command("ir"))
+@requires(POSIX, SANDBOX, R, command("ir"), command("uv"))
 def test_worker_replaces_selected_r_resolver(binary: Path) -> Transcript:
     with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
         root = Path(directory).resolve()

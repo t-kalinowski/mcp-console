@@ -21,6 +21,7 @@ def probe() -> None:
             assert error.errno in (errno.EPERM, errno.EACCES, errno.EROFS), error
         else:
             raise AssertionError(f"resolver wrote outside its grants: {destination}")
+    assert os.environ["CODEX_NETWORK_PROXY_ACTIVE"] == "1"
     try:
         urllib.request.urlopen("https://example.com", timeout=10)
     except urllib.error.URLError as error:
