@@ -258,6 +258,118 @@ def test_readonly_temporary_directories_retire_without_following_symlinks(
 
 
 @requires(POSIX, NATIVE_FIXTURES, UNPRIVILEGED)
+def test_temporary_directory_symlink_race_preserves_external_permissions(
+    binary: Path,
+) -> Transcript:
+    return _temporary_directory_race(binary, "symlink")
+
+
+@requires(POSIX, NATIVE_FIXTURES, UNPRIVILEGED)
+def test_vanished_temporary_child_does_not_confirm_root_retirement(
+    binary: Path,
+) -> Transcript:
+    return _temporary_directory_race(binary, "vanished")
+
+
+def _temporary_directory_race(binary: Path, race: str) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        owned = root / "owned"
+        owned.mkdir()
+        external = root / "external-library"
+        external.mkdir()
+        (external / "retained.txt").write_text("external contents")
+        external.chmod(0o500)
+        environment = dict(
+            os.environ,
+            PATH=str(root),
+            RETICULATE_PYTHON=sys.executable,
+            TMPDIR=str(owned),
+            MCP_CONSOLE_TEST_STORAGE_RACE_ROOT=str(root),
+            MCP_CONSOLE_TEST_STORAGE_RACE=race,
+        )
+        environment[LOADER_VARIABLE] = str(
+            build_interposer(root, "temporary_directory_race")
+        )
+        environment.pop("R_HOME", None)
+        try:
+            with McpClient(binary, DIRECT.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                # fmt: python
+                python = code("""
+                    import os
+                    from pathlib import Path
+
+                    temporary = Path(os.environ["TMPDIR"])
+                    Path("worker-temporary").write_text(str(temporary))
+                    (temporary / "raced").mkdir()
+                    (temporary / "raced").chmod(0o500)
+                    (temporary / "vanishing").mkdir()
+                    (temporary / "retained.txt").write_text("private contents")
+                    Path("armed").touch()
+                    print("storage race armed")
+                    """)
+                client.expect("storage race armed\n", python=python)
+                temporary = Path((root / "worker-temporary").read_text())
+                assert temporary.is_relative_to(owned), temporary
+                restarted = client.send(control="restart")
+                assert not restarted.get("isError"), restarted
+                assert (root / "mutated").read_text() == race
+                assert external.stat().st_mode & 0o777 == 0o500
+                assert (external / "retained.txt").read_text() == "external contents"
+                assert not temporary.exists(), temporary
+                client.expect("replacement ran\n", python="print('replacement ran')")
+                return client.finish()
+        finally:
+            external.chmod(0o700)
+
+
+@requires(POSIX, UNPRIVILEGED)
+def test_deep_readonly_temporary_tree_retires(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        owned = root / "owned"
+        owned.mkdir()
+        environment = dict(
+            os.environ,
+            PATH=str(root),
+            RETICULATE_PYTHON=sys.executable,
+            TMPDIR=str(owned),
+        )
+        environment.pop("R_HOME", None)
+        with McpClient(binary, DIRECT.serve(), environment, root) as client:
+            client.initialize_and_list_tools()
+            # fmt: python
+            python = code("""
+                import os
+                from pathlib import Path
+
+                temporary = Path(os.environ["TMPDIR"])
+                Path("worker-temporary").write_text(str(temporary))
+                parent = os.open(temporary, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    for _ in range(os.pathconf(temporary, "PC_PATH_MAX") // 64 + 1):
+                        name = "d" * 63
+                        os.mkdir(name, dir_fd=parent)
+                        child = os.open(name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=parent)
+                        os.close(parent)
+                        parent = child
+                    os.fchmod(parent, 0o500)
+                finally:
+                    os.close(parent)
+                print("deep readonly storage created")
+                """)
+            client.expect("deep readonly storage created\n", python=python)
+            temporary = Path((root / "worker-temporary").read_text())
+            assert temporary.is_relative_to(owned), temporary
+            restarted = client.send(control="restart")
+            assert not restarted.get("isError"), restarted
+            assert not temporary.exists(), temporary
+            client.expect("replacement ran\n", python="print('replacement ran')")
+            return client.finish()
+
+
+@requires(POSIX, NATIVE_FIXTURES, UNPRIVILEGED)
 def test_failed_storage_retirement_blocks_replacement(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)

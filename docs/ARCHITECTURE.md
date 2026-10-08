@@ -179,7 +179,9 @@ Launcher reaping and successful I/O settlement also supersede that barrier when 
 Process and worker consumers read separate cleanup and I/O views of that retained result, avoiding duplicate diagnostics within one shutdown response.
 Restart and EOF check the retiring launch's retained I/O result even when an initial launch failed before readiness, a failed evaluation has already stopped the logical worker or physical cleanup fails.
 Failed-worker replacement also requires launcher reaping and confirmed retirement of its owned temporary storage.
-On Unix, retiring direct-worker temporary storage restores owner access to its private directories without following symlinks; linked project libraries retain their permissions.
+On Unix, retiring direct-worker temporary storage restores owner access to its private directories through directory-relative, no-follow operations; linked project libraries retain their permissions even if a child is replaced by a symlink during traversal.
+Traversal retains directory descriptors so deep trees do not require full child paths.
+A vanished child does not confirm root retirement; cleanup must remove the owned root or confirm that the root itself is absent.
 Available output is drained even when cleanup fails.
 The existing worker, relay, launcher and force-stop allowances are captured once.
 Relay drain eligibility uses when the local dispatcher processes ShutdownStarted.

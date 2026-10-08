@@ -333,7 +333,13 @@ impl TemporaryDirectory {
         };
         match remove() {
             Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && matches!(std::fs::symlink_metadata(&path), Err(root_error)
+                        if root_error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Ok(())
+            }
             Err(error) => Err(format!(
                 "cannot remove worker temporary directory {}: {error}",
                 path.display()
@@ -344,23 +350,20 @@ impl TemporaryDirectory {
 
 #[cfg(unix)]
 fn unlock_temporary_directories(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let metadata = std::fs::symlink_metadata(path)?;
-    if !metadata.is_dir() {
-        return Ok(());
-    }
-    std::fs::set_permissions(
-        path,
-        std::fs::Permissions::from_mode(metadata.permissions().mode() | 0o700),
+    use std::os::fd::AsRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    let parent = std::fs::File::open(path.parent().expect("temporary directory parent"))?;
+    let name = std::ffi::CString::new(
+        path.file_name()
+            .expect("temporary directory name")
+            .as_bytes(),
     )?;
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            unlock_temporary_directories(&entry.path())?;
-        }
-    }
-    Ok(())
+    temporary_directories::unlock(parent.as_raw_fd(), &name)
 }
+
+#[cfg(unix)]
+mod temporary_directories;
 
 impl Drop for TemporaryDirectory {
     fn drop(&mut self) {
