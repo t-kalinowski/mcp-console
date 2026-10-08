@@ -23,11 +23,11 @@ A plain restart reuses accepted requirements, including successful automatic add
 
 The default optional declarations are:
 
-| Environment | Defaults                                                                               |
-| ----------- | -------------------------------------------------------------------------------------- |
-| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
-| Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                   |
-| DuckDB      | `icu`, `json`, `sqlite` with or without R                                              |
+| Environment | Defaults                                                                                                  |
+| ----------- | --------------------------------------------------------------------------------------------------------- |
+| R           | `tidyverse`, `dplyr`, `dbplyr`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
+| Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                                      |
+| DuckDB      | `icu`, `json`, `sqlite` with or without R                                                                 |
 
 Managed DuckDB defaults provide JSON extraction, named-timezone operations, and SQLite attachment with either native provider.
 Preparation skips extensions identified as built-in by the selected engine, including their catalog aliases, and installs the others in the shared extension cache.

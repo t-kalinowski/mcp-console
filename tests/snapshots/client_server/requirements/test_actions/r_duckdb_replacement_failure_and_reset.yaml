@@ -14,6 +14,8 @@ result:
             "r": [
               "DBI",
               "arrow",
+              "dbplyr",
+              "dplyr",
               "duckdb",
               "ggplot2",
               "nanoarrow",
@@ -56,6 +58,8 @@ result:
       r:
         - DBI
         - arrow
+        - dbplyr
+        - dplyr
         - duckdb
         - ggplot2
         - nanoarrow
@@ -633,6 +637,8 @@ result:
             "r": [
               "DBI",
               "arrow",
+              "dbplyr",
+              "dplyr",
               "duckdb",
               "ggplot2",
               "nanoarrow",
@@ -675,6 +681,8 @@ result:
       r:
         - DBI
         - arrow
+        - dbplyr
+        - dplyr
         - duckdb
         - ggplot2
         - nanoarrow

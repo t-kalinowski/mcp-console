@@ -113,6 +113,8 @@ def test_empty_declaration_and_round_trip(
     assert startup["requirements"]["r"] == sorted(
         [
             "tidyverse",
+            "dplyr",
+            "dbplyr",
             "reticulate",
             "DBI",
             "duckdb",
