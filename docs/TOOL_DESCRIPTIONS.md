@@ -23,7 +23,7 @@ Tool-level SQL guidance describes file queries directly; runtime diagnostics ide
 Requirement keys remain available even when their language is hidden; their descriptions then explain host-provider preparation without advertising a direct code field.
 Visibility selects direct code fields and applicable examples, not SQL ownership: managed DuckDB still uses R when available and Python otherwise.
 Show bridge examples only when both source languages are visible.
-When Python and SQL are visible but R is hidden, describe user-owned DB-API selection and qualify managed `sql_connection()` and frame registration: those helpers require Python-owned DuckDB.
+When Python and SQL are visible but R is hidden, describe user-owned DB-API selection and `_console.sql_connection()` as the active native getter, which errors for an R-owned connection; frame registration requires Python-owned DuckDB.
 
 Advertising an unavailable language lets an agent identify the missing prerequisite and ask for installation authorization, at the cost of a rejected call before discovery is known.
 It neither proves availability nor authorizes installation.

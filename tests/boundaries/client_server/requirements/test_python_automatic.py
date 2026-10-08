@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.requirements import POSIX, SQL, requires
+from support.requirements import POSIX, R, SQL, requires
 from support.assertions import last_result_text
 from support.previews import (
     assert_preview,
@@ -33,7 +33,7 @@ from support.suites import run_this_suite
 PENDING_TEXT_BUDGET = 8 * 1024 * 1024
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_resolves_missing_python_import_without_replaying_cell(
     binary: Path,
@@ -446,7 +446,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
                     return Cursor()
 
 
-            console_sql_connection(Connection())
+            _console.sql_connection(Connection())
             """)
         client.expect(python=python)
 
@@ -478,7 +478,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
                 return restore_hook
 
 
-            console_sql_connection(None)
+            _console.sql_connection(None)
             sys.settrace(restore_hook)
             """)
         client.expect(python=python)

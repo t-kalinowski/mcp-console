@@ -18,6 +18,10 @@ from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
 from support.records import McpTranscript, Transcript, TranscriptWithCompanions
 from support.requirements import POSIX, R, SQL, requires
+from support.resolvers import expose_uv
+from boundaries.client_server.python.test_without_r import (
+    environment as without_r_environment,
+)
 
 
 def _configure(root: Path, languages: list[str]) -> Path:
@@ -33,9 +37,9 @@ def _environment(root: Path, *, without_r: bool = False) -> dict[str, str]:
     if without_r:
         bin_dir = root / "bin"
         bin_dir.mkdir()
-        (bin_dir / "uv").symlink_to(shutil.which("uv"))
+        expose_uv(bin_dir)
         retain_system_bwrap(bin_dir)
-        env["PATH"] = str(bin_dir)
+        env.update(without_r_environment(bin_dir))
         for name in (
             "R_HOME",
             "R_LIBS",
@@ -54,7 +58,10 @@ def _tool(client: McpClient) -> dict:
 
 
 @requires(SQL)
-def test_configures_captured_tool_surface(binary: Path) -> TranscriptWithCompanions:
+@executions(DIRECT)
+def test_configures_captured_tool_surface(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
     transcripts = {}
     for languages in (
         ["sql"],
@@ -110,8 +117,10 @@ def test_configures_captured_tool_surface(binary: Path) -> TranscriptWithCompani
 
 
 @requires(SQL)
+@executions(DIRECT)
 def test_builtin_guidance_matches_visible_languages(
     binary: Path,
+    execution: Execution,
 ) -> TranscriptWithCompanions:
     transcripts = {}
     for languages in (["sql"], ["sql", "python"], ["r", "sql"]):
@@ -143,9 +152,7 @@ def test_builtin_guidance_matches_visible_languages(
                     assert "from an R cell" not in sql_guidance
                 if "python" in languages:
                     python_guidance = properties["python"]["description"]
-                    assert "requires Python-owned DuckDB" in " ".join(
-                        python_guidance.split()
-                    )
+                    assert "on Python-owned DuckDB" in " ".join(python_guidance.split())
                     assert "`r.name`" not in python_guidance
                     assert "R plot rules" not in properties["python"]["description"]
                 else:
@@ -192,7 +199,7 @@ def test_sql_provider_guidance_is_independent_of_visibility(
                         assert tool == advertised
                     if "python" in languages:
                         assert (
-                            "requires Python-owned DuckDB"
+                            "on Python-owned DuckDB"
                             in tool["inputSchema"]["properties"]["python"][
                                 "description"
                             ]
@@ -208,7 +215,7 @@ def test_sql_provider_guidance_is_independent_of_visibility(
                         assert "Error" not in last_tool_text(client)
                         if without_r:
                             client.send(
-                                python='_ = sql_connection().register("visible_frame", frame)'
+                                python='_ = _console.sql_connection().register("visible_frame", frame)'
                             )
                         else:
                             client.send(python="r.visible_frame = frame")

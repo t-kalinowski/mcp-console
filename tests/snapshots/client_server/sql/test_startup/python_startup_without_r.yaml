@@ -17,7 +17,7 @@ config:
 
       native = sqlite3.connect(":memory:")
       _ = native.execute("CREATE TABLE selected AS SELECT 42 AS answer")
-      console_sql_connection(native)
+      _console.sql_connection(native)
   python: <configured Python>
 ---
 !same-as MCP initialization for this execution mode
@@ -35,8 +35,9 @@ result:
 ---
 send:
   python: >-
-    assert_startup_transport_consumed(); assert sql_connection() is native;
-    assert native.execute('SELECT answer FROM selected').fetchone() == (42,)
+    assert_startup_transport_consumed(); assert _console.sql_connection() is
+    native; assert native.execute('SELECT answer FROM selected').fetchone()
+    == (42,)
 result:
   content:
     - type: text

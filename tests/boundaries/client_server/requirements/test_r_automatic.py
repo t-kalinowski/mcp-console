@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.progress import without_elapsed
-from support.requirements import POSIX, PROCESS_EVENTS, SQL, command, requires
+from support.requirements import POSIX, PROCESS_EVENTS, R, SQL, command, requires
 from support.assertions import (
     entry_result_text,
     last_result_text,
@@ -159,7 +159,7 @@ def send_and_compare_r_error(
     }
 
 
-@requires(POSIX, SQL)
+@requires(R, POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_resolves_missing_r_packages_during_evaluation(
@@ -209,7 +209,7 @@ def test_resolves_missing_r_packages_during_evaluation(
         return client.finish()
 
 
-@requires(POSIX, SQL)
+@requires(R, POSIX, SQL)
 @executions(RUNTIME)
 @requires(command("ir"))
 def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
@@ -241,7 +241,7 @@ def test_does_not_resolve_missing_r_packages_from_sql_callbacks(
 
             connection = sqlite3.connect(":memory:")
             connection.create_function("sql_requires_package", 0, r.sql_requires_package)
-            console_sql_connection(connection)
+            _console.sql_connection(connection)
             """)
         client.expect(python=python)
         baseline = len(ir_run_records(record))

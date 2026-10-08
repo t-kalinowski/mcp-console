@@ -74,15 +74,16 @@ result:
               `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; managed
               sessions prepare missing packages on first use. Avoid availability
               probes or `install.packages()`. Access Python globals through `py$name`.
-              `sql_connection()` returns the R-owned SQL connection for DBI/dplyr.
-              Select a user-owned DBI connection for SQL cells with
-              `console_sql_connection(connection)`; restore managed DuckDB with
-              `console_sql_connection(NULL)`. Never disconnect the managed connection;
-              restore it before disconnecting a selection. Default-device plots return
-              as PNGs and finalize at cell end, including after errors; draw each plot
-              in one cell. Explicit devices are not captured. Set persistent
-              dimensions in inches and DPI with `options(console.plot.width_in = ...,
-              console.plot.height_in = ..., console.plot.dpi = ...)`.
+              `.console$sql_connection()` returns the active native DBI connection for
+              DBI/dplyr, or errors if another runtime owns SQL. Select a user-owned
+              DBI connection for SQL cells with `.console$sql_connection(connection)`;
+              restore managed DuckDB with `.console$sql_connection(NULL)`. Never
+              disconnect the managed connection; restore it before disconnecting a
+              selection. Default-device plots return as PNGs and finalize at cell end,
+              including after errors; draw each plot in one cell. Explicit devices are
+              not captured. Set persistent dimensions in inches and DPI with
+              `options(console.plot.width_in = ..., console.plot.height_in = ...,
+              console.plot.dpi = ...)`.
             type:
               - string
               - "null"
@@ -94,14 +95,17 @@ result:
               distributions on first import. Use `requirements.python` when import and
               distribution names differ or to prepare before execution. Access R
               globals and call functions through `r.name`. Select a user-owned DB-API
-              connection for SQL cells with `console_sql_connection(connection)`;
-              restore managed DuckDB with `console_sql_connection(None)`. For R-owned
-              DuckDB, bind Python frames to an R name through `r` before querying. For
-              Python-owned DuckDB, `sql_connection()` returns the connection; register
-              frames with `sql_connection().register(name, frame)` (globals are not
-              scanned). At cell end, even after errors, open `matplotlib.pyplot`
-              figures return once as PNGs and close; `show()` is optional. Closing a
-              figure suppresses capture. R plots through `r` follow the R plot rules.
+              connection for SQL cells with `_console.sql_connection(connection)`;
+              restore managed DuckDB with `_console.sql_connection(None)`. For R-owned
+              DuckDB, bind Python frames to an R name through `r` before querying.
+              `_console.sql_connection()` returns the active native Python connection,
+              or errors if SQL uses R; on Python-owned DuckDB, register frames with
+              `_console.sql_connection().register(name, frame)` (globals are not
+              scanned). `matplotlib.pyplot.show()` returns open figures as PNGs
+              immediately and closes them. At cell end, even after errors, remaining
+              open figures return as PNGs and close; `show()` is optional. Closing an
+              unshown figure suppresses capture. R plots through `r` follow the R plot
+              rules.
             type:
               - string
               - "null"

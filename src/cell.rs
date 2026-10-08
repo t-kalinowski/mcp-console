@@ -59,7 +59,7 @@ impl Languages {
             match language {
                 "r" => languages.r = true,
                 "python" => languages.python = true,
-                "sql" if !cfg!(windows) => languages.sql = true,
+                "sql" => languages.sql = true,
                 _ => return Err(Self::invalid_configuration()),
             }
         }
@@ -70,7 +70,7 @@ impl Languages {
         Self {
             r: true,
             python: true,
-            sql: !cfg!(windows),
+            sql: true,
         }
     }
 
@@ -100,11 +100,6 @@ impl Languages {
     }
 
     fn invalid_configuration() -> String {
-        let available = if cfg!(windows) {
-            "`r` and `python`"
-        } else {
-            "`r`, `python`, and `sql`"
-        };
-        format!("`{LANGUAGES_ENV}` must be a comma-separated subset of {available}")
+        format!("`{LANGUAGES_ENV}` must be a comma-separated subset of `r`, `python`, and `sql`")
     }
 }

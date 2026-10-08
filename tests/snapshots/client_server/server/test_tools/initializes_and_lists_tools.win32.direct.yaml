@@ -24,13 +24,23 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent R and Python workbench for local execution on Windows. SQL is
-        not yet supported. Send one complete `r` or `python` cell per call.
-        Inspect its output and reuse persistent objects. Results display
-        automatically; supported plots return as images. For a reusable R
-        script, include imports, data inputs, and `#| packages:`/`#| r-version:`
-        metadata for `ir run script.R`, which starts without live Console
-        objects.
+        Persistent R, Python, and SQL workbench for local execution on Windows.
+        Send one complete `r`, `python`, or `sql` cell per call. Inspect its
+        output and reuse persistent objects. Results display automatically;
+        supported plots return as images.
+
+
+        For databases and structured files, consider DuckDB SQL first for
+        inspection, joins, and aggregation. Use R for vectorized data and string
+        operations, statistics, and plots. For a reusable R script, include
+        imports, data inputs, and `#| packages:`/`#| r-version:` metadata for
+        `ir run script.R`, which starts without live Console objects. Use Python
+        when its libraries or format-specific parsing simplify the task. Switch
+        languages when useful.
+
+
+        DuckDB can query CSV, Parquet, JSON, and JSONL directly, including
+        nested JSON.
 
 
         Run one cell at a time. Wait for its `send` to return before another
@@ -61,9 +71,14 @@ result:
               `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; managed
               sessions prepare missing packages on first use. Avoid availability
               probes or `install.packages()`. Access Python globals through `py$name`.
-              Default-device plots return as PNGs and finalize at cell end, including
-              after errors; draw each plot in one cell. Explicit devices are not
-              captured. Set persistent dimensions in inches and DPI with
+              `.console$sql_connection()` returns the active native DBI connection for
+              DBI/dplyr, or errors if another runtime owns SQL. Select a user-owned
+              DBI connection for SQL cells with `.console$sql_connection(connection)`;
+              restore managed DuckDB with `.console$sql_connection(NULL)`. Never
+              disconnect the managed connection; restore it before disconnecting a
+              selection. Default-device plots return as PNGs and finalize at cell end,
+              including after errors; draw each plot in one cell. Explicit devices are
+              not captured. Set persistent dimensions in inches and DPI with
               `options(console.plot.width_in = ..., console.plot.height_in = ...,
               console.plot.dpi = ...)`.
             type:
@@ -76,10 +91,34 @@ result:
               Import packages normally; managed sessions prepare missing PyPI
               distributions on first import. Use `requirements.python` when import and
               distribution names differ or to prepare before execution. Access R
-              globals and call functions through `r.name`. At cell end, even after
-              errors, open `matplotlib.pyplot` figures return once as PNGs and close;
-              `show()` is optional. Closing a figure suppresses capture. R plots
-              through `r` follow the R plot rules.
+              globals and call functions through `r.name`. Select a user-owned DB-API
+              connection for SQL cells with `_console.sql_connection(connection)`;
+              restore managed DuckDB with `_console.sql_connection(None)`. For R-owned
+              DuckDB, bind Python frames to an R name through `r` before querying.
+              `_console.sql_connection()` returns the active native Python connection,
+              or errors if SQL uses R; on Python-owned DuckDB, register frames with
+              `_console.sql_connection().register(name, frame)` (globals are not
+              scanned). `matplotlib.pyplot.show()` returns open figures as PNGs
+              immediately and closes them. At cell end, even after errors, remaining
+              open figures return as PNGs and close; `show()` is optional. Closing an
+              unshown figure suppresses capture. R plots through `r` follow the R plot
+              rules.
+            type:
+              - string
+              - "null"
+          sql:
+            description: >-
+              Evaluate one complete SQL cell through the active connection. Managed
+              DuckDB keeps a persistent catalog. Results are bounded table previews
+              that abbreviate long text cells; query focused subsets or aggregates.
+              The selected driver supplies its own SQL dialect and types. With R-owned
+              managed DuckDB, query R data frames by name; DuckDB tables/views take
+              precedence. Use DBI from an R cell for commands requiring the statement
+              interface. Managed conveniences/extensions apply only to DuckDB. Read
+              SQLite with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. With a
+              sandbox, attach existing DuckDB databases outside writable paths using
+              `ATTACH 'path' AS name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`,
+              `SUMMARIZE`, or `EXPLAIN`; CLI dot commands are not supported.
             type:
               - string
               - "null"

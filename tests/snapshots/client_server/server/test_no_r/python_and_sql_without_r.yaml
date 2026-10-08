@@ -34,9 +34,14 @@ send:
     import pandas as pd
 
     registered = pd.DataFrame({"value": np.array([20, 22])})
-    sql_connection().register("registered", registered)
-    assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")
-    assert sql_connection().execute("SELECT answer FROM answers").fetchone() == (42,)
+    _console.sql_connection().register("registered", registered)
+    if os.name == "nt":
+        assert ctypes.windll.kernel32.GetModuleHandleW("R.dll") == 0
+    else:
+        assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")
+    assert _console.sql_connection().execute("SELECT answer FROM answers").fetchone() == (
+        42,
+    )
     answer + 1
 result:
   content:
@@ -60,7 +65,7 @@ send:
   python: |
     import sqlite3
 
-    console_sql_connection(sqlite3.connect(":memory:"))
+    _console.sql_connection(sqlite3.connect(":memory:"))
 result:
   content:
     - type: text
@@ -79,7 +84,7 @@ result:
   isError: false
 ---
 send:
-  python: console_sql_connection(None)
+  python: _console.sql_connection(None)
 result:
   content:
     - type: text

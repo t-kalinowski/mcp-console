@@ -194,23 +194,37 @@ Defaults prepare SQLite for read-only attachment; use `READ_ONLY` when opening d
 With R-owned DuckDB, unqualified relation names can refer to R global data frames; a table/view with that name takes precedence.
 A view sees later rebinding of the R name.
 Python frames must be assigned to an R global first.
-With Python-owned DuckDB, register frames explicitly with `sql_connection().register("name", frame)`; Python and R globals are not scanned or copied into the Python catalog.
+With Python-owned DuckDB, register frames explicitly with `_console.sql_connection().register("name", frame)`; Python and R globals are not scanned or copied into the Python catalog.
+
+Use `.console$sql_connection(connection)` in R or `_console.sql_connection(connection)` in Python to get, select, or reset the active connection:
+
+| Argument                | Operation                                                                                        |
+| ----------------------- | ------------------------------------------------------------------------------------------------ |
+| Omitted                 | Return the exact active native connection.                                                       |
+| DBI / DB-API connection | Select that user-owned object for later SQL cells; return invisible NULL in R or None in Python. |
+| NULL / None             | Reset to the session's managed default; return invisible NULL / None.                            |
+
+The getter never changes providers.
+If the active native connection belongs to the other runtime, it reports an error naming that runtime's helper.
+Use the existing reticulate bridge for native object access when supported; Console does not create interchangeable connection wrappers.
 
 Select another backend without moving its connection between languages:
 
 ```r
 connection <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
-console_sql_connection(connection)
+.console$sql_connection(connection)
+stopifnot(identical(.console$sql_connection(), connection))
 # Restore managed DuckDB before disconnecting connection:
-console_sql_connection(NULL)
+.console$sql_connection(NULL)
 ```
 
 ```python
 import sqlite3
 
 connection = sqlite3.connect(":memory:")
-console_sql_connection(connection)
-console_sql_connection(None)  # Restore the existing managed catalog.
+_console.sql_connection(connection)
+assert _console.sql_connection() is connection
+_console.sql_connection(None)  # Restore the existing managed catalog.
 ```
 
 The latest selection controls SQL cells.
@@ -219,9 +233,18 @@ SQL on a selected R connection can continue while Python setup is incomplete wit
 Interrupting selection replay leaves Python setup incomplete; a later Python cell retries setup while preserving the R connection, its transaction, and live worker state.
 User connections remain user-owned; restoring managed DuckDB does not close them.
 Never disconnect Console's managed connection.
-R `sql_connection()` returns its selected R-owned connection even while SQL cells use a Python selection.
-Without R, Python `sql_connection()` returns its active Python connection.
-Reset from either language restores the automatic managed provider and the same managed catalog without closing user connections or changing their transactions.
+Reset restores the same managed connection and catalog within the current worker generation.
+The managed default is currently built-in in-memory DuckDB, owned by R when available and Python otherwise, regardless of initialization order.
+A user selection does not replace that default.
+Restart clears selection and catalog state and reinstalls the helper namespaces; connection objects do not survive worker replacement.
+
+R rejects non-DBI and already-invalid connections before changing selection.
+Python requires a callable `cursor()` method; DB-API has no portable validity check, so closed connections retain their driver's errors on use.
+Closing a selected connection leaves it selected until reset or reselection, without retrying another provider.
+
+This API replaces the previous top-level getter and selector in one migration; no compatibility aliases are installed.
+The small `.console` R environment and `_console` Python namespace remain available after clearing user globals.
+
 Reset does not replay captured startup; failed startup keeps SQL withheld until explicit restart.
 R previews of user DBI connections use a private in-memory rendering catalog, opened only when a preview needs it.
 
@@ -259,8 +282,13 @@ options(
 Explicit user devices are not closed or captured by Console.
 R plots invoked through Python follow these same rules.
 
-At Python cell end, including after an exception, all open pyplot figures are returned in figure-number order and closed.
-`show()` is optional; `savefig()` does not suppress capture, but closing a figure does.
+Python's `plt.show()` immediately returns all open pyplot figures as PNGs in figure-number order and closes them.
+The images remain available after an explicit `plt.close()` or a later exception.
+The `block` argument is accepted without waiting for a GUI.
+`plt.pause()` captures each frame while keeping figures open for its canvas event loop and subsequent updates.
+An interrupt during explicit display stops the cell; automatic cell-end capture remains best effort.
+At cell end, including after an exception, remaining open figures are captured and closed the same way; `show()` is optional.
+`savefig()` does not suppress capture, but closing an unshown figure does.
 Figures outside pyplot are not captured.
 An inherited `MPLBACKEND` is respected; otherwise Console uses `Agg`.
 Host configuration/font caches may be read while new cache writes are redirected to private worker storage.
@@ -327,7 +355,7 @@ Recordings are not checkpoints and cannot recover data a language printer never 
 Partial R initialization or unsafe bridge/startup failure can require restart even when ordinary Python remains usable.
 
 macOS and Linux are supported.
-Windows x64 supports experimental [local R and Python](WINDOWS.md), including managed dependency resolution; SQL is deferred.
+Windows x64 supports experimental [local R, Python, and SQL](WINDOWS.md), including managed dependency resolution.
 Native enforcement and descendant retirement have explicit [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
 `--no-sandbox` removes native enforcement and descendant cleanup.
 Preparation remains a separate [trusted host operation](REQUIREMENTS.md#host-resolution-and-trust).

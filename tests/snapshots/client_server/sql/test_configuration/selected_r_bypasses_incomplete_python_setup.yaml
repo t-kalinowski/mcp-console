@@ -15,7 +15,7 @@ send:
     native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
     invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
     DBI::dbBegin(native)
-    console_sql_connection(native)
+    .console$sql_connection(native)
 result:
   content:
     - type: text
@@ -40,8 +40,8 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 919, in _mcp_console_configure_module_defaults
-          File "<string>", line 877, in apply
+          File "<string>", line 949, in _mcp_console_configure_module_defaults
+          File "<string>", line 907, in apply
           File "<SQL setup checkpoint>", line 16, in configuration_checkpoint
           File "<string>", line 50, in _console_input
         KeyboardInterrupt
@@ -61,7 +61,10 @@ result:
 ---
 send:
   r: |
-    stopifnot(Sys.getpid() == retained_pid, identical(sql_connection(), native))
+    stopifnot(
+      Sys.getpid() == retained_pid,
+      identical(.console$sql_connection(), native)
+    )
     DBI::dbRollback(native)
     stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
 result:

@@ -4,7 +4,7 @@ config:
     language: python
     code: |-
       startup_count = 1
-      _ = sql_connection()
+      _ = _console.sql_connection()
 ---
 !same-as MCP initialization for this execution mode
 ---
@@ -15,8 +15,8 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 382, in initialize_connection
-        RuntimeError: startup must select a native connection with console_sql_connection(connection)
+          File "<string>", line 387, in initialize_connection
+        RuntimeError: startup must select a native connection with _console.sql_connection(connection)
         Error: configured startup did not complete; SQL withheld; explicit restart required
         Error: SQL unavailable: configured startup did not complete; explicit restart required
   isError: false
@@ -24,7 +24,7 @@ result:
 send:
   python: |
     assert startup_count == 1
-    assert sql_connection().execute(
+    assert _console.sql_connection().execute(
         "SELECT count(*) FROM information_schema.tables WHERE table_name = 'never_run'"
     ).fetchone() == (0,)
 result:

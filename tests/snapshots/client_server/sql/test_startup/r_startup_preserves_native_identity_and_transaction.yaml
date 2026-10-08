@@ -21,7 +21,7 @@ config:
       invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
       DBI::dbBegin(native)
       invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
-      console_sql_connection(native)
+      .console$sql_connection(native)
 ---
 !same-as MCP initialization for this execution mode
 ---
@@ -40,7 +40,7 @@ result:
 send:
   r: |
     assert_startup_transport_consumed()
-    stopifnot(startup_count == 1L, identical(sql_connection(), native))
+    stopifnot(startup_count == 1L, identical(.console$sql_connection(), native))
     DBI::dbRollback(native)
     stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
 result:
@@ -75,7 +75,7 @@ result:
 send:
   r: >-
     assert_startup_transport_consumed(); stopifnot(startup_count == 1L,
-    identical(sql_connection(), native))
+    identical(.console$sql_connection(), native))
 result:
   content:
     - type: text

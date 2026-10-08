@@ -3,7 +3,7 @@
 The shared runtime coordinator supports independent R and Python startup on [Windows](WINDOWS.md) for local sandboxed or unsandboxed sessions, including managed dependency resolution through the shared `resolve` subcommand with `ir` and `uv` materializing environments on the host.
 Windows uses native pipe/event/process primitives, and resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code; cancellation and normal completion require confirmed empty Jobs.
 These Jobs own trusted host preparation and inspection processes, not evaluated user code, and are not sandboxes.
-Windows SQL is deferred.
+Windows SQL uses the shared R DBI and Python DB-API providers and managed DuckDB defaults.
 
 Console separates session management from code execution.
 The server owns what survives a worker; the worker owns live language state.

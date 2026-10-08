@@ -7,11 +7,11 @@ config:
       native <- DBI::dbConnect(duckdb::duckdb())
       invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
       DBI::dbBegin(native)
-      console_sql_connection(native)
+      .console$sql_connection(native)
       invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
 
-      reticulate::py_run_string("console_sql_connection(None)")
-      console_sql_connection(native)
+      reticulate::py_run_string("_console.sql_connection(None)")
+      .console$sql_connection(native)
 ---
 !same-as MCP initialization for this execution mode
 ---
@@ -41,8 +41,8 @@ send:
   r: |
     DBI::dbRollback(native)
     stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
-    console_sql_connection(native)
-    stopifnot(identical(sql_connection(), native))
+    .console$sql_connection(native)
+    stopifnot(identical(.console$sql_connection(), native))
 result:
   content:
     - type: text

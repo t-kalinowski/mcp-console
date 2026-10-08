@@ -24,7 +24,7 @@ send:
 
     sqlite = sqlite3.connect(":memory:")
     connection = CursorOnlyConnection(sqlite)
-    console_sql_connection(connection)
+    _console.sql_connection(connection)
     del sqlite
     del connection
 result:
@@ -36,7 +36,7 @@ result:
 send:
   python: |
     try:
-        console_sql_connection(object())
+        _console.sql_connection(object())
     except TypeError as error:
         print(error)
 result:
@@ -214,7 +214,7 @@ send:
             return ControlCursor()
 
 
-    console_sql_connection(ControlConnection())
+    _console.sql_connection(ControlConnection())
 result:
   content:
     - type: text
@@ -234,7 +234,7 @@ result:
   isError: false
 ---
 send:
-  r: console_sql_connection(NULL); invisible()
+  r: .console$sql_connection(NULL); invisible()
 result:
   content:
     - type: text
@@ -254,7 +254,7 @@ result:
   isError: false
 ---
 send:
-  python: console_sql_connection(sqlite3.connect(':memory:'))
+  python: _console.sql_connection(sqlite3.connect(':memory:'))
 result:
   content:
     - type: text
@@ -273,7 +273,7 @@ result:
   isError: false
 ---
 send:
-  python: console_sql_connection(None)
+  python: _console.sql_connection(None)
 result:
   content:
     - type: text

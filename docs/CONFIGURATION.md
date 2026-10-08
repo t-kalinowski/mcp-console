@@ -70,7 +70,7 @@ languages: [sql]
 mcp-console serve -c 'languages=[sql,python]'
 ```
 
-The list accepts a nonempty subset of `r`, `python`, and `sql`; SQL is not yet supported on Windows.
+The list accepts a nonempty subset of `r`, `python`, and `sql` on every supported host.
 An override replaces the entire list.
 Omitting `languages` preserves the standard full interface and the internal `MCP_CONSOLE_LANGUAGES` filter.
 An explicit list determines the public interface independently of that internal runtime setting.
@@ -165,7 +165,7 @@ startup:
   code: |
     import sqlite3
     connection = sqlite3.connect("analysis.sqlite")
-    console_sql_connection(connection)
+    _console.sql_connection(connection)
 ```
 
 For R, set `language: r` and construct a normal DBI connection:
@@ -175,7 +175,7 @@ startup:
   language: r
   code: |
     connection <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
-    console_sql_connection(connection)
+    .console$sql_connection(connection)
 ```
 
 Use normal driver arguments for database paths, read-only access, threads, memory, and other engine settings.
@@ -193,7 +193,7 @@ Sandboxed launch grants access only to this private transport directory, which i
 Output explicitly emitted by the program and runtime errors remain visible.
 Python figures are finalized and published before startup completes, including when the program fails; the first cell response or idle poll can collect them without running a Python cell.
 
-The program must finish by leaving a usable connection selected through the existing `console_sql_connection(connection)` helper.
+The program must finish by leaving a usable connection selected through `.console$sql_connection(connection)` in R or `_console.sql_connection(connection)` in Python.
 It must be a user-created native connection; selecting or retrieving Console's managed default does not satisfy startup.
 The final selection must remain on the startup interpreter; a reset or provider switch from the other interpreter does not satisfy startup.
 It runs once per worker generation, on the serialized interpreter thread with the ordinary resolver, input, output, and interrupt services.
@@ -212,9 +212,8 @@ After successful startup, ordinary connection selection and reset apply: reset r
 A failed startup receipt cannot be cleared by resetting the connection helper.
 See [native connection selection](BUILTIN_RUNTIME.md#sql-and-duckdb).
 
-Startup requires the built-in worker and relay and is currently supported on macOS and Linux.
+Startup requires the built-in worker and relay and is supported on macOS, Linux, and Windows.
 It does not grant access to databases or other host paths, or add network permissions; persistent writable databases still need an existing sandbox write grant.
-SQL remains unsupported on Windows.
 
 ## Keys and values
 

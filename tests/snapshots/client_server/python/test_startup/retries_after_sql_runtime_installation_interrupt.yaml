@@ -18,7 +18,7 @@ send:
     import json
 
     assert "never_run" not in globals()
-    assert callable(console_sql_connection)
+    assert callable(_console.sql_connection)
     json.loads("42")
 result:
   content:

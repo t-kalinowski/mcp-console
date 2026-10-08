@@ -165,9 +165,14 @@ def test_python_and_sql_without_r(binary: Path, execution: Execution) -> Transcr
             import pandas as pd
 
             registered = pd.DataFrame({"value": np.array([20, 22])})
-            sql_connection().register("registered", registered)
-            assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")
-            assert sql_connection().execute("SELECT answer FROM answers").fetchone() == (42,)
+            _console.sql_connection().register("registered", registered)
+            if os.name == "nt":
+                assert ctypes.windll.kernel32.GetModuleHandleW("R.dll") == 0
+            else:
+                assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")
+            assert _console.sql_connection().execute("SELECT answer FROM answers").fetchone() == (
+                42,
+            )
             answer + 1
             """)
         client.send(python=python)
@@ -179,12 +184,12 @@ def test_python_and_sql_without_r(binary: Path, execution: Execution) -> Transcr
             python=code("""
                 import sqlite3
 
-                console_sql_connection(sqlite3.connect(":memory:"))
+                _console.sql_connection(sqlite3.connect(":memory:"))
                 """)
         )
         client.send(sql="SELECT 7 AS temporary_answer")
         assert "7" in last_result_text(client)
-        client.send(python="console_sql_connection(None)")
+        client.send(python="_console.sql_connection(None)")
         client.send(sql="SELECT answer FROM answers")
         assert "42" in last_result_text(client), last_result_text(client)
         client.send(r="1 + 1")
@@ -266,7 +271,9 @@ def test_no_r_interrupt_requirements_reject_before_control_and_stdin(
         return client.finish()[3:]
 
 
-@requires(SQL)
+# Native DuckDB query cancellation uses Unix SIGINT; Windows covers cooperative
+# DB-API callbacks and native R queries in its acceptance suite.
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_no_r_sql_interrupt_and_worker_crash(
     binary: Path, execution: Execution
@@ -285,7 +292,9 @@ def test_no_r_sql_interrupt_and_worker_crash(
                 return value
 
 
-            _ = sql_connection().create_function("sql_gate", sql_gate, ["BIGINT"], "BIGINT")
+            _ = _console.sql_connection().create_function(
+                "sql_gate", sql_gate, ["BIGINT"], "BIGINT"
+            )
             """)
         client.send(python=python)
         client.send(sql="SELECT sql_gate(answer) FROM answers")
@@ -348,7 +357,7 @@ def test_no_r_extension_preparation_uses_candidate_provider(
             original_pid = os.getpid()
             original_executable = sys.executable
             answer = 41
-            original_connection = sql_connection()
+            original_connection = _console.sql_connection()
             """)
         client.send(python=python)
         client.send(
@@ -373,7 +382,7 @@ def test_no_r_extension_preparation_uses_candidate_provider(
         python = code("""
             assert os.getpid() == original_pid
             assert sys.executable == original_executable
-            assert sql_connection() is original_connection
+            assert _console.sql_connection() is original_connection
             answer + 1
             """)
         client.send(python=python)
@@ -402,8 +411,10 @@ def test_no_r_extension_preparation_accepts_older_duckdb(
         platform = re.search(r"/v0\.9\.2/([^/]+)/not_a_real_duckdb_extension", output)
         assert platform is not None, output
         assert client.transcript[-1]["result"]["isError"] is True
-        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
-            platform[1], "<duckdb platform>"
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            normalize_process_diagnostic(output).replace(
+                platform[1], "<duckdb platform>"
+            )
         )
         client.expect("42\n", python="retained")
         return client.finish()

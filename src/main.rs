@@ -157,13 +157,8 @@ fn run_server(
         &mut resolver,
         &mut policy,
     )?;
-    if startup.is_some() {
-        if worker.is_some() || relay.is_some() {
-            return Err("startup requires the built-in worker and relay".into());
-        }
-        if cfg!(windows) {
-            return Err("configured startup is not supported on Windows".into());
-        }
+    if startup.is_some() && (worker.is_some() || relay.is_some()) {
+        return Err("startup requires the built-in worker and relay".into());
     }
     if python.is_some() && (worker.is_some() || relay.is_some()) {
         return Err("python selection requires the built-in worker and relay".into());
