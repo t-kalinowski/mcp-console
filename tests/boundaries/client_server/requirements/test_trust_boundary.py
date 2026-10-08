@@ -39,11 +39,13 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
     protected = root / "protected"
     protected.mkdir()
     (protected / "canary").write_text("preserved")
+    # These probes own uv configuration. Exclude its whole inherited namespace
+    # so new uv settings cannot silently become fixture inputs.
     env = dict(
         {
             name: value
             for name, value in environment(tools).items()
-            if "proxy" not in name.lower()
+            if not name.startswith("UV_") and "proxy" not in name.lower()
         },
         XDG_CACHE_HOME=str(root / "cache"),
         MCP_CONSOLE_TEST_PROTECTED=str(protected),
@@ -54,29 +56,6 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
         UV_NO_CONFIG="1",
         UV_PYTHON_PREFERENCE="only-managed",
     )
-    # The fixture owns its package inputs and managed-Python selection.
-    for name in (
-        "UV_INDEX",
-        "UV_DEFAULT_INDEX",
-        "UV_EXTRA_INDEX_URL",
-        "UV_FIND_LINKS",
-        "UV_NO_INDEX",
-        "UV_EXCLUDE_NEWER",
-        "UV_CONSTRAINT",
-        "UV_BUILD_CONSTRAINT",
-        "UV_OVERRIDE",
-        "UV_NO_BUILD",
-        "UV_NO_BUILD_PACKAGE",
-        "UV_NO_BINARY",
-        "UV_NO_BINARY_PACKAGE",
-        "UV_CONFIG_FILE",
-        "UV_ENV_FILE",
-        "UV_MANAGED_PYTHON",
-        "UV_NO_MANAGED_PYTHON",
-        "UV_PYTHON_DOWNLOADS",
-        "UV_PYTHON_DOWNLOADS_JSON_URL",
-    ):
-        env.pop(name, None)
     return working, env
 
 
@@ -100,22 +79,15 @@ def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
         patch.dict(
             os.environ,
             MCP_CONSOLE_HOME=str(Path(directory) / "caller-console"),
-            UV_MANAGED_PYTHON="1",
-            UV_NO_MANAGED_PYTHON="1",
-            UV_PYTHON_DOWNLOADS="never",
-            UV_PYTHON_DOWNLOADS_JSON_URL=str(
-                Path(directory) / "missing-python-downloads.json"
-            ),
-            UV_CONSTRAINT=str(Path(directory) / "missing-constraints.txt"),
-            UV_BUILD_CONSTRAINT=str(Path(directory) / "missing-build-constraints.txt"),
-            UV_OVERRIDE=str(Path(directory) / "missing-overrides.txt"),
-            UV_NO_BUILD="1",
-            UV_NO_BUILD_PACKAGE="mcp-console-build-probe",
-            UV_NO_BINARY="1",
-            UV_NO_BINARY_PACKAGE="mcp-console-trust-probe",
+            # Representative hostile inputs; the unknown sentinel checks the
+            # namespace rule without maintaining a catalog of uv settings.
             UV_ENV_FILE=str(Path(directory) / "missing.env"),
             UV_NO_ENV_FILE="0",
             UV_EXCLUDE_NEWER="2000-01-01",
+            UV_MCP_CONSOLE_TEST_INHERITED="caller setting",
+            UV_PYTHON_INSTALL_MIRROR=(
+                Path(directory) / "missing-python-mirror"
+            ).as_uri(),
         ),
     ):
         root = Path(directory).resolve()
@@ -171,7 +143,6 @@ def test_worker_replaces_uv_configuration_and_wheel(binary: Path) -> Transcript:
         config = working / "uv.toml"
         config.write_text("")
         env.pop("UV_NO_CONFIG")
-        env.pop("UV_FIND_LINKS", None)
         env["UV_CONFIG_FILE"] = str(config)
         with McpClient(
             binary, ("serve", "--writable-root", str(working)), env, working
@@ -298,7 +269,6 @@ def test_worker_supplies_package_build_backend(binary: Path) -> Transcript:
         config = working / "uv.toml"
         config.write_text("")
         env.pop("UV_NO_CONFIG")
-        env.pop("UV_FIND_LINKS", None)
         env["UV_CONFIG_FILE"] = str(config)
         with McpClient(
             binary, ("serve", "--writable-root", str(working)), env, working

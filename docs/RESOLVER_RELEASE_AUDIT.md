@@ -32,7 +32,9 @@ Configuration capture preserves values and policy, not file contents.
 | Default and custom caches, R/Python/DuckDB                | Cache selection remains captured; companion staging and cache-root metadata remain protected. | Existing resolver-cache and cache-location cases, including real extension installation/loading, cold R preparation, companion-cache denial, and metadata denial.                                                                                                        |
 
 The restricted native-startup case also grants reads to the compiled ELF target's loader and shared-library directories, including toolchain paths outside the conventional system roots; Linux requires `ldd` for this inspection.
-The replacement-resolver launchers quote an interpreter path containing spaces, and the trust fixture clears inherited package upload-date cutoffs.
+The replacement-resolver launchers quote an interpreter path containing spaces.
+The trust fixtures exclude inherited `UV_*` variables before setting their own uv configuration, while preserving `HOME` and unrelated host tool settings.
+This namespace rule covers added uv controls without maintaining a variable catalog; the public resolver probe checks that an arbitrary inherited UV-prefixed sentinel is absent, and successful preparation exercises representative invalid caller settings.
 The probes use owned temporary files outside macOS's writable user-temporary directory.
 They require actual filesystem denial and a 403 rejection with Console's managed proxy active, successful permitted preparation, and a receipt written by resolver-side code.
 A marker in the environment alone is not evidence of containment.

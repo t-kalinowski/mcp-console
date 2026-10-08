@@ -10,6 +10,7 @@ import urllib.request
 
 
 def probe() -> None:
+    assert "UV_MCP_CONSOLE_TEST_INHERITED" not in os.environ
     cache = Path(os.environ["UV_CACHE_DIR"])
     protected = Path(os.environ["MCP_CONSOLE_TEST_PROTECTED"])
     assert protected.joinpath("canary").read_text() == "preserved"
