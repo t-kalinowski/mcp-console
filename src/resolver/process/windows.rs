@@ -11,6 +11,7 @@ use std::path::Path;
 use std::process::{Child as Process, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
+use windows_sys::Wdk::System::Threading::NtTerminateProcess;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
 use windows_sys::Win32::System::IO::*;
@@ -57,6 +58,7 @@ pub(crate) struct Child {
     process: Process,
     job: OwnedHandle,
     completion: OwnedHandle,
+    interrupted: bool,
 }
 
 impl Deref for Child {
@@ -132,6 +134,7 @@ pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
             process,
             job,
             completion,
+            interrupted: false,
         })
     }
 }
@@ -173,6 +176,10 @@ impl Child {
             return Err(io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    pub(super) fn interrupted(&self) -> bool {
+        self.interrupted
     }
 
     fn retire(
@@ -235,15 +242,24 @@ pub(super) fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterr
     if child.try_wait()?.is_some() {
         return Ok(ResolverInterrupt::AlreadyExited);
     }
+    // Unlike Job termination or an exit-code comparison, the native call
+    // distinguishes starting termination from a process already terminating.
+    // Its result retains the cause even when a natural exit uses our status.
+    // https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/nf-ntddk-zwterminateprocess
+    // SAFETY: Child owns the spawned process handle with termination access.
+    match unsafe { NtTerminateProcess(child.as_raw_handle(), STATUS_CONTROL_C_EXIT) } {
+        STATUS_SUCCESS => child.interrupted = true,
+        STATUS_PROCESS_IS_TERMINATING => {}
+        status => {
+            return Err(io::Error::from_raw_os_error(unsafe {
+                RtlNtStatusToDosError(status) as i32
+            }));
+        }
+    }
+    // Descendants still need Job-wide termination, including after a natural
+    // root exit. Retirement confirms the whole Job and the exit observation.
     child.terminate(STATUS_CONTROL_C_EXIT as u32)?;
     Ok(ResolverInterrupt::Signaled)
-}
-
-pub(super) fn interrupted_exit(status: &ExitStatus) -> bool {
-    // Successful Job termination can include an already-exiting leader. Its
-    // independently assigned exit code survives; only the forced status is
-    // evidence that this interruption supplied the leader's failure.
-    status.code() == Some(STATUS_CONTROL_C_EXIT)
 }
 
 pub(super) fn stop_resolver(

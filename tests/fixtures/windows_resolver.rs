@@ -39,7 +39,10 @@ fn main() {
         }
         if std::env::var("TEST_RESOLVER_MODE").as_deref() == Ok("failed") {
             eprintln!("fixture resolver failure");
-            std::process::exit(23);
+            let code = std::env::var("TEST_RESOLVER_EXIT_CODE")
+                .map(|code| code.parse().unwrap())
+                .unwrap_or(23);
+            std::process::exit(code);
         }
         if program.file_stem().unwrap() == "ir" || args.iter().any(|arg| arg == "ir") {
             print!("{}", std::env::var("TEST_RESOLVER_LIBRARY").unwrap());

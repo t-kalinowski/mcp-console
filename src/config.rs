@@ -1,36 +1,64 @@
-//! Schema-independent project-file and command-line configuration layering.
+//! Schema-independent ordered-file and command-line configuration layering.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
 mod inline;
 mod yaml;
 
-/// Read one optional project mapping, then apply overrides in argument order.
+pub struct Loaded {
+    pub value: Option<Value>,
+    pub paths: Vec<PathBuf>,
+}
+
+/// Read optional mappings in source order, then apply overrides in argument order.
 /// Absence is distinct from an explicitly supplied empty configuration.
-pub fn load(path: Option<&Path>, overrides: &[String]) -> Result<Option<Value>, String> {
-    // A dangling symlink or an unreadable existing file must reach read_to_string.
-    let mut value = if let Some(path) = path {
-        match std::fs::symlink_metadata(path) {
+/// Relative source paths use the captured launch directory.
+pub fn load(directory: &Path, paths: &[PathBuf], overrides: &[String]) -> Result<Loaded, String> {
+    let mut value = None;
+    let mut sources = Vec::new();
+    let mut identities = std::collections::HashSet::new();
+    for path in paths {
+        let absolute = directory.join(path);
+        match std::fs::symlink_metadata(&absolute) {
             Err(error)
                 if matches!(
                     error.kind(),
                     std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
                 ) =>
             {
-                None
+                continue;
             }
             Err(error) => return Err(format!("cannot inspect '{}': {error}", path.display())),
             Ok(_) => {
-                let source = std::fs::read_to_string(path)
+                // Follow links, but reject non-regular targets before opening:
+                // reading a FIFO, for example, could block launcher startup.
+                let metadata = std::fs::metadata(&absolute)
+                    .map_err(|error| format!("cannot inspect '{}': {error}", path.display()))?;
+                if !metadata.is_file() {
+                    return Err(format!(
+                        "configuration '{}' must be a regular file",
+                        path.display()
+                    ));
+                }
+                let identity = std::fs::canonicalize(&absolute)
+                    .map_err(|error| format!("cannot resolve '{}': {error}", path.display()))?;
+                if !identities.insert(identity) {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&absolute)
                     .map_err(|error| format!("cannot read '{}': {error}", path.display()))?;
-                Some(yaml::load(&source).map_err(|error| format!("{}: {error}", path.display()))?)
+                let overlay =
+                    yaml::load(&source).map_err(|error| format!("{}: {error}", path.display()))?;
+                merge(
+                    value.get_or_insert_with(|| Value::Object(Map::new())),
+                    overlay,
+                );
+                sources.push(path.clone());
             }
         }
-    } else {
-        None
-    };
+    }
     for argument in overrides {
         let (key, source) = argument
             .split_once('=')
@@ -50,7 +78,10 @@ pub fn load(path: Option<&Path>, overrides: &[String]) -> Result<Option<Value>, 
             overlay,
         );
     }
-    Ok(value)
+    Ok(Loaded {
+        value,
+        paths: sources,
+    })
 }
 
 /// Objects merge recursively; arrays, scalars, and null replace the old value.
@@ -63,5 +94,131 @@ fn merge(base: &mut Value, overlay: Value) {
             }
         }
         (base, value) => *base = value,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    #[test]
+    fn absent_and_empty_sources_remain_distinct() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = [PathBuf::from("global.yaml"), PathBuf::from("project.yaml")];
+        let absent = load(directory.path(), &paths, &[]).unwrap();
+        assert_eq!(absent.value, None);
+        assert!(absent.paths.is_empty());
+        std::fs::write(directory.path().join(&paths[0]), "{}").unwrap();
+        let empty = load(directory.path(), &paths, &[]).unwrap();
+        assert_eq!(empty.value, Some(json!({})));
+        assert_eq!(empty.paths, paths[..1]);
+    }
+
+    #[test]
+    fn ordered_sources_and_overrides_merge_raw_values() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = [PathBuf::from("global.yaml"), PathBuf::from("project.yaml")];
+        std::fs::write(
+            directory.path().join(&paths[0]),
+            r#"
+environment: {KEEP: global, CHANGE: global}
+nested: {keep: true, empty: {keep: true}, list: [global], clear: [old]}
+reset: {old: true}
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join(&paths[1]),
+            r#"
+environment: {CHANGE: project, ADD: project}
+nested: {empty: {}, list: [project], clear: []}
+reset: null
+"#,
+        )
+        .unwrap();
+        let layered = load(directory.path(), &paths, &[]).unwrap();
+        assert_eq!(layered.paths, paths);
+        assert_eq!(
+            layered.value,
+            Some(json!({
+                "environment": {"KEEP": "global", "CHANGE": "project", "ADD": "project"},
+                "nested": {"keep": true, "empty": {"keep": true}, "list": ["project"], "clear": []},
+                "reset": null,
+            }))
+        );
+        let arguments = [
+            "environment.CHANGE=first",
+            "reset={new: true}",
+            "environment.CHANGE=last",
+        ]
+        .map(String::from);
+        let overridden = load(directory.path(), &paths, &arguments).unwrap();
+        let mut expected = layered.value.unwrap();
+        expected["environment"]["CHANGE"] = json!("last");
+        expected["reset"] = json!({"new": true});
+        assert_eq!(overridden.value, Some(expected));
+        std::fs::write(directory.path().join(&paths[1]), "{}").unwrap();
+        let empty_project = load(directory.path(), &paths, &[]).unwrap();
+        let global_only = load(directory.path(), &paths[..1], &[]).unwrap();
+        assert_eq!(empty_project.value, global_only.value);
+    }
+
+    #[test]
+    fn each_selected_file_must_parse_as_a_mapping() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = [PathBuf::from("global.yaml"), PathBuf::from("project.yaml")];
+        std::fs::write(directory.path().join(&paths[1]), "{}").unwrap();
+        for source in ["sandbox: [", "[]", "null", "---\n{}\n---\n{}", ""] {
+            std::fs::write(directory.path().join(&paths[0]), source).unwrap();
+            let error = load(directory.path(), &paths, &["sandbox={}".into()])
+                .err()
+                .unwrap();
+            assert!(error.contains("global.yaml"), "{error}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_regular_sources_and_deduplicates_identical_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = PathBuf::from("config.yaml");
+        std::fs::create_dir(directory.path().join(&path)).unwrap();
+        assert!(
+            load(directory.path(), std::slice::from_ref(&path), &[])
+                .err()
+                .unwrap()
+                .contains("must be a regular file")
+        );
+        std::fs::remove_dir(directory.path().join(&path)).unwrap();
+        std::fs::write(directory.path().join(&path), "{}").unwrap();
+        let loaded = load(directory.path(), &[directory.path().join(&path), path], &[]).unwrap();
+        assert_eq!(loaded.paths.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn follows_regular_symlinks_once_and_rejects_dangling_links_fifos_and_devices() {
+        let directory = tempfile::tempdir().unwrap();
+        let global = directory.path().join("global.yaml");
+        let project = directory.path().join("project.yaml");
+        let target = directory.path().join("target.yaml");
+        std::fs::write(&target, "{}").unwrap();
+        std::os::unix::fs::symlink(&target, &global).unwrap();
+        std::os::unix::fs::symlink(&target, &project).unwrap();
+        let loaded = load(directory.path(), &[global.clone(), project.clone()], &[]).unwrap();
+        assert_eq!(loaded.paths.as_slice(), std::slice::from_ref(&global));
+        std::fs::remove_file(&target).unwrap();
+        let error = load(directory.path(), &[project], &[]).err().unwrap();
+        assert!(
+            error.contains("project.yaml") && error.contains("cannot inspect"),
+            "{error}"
+        );
+        let target_c = std::ffi::CString::new(target.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(target_c.as_ptr(), 0o600) }, 0);
+        for path in [global, PathBuf::from("/dev/null")] {
+            let error = load(directory.path(), &[path], &[]).err().unwrap();
+            assert!(error.contains("must be a regular file"), "{error}");
+        }
     }
 }

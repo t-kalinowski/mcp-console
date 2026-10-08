@@ -66,13 +66,20 @@ def _snapshot_survives_replacement(
         for name in ("output café 雪", "CLI cache", "neighbor"):
             (host / name).mkdir()
         config = host / ".agents/console/config.yaml"
+        global_config = host / "console-home/config.yaml"
         config.parent.mkdir(parents=True)
         if configured:
+            global_config.parent.mkdir()
+            global_config.write_text(
+                json.dumps(
+                    {"sandbox": {"filesystem": {"read_write": ["./output café 雪"]}}}
+                ),
+                encoding="utf-8",
+            )
             config.write_text(
                 json.dumps(
                     {
                         "sandbox": {
-                            "filesystem": {"read_write": ["./output café 雪"]},
                             "network": {"proxy": {"domains": {"allow": ["127.0.0.1"]}}},
                         }
                     }
@@ -89,6 +96,7 @@ def _snapshot_survives_replacement(
             "MCP_CONSOLE_TEST_PROJECT": str(host),
             "MCP_CONSOLE_TEST_CONFIGURED": str(int(configured)),
             "MCP_CONSOLE_SANDBOX_SETTINGS": "invalid ambient settings",
+            "MCP_CONSOLE_HOME": str(global_config.parent),
         }
         environment.pop("RETICULATE_PYTHON", None)
         environment["MCP_CONSOLE_TEST_PORTS"] = json.dumps(ports)
@@ -98,6 +106,7 @@ def _snapshot_survives_replacement(
             ("serve", "--writable-root", "CLI cache", "-c", "cache=host"),
             environment,
             host,
+            use_home_configuration=True,
         ) as client:
             client.initialize_and_list_tools()
             # Even the first worker uses the snapshot taken before MCP readiness.
@@ -106,11 +115,15 @@ def _snapshot_survives_replacement(
             assert last_tool_text(client).endswith(expected), last_tool_text(client)
 
             config.write_text("invalid: [", encoding="utf-8")
+            if configured:
+                global_config.write_text("invalid: [", encoding="utf-8")
             client.send(control="restart")
             send_and_collect_runtime_python_resolution(client, python=exercise)
             assert last_tool_text(client).endswith(expected), last_tool_text(client)
 
             config.unlink()
+            if configured:
+                global_config.unlink()
             client.send(python="os._exit(23)")
             send_and_collect_runtime_python_resolution(client, python=exercise)
             assert last_tool_text(client).endswith(expected), last_tool_text(client)

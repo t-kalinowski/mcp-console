@@ -214,7 +214,7 @@ The subprocess owner captures its cause when collection finishes; a later contro
 When an interrupted subprocess exits unsuccessfully, its formatted materializer error retains that captured cause and its complete diagnostic.
 Unix interruption confirms the leader is stopped or exited before delivering SIGINT, then resumes a stopped leader; a successful signal call alone cannot distinguish a live process from an unreaped zombie.
 Nonblocking exit probes leave stop notifications intact for that suspension wait.
-Windows interruption terminates the Job with the control-C exit status and attributes the failure only after observing that status on its leader; an independently assigned exit code retains its own diagnostic and cause.
+Windows interruption records whether native root termination began, then terminates the Job with the control-C exit status and confirms retirement before attributing the failure; a natural exit retains its own diagnostic and cause even when its exit code matches that status.
 Preparation that consumes control after successful collection retains that cause before publishing its terminal result.
 For multistage preparation, only a subprocess report matching the operation's final result supplies its control cause; cleanup confirmation still includes every stage.
 Errors closing the preparation connection remain visible.

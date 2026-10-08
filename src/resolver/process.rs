@@ -264,18 +264,19 @@ impl ResolverProcess {
     ) -> Result<ResolverOutput, String> {
         let outcome = on_started(self.stop_handle())
             .and_then(|()| wait_for_resolver_exit(&mut invocation.child, self, program, kind));
+        #[cfg(unix)]
         let interrupted = matches!(outcome, Ok(true));
         let mut failure = ResolverFailure {
             primary: outcome.err(),
             cleanup: Vec::new(),
         };
+        #[cfg(windows)]
+        let interrupted = invocation.child.interrupted();
         let retirement = invocation.retire(program, kind);
         #[cfg(windows)]
-        let interrupted = interrupted
-            && retirement
-                .process
-                .as_ref()
-                .is_ok_and(native::interrupted_exit);
+        let interrupted = interrupted && retirement.process.is_ok();
+        // Native root termination retains its cause independently of the exit
+        // code; Job retirement still has to confirm the process exited.
         #[cfg(windows)]
         if interrupted {
             failure
@@ -559,10 +560,10 @@ fn wait_for_resolver_exit(
             }) => match interrupt_resolver(child) {
                 Ok(ResolverInterrupt::Signaled) => {
                     let _ = reply.send(Ok(()));
-                    // Forced Job termination is observed within retirement's
-                    // allowance; collection checks its actual leader status.
+                    // Windows terminates the owned Job. Retirement confirms
+                    // exit before using the recorded root termination cause.
                     #[cfg(windows)]
-                    return Ok(true);
+                    return Ok(child.interrupted());
                     #[cfg(unix)]
                     {
                         interrupted = true;
