@@ -14,42 +14,62 @@ stderr: >
 command: serve
 home: unreadable
 stderr: |
-  cannot read '<root>/console-home/config.yaml': Is a directory (os error 21)
+  configuration '<root>/console-home/config.yaml' must be a regular file
 ---
 command: sandbox
 home: unreadable
 stderr: |
-  cannot read '<root>/console-home/config.yaml': Is a directory (os error 21)
+  configuration '<root>/console-home/config.yaml' must be a regular file
 ---
 command: serve
 home: invalid
 stderr: >
-  <root>/console-home/config.yaml: unknown: unknown field `unknown`,
-  expected one of `startup`, `cache`, `python`, `r`, `languages`,
+  configuration from <root>/console-home/config.yaml,
+  .agents/console/config.yaml: unknown: unknown field `unknown`, expected
+  one of `startup`, `cache`, `python`, `r`, `languages`,
   `inherit_environment`, `environment`, `sandbox`, `resolver`; see
   docs/CONFIGURATION.md for the public format
 ---
 command: sandbox
 home: invalid
 stderr: >
-  <root>/console-home/config.yaml: unknown: unknown field `unknown`,
-  expected one of `startup`, `cache`, `python`, `r`, `languages`,
+  configuration from <root>/console-home/config.yaml,
+  .agents/console/config.yaml: unknown: unknown field `unknown`, expected
+  one of `startup`, `cache`, `python`, `r`, `languages`,
   `inherit_environment`, `environment`, `sandbox`, `resolver`; see
   docs/CONFIGURATION.md for the public format
 ---
 command: serve
 home: invalid override
 stderr: >
-  configuration with CLI overrides: cache: unknown variant `invalid`,
-  expected `console` or `host`; see docs/CONFIGURATION.md for the public
-  format
+  configuration from <root>/console-home/config.yaml,
+  .agents/console/config.yaml with CLI overrides: cache: unknown variant
+  `invalid`, expected `console` or `host`; see docs/CONFIGURATION.md for
+  the public format
 ---
 command: sandbox
 home: invalid override
 stderr: >
-  configuration with CLI overrides: cache: unknown variant `invalid`,
-  expected `console` or `host`; see docs/CONFIGURATION.md for the public
-  format
+  configuration from <root>/console-home/config.yaml,
+  .agents/console/config.yaml with CLI overrides: cache: unknown variant
+  `invalid`, expected `console` or `host`; see docs/CONFIGURATION.md for
+  the public format
+---
+command: serve
+home: invalid environment override
+stderr: >
+  configuration from <root>/console-home/config.yaml,
+  .agents/console/config.yaml with CLI overrides: environment: TOKEN:
+  environment values must be strings; see docs/CONFIGURATION.md for the
+  public format
+---
+command: sandbox
+home: invalid environment override
+stderr: >
+  configuration from <root>/console-home/config.yaml,
+  .agents/console/config.yaml with CLI overrides: environment: TOKEN:
+  environment values must be strings; see docs/CONFIGURATION.md for the
+  public format
 ---
 command: serve
 home: relative home
