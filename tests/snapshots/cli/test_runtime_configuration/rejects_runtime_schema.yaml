@@ -1,8 +1,9 @@
 ---
 path: r.executable
 value: ""
-stderr: |
-  r.executable: expected a nonempty path
+stderr: >
+  configuration with CLI overrides: r.executable must name an R executable
+  or launcher
 ---
 path: r.packages
 value:

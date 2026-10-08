@@ -198,6 +198,14 @@ pub fn discover(
         value.unwrap_or_else(|| serde_json::json!({})),
     )
     .map_err(|error| format!("{name}: {error}; see docs/CONFIGURATION.md for the public format"))?;
+    if let Some(r) = &mut project.r
+        && let Some(path) = &mut r.executable
+        && path.as_os_str().is_empty()
+    {
+        return Err(format!(
+            "{name}: r.executable must name an R executable or launcher"
+        ));
+    }
     if let Some(startup) = &project.startup {
         startup
             .validate()

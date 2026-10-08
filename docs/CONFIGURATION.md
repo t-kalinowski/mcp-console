@@ -135,41 +135,40 @@ Custom workers retain their own language, SQL, and preparation contracts; Consol
 This is a usability setting.
 It does not restrict what SQL can do or change the sandbox and dependency trust boundaries.
 
-## R interpreter and package configuration
+## R executable selection
 
-Choose an installed R executable or its ordinary launcher:
+Select an installed R executable or its ordinary launcher:
 
 ```yaml
-r: /Library/Frameworks/R.framework/Resources/bin/R
+r: /opt/R/4.6.1/bin/R
 ```
 
-The scalar expands to `r: {executable: PATH}` before each input layer merges.
-It retains automatic package resolution and native R startup.
-A full mapping can also choose startup packages and policy:
+The scalar expands to `r: {executable: PATH}` before configuration layers merge.
+A mapping can combine selection with the existing startup setting:
 
 ```yaml
 r:
   executable: /opt/R/4.6.1/bin/R
-  vanilla: false
-  resolution: explicit
-  packages: [dplyr, dbplyr, ggplot2]
+  vanilla: true
 ```
 
 Paths, including bare filenames, are relative to the captured launch directory.
-A leading `~` expands using the server's absolute `HOME`; `~user` and variable references are not expanded.
-For Windows, use an installed launcher such as `r: 'C:\Program Files\R\R-4.6.1\bin\R.exe'`.
-These paths are illustrative, not required R versions.
-Directories, Rscript selectors, commands with arguments, and broken or incompatible installations are errors.
-An explicit selection overrides inherited R installation hints and PATH discovery; it works without R on PATH.
-Omitting `executable` preserves ordinary discovery, including with a behavior-only mapping.
+A leading `~` uses the server's absolute `HOME`; `~user` and variable references are not expanded.
+On Windows, select an installed launcher such as `r: 'C:\Program Files\R\R-4.6.1\bin\R.exe'`.
+Directories, Rscript selectors, commands with arguments, and incompatible installations are errors.
+An explicit selection overrides inherited R installation hints and PATH discovery.
+Omitting `executable` preserves ordinary discovery; `r: null` clears the R settings before subsequent overrides.
 
-Console captures the launcher and its matching Rscript, runtime library, and resource directories.
-Workers and preparation use that installation across restarts, including after a cell changes PATH or R_HOME.
-Changing an accepted installation's files or symlink targets requires a new server connection; Console fails rather than switching runtimes.
+Console captures the installation's matching Rscript, runtime library, and resource directories for workers and preparation across restarts.
+It checks selected installation file contents and resource directory targets before each worker launch and preparation operation; detected changes require a new server connection.
+Ordinary changes within resource directories remain allowed.
+Failed initial discovery can be retried with explicit restart after repairing the captured path.
+Inspection uses worker permissions and suppresses startup files; native R startup retains the behavior below.
+
+The installation and all code it loads remain [trusted preparation inputs](REQUIREMENTS.md#host-resolution-and-trust).
+These checks do not protect against concurrent file replacement or changes to uncaptured dependencies.
+Keep those inputs outside worker-writable paths when relying on worker isolation.
 For sandboxed R preparation, the selected installation's files and directories must be read-only to workers; remove overlapping write grants or use `resolution: disabled`.
-Failed initial discovery can be retried with explicit restart after repairing the configured path.
-Execution-based inspection runs under worker permissions and suppresses R startup files.
-Native startup still runs inside the worker as described below.
 
 ## Python environment selection
 

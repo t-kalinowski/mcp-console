@@ -40,10 +40,7 @@ impl Resolution {
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct R {
-    #[serde(
-        deserialize_with = "super::sandbox::supplied",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(deserialize_with = "super::sandbox::supplied", skip_serializing)]
     pub executable: Option<PathBuf>,
     pub vanilla: bool,
     pub resolution: Resolution,
