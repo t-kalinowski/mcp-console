@@ -7,7 +7,7 @@ use std::path::PathBuf;
 pub(crate) fn configure(
     selection: Option<Cache>,
     no_sandbox: bool,
-    python: Option<&std::path::Path>,
+    python: Option<&crate::settings::PythonChoice>,
     resolver: &mut SandboxSettings,
     worker: &mut SandboxSettings,
 ) -> Result<(), String> {
@@ -24,10 +24,13 @@ pub(crate) fn configure(
     if no_sandbox {
         return Err("cache: console requires sandboxing; use cache: host with --no-sandbox".into());
     }
-    let explicit_python = python
-        .map(|python| python.as_os_str().to_owned())
-        .or_else(|| std::env::var_os("RETICULATE_PYTHON"))
-        .is_some_and(|python| !python.is_empty() && python != "managed");
+    let explicit_python = python.map_or_else(
+        || {
+            std::env::var_os("RETICULATE_PYTHON")
+                .is_some_and(|python| !python.is_empty() && python != "managed")
+        },
+        |python| python.executable.is_some(),
+    );
     // Host-side companion staging uses the sibling mcp-console/sandbox cache.
     // Grant only dependency storage, never the shared Console cache parent.
     let root = console_root(resolver)?.join("dependencies");

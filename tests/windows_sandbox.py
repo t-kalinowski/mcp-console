@@ -135,11 +135,20 @@ class WindowsSandbox(unittest.TestCase):
 
     def console_cache_paths(self, *, profile_fallback: bool):
         from windows import Session
+        from support.resolvers import preseeded_duckdb_python
 
         with workspace() as root:
-            selected = root / "python"
+            python = preseeded_duckdb_python(root)
+            # Probe trusted preparation; selected environment startup hooks
+            # execute under worker permissions rather than resolver grants.
             subprocess.run(
-                [sys.executable, "-m", "venv", "--without-pip", selected], check=True
+                [
+                    "rustc",
+                    str(ROOT / "tests/fixtures/windows_resolver.rs"),
+                    "-o",
+                    str(root / "uv.exe"),
+                ],
+                check=True,
             )
             # Hosted temp directories may exclude the sandbox account. Grant
             # reads for the selected venv, session cwd, and host-written probe.
@@ -159,7 +168,6 @@ class WindowsSandbox(unittest.TestCase):
                 check=True,
                 capture_output=True,
             )
-            python = selected / "Scripts/python.exe"
             local = (
                 root / "account/AppData/Local" if profile_fallback else root / "local"
             )
@@ -171,35 +179,30 @@ class WindowsSandbox(unittest.TestCase):
                 UV_CACHE_DIR=str(root / "host-uv"),
                 IR_CACHE_DIR=str(root / "host-ir"),
                 CACHE_TEST_ROOT=str(cache),
+                TEST_RESOLVER_CACHE_PROBE="1",
+                TEST_RESOLVER_RECORD=str(cache / "resolver-commands.jsonl"),
+                TEST_RESOLVER_PYTHON=str(python),
             )
-            for name in ("XDG_CACHE_HOME", "R_HOME", "RETICULATE_PYTHON"):
+            for name in (
+                "XDG_CACHE_HOME",
+                "R_HOME",
+                "RETICULATE_PYTHON",
+                "RETICULATE_UV",
+            ):
                 environment.pop(name, None)
             if profile_fallback:
                 environment.pop("LOCALAPPDATA")
                 environment.update(
                     HOME="relative-home", USERPROFILE=str(root / "account")
                 )
-            (selected / "Lib/site-packages/sitecustomize.py").write_text(
-                dedent("""
-                    import os
-                    from pathlib import Path
-
-                    if "MCP_CONSOLE_LOCAL_RUNTIME" not in os.environ:
-                        root = Path(os.environ["CACHE_TEST_ROOT"])
-                        cache = Path(os.environ["UV_CACHE_DIR"])
-                        assert cache.is_relative_to(root)
-                        cache.mkdir(parents=True, exist_ok=True)
-                        cache.joinpath("resolver-probe").write_text("prepared")
-                    """)
-            )
             # Keep the cwd under the explicit read grant too. The native
             # runner's background read-ACL traversal can still be in progress.
             session = Session(
                 os.environ,
-                python=python,
                 sandbox=True,
                 temporary_root=root,
                 overrides=[
+                    'python={"managed":{}}',
                     'sandbox.network="enabled"',
                     "inherit_environment=false",
                     "environment=" + json.dumps(environment),
@@ -213,7 +216,7 @@ class WindowsSandbox(unittest.TestCase):
                         from pathlib import Path
 
                         root = Path(os.environ["CACHE_TEST_ROOT"])
-                        for name in ("UV_CACHE_DIR", "IR_CACHE_DIR", "R_USER_CACHE_DIR", "RENV_PATHS_CACHE"):
+                        for name in ("UV_CACHE_DIR", "IR_CACHE_DIR", "R_USER_CACHE_DIR", "RENV_PATHS_CACHE", "PYTHONUSERBASE"):
                             assert Path(os.environ[name]).is_relative_to(root)
                         assert Path(os.environ["UV_CACHE_DIR"]).joinpath("resolver-probe").read_text() == "prepared"
                         print("Console caches retained")

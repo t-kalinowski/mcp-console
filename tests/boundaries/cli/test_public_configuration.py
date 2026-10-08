@@ -23,6 +23,7 @@ from support.requirements import (
     requires,
 )
 from support.suites import run_this_suite
+from support.resolvers import preseeded_duckdb_python, probing_uv
 
 
 def configure(root: Path, document: dict) -> None:
@@ -257,7 +258,9 @@ def test_resolver_defaults_and_replacement(binary: Path) -> TranscriptWithCompan
                     client.finish_with_standard_error(expected_exit_status=1)
                 else:
                     client.finish()
-            native = json.loads(captures["resolver"].read_text().splitlines()[-1])
+            # Discovery owns the first resolver launch. Later explicit Python
+            # inspection has the same private transport with worker permissions.
+            native = json.loads(captures["resolver"].read_text().splitlines()[0])
             proxy = native.get("proxy")
             if name in {
                 "restricted",
@@ -461,15 +464,11 @@ def test_shared_environment_survives_restart(
             root = Path(temporary).resolve()
             tools = root / "bin"
             tools.mkdir()
-            selected = root / "python"
-            subprocess.run(
-                [sys.executable, "-m", "venv", "--without-pip", selected],
-                check=True,
-                capture_output=True,
-            )
-            python = selected / "bin/python"
-            site = next((selected / "lib").glob("python*/site-packages"))
-            site.joinpath("sitecustomize.py").write_text("""
+            python = preseeded_duckdb_python(root)
+            probing_uv(
+                root,
+                python,
+                """
 import json
 import os
 from pathlib import Path
@@ -477,7 +476,8 @@ if "MCP_CONSOLE_LOCAL_RUNTIME" not in os.environ:
     cache = Path(os.environ["UV_CACHE_DIR"])
     cache.mkdir(parents=True, exist_ok=True)
     cache.joinpath("environment.json").write_text(json.dumps({name: os.environ.get(name) for name in ("ROLE", "SHARED", "INHERITED", "UV_CACHE_DIR")}))
-""")
+""",
+            )
             common = {
                 "HOME": os.environ["HOME"],
                 "PATH": str(tools),
@@ -492,7 +492,7 @@ if "MCP_CONSOLE_LOCAL_RUNTIME" not in os.environ:
                 root,
                 {
                     "cache": "host" if execution is DIRECT else "console",
-                    "python": str(python),
+                    "python": {"managed": {}},
                     "languages": ["python"],
                     "inherit_environment": inherit,
                     "environment": common,

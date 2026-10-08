@@ -56,8 +56,15 @@ impl Selection {
         configured: Option<OsString>,
         resolver: &crate::resolver::execution::PythonConfiguration,
         extension_directory: Option<PathBuf>,
+        inspect_explicit: impl FnOnce(
+            &Path,
+            &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+        ) -> Result<crate::python::NativePython, String>,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Option<ManagedPython>), String> {
+        let explicit = configured
+            .as_ref()
+            .is_some_and(|python| !python.is_empty() && python != "managed");
         Self::python_with(
             configured,
             resolver.has_uv(),
@@ -72,7 +79,11 @@ impl Selection {
                 )
             },
             |executable, started| {
-                crate::resolver::execution::inspect_native(resolver, executable, started)
+                if explicit {
+                    inspect_explicit(executable, started)
+                } else {
+                    crate::resolver::execution::inspect_native(resolver, executable, started)
+                }
             },
             on_started,
         )
