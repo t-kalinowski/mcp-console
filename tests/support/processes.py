@@ -85,17 +85,20 @@ else:
     def child_process_identities(
         parent: ProcessIdentity,
     ) -> tuple[ProcessIdentity, ...]:
-        assert current_process_identity(parent[0]) == parent
-        children = set()
-        for task in Path(f"/proc/{parent[0]}/task").iterdir():
-            try:
-                task_children = (task / "children").read_text()
-            except (FileNotFoundError, ProcessLookupError):
-                # Threads may retire while their owning process stays gated.
-                continue
-            children.update(map(int, task_children.split()))
-        assert current_process_identity(parent[0]) == parent
-        return tuple(capture_process_identity(pid) for pid in sorted(children))
+        while True:
+            assert current_process_identity(parent[0]) == parent
+            children = set()
+            for task in Path(f"/proc/{parent[0]}/task").iterdir():
+                try:
+                    task_children = (task / "children").read_text()
+                except (FileNotFoundError, ProcessLookupError):
+                    # Exiting tasks can reparent children to an already-scanned
+                    # task. Start over rather than return an incomplete set.
+                    break
+                children.update(map(int, task_children.split()))
+            else:
+                assert current_process_identity(parent[0]) == parent
+                return tuple(capture_process_identity(pid) for pid in sorted(children))
 
     def process_file_descriptors(identity: ProcessIdentity) -> set[int]:
         assert current_process_identity(identity[0]) == identity

@@ -66,7 +66,7 @@ The [subsequent main run](https://github.com/t-kalinowski/mcp-console/actions/ru
 Review repairs declare uv as a fixture capability, clear inherited competing package-source selectors and proxy evidence, and require managed-proxy evidence for the download denial.
 Native constructor cases use a fixture-owned Console home while preserving the caller's `HOME`.
 The Windows repair preserves interruption as the cause when terminating a live resolver Job, while retaining confirmed retirement and independently completed setup failures.
-The Linux observation fixture skips task entries that disappear while enumerating a live parent's children; process identity and descendant-retirement assertions remain intact.
+The Linux observation fixture restarts enumeration when a task disappears to include children reparented to a previously scanned task; process identity and descendant-retirement assertions remain intact.
 The [revised PR run](https://github.com/t-kalinowski/mcp-console/actions/runs/37725473130) at `b9d702e4` passed the Linux and macOS jobs and Windows core/native acceptance, confirming the interruption and Linux observation repairs.
 Windows then failed eight existing shared transcript cases on loader inspection, executable naming, recorded path presentation, and dependency startup diagnostics.
 
