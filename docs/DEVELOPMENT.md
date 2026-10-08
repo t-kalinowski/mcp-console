@@ -163,6 +163,34 @@ Explicit `--jobs N` overrides must be at least one.
 The shared boundary runner also accepts `-j N`; unscoped Windows `--full` runs require `--jobs N`.
 See the [timing comparison](benchmarks/transcript-concurrency.md) for the measurements and their coverage limits.
 
+## Documentation website
+
+The documentation website renders the Markdown guides in `docs/` directly, with a home page and getting-started page written in Quarto.
+The website filter derives page titles from the guides' first headings and points links outside `docs/` to the repository on GitHub.
+Keep the Markdown guides usable on GitHub; they do not need website front matter.
+
+Install [Quarto](https://quarto.org/docs/get-started/), then run from the repository root:
+
+```sh
+quarto preview docs
+```
+
+For a complete build and link check:
+
+```sh
+quarto render docs
+python3 tests/website.py
+```
+
+The check renders a fresh copy in a temporary directory and verifies page titles, navigation, search coverage, and local links and section anchors.
+Code examples are displayed without execution; building the website does not require R, Python packages, or a Console executable.
+Generated files in `docs/_site/` and `docs/.quarto/` are ignored.
+Add new guides to the sidebar in `docs/_quarto.yml`; the render list includes top-level Markdown guides and benchmark pages, excluding task templates.
+
+The Documentation workflow checks pull requests and deploys changes on `main` to GitHub Pages.
+Set the repository's **Settings → Pages → Source** to **GitHub Actions** before the first deployment.
+The workflow can also be started manually on `main`.
+
 ## Find the public test
 
 Start at the outermost boundary that observes the change.
