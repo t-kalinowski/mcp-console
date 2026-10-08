@@ -2,6 +2,8 @@
 
 import json
 import os
+from collections.abc import Iterator
+from contextlib import chdir, contextmanager
 from pathlib import Path
 import shlex
 import shutil
@@ -29,12 +31,32 @@ EVIDENCE = {
 }
 
 
+def selected_resolver(name: str) -> str:
+    executable = shutil.which(name)
+    assert executable is not None
+    return str(Path(executable).resolve())
+
+
+@contextmanager
+def relative_resolver_path(root: Path, name: str) -> Iterator[None]:
+    tools = root / "caller-bin"
+    tools.mkdir()
+    (tools / name).symlink_to(selected_resolver(name))
+    with (
+        chdir(root),
+        patch.dict(
+            os.environ,
+            PATH=os.pathsep.join((tools.name, os.environ["PATH"])),
+        ),
+    ):
+        yield
+
+
 def workspace(root: Path) -> tuple[Path, dict[str, str]]:
     working = root / "workspace"
     tools = working / "bin"
     tools.mkdir(parents=True)
-    uv = shutil.which("uv")
-    assert uv is not None
+    uv = selected_resolver("uv")
     (tools / "uv").symlink_to(uv)
     protected = root / "protected"
     protected.mkdir()
@@ -76,6 +98,7 @@ def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
     # A home-relative fixture stays outside macOS's writable user temp directory.
     with (
         TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory,
+        relative_resolver_path(Path(directory), "uv"),
         patch.dict(
             os.environ,
             MCP_CONSOLE_HOME=str(Path(directory) / "caller-console"),
@@ -325,13 +348,15 @@ def test_worker_supplies_package_build_backend(binary: Path) -> Transcript:
 
 @requires(POSIX, SANDBOX, R, command("ir"), command("uv"))
 def test_worker_replaces_selected_r_resolver(binary: Path) -> Transcript:
-    with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
+    with (
+        TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory,
+        relative_resolver_path(Path(directory), "ir"),
+    ):
         root = Path(directory).resolve()
         working, env = workspace(root)
         r_env, _ = r_test_environment()
         tools = working / "bin"
-        ir = shutil.which("ir")
-        assert ir is not None
+        ir = selected_resolver("ir")
         (tools / "ir").symlink_to(ir)
         env.update(
             R_HOME=r_env["R_HOME"],
@@ -339,7 +364,7 @@ def test_worker_replaces_selected_r_resolver(binary: Path) -> Transcript:
             IR_CACHE_DIR=ir_cache_directory(r_env),
             UV_CACHE_DIR=str(root / "cache/uv"),
             RETICULATE_PYTHON=sys.executable,
-            RETICULATE_UV=shutil.which("uv"),
+            RETICULATE_UV=selected_resolver("uv"),
             MCP_CONSOLE_TEST_RESOLVER=ir,
         )
         env.update(

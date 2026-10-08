@@ -33,6 +33,7 @@ Configuration capture preserves values and policy, not file contents.
 
 The restricted native-startup case also grants reads to the compiled ELF target's loader and shared-library directories, including toolchain paths outside the conventional system roots; Linux requires `ldd` for this inspection.
 The replacement-resolver launchers quote an interpreter path containing spaces.
+The fixtures resolve selected uv/ir paths against the caller's working directory before using them in workspace symlinks and resolver environments; both replacement cases exercise relative `PATH` entries.
 The trust fixtures exclude inherited `UV_*` variables before setting their own uv configuration, while preserving `HOME` and unrelated host tool settings.
 This namespace rule covers added uv controls without maintaining a variable catalog; the public resolver probe checks that an arbitrary inherited UV-prefixed sentinel is absent, and successful preparation exercises representative invalid caller settings.
 The probes use owned temporary files outside macOS's writable user-temporary directory.
