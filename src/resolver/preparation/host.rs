@@ -129,14 +129,9 @@ impl Context {
             installation.validate()?;
         }
         match operation {
-            Operation::InspectR {
-                executable,
-                require_read_only,
-            } => serde_json::to_value(crate::local_runtime::RInstallation::inspect(
-                &executable,
-                require_read_only,
-                on_started,
-            )?)
+            Operation::InspectR { executable } => serde_json::to_value(
+                crate::local_runtime::RInstallation::inspect(&executable, on_started)?,
+            )
             .map_err(|error| error.to_string()),
             Operation::Bootstrap => {
                 let bootstrap = self

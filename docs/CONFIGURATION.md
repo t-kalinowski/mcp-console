@@ -168,7 +168,6 @@ Inspection uses worker permissions and suppresses startup files; native R startu
 The installation and all code it loads remain [trusted preparation inputs](REQUIREMENTS.md#host-resolution-and-trust).
 These checks do not protect against concurrent file replacement or changes to uncaptured dependencies.
 Keep those inputs outside worker-writable paths when relying on worker isolation.
-For sandboxed R preparation, the selected installation's files and directories must be read-only to workers; remove overlapping write grants or use `resolution: disabled`.
 
 ## Python environment selection
 

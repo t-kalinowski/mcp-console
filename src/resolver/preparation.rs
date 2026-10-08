@@ -45,7 +45,6 @@ pub(crate) enum Operation {
     InspectR {
         #[serde(with = "crate::local_runtime::native_path")]
         executable: std::path::PathBuf,
-        require_read_only: bool,
     },
     Bootstrap,
     ResolveRStandalone {

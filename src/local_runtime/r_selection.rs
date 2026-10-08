@@ -74,7 +74,6 @@ impl FileIdentity {
 impl RInstallation {
     pub(crate) fn inspect(
         executable: &Path,
-        require_read_only: bool,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let context = |error: String| format!("r.executable {}: {error}", executable.display());
@@ -194,17 +193,13 @@ impl RInstallation {
             } else {
                 "etc/Renviron"
             }))?);
-            let installation = Self {
+            Self {
                 home,
                 resources,
                 identity,
                 resource_targets: Vec::new(),
             }
-            .capture_resource_targets()?;
-            if require_read_only {
-                installation.verify_read_only()?;
-            }
-            Ok(installation)
+            .capture_resource_targets()
         })()
         .map_err(context)
     }
@@ -219,45 +214,6 @@ impl RInstallation {
             })
             .collect::<Result<_, _>>()?;
         Ok(self)
-    }
-    /// Runs in the inspection process under worker permissions. Metadata or a
-    /// digest alone cannot prevent a worker from changing code after validation.
-    fn verify_read_only(&self) -> Result<(), String> {
-        let reject = |path: &Path| {
-            format!(
-                "R preparation requires a worker-read-only installation: {}; remove its worker write grants or use resolution: disabled",
-                path.display()
-            )
-        };
-        for identity in &self.identity {
-            for path in [&identity.path, &identity.target] {
-                if writable(std::fs::OpenOptions::new().write(true).open(path))? {
-                    return Err(reject(path));
-                }
-                let parent = path.parent().ok_or("R installation file has no parent")?;
-                for directory in std::iter::once(parent).chain(
-                    parent
-                        .ancestors()
-                        .skip(1)
-                        .take_while(|directory| directory.starts_with(&self.home)),
-                ) {
-                    if writable(tempfile::NamedTempFile::new_in(directory))? {
-                        return Err(reject(directory));
-                    }
-                }
-            }
-        }
-        for directory in std::iter::once(self.home.as_path()).chain(
-            self.resources
-                .iter()
-                .map(Path::new)
-                .chain(self.resource_targets.iter().map(Path::new)),
-        ) {
-            if writable(tempfile::NamedTempFile::new_in(directory))? {
-                return Err(reject(directory));
-            }
-        }
-        Ok(())
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
         // Drift check for trusted installation inputs. This neither pins
@@ -296,20 +252,6 @@ impl RInstallation {
             command.env(name, value);
         }
         Ok(())
-    }
-}
-fn writable<T>(result: std::io::Result<T>) -> Result<bool, String> {
-    match result {
-        Ok(_) => Ok(true),
-        Err(error)
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
-            ) =>
-        {
-            Ok(false)
-        }
-        Err(error) => Err(error.to_string()),
     }
 }
 fn probe(
