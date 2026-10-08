@@ -111,6 +111,7 @@ class WindowsRelay(unittest.TestCase):
                 R_ENVIRON_USER=os.devnull,
                 R_PROFILE=os.devnull,
                 R_PROFILE_USER=os.devnull,
+                R_DEFAULT_PACKAGES="NULL",
                 TEST_WORKER_SCENARIO=scenario,
                 TEST_WORKER_READY=ready.name,
                 TEST_DISPATCHED=str(marker),
