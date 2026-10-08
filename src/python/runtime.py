@@ -576,10 +576,10 @@ def _mcp_console_install_matplotlib_show(
         pause_code = _getattr(_getattr(pyplot, "pause", None), "__code__", None)
 
         def show(*args, **kwargs):
-            # pause() uses show(block=False) before running its canvas event loop.
-            # Keep that manager alive; ordinary show closes to avoid duplicates.
+            # Native callers may have no Python frame; only pause() keeps figures open.
+            caller = _sys._getframe().f_back
             return _finalize_plots(
-                close=_sys._getframe(1).f_code is not pause_code,
+                close=caller is None or caller.f_code is not pause_code,
                 propagate_interrupt=True,
             )
 

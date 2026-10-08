@@ -210,6 +210,58 @@ def test_returns_matplotlib_plots(binary: Path, execution: Execution) -> Transcr
 
 
 @executions(DIRECT, SANDBOXED)
+@requires(R)
+def test_returns_matplotlib_plots_from_r_bridge(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        temporary = Path(directory)
+        environment = matplotlib_test_environment(temporary / "host-cache")
+        environment["TMPDIR"] = directory
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment
+        ) as client:
+            client.initialize_and_list_tools()
+            wait_for_worker_ready(client, "Matplotlib declaration readiness")
+            client.expect("[prepared]", requirements={"python": ["matplotlib"]})
+            client.expect(
+                "[done]",
+                # fmt: r
+                r=code("""
+                    plt <- reticulate::import("matplotlib.pyplot")
+                    invisible(plt$show())
+                    """),
+            )
+            client.send(
+                # fmt: r
+                r=code("""
+                    figure <- plt$figure()
+                    invisible(plt$plot(1:3, c(3, 1, 2)))
+                    invisible(figure$savefig(file.path(Sys.getenv("TMPDIR"), "r-show.png")))
+                    cat("before show\\n")
+                    invisible(plt$show())
+                    stopifnot(length(plt$get_fignums()) == 0L)
+                    invisible(plt$show())
+                    cat("after show\\n")
+                    """),
+            )
+            assert_result_content(
+                client,
+                [
+                    "before show\n",
+                    wait_for_worker_file(temporary, "r-show.png", client).read_bytes(),
+                    "after show\n",
+                ],
+                image_reference="live R bridge matplotlib savefig {page}",
+            )
+            client.expect(
+                "[]\n",
+                python="import matplotlib.pyplot as plt; plt.get_fignums()",
+            )
+            return client.finish()
+
+
+@executions(DIRECT, SANDBOXED)
 def test_returns_no_r_matplotlib_plots(
     binary: Path, execution: Execution
 ) -> Transcript:

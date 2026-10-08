@@ -1,0 +1,57 @@
+name: Documentation
+
+on:
+  pull_request:
+    paths:
+      - docs/**
+      - tests/website.py
+      - .github/workflows/docs.yaml
+  push:
+    branches: [main]
+    paths:
+      - docs/**
+      - tests/website.py
+      - .github/workflows/docs.yaml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: documentation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: quarto-dev/quarto-actions/setup@v2
+      - name: Check website pages and links
+        run: python tests/website.py
+      - name: Render website
+        run: quarto render docs
+      - uses: actions/upload-pages-artifact@v5
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with:
+          path: docs/_site
+
+  deploy:
+    name: Deploy documentation
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v6
+      - uses: actions/deploy-pages@v5
+        id: deployment

@@ -1,0 +1,84 @@
+---
+title: Get started
+description: Install MCP Console, connect an MCP client, and run your first analysis.
+---
+
+MCP Console runs on the same host as your MCP client.
+For remote work, run the client and Console together on that host, alongside the client's shell and filesystem tools.
+
+## Install
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
+To use R, install it with [rig](https://github.com/r-lib/rig#id-installation) and run `rig add release`.
+Python and SQL also work without R.
+
+Source installation requires Git, [rustup](https://rustup.rs/) with Rust 1.95 or later, and platform build tools.
+On macOS, run:
+
+```sh
+xcode-select --install
+```
+
+On Ubuntu:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential git pkg-config libcap-dev libcurl4-openssl-dev binutils
+```
+
+For Windows, follow the [Windows build and installation guide](WINDOWS.md#build-and-run).
+
+Install Console and its private sandbox runner:
+
+```sh
+uv tool install git+https://github.com/t-kalinowski/mcp-console
+```
+
+Installation builds the pinned sandbox runner with its own toolchain.
+Initial runtime preparation can download interpreters, packages, and extensions.
+The [release guide](../RELEASE.md#private-sandbox-executable) lists the build prerequisites.
+
+## Connect your client
+
+Configure your MCP client to launch `uvx mcp-console serve` over stdio.
+For clients that use an `mcpServers` configuration:
+
+```json
+{
+  "mcpServers": {
+    "console": {
+      "command": "uvx",
+      "args": ["mcp-console", "serve"]
+    }
+  }
+}
+```
+
+The [repository quickstart](../README.md#quickstart) includes commands for individual clients.
+Confirm that your client exposes the `send` tool.
+
+Without R, Console uses `uv` to select Python.
+To use an existing project environment, set `python: .venv/bin/python` in `.agents/console/config.yaml`; that environment's packages must already be installed.
+See [configuration](CONFIGURATION.md#python-environment-selection) for selection rules and Windows paths.
+
+## Try an analysis
+
+Ask your agent:
+
+> Use MCP Console to explore the Palmer Penguins data from the R package `palmerpenguins`.
+> Fit a logistic regression in R to predict penguin sex from body measurements, summarize the data by species with SQL, and plot the model's predictions with Python and Matplotlib.
+> Keep the data and model for follow-up.
+
+Then ask:
+
+> Where does the model make the most mistakes?
+> Show me a plot and the path to the recorded session transcript.
+
+For a Python-only session, ask Console to generate and analyze a small simulated dataset with NumPy and pandas.
+
+## Next steps
+
+- Read the [runtime guide](BUILTIN_RUNTIME.md) for language bridges, SQL, input, and plots.
+- Use [requirements](REQUIREMENTS.md) to select packages and interpreters.
+- Inspect [recordings](RECORDING.md) and prepare a Quarto report from a session.
+- Review the [sandbox limits](SANDBOX.md#supported-hosts-and-lifetime-limits) before choosing a policy.
