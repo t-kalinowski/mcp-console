@@ -5,7 +5,7 @@ import signal
 import subprocess
 import sys
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -16,6 +16,7 @@ from support.client import TextReader
 from support.events import Events
 from support.records import Transcript
 from support.native import LOADER_VARIABLE, build_interposer
+from support.normalization import code
 from support.requirements import (
     LINUX_SANDBOX,
     MACOS_SANDBOX,
@@ -213,6 +214,58 @@ def test_cancel_closes_inherited_output_before_preparation_close(
     return inherited_output(binary, "cancel")
 
 
+@requires(PROCESS_EVENTS)
+def test_interrupt_keeps_cause_after_nonzero_resolver_exit(binary: Path) -> Transcript:
+    with (
+        TemporaryDirectory() as temporary,
+        closing(FifoCheckpoint.create(Path(temporary) / "started")) as started,
+    ):
+        root = Path(temporary)
+        uv = root / "uv"
+        uv.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code(f"""
+                import signal
+                import sys
+
+                signal.pthread_sigmask(signal.SIG_BLOCK, {{signal.SIGINT}})
+                with open({str(started.path)!r}, "wb", buffering=0) as checkpoint:
+                    assert checkpoint.write(b"1") == 1
+                assert signal.sigwait({{signal.SIGINT}}) == signal.SIGINT
+                print("fixture resolver interrupted", file=sys.stderr, flush=True)
+                raise SystemExit(23)
+                """),
+        )
+        uv.chmod(0o755)
+        with preparation(binary, root, {"PATH": str(root)}) as (process, send, receive):
+            send(
+                {
+                    "Run": {
+                        "id": 1,
+                        "operation": {"PythonVersion": {"constraints": []}},
+                    }
+                }
+            )
+            started.wait("resolver is waiting for its interrupt")
+            send({"Control": {"id": 1, "control": "Interrupted"}})
+            assert receive("interrupt receipt") == {
+                "Controlled": {"id": 1, "result": {"Ok": True}}
+            }
+            completed = receive("interrupted resolver completion")["Completed"]
+            assert completed["confirmed"] is True, completed
+            assert completed["control"] == "Interrupted", completed
+            assert "fixture resolver interrupted" in completed["result"]["Err"], (
+                completed
+            )
+            send("Close")
+            assert receive("close") == "Closed"
+            process.stdin.close()
+            assert process.wait(timeout=10) == 0, process.stderr.read()
+            assert process.stderr.read() == ""
+            return [{"completed": completed}]
+
+
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS)
 def test_cancel_retires_backpressured_stdin_independently_of_output(
     binary: Path,
@@ -225,6 +278,13 @@ def test_exit_during_observer_registration_keeps_accepted_interrupt(
     binary: Path,
 ) -> Transcript:
     return inherited_output(binary, "interrupt")
+
+
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_interrupt_after_failed_exit_preserves_independent_failure(
+    binary: Path,
+) -> Transcript:
+    return inherited_output(binary, "interrupt-failed")
 
 
 @requires(MACOS_SANDBOX, NATIVE_FIXTURES, PROCESS_EVENTS)
@@ -448,7 +508,7 @@ def inherited_output(
             environment = {
                 "PATH": str(root),
                 "TEST_RESOLVER_ROOT": str(root),
-                "TEST_RESOLVER_MODE": mode,
+                "TEST_RESOLVER_MODE": "failed" if mode == "interrupt-failed" else mode,
             }
             if mode == "stdin":
                 environment.update(
@@ -457,7 +517,10 @@ def inherited_output(
                         "MCP_CONSOLE_TEST_STDIN_BLOCKED": str(root / "blocked"),
                     }
                 )
-            elif mode in ("interrupt", "registration") or pidfd_error is not None:
+            elif (
+                mode in ("interrupt", "interrupt-failed", "registration")
+                or pidfd_error is not None
+            ):
                 environment.update(
                     {
                         LOADER_VARIABLE: str(
@@ -501,7 +564,10 @@ def inherited_output(
                     gates["blocked"].wait(
                         "materializer stdin writer reached actual backpressure"
                     )
-                elif mode in ("interrupt", "registration") or pidfd_error is not None:
+                elif (
+                    mode in ("interrupt", "interrupt-failed", "registration")
+                    or pidfd_error is not None
+                ):
                     gates["entered"].wait("live-child exit probe held")
                     if pidfd_error is not None:
                         gates["release"].release()
@@ -519,7 +585,7 @@ def inherited_output(
                         gates["exit"].release()
                     assert exits.wait(10) == {leader}
                     retired.add("leader")
-                if mode == "interrupt":
+                if mode in ("interrupt", "interrupt-failed"):
                     send({"Control": {"id": 1, "control": "Interrupted"}})
                     assert receive("accepted interrupt after leader exit") == {
                         "Controlled": {"id": 1, "result": {"Ok": True}}
@@ -545,11 +611,12 @@ def inherited_output(
                         "Err": "managed Python version resolution interrupted"
                     }, completed
                     assert completed["control"] == "Interrupted", completed
-                elif mode == "failed":
+                elif mode in ("failed", "interrupt-failed"):
                     assert (
                         "fixture materialization failed before replying"
                         in completed["result"]["Err"]
                     ), completed
+                    assert completed["control"] is None, completed
                 else:
                     assert completed["control"] == "Cancelled", completed
                     kind = (

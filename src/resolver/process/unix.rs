@@ -73,6 +73,11 @@ pub(crate) fn spawn_resolver(command: &mut Command) -> io::Result<Child> {
 
 pub(super) fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterrupt> {
     let pid = child.id();
+    // Linux can report successful signaling for an unreaped, exited leader.
+    // Such an acknowledgment must not attribute its earlier failure to control.
+    if crate::process_exit::direct_child_has_exited(pid)? {
+        return Ok(ResolverInterrupt::AlreadyExited);
+    }
     // SAFETY: `process_group(0)` made the resolver PID its process-group ID.
     if unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) } == 0 {
         return Ok(ResolverInterrupt::Signaled);
