@@ -64,16 +64,21 @@ base::local(
       paths <- paths[!paths %in% temporary_library]
       index <- base::match(managed, paths)
       paths <- paths[!paths %in% managed]
-      paths <- base::append(
-        paths,
-        library,
-        after = if (base::is.na(index)) 0L else index - 1L
-      )
+      existing <- library %in% paths
+      if (!existing) {
+        paths <- base::append(
+          paths,
+          library,
+          after = if (base::is.na(index)) 0L else index - 1L
+        )
+      }
       base::.libPaths(base::c(temporary_library, paths))
       if (!library %in% base::.libPaths()) {
         base::stop("resolved R library was not added to .libPaths()")
       }
-      managed <<- library
+      # R deduplicates library paths. Reusing a project entry does not give
+      # Console ownership of that entry on the next activation.
+      managed <<- if (existing) "" else library
       library
     }
 
