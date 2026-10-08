@@ -106,6 +106,11 @@ class WindowsRelay(unittest.TestCase):
             [str(BINARY), "worker-relay", str(self.worker)],
             env=dict(
                 os.environ,
+                # Built-in worker scenarios must exclude host R startup files.
+                R_ENVIRON=os.devnull,
+                R_ENVIRON_USER=os.devnull,
+                R_PROFILE=os.devnull,
+                R_PROFILE_USER=os.devnull,
                 TEST_WORKER_SCENARIO=scenario,
                 TEST_WORKER_READY=ready.name,
                 TEST_DISPATCHED=str(marker),
