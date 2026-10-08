@@ -113,6 +113,7 @@ Suite paths with an underscore-prefixed component are not discovered.
 
 Never edit snapshots by hand.
 Regenerate intentional changes with `scripts/test --update SELECTOR`, review them, and rerun without `--update`.
+CLI help snapshots use an 80-column width with all standard streams detached from the caller's terminal.
 Only a full unscoped run audits orphan snapshots; a successful full update can remove them.
 Focused updates preserve unselected snapshots, and skipped cases retain their snapshots even during full updates.
 Prefer one shared snapshot across platforms.
