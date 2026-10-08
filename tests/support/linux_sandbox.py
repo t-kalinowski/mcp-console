@@ -41,7 +41,7 @@ def inherited_procfs_command(command: list[str]) -> list[str]:
     ]
 
 
-def nested_namespaces_available() -> bool:
+def inherited_procfs_available() -> bool:
     if sys.platform != "linux" or shutil.which("bwrap") is None:
         return False
     # The fixture denies fresh procfs mounts without preventing the inner
@@ -58,6 +58,36 @@ def nested_namespaces_available() -> bool:
             "/bin/true",
         ]
     )
+    return subprocess.run(command, capture_output=True, timeout=10).returncode == 0
+
+
+def nested_namespaces_available() -> bool:
+    helper = shutil.which("bwrap")
+    if sys.platform != "linux" or helper is None:
+        return False
+    # Root metadata uses ordinary nested namespaces, without the seccomp
+    # filter that forces inherited-procfs execution in the separate fixture.
+    command = [
+        helper,
+        "--unshare-user",
+        "--unshare-pid",
+        "--ro-bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--",
+        helper,
+        "--unshare-user",
+        "--unshare-pid",
+        "--ro-bind",
+        "/",
+        "/",
+        "--",
+        "/bin/true",
+    ]
     return subprocess.run(command, capture_output=True, timeout=10).returncode == 0
 
 

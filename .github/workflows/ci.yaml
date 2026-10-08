@@ -76,8 +76,11 @@ jobs:
             windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-
       - name: Install Windows runtime packages
         run: |
-          uv python install 3.13
+          uv python install 3.13 3.9
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $oldPython = uv python find 3.9 --python-preference only-managed
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "MCP_CONSOLE_TEST_OLD_PYTHON=$oldPython" >> $env:GITHUB_ENV
           $consolePython = Join-Path $env:LOCALAPPDATA "mcp-console/cache/dependencies/uv/python"
           uv python install 3.13 --install-dir $consolePython
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
