@@ -75,20 +75,20 @@ def test_routes_input_to_idle_later_callback(
 @executions(RUNTIME)
 def test_uses_native_width_default(binary: Path, execution: Execution) -> Transcript:
     environment, rscript = r_test_environment()
-    client = McpClient(binary, execution.serve(), environment)
-    client.initialize_and_list_tools()
-    # fmt: r
-    r = code(r"""
-        cat("width: ", getOption("width"), "\n", sep = "")
-        1:45
-        """)
-    client.send(r=r)
-    output = last_tool_text(client)
-    reference = subprocess.check_output(
-        [rscript, "--vanilla", "-e", r], env=environment, text=True
-    )
-    assert output == reference, repr(output)
-    return client.finish()
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        # fmt: r
+        r = code(r"""
+            cat("width: ", getOption("width"), "\n", sep = "")
+            1:45
+            """)
+        client.send(r=r)
+        output = last_tool_text(client)
+        reference = subprocess.check_output(
+            [rscript, "--vanilla", "-"], input=r, env=environment, text=True
+        )
+        assert output == reference, repr(output)
+        return client.finish()
 
 
 @executions(DIRECT, SANDBOXED)
