@@ -63,6 +63,10 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
         "UV_CONSTRAINT",
         "UV_BUILD_CONSTRAINT",
         "UV_OVERRIDE",
+        "UV_NO_BUILD",
+        "UV_NO_BUILD_PACKAGE",
+        "UV_NO_BINARY",
+        "UV_NO_BINARY_PACKAGE",
         "UV_CONFIG_FILE",
         "UV_MANAGED_PYTHON",
         "UV_NO_MANAGED_PYTHON",
@@ -90,6 +94,10 @@ def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
             UV_CONSTRAINT=str(Path(directory) / "missing-constraints.txt"),
             UV_BUILD_CONSTRAINT=str(Path(directory) / "missing-build-constraints.txt"),
             UV_OVERRIDE=str(Path(directory) / "missing-overrides.txt"),
+            UV_NO_BUILD="1",
+            UV_NO_BUILD_PACKAGE="mcp-console-build-probe",
+            UV_NO_BINARY="1",
+            UV_NO_BINARY_PACKAGE="mcp-console-trust-probe",
         ),
     ):
         root = Path(directory).resolve()
@@ -137,7 +145,10 @@ def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
 
 @requires(POSIX, SANDBOX, command("uv"))
 def test_worker_replaces_uv_configuration_and_wheel(binary: Path) -> Transcript:
-    with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
+    with (
+        TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory,
+        patch.dict(os.environ, UV_NO_BINARY_PACKAGE="mcp-console-trust-probe"),
+    ):
         root = Path(directory).resolve()
         working, env = workspace(root)
         (working / "probe-source.py").write_text(PROBE.read_text())
@@ -260,7 +271,10 @@ def test_worker_poisons_explicitly_writable_python_cache(binary: Path) -> Transc
 
 @requires(POSIX, SANDBOX, command("uv"))
 def test_worker_supplies_package_build_backend(binary: Path) -> Transcript:
-    with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
+    with (
+        TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory,
+        patch.dict(os.environ, UV_NO_BUILD="1"),
+    ):
         root = Path(directory).resolve()
         working, env = workspace(root)
         for name in ("trust_probe.py", "build_backend.py"):
