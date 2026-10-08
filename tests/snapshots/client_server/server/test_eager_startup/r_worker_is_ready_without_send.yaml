@@ -61,43 +61,6 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
-          "startup_requirements": {
-            "r": [
-              "DBI",
-              "arrow",
-              "dbplyr",
-              "dplyr",
-              "duckdb",
-              "ggplot2",
-              "nanoarrow",
-              "reticulate",
-              "tidyverse",
-              "yyjsonr"
-            ],
-            "python": [
-              "numpy",
-              "pandas",
-              "matplotlib",
-              "plotnine"
-            ],
-            "duckdb": [
-              "icu",
-              "json",
-              "sqlite"
-            ],
-            "python_version": [],
-            "exclude_newer": null
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -111,7 +74,17 @@ result:
               "utf8"
             ],
             "python": []
-          }
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "automatic"
+          },
+          "selection": {
+            "r": "<selected R home>",
+            "python": "<selected Python>",
+            "python_source": "default managed"
+          },
+          "prepared": true
         }
   structuredContent:
     requirements:
@@ -137,37 +110,6 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
-    startup_requirements:
-      r:
-        - DBI
-        - arrow
-        - dbplyr
-        - dplyr
-        - duckdb
-        - ggplot2
-        - nanoarrow
-        - reticulate
-        - tidyverse
-        - yyjsonr
-      python:
-        - numpy
-        - pandas
-        - matplotlib
-        - plotnine
-      duckdb:
-        - icu
-        - json
-        - sqlite
-      python_version: []
-      exclude_newer: ~
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -180,6 +122,14 @@ result:
         - tibble
         - utf8
       python: []
+    resolution:
+      r: automatic
+      python: automatic
+    selection:
+      r: <selected R home>
+      python: <selected Python>
+      python_source: default managed
+    prepared: true
   isError: false
 ---
 send:

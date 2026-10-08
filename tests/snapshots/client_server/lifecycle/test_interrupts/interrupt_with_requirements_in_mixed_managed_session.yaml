@@ -22,29 +22,6 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
-          "startup_requirements": {
-            "r": [
-              "DBI"
-            ],
-            "python": [],
-            "duckdb": [
-              "icu",
-              "json",
-              "sqlite"
-            ],
-            "python_version": [],
-            "exclude_newer": null
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "python.managed"
-          },
-          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -58,7 +35,17 @@ result:
               "utf8"
             ],
             "python": []
-          }
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "automatic"
+          },
+          "selection": {
+            "r": "<selected R home>",
+            "python": "<selected Python>",
+            "python_source": "python.managed"
+          },
+          "prepared": true
         }
   structuredContent:
     requirements:
@@ -71,24 +58,6 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
-    startup_requirements:
-      r:
-        - DBI
-      python: []
-      duckdb:
-        - icu
-        - json
-        - sqlite
-      python_version: []
-      exclude_newer: ~
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: python.managed
-    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -101,6 +70,14 @@ result:
         - tibble
         - utf8
       python: []
+    resolution:
+      r: automatic
+      python: automatic
+    selection:
+      r: <selected R home>
+      python: <selected Python>
+      python_source: python.managed
+    prepared: true
   isError: false
 ---
 send:

@@ -60,42 +60,41 @@ result:
           r:
             description: >-
               Evaluate one complete R cell in persistent global state. Visible
-              top-level expressions autoprint; leave the primary result last.
-              Load CRAN packages normally through `library()`, `require()`,
+              top-level expressions autoprint; leave the primary result last. Load
+              CRAN packages normally through `library()`, `require()`,
               `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; managed
               sessions prepare missing packages on first use. Avoid availability
-              probes or `install.packages()`. Access Python globals through
-              `py$name`. Default-device plots return as PNGs and finalize at
-              cell end, including after errors; draw each plot in one cell.
-              Explicit devices are not captured. Set persistent dimensions in
-              inches and DPI with `options(console.plot.width_in = ...,
-              console.plot.height_in = ..., console.plot.dpi = ...)`.
+              probes or `install.packages()`. Access Python globals through `py$name`.
+              Default-device plots return as PNGs and finalize at cell end, including
+              after errors; draw each plot in one cell. Explicit devices are not
+              captured. Set persistent dimensions in inches and DPI with
+              `options(console.plot.width_in = ..., console.plot.height_in = ...,
+              console.plot.dpi = ...)`.
             type:
               - string
               - "null"
           python:
             description: >-
-              Evaluate one complete Python cell in persistent `__main__` state.
-              The final visible expression autoprints; leave the primary result
-              last. Import packages normally; managed sessions prepare missing
-              PyPI distributions on first import. Use `requirements.python` when
-              import and distribution names differ or to prepare before
-              execution. Access R globals and call functions through `r.name`.
-              `matplotlib.pyplot.show()` returns open figures as PNGs
-              immediately and closes them. At cell end, even after errors,
-              remaining open figures return as PNGs and close; `show()` is
-              optional. Closing an unshown figure suppresses capture. R plots
-              through `r` follow the R plot rules.
+              Evaluate one complete Python cell in persistent `__main__` state. The
+              final visible expression autoprints; leave the primary result last.
+              Import packages normally; managed sessions prepare missing PyPI
+              distributions on first import. Use `requirements.python` when import and
+              distribution names differ or to prepare before execution. Access R
+              globals and call functions through `r.name`. `matplotlib.pyplot.show()`
+              returns open figures as PNGs immediately and closes them. At cell end,
+              even after errors, remaining open figures return as PNGs and close;
+              `show()` is optional. Closing an unshown figure suppresses capture. R
+              plots through `r` follow the R plot rules.
             type:
               - string
               - "null"
           timeout_ms:
             description: >-
-              Wait for output for up to this many milliseconds (default 60,000).
-              `0` returns without waiting for completion. Expiry returns
-              available output while work continues. This is a wait budget, not
-              cancellation or a whole-call deadline: preparation and control can
-              exceed it; standalone preparation has no timeout.
+              Wait for output for up to this many milliseconds (default 60,000). `0`
+              returns without waiting for completion. Expiry returns available output
+              while work continues. This is a wait budget, not cancellation or a
+              whole-call deadline: preparation and control can exceed it; standalone
+              preparation has no timeout.
             type: integer
             format: uint64
             minimum: 0
@@ -104,41 +103,40 @@ result:
             description: >-
               Apply control before same-call stdin/code. `interrupt` requests a
               cooperative interrupt and cancellation of dependency preparation,
-              preserving live state. A following cell runs only if prior work
-              stops. `restart` discards live state, including debugger and
-              unread input; same-call stdin/code go only to the replacement.
+              preserving live state. A following cell runs only if prior work stops.
+              `restart` discards live state, including debugger and unread input;
+              same-call stdin/code go only to the replacement.
             type: string
             enum:
               - interrupt
               - restart
           stdin:
             description: >-
-              Send stdin alone to answer an active read, prompt, or debugger.
-              UTF-8 text is queued exactly; no newline is added, so line input
-              normally needs a trailing `\n`. Empty text queues nothing. With a
-              cell, input queues before code; an already waiting read may
-              consume it first, including while interrupted work unwinds. Unread
-              input can satisfy later reads; restart discards it.
+              Send stdin alone to answer an active read, prompt, or debugger. UTF-8
+              text is queued exactly; no newline is added, so line input normally
+              needs a trailing `\n`. Empty text queues nothing. With a cell, input
+              queues before code; an already waiting read may consume it first,
+              including while interrupted work unwinds. Unread input can satisfy later
+              reads; restart discards it.
             type:
               - string
               - "null"
           requirements:
             description: >-
               Inspect declarations or prepare dependencies on the execution host
-              without importing, attaching, or loading them. Configured
-              resolution policies govern preparation. Requires host preparation
-              support; bare runtimes use installed packages. Alone, performs
-              standalone preparation. With a cell, preparation precedes code;
-              without control it also precedes bundled stdin. Failure or a
-              required restart withholds the cell. Compatible additions preserve
-              live state on an idle worker; other changes need restart. With
-              restart, candidate resolution precedes replacement; resolution
-              failure preserves the current worker and sends no stdin/code.
-              Standalone preparation rejects nonempty stdin. Only add can
-              accompany interrupt, with a following cell; providers without this
-              preparation support reject the combination before signaling or
-              input. Otherwise interrupt and stdin precede deferred
-              validation/preparation and are not rolled back on failure.
+              without importing, attaching, or loading them. Configured resolution
+              policies govern preparation. Requires host preparation support; bare
+              runtimes use installed packages. Alone, performs standalone preparation.
+              With a cell, preparation precedes code; without control it also precedes
+              bundled stdin. Failure or a required restart withholds the cell.
+              Compatible additions preserve live state on an idle worker; other
+              changes need restart. With restart, candidate resolution precedes
+              replacement; resolution failure preserves the current worker and sends
+              no stdin/code. Standalone preparation rejects nonempty stdin. Only add
+              can accompany interrupt, with a following cell; providers without this
+              preparation support reject the combination before signaling or input.
+              Otherwise interrupt and stdin precede deferred validation/preparation
+              and are not rolled back on failure.
             type:
               - object
               - "null"

@@ -21,9 +21,8 @@ result:
   content:
     - type: text
       text: >-
-        Python resolution is disabled by configuration for this operation
-        (disabled); use resolution: explicit for MCP requirements changes or
-        automatic for runtime preparation
+        Python requirements are unavailable in this non-managed Python session;
+        install packages before starting the session
   isError: true
 ---
 send:
@@ -44,9 +43,8 @@ result:
   content:
     - type: text
       text: >-
-        Python resolution is disabled by configuration for this operation
-        (disabled); use resolution: explicit for MCP requirements changes or
-        automatic for runtime preparation
+        Python requirements are unavailable in this non-managed Python session;
+        install packages before starting the session
   isError: true
 ---
 send:

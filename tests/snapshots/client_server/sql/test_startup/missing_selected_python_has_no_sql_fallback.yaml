@@ -5,29 +5,7 @@ config:
     code: raise RuntimeError('source must not execute')
   python: /mcp-console-startup-missing-python
 ---
-!same-as MCP initialization for this execution mode
----
-send: {}
-result:
-  content:
-    - type: text
-      text: |-
-        Error: selected Python executable is not an absolute file: /mcp-console-startup-missing-python
-        Error: Python initialization is incomplete; SQL withheld; explicit restart required
-
-        [idle]
-  isError: false
----
-send:
-  sql: SELECT 42 AS answer
-result:
-  content:
-    - type: text
-      text: >
-        Error: SQL unavailable: Python initialization is incomplete; explicit
-        restart required
-  isError: false
----
-missing_selected_python: >
-  Error: SQL unavailable: Python initialization is incomplete; explicit
-  restart required
+exit_status: 1
+stderr: >
+  cannot use existing Python /mcp-console-startup-missing-python: No such
+  file or directory (os error 2)

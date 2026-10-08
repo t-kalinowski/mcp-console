@@ -55,20 +55,9 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
-          "startup_requirements": {
+          "runtime_requirements": {
             "r": [],
-            "python": [
-              "numpy",
-              "pandas",
-              "matplotlib",
-              "plotnine",
-              "duckdb"
-            ],
-            "duckdb": [
-              "sqlite"
-            ],
-            "python_version": [],
-            "exclude_newer": null
+            "python": []
           },
           "resolution": {
             "r": "automatic",
@@ -79,11 +68,7 @@ result:
             "python": "<selected Python>",
             "python_source": "default managed"
           },
-          "prepared": true,
-          "runtime_requirements": {
-            "r": [],
-            "python": []
-          }
+          "prepared": true
         }
   structuredContent:
     requirements:
@@ -93,18 +78,9 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
-    startup_requirements:
+    runtime_requirements:
       r: []
-      python:
-        - numpy
-        - pandas
-        - matplotlib
-        - plotnine
-        - duckdb
-      duckdb:
-        - sqlite
-      python_version: []
-      exclude_newer: ~
+      python: []
     resolution:
       r: automatic
       python: automatic
@@ -113,7 +89,4 @@ result:
       python: <selected Python>
       python_source: default managed
     prepared: true
-    runtime_requirements:
-      r: []
-      python: []
   isError: false

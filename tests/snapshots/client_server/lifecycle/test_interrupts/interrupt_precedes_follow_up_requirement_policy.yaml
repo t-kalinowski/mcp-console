@@ -1,0 +1,18 @@
+---
+policy: startup_only
+interrupt:
+  content:
+    - type: text
+      text: |-
+        interrupted
+        R resolution is disabled by configuration for this operation (startup_only); use resolution: explicit for MCP requirements changes or automatic for runtime preparation
+  isError: true
+---
+policy: disabled
+interrupt:
+  content:
+    - type: text
+      text: |-
+        interrupted
+        R resolution is disabled by configuration for this operation (disabled); use resolution: explicit for MCP requirements changes or automatic for runtime preparation
+  isError: true

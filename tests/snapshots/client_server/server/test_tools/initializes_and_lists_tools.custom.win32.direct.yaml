@@ -87,42 +87,40 @@ result:
             description: >-
               Apply control before same-call stdin/code. `interrupt` requests a
               cooperative interrupt and cancellation of dependency preparation,
-              preserving live state. A following cell runs only if prior work
-              stops. `restart` discards live interpreter, database, debugger,
-              and unread-input state; same-call stdin/code go only to the
-              replacement.
+              preserving live state. A following cell runs only if prior work stops.
+              `restart` discards live interpreter, database, debugger, and
+              unread-input state; same-call stdin/code go only to the replacement.
             type: string
             enum:
               - interrupt
               - restart
           stdin:
             description: >-
-              Send stdin alone to answer an active read, prompt, or debugger.
-              UTF-8 text is queued exactly; no newline is added, so line input
-              normally needs a trailing `\n`. Empty text queues nothing. With a
-              cell, input queues before code; an already waiting read may
-              consume it first, including while interrupted work unwinds. Unread
-              input can satisfy later reads; restart discards it.
+              Send stdin alone to answer an active read, prompt, or debugger. UTF-8
+              text is queued exactly; no newline is added, so line input normally
+              needs a trailing `\n`. Empty text queues nothing. With a cell, input
+              queues before code; an already waiting read may consume it first,
+              including while interrupted work unwinds. Unread input can satisfy later
+              reads; restart discards it.
             type:
               - string
               - "null"
           requirements:
             description: >-
               Inspect declarations or prepare dependencies on the execution host
-              without importing, attaching, or loading them. Configured
-              resolution policies govern preparation. Requires host preparation
-              support; bare runtimes use installed packages. Alone, performs
-              standalone preparation. With a cell, preparation precedes code;
-              without control it also precedes bundled stdin. Failure or a
-              required restart withholds the cell. Compatible additions preserve
-              live state on an idle worker; other changes need restart. With
-              restart, candidate resolution precedes replacement; resolution
-              failure preserves the current worker and sends no stdin/code.
-              Standalone preparation rejects nonempty stdin. Only add can
-              accompany interrupt, with a following cell; providers without this
-              preparation support reject the combination before signaling or
-              input. Otherwise interrupt and stdin precede deferred
-              validation/preparation and are not rolled back on failure.
+              without importing, attaching, or loading them. Configured resolution
+              policies govern preparation. Requires host preparation support; bare
+              runtimes use installed packages. Alone, performs standalone preparation.
+              With a cell, preparation precedes code; without control it also precedes
+              bundled stdin. Failure or a required restart withholds the cell.
+              Compatible additions preserve live state on an idle worker; other
+              changes need restart. With restart, candidate resolution precedes
+              replacement; resolution failure preserves the current worker and sends
+              no stdin/code. Standalone preparation rejects nonempty stdin. Only add
+              can accompany interrupt, with a following cell; providers without this
+              preparation support reject the combination before signaling or input.
+              Otherwise interrupt and stdin precede deferred validation/preparation
+              and are not rolled back on failure.
             type:
               - object
               - "null"
@@ -169,21 +167,20 @@ result:
                   maxLength: 64
               r:
                 description: >-
-                  Single-line ir package references for dependency preparation,
-                  e.g. DBI or duckdb, including supported remote references;
-                  local sources and NUL/line breaks are rejected.
+                  Single-line ir package references for dependency preparation, e.g. DBI
+                  or duckdb, including supported remote references; local sources and
+                  NUL/line breaks are rejected.
                 type: array
                 items:
                   type: string
                   minLength: 1
               python:
                 description: >-
-                  Named PEP 508 registry requirements for dependency
-                  preparation, e.g. duckdb>=1, with versions, extras, or
-                  markers. Paths, URLs, editable requirements, direct
-                  references, and local sources are rejected. Bare or
-                  user-selected environments and custom workers disable managed
-                  registry requirements.
+                  Named PEP 508 registry requirements for dependency preparation, e.g.
+                  duckdb>=1, with versions, extras, or markers. Paths, URLs, editable
+                  requirements, direct references, and local sources are rejected. Bare or
+                  user-selected environments and custom workers disable managed registry
+                  requirements.
                 type: array
                 items:
                   type: string

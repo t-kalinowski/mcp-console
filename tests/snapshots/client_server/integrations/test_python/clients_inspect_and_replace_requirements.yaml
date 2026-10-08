@@ -7,7 +7,6 @@ sync:
     python_version:
       - ">=3.11"
     exclude_newer: 2026-01-01
-  prepared: true
   runtime_requirements:
     r:
       - DBI
@@ -20,6 +19,14 @@ sync:
       - tibble
       - utf8
     python: []
+  resolution:
+    r: automatic
+    python: automatic
+  selection:
+    r: /Library/Frameworks/R.framework/Versions/4.6/Resources
+    python: /Users/tomasz/Library/Caches/uv/environments-v2/-run-4bab86448421df03/bin/python
+    python_source: default managed
+  prepared: true
 ---
 async:
   requirements:
@@ -28,7 +35,6 @@ async:
     duckdb: []
     python_version: []
     exclude_newer: ~
-  prepared: true
   runtime_requirements:
     r:
       - DBI
@@ -41,3 +47,11 @@ async:
       - tibble
       - utf8
     python: []
+  resolution:
+    r: automatic
+    python: automatic
+  selection:
+    r: /Library/Frameworks/R.framework/Versions/4.6/Resources
+    python: /Users/tomasz/Library/Caches/uv/environments-v2/-run-4bab86448421df03/bin/python
+    python_source: default managed
+  prepared: true

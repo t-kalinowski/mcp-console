@@ -6,8 +6,8 @@ result:
   content:
     - type: text
       text: >-
-        python.managed: managed Python sessions require `uv` on PATH; install uv
-        or select an existing environment
+        Python sessions without R require `uv` on PATH; set python in
+        .agents/console/config.yaml to use an existing environment
   isError: true
 ---
 send:

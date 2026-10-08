@@ -189,7 +189,7 @@ A mapping contains exactly one of `managed`, `existing`, or `first_available`.
 Quote version strings; use the same constraints as `requirements.python_version`.
 Omission preserves the bundled version-selection rule.
 Managed selection ignores ambient uv interpreter preferences.
-Conflicting selection controls explicitly supplied through `environment` or `resolver.environment` are errors; use the Python settings instead.
+With explicit managed Python configuration, conflicting selection controls supplied through `environment` or `resolver.environment` are errors; use the Python settings instead.
 Other shared resolver environment and cache settings retain their existing roles.
 
 Select an existing executable or standard venv root:

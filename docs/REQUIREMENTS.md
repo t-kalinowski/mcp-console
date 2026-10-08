@@ -319,7 +319,7 @@ R installations and all code loaded during preparation remain trusted inputs; gr
 
 The preparation owner captures startup `UV_*` values except `UV_OFFLINE`, restores that snapshot for later calls, and uses its captured uv selection.
 Managed Python forces uv-managed CPython for inventory and isolated environment creation; ambient interpreter controls do not select host Python.
-Explicitly configured conflicting controls are rejected.
+With explicit managed Python configuration, conflicting controls supplied through the configured environment are rejected.
 R-present sessions respect `RETICULATE_UV`; the special `managed` value uses reticulate's managed tool/cache.
 Environment changes in evaluated cells do not configure later host resolution, though mutable files still can.
 Default local resolver writes are confined to the Console cache root and private temporary storage.
