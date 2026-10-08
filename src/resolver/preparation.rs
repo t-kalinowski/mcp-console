@@ -42,6 +42,9 @@ pub(crate) struct Discovery {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum Operation {
+    InspectR {
+        executable: std::path::PathBuf,
+    },
     Bootstrap,
     ResolveRStandalone {
         requirements: Vec<String>,

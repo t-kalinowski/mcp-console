@@ -107,6 +107,44 @@ impl ClientConfiguration {
             .or_else(|| std::env::var_os("RETICULATE_PYTHON"));
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
+        let installation = r_settings
+            .executable
+            .as_ref()
+            .map(|executable| {
+                crate::resolver::preparation::Preparation::inspect::<
+                    crate::local_runtime::RInstallation,
+                >(
+                    crate::resolver::preparation::Operation::InspectR {
+                        executable: executable.clone(),
+                    },
+                    sandbox_settings.clone(),
+                    no_sandbox,
+                    diagnostics.clone(),
+                    on_started,
+                )
+            })
+            .transpose()?;
+        let mut resolver_settings = resolver_settings;
+        if let Some(installation) = &installation {
+            let mut command = std::process::Command::new(&program);
+            installation.configure(&mut command)?;
+            let values = resolver_settings
+                .entry("environment")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .expect("captured resolver environment");
+            for (key, value) in command.get_envs() {
+                values.insert(
+                    key.to_str()
+                        .ok_or("R environment name is not UTF-8")?
+                        .into(),
+                    value
+                        .and_then(|value| value.to_str())
+                        .ok_or("R environment path is not UTF-8")?
+                        .into(),
+                );
+            }
+        }
         let local_runtime;
         #[cfg(any(unix, windows))]
         let resolver_preparation;
@@ -177,6 +215,7 @@ impl ClientConfiguration {
             );
             local_runtime = Some(crate::local_runtime::Selection {
                 r_home: Some(home),
+                installation,
                 r_settings,
                 python: None,
             });

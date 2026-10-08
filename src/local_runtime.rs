@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+mod r_selection;
 
 #[cfg(any(unix, windows))]
 use crate::resolver::{ManagedPython, ResolverStopHandle};
@@ -19,6 +20,8 @@ pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other t
 #[serde(deny_unknown_fields)]
 pub(crate) struct Selection {
     pub(crate) r_home: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) installation: Option<RInstallation>,
     #[serde(default)]
     pub(crate) r_settings: crate::settings::R,
     // In managed sessions, None leaves R declarations and selection hints lazy.
@@ -39,6 +42,8 @@ pub(crate) struct Python {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkerSelection {
     pub(crate) r: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) installation: Option<RInstallation>,
     #[serde(default)]
     pub(crate) r_settings: crate::settings::R,
     pub(crate) python: Option<Python>,
@@ -112,6 +117,7 @@ impl Selection {
         let duckdb_extension_directory = managed.as_ref().and(extension_directory);
         let selection = Self {
             r_home: None,
+            installation: None,
             r_settings: Default::default(),
             python: Some(Python {
                 selected: Box::new(selected),
@@ -161,6 +167,9 @@ impl Selection {
     }
 
     pub(crate) fn configure(&self, command: &mut Command) -> Result<(), String> {
+        if let Some(installation) = &self.installation {
+            installation.configure(command)?;
+        }
         if let Some(home) = &self.r_home {
             // Preserve native filename bytes through R_HOME. The structured
             // Python handoff does not need to encode the R path as UTF-8.
@@ -170,7 +179,8 @@ impl Selection {
             ENVIRONMENT,
             serde_json::to_string(&WorkerSelection {
                 r: self.r_home.is_some(),
-                r_settings: self.r_settings,
+                installation: self.installation.clone(),
+                r_settings: self.r_settings.clone(),
                 python: self.python.clone(),
             })
             .map_err(|error| format!("cannot encode runtime selections: {error}"))?,
@@ -211,9 +221,14 @@ impl Selection {
     }
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RInstallation {
     pub(crate) home: PathBuf,
     resources: [OsString; 3],
+    #[serde(default)]
+    identity: Vec<r_selection::FileIdentity>,
+    #[serde(default)]
+    resource_targets: Vec<PathBuf>,
 }
 
 impl RInstallation {
@@ -278,6 +293,8 @@ pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Erro
     }
     let installation = RInstallation {
         home,
+        identity: Vec::new(),
+        resource_targets: Vec::new(),
         resources: std::array::from_fn(|index| OsString::from_vec(values[index].to_vec())),
     };
     installation.configure_environment();
@@ -347,6 +364,8 @@ impl Drop for TemporaryDirectory {
 pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Error>> {
     let home = harp::command::r_home_setup()?;
     let installation = RInstallation {
+        identity: Vec::new(),
+        resource_targets: Vec::new(),
         resources: ["share", "include", "doc"].map(|name| home.join(name).into_os_string()),
         home,
     };

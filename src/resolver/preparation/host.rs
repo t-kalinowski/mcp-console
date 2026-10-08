@@ -107,6 +107,10 @@ impl Context {
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<serde_json::Value, String> {
         match operation {
+            Operation::InspectR { executable } => serde_json::to_value(
+                crate::local_runtime::RInstallation::inspect(&executable, on_started)?,
+            )
+            .map_err(|error| error.to_string()),
             Operation::Bootstrap => {
                 let bootstrap = self
                     .bootstrap

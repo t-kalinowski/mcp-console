@@ -109,6 +109,35 @@ Without R or an explicit selection, Console uses uv on the local host.
 A broken selected interpreter is an error, not a reason to fall back.
 See [runtime selection](BUILTIN_RUNTIME.md).
 
+## R executable selection
+
+Select an installed R executable or its ordinary launcher:
+
+```yaml
+r: /opt/R/4.6.1/bin/R
+```
+
+The scalar expands to `r: {executable: PATH}` before configuration layers merge.
+A mapping can combine selection with the existing startup setting:
+
+```yaml
+r:
+  executable: /opt/R/4.6.1/bin/R
+  vanilla: true
+```
+
+Paths, including bare filenames, are relative to the captured launch directory.
+A leading `~` uses the server's absolute `HOME`; `~user` and variable references are not expanded.
+On Windows, select an installed launcher such as `r: 'C:\Program Files\R\R-4.6.1\bin\R.exe'`.
+Directories, Rscript selectors, commands with arguments, and incompatible installations are errors.
+An explicit selection overrides inherited R installation hints and PATH discovery.
+Omitting `executable` preserves ordinary discovery; `r: null` clears the R settings before subsequent overrides.
+
+Console captures the installation's matching Rscript, runtime library, and resource directories for workers and preparation across restarts.
+It checks accepted installation files and resource targets before reuse; changing them requires a new server connection.
+Failed initial discovery can be retried with explicit restart after repairing the captured path.
+Inspection uses worker permissions and suppresses startup files; native R startup retains the behavior below.
+
 ## Native R startup
 
 The built-in R interpreter uses R's normal startup by default:

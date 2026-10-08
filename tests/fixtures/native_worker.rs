@@ -545,6 +545,7 @@ fn native_probe() {
         let mut runtime = crate::python::Runtime::new(crate::local_runtime::WorkerSelection {
             r_settings: Default::default(),
             r: false,
+            installation: None,
             python: Some(crate::local_runtime::Python {
                 selected: Box::new(initial.clone()),
                 explicit: None,

@@ -94,7 +94,7 @@ impl ConsoleServer {
                         no_sandbox,
                         sandbox_settings.clone(),
                         python.clone(),
-                        r,
+                        r.clone(),
                         resolver.clone(),
                         diagnostics,
                         started,

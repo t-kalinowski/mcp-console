@@ -66,6 +66,8 @@ The owner retains its captured initializer, replaces only the failed readiness a
 Cells capture readiness at admission, so replacing a failed attempt cannot revive a rejected cell.
 Accepted configuration and post-acceptance worker recovery retain their existing ownership.
 Custom workers remain lazy.
+An explicit R launcher is inspected with captured worker permissions before dependency discovery.
+The server retains its installation identity, matching Rscript and runtime resources across worker generations; preparation uses those same resources, while native startup stays inside the worker.
 The captured public `languages` selection governs presentation and source-argument admission only; it is not forwarded into worker runtime configuration.
 Hidden source keys are rejected before same-call control, preparation, or stdin effects.
 Configured language fields stay visible even when a runtime is unavailable; execution validates discovered capabilities.

@@ -709,6 +709,31 @@ class WindowsConsole(unittest.TestCase):
         )
         self.assertEqual(session.process.wait(timeout=10), 0)
 
+    def test_explicit_r_selections_use_windows_installation(self):
+        selected = shutil.which("R")
+        self.assertIsNotNone(selected, "Windows R selection acceptance requires R")
+        home = Path(subprocess.check_output([selected, "RHOME"], text=True).strip())
+        self.assertTrue((home / "etc/Rcmd_environ").is_file())
+        for selection in (selected, {"executable": selected}):
+            with self.subTest(selection=selection):
+                session = Session(overrides=["r=" + json.dumps(selection)])
+                try:
+                    session.initialize()
+                    self.assertIn(
+                        "selected R ready",
+                        json.dumps(session.send(r='cat("selected R ready")')),
+                    )
+                    self.assertIn(
+                        "selected R retained",
+                        json.dumps(
+                            session.send(
+                                control="restart", r='cat("selected R retained")'
+                            )
+                        ),
+                    )
+                finally:
+                    session.close()
+
     def test_r_without_python(self):
         # Capture R before removing the interpreter launchers from PATH.
         r_home = (
