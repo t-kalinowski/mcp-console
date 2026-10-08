@@ -76,7 +76,9 @@ fn main() -> ExitCode {
             writable_root,
             overrides: command_overrides,
         } => {
-            overrides.extend(command_overrides);
+            if let Err(error) = overrides.extend(command_overrides) {
+                return exit_with_error(error);
+            }
             match run_server(worker, relay, no_sandbox, writable_root, &overrides) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => exit_with_error(error),
@@ -102,7 +104,9 @@ fn main() -> ExitCode {
             writable_root,
             overrides: command_overrides,
         } => {
-            overrides.extend(command_overrides);
+            if let Err(error) = overrides.extend(command_overrides) {
+                return exit_with_error(error);
+            }
             match sandbox::run(
                 &command,
                 exit_with_parent,

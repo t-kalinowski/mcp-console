@@ -162,18 +162,29 @@ pub fn discover(
     overrides: &crate::cli::ConfigOverrides,
 ) -> Result<Captured, String> {
     let mut paths = Vec::new();
-    // Exclude scopes before resolving or inspecting their sources. In particular,
-    // --no-config must not resolve Console home just to discover configuration.
-    if !overrides.no_config {
-        if let Some(home) = crate::console_paths::home_console_directory()? {
+    // Select sources before resolving or inspecting them. Explicit selection and
+    // global exclusions must not resolve Console home for configuration discovery.
+    if let Some(path) = &overrides.config_file {
+        if overrides.no_config || overrides.no_global_config || overrides.no_project_config {
+            return Err("--config-file cannot be combined with --no-config, --no-global-config, or --no-project-config".into());
+        }
+        paths.push(path.clone());
+    } else if !overrides.no_config {
+        if !overrides.no_global_config
+            && let Some(home) = crate::console_paths::home_console_directory()?
+        {
             paths.push(home.join("config.yaml"));
         }
         if !overrides.no_project_config {
             paths.push(PathBuf::from(".agents/console/config.yaml"));
         }
     }
-    let crate::config::Loaded { value, paths } =
-        crate::config::load(directory, &paths, &overrides.values)?;
+    let crate::config::Loaded { value, paths } = crate::config::load(
+        directory,
+        &paths,
+        &overrides.values,
+        overrides.config_file.is_some(),
+    )?;
     let configured = value.is_some();
     let files = paths
         .iter()

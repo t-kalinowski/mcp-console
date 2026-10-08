@@ -48,13 +48,21 @@ pub struct ConfigOverrides {
     /// Skip trusted launch-directory project configuration; still load global configuration and apply -c overrides
     #[arg(
         long,
-        long_help = "Skip launch-directory project configuration; still load global configuration and apply -c overrides.\nAutomatic project configuration is trusted launcher input: it can select executables, child environments, and sandbox permissions. Trusting sandboxed code is not equivalent to trusting it to define the sandbox.\nGlobal settings supply defaults, not a mandatory security ceiling; projects may override them. Integrations opening unfamiliar projects should use this flag until they authorize project configuration.\nNeither discovery flag is a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy."
+        long_help = "Skip launch-directory project configuration; still load global configuration and apply -c overrides.\nAutomatic project configuration is trusted launcher input: it can select executables, child environments, and sandbox permissions. Trusting sandboxed code is not equivalent to trusting it to define the sandbox.\nGlobal settings supply defaults, not a mandatory security ceiling; projects may override them. Integrations opening unfamiliar projects should use this flag until they authorize project configuration.\nDiscovery flags are not a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy."
     )]
     pub no_project_config: bool,
+
+    /// Skip global configuration; still load project configuration and apply -c overrides
+    #[arg(long)]
+    pub no_global_config: bool,
 
     /// Skip global and project configuration; apply only -c overrides (not a general safe mode)
     #[arg(long)]
     pub no_config: bool,
+
+    /// Use only this YAML or JSON configuration file, then apply -c overrides
+    #[arg(long, value_name = "PATH")]
+    pub config_file: Option<PathBuf>,
 
     /// Override layered global and project configuration; repeat for ordered dotted KEY=VALUE assignments
     #[arg(short = 'c', long = "config", value_name = "KEY=VALUE")]
@@ -62,10 +70,18 @@ pub struct ConfigOverrides {
 }
 
 impl ConfigOverrides {
-    pub fn extend(&mut self, other: Self) {
+    pub fn extend(&mut self, other: Self) -> Result<(), String> {
+        if self.config_file.is_some() && other.config_file.is_some() {
+            return Err("--config-file may be supplied only once".into());
+        }
+        if other.config_file.is_some() {
+            self.config_file = other.config_file;
+        }
         self.values.extend(other.values);
         self.no_project_config |= other.no_project_config;
+        self.no_global_config |= other.no_global_config;
         self.no_config |= other.no_config;
+        Ok(())
     }
 }
 

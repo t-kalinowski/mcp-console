@@ -16,11 +16,27 @@ flag: after
 selected: home|home|unset
 ---
 command: serve
+flag: no global before
+selected: project|unset|project
+---
+command: serve
+flag: no global after
+selected: project|unset|project
+---
+command: serve
+flag: no global with overrides
+selected: last|unset|project
+---
+command: serve
 flag: no config before
 selected: unset|unset|unset
 ---
 command: serve
 flag: no config after
+selected: unset|unset|unset
+---
+command: serve
+flag: both scopes excluded
 selected: unset|unset|unset
 ---
 command: serve
@@ -39,6 +55,11 @@ arguments:
   - --no-project-config
 project: absent
 selected: home
+---
+command: serve
+project: absent
+global: excluded
+selected: unset|unset|cli
 ---
 command: sandbox
 flag: default
@@ -57,11 +78,27 @@ flag: after
 selected: home|home|unset
 ---
 command: sandbox
+flag: no global before
+selected: project|unset|project
+---
+command: sandbox
+flag: no global after
+selected: project|unset|project
+---
+command: sandbox
+flag: no global with overrides
+selected: last|unset|project
+---
+command: sandbox
 flag: no config before
 selected: unset|unset|unset
 ---
 command: sandbox
 flag: no config after
+selected: unset|unset|unset
+---
+command: sandbox
+flag: both scopes excluded
 selected: unset|unset|unset
 ---
 command: sandbox
@@ -80,3 +117,8 @@ arguments:
   - --no-project-config
 project: absent
 selected: home
+---
+command: sandbox
+project: absent
+global: excluded
+selected: unset|unset|cli

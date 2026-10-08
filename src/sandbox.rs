@@ -155,17 +155,23 @@ pub fn run(
     writable_roots: Vec<PathBuf>,
     overrides: &crate::cli::ConfigOverrides,
 ) -> Result<ExitCode, String> {
-    if (overrides.no_config || overrides.no_project_config)
-        && (config_env.is_some() || settings_env.is_some())
-    {
-        let flag = if overrides.no_config {
-            "--no-config"
+    if config_env.is_some() || settings_env.is_some() {
+        let selector = if overrides.no_config {
+            Some("--no-config")
+        } else if overrides.no_project_config {
+            Some("--no-project-config")
+        } else if overrides.no_global_config {
+            Some("--no-global-config")
+        } else if overrides.config_file.is_some() {
+            Some("--config-file")
         } else {
-            "--no-project-config"
+            None
         };
-        return Err(format!(
-            "{flag} cannot be combined with --config-env or --settings-env"
-        ));
+        if let Some(flag) = selector {
+            return Err(format!(
+                "{flag} cannot be combined with --config-env or --settings-env"
+            ));
+        }
     }
     if !overrides.values.is_empty() && (config_env.is_some() || settings_env.is_some()) {
         return Err(

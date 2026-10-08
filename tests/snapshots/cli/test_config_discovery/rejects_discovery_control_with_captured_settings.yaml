@@ -14,6 +14,20 @@ stderr: |
   --no-project-config cannot be combined with --config-env or --settings-env
 ---
 selector: --config-env
+flag: --no-global-config
+placement: before
+payload: ~
+stderr: |
+  --no-global-config cannot be combined with --config-env or --settings-env
+---
+selector: --config-env
+flag: --no-global-config
+placement: after
+payload: ~
+stderr: |
+  --no-global-config cannot be combined with --config-env or --settings-env
+---
+selector: --config-env
 flag: --no-config
 placement: before
 payload: ~
@@ -28,6 +42,20 @@ stderr: |
   --no-config cannot be combined with --config-env or --settings-env
 ---
 selector: --config-env
+flag: --config-file
+placement: before
+payload: ~
+stderr: |
+  --config-file cannot be combined with --config-env or --settings-env
+---
+selector: --config-env
+flag: --config-file
+placement: after
+payload: ~
+stderr: |
+  --config-file cannot be combined with --config-env or --settings-env
+---
+selector: --config-env
 flag: --no-project-config
 placement: before
 payload: not JSON
@@ -42,6 +70,20 @@ stderr: |
   --no-project-config cannot be combined with --config-env or --settings-env
 ---
 selector: --config-env
+flag: --no-global-config
+placement: before
+payload: not JSON
+stderr: |
+  --no-global-config cannot be combined with --config-env or --settings-env
+---
+selector: --config-env
+flag: --no-global-config
+placement: after
+payload: not JSON
+stderr: |
+  --no-global-config cannot be combined with --config-env or --settings-env
+---
+selector: --config-env
 flag: --no-config
 placement: before
 payload: not JSON
@@ -55,6 +97,20 @@ payload: not JSON
 stderr: |
   --no-config cannot be combined with --config-env or --settings-env
 ---
+selector: --config-env
+flag: --config-file
+placement: before
+payload: not JSON
+stderr: |
+  --config-file cannot be combined with --config-env or --settings-env
+---
+selector: --config-env
+flag: --config-file
+placement: after
+payload: not JSON
+stderr: |
+  --config-file cannot be combined with --config-env or --settings-env
+---
 selector: --settings-env
 flag: --no-project-config
 placement: before
@@ -68,6 +124,20 @@ placement: after
 payload: ~
 stderr: |
   --no-project-config cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
+flag: --no-global-config
+placement: before
+payload: ~
+stderr: |
+  --no-global-config cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
+flag: --no-global-config
+placement: after
+payload: ~
+stderr: |
+  --no-global-config cannot be combined with --config-env or --settings-env
 ---
 selector: --settings-env
 flag: --no-config
@@ -84,6 +154,20 @@ stderr: |
   --no-config cannot be combined with --config-env or --settings-env
 ---
 selector: --settings-env
+flag: --config-file
+placement: before
+payload: ~
+stderr: |
+  --config-file cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
+flag: --config-file
+placement: after
+payload: ~
+stderr: |
+  --config-file cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
 flag: --no-project-config
 placement: before
 payload: not JSON
@@ -98,6 +182,20 @@ stderr: |
   --no-project-config cannot be combined with --config-env or --settings-env
 ---
 selector: --settings-env
+flag: --no-global-config
+placement: before
+payload: not JSON
+stderr: |
+  --no-global-config cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
+flag: --no-global-config
+placement: after
+payload: not JSON
+stderr: |
+  --no-global-config cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
 flag: --no-config
 placement: before
 payload: not JSON
@@ -110,3 +208,17 @@ placement: after
 payload: not JSON
 stderr: |
   --no-config cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
+flag: --config-file
+placement: before
+payload: not JSON
+stderr: |
+  --config-file cannot be combined with --config-env or --settings-env
+---
+selector: --settings-env
+flag: --config-file
+placement: after
+payload: not JSON
+stderr: |
+  --config-file cannot be combined with --config-env or --settings-env
