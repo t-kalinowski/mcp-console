@@ -13,6 +13,19 @@ struct ResolverInput<'a> {
     extension_directory: &'a Path,
 }
 
+pub(crate) fn python_duckdb_available(
+    managed_python: &super::ManagedPython,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<bool, String> {
+    let output = run(
+        managed_python,
+        br#"{"check_available":true}"#.to_vec(),
+        on_started,
+    )?;
+    serde_json::from_slice(&output)
+        .map_err(|error| format!("invalid DuckDB availability result: {error}"))
+}
+
 pub(crate) fn resolve_python_duckdb_extensions(
     managed_python: &super::ManagedPython,
     extensions: &[String],
@@ -24,7 +37,14 @@ pub(crate) fn resolve_python_duckdb_extensions(
         extension_directory,
     })
     .expect("DuckDB extension resolver input should serialize as JSON");
+    run(managed_python, input, on_started).map(|_| ())
+}
 
+fn run(
+    managed_python: &super::ManagedPython,
+    input: Vec<u8>,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<Vec<u8>, String> {
     let python = managed_python.python();
     let mut command = resolver_command(python);
     command
@@ -56,5 +76,5 @@ pub(crate) fn resolve_python_duckdb_extensions(
     output
         .write_result
         .map_err(|error| format!("failed to write DuckDB extension requirements: {error}"))?;
-    Ok(())
+    Ok(output.stdout)
 }

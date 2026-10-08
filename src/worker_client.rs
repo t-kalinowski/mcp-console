@@ -30,6 +30,7 @@ mod platform;
 use crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS;
 pub(crate) use configuration::ClientConfiguration;
 use configuration::RResolver;
+pub(crate) use environment::validate_r_requirements;
 pub(crate) use environment::{Declaration, Requirements, RequirementsAction};
 use environment::{Environment, PythonEnvironment, RuntimeRResolutionFailure};
 use evaluation::Evaluation;

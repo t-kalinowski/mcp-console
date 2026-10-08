@@ -77,6 +77,7 @@ impl ClientConfiguration {
             no_sandbox,
             sandbox_settings,
             Environment {
+                startup: Default::default(),
                 local_runtime: None,
                 custom_worker: true,
                 duckdb_extensions: Default::default(),
@@ -103,6 +104,14 @@ impl ClientConfiguration {
             crate::resolver::cache::duckdb_extension_directory(&resolver_settings)?;
         let languages = crate::cell::Languages::from_environment()?;
         let legacy_python = python.is_none();
+        let mut startup = super::environment::StartupRequirements {
+            r: r_settings.packages.clone(),
+            python: python
+                .as_ref()
+                .map(|python| python.managed.clone())
+                .unwrap_or_default(),
+            ..Default::default()
+        };
         let explicit_managed = python
             .as_ref()
             .is_some_and(|python| python.executable.is_none());
@@ -147,6 +156,19 @@ impl ClientConfiguration {
             diagnostics.clone(),
             on_started,
         )?;
+        if startup
+            .r
+            .as_ref()
+            .is_some_and(|packages| !packages.is_empty())
+            && (discovery.selections.r_home.is_none() || !discovery.managed)
+        {
+            let error =
+                "r.packages: requested startup packages require R and R preparation support";
+            preparation
+                .close()
+                .map_err(|cleanup| format!("{error}; {cleanup}"))?;
+            return Err(error.into());
+        }
         #[cfg(any(unix, windows))]
         let (r, duckdb_extensions, python, r_resolver) = if discovery.selections.r_home.is_none() {
             let resolver = crate::resolver::execution::PythonConfiguration {
@@ -157,6 +179,7 @@ impl ClientConfiguration {
             };
             let selected = crate::local_runtime::Selection::python(
                 configured_python.clone(),
+                startup.python.manifest(true),
                 &resolver,
                 duckdb_extension_directory.clone(),
                 |executable, started| {
@@ -190,6 +213,7 @@ impl ClientConfiguration {
                 }
             };
             selection.r_settings = r_settings;
+            startup.native_duckdb = extensions.clone();
             local_runtime = Some(selection);
             resolver_preparation = Some(preparation);
             let python = Some(match managed {
@@ -303,6 +327,7 @@ impl ClientConfiguration {
             no_sandbox,
             sandbox_settings,
             Environment {
+                startup,
                 local_runtime,
                 custom_worker: false,
                 duckdb_extensions,

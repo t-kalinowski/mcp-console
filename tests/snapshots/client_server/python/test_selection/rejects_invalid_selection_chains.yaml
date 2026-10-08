@@ -5,8 +5,8 @@ stderr: |
 ---
 choice: duplicate active venv
 stderr: >
-  python: expected exactly one of existing, managed, first_available;
-  managed accepts an empty mapping
+  python.first_available[1]: python: expected exactly one of existing,
+  managed, first_available
 ---
 choice: managed first
 stderr: >
@@ -19,9 +19,8 @@ stderr: >
   optional managed candidate last; nested chains are unsupported
 ---
 choice: multiple choices
-stderr: >
-  python: expected exactly one of existing, managed, first_available;
-  managed accepts an empty mapping
+stderr: |
+  python: expected exactly one of existing, managed, first_available
 ---
 choice: null managed options
 stderr: |

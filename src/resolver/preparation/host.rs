@@ -195,6 +195,12 @@ impl Context {
                 resolver::resolve_duckdb_extensions(&r, &extensions, on_started)?;
                 Ok(serde_json::Value::Null)
             }
+            Operation::PythonDuckdbAvailable { python } => {
+                if !matches!(self.mode, Mode::PythonOnly) || !self.managed_python {
+                    return Err("Python-backed DuckDB preparation requires managed Python".into());
+                }
+                resolver::python_duckdb_available(&python, on_started).map(serde_json::Value::Bool)
+            }
             Operation::DuckdbPython {
                 python,
                 extensions,

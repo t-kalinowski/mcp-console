@@ -1,7 +1,7 @@
 # Requirements and environments
 
 Local [Windows](WINDOWS.md) sessions use the same managed R/Python resolution and hidden `resolve` subcommand as macOS and Linux.
-Managed DuckDB prepares the same `icu`, `json`, and `sqlite` extension defaults on all supported hosts, including Windows.
+Managed DuckDB prepares the same `icu`, `json`, and `sqlite` extension defaults on all supported hosts, including Windows, when the prepared environment supplies its provider.
 
 The server retains dependency declarations and resolved environments across worker generations.
 Preparation makes packages or extensions **available**; it does not attach R packages, import Python modules, or load DuckDB extensions.
@@ -29,6 +29,11 @@ The default optional declarations are:
 | Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                                      |
 | DuckDB      | `icu`, `json`, `sqlite` with or without R                                                                 |
 
+[Startup configuration](CONFIGURATION.md#startup-package-declarations) can replace the R or managed Python package list and set managed Python version constraints.
+An omitted list preserves the defaults above; an empty list declares no optional packages for that language.
+Without R, implicit DuckDB extensions are omitted when the prepared Python environment does not supply DuckDB, including when uv excludes a conditional DuckDB requirement.
+Explicit extension requests still require a usable provider.
+
 Managed DuckDB defaults provide JSON extraction, named-timezone operations, and SQLite attachment with either native provider.
 Preparation skips extensions identified as built-in by the selected engine, including their catalog aliases, and installs the others in the shared extension cache.
 The default declaration is the same even when the engine statically links some of those extensions; loading remains a separate worker operation.
@@ -45,12 +50,12 @@ See [shared readiness](SEND_OPERATIONS.md#server-readiness), including early req
 
 ## Inspecting and replacing requirements
 
-| Action          | Meaning                                                                                       |
-| --------------- | --------------------------------------------------------------------------------------------- |
-| `get`           | Read the last committed declaration; no resolution, output consumption, or worker launch.     |
-| `add` (default) | Accumulate requirements; exact repeats are no-ops.                                            |
-| `set`           | Replace the whole declaration; omitted lists/constraints are empty. No defaults are injected. |
-| `reset`         | Restore startup defaults, removing explicit and automatic additions from the declaration.     |
+| Action          | Meaning                                                                                               |
+| --------------- | ----------------------------------------------------------------------------------------------------- |
+| `get`           | Read the last committed declaration; no resolution, output consumption, or worker launch.             |
+| `add` (default) | Accumulate requirements; exact repeats are no-ops.                                                    |
+| `set`           | Replace the whole declaration; omitted lists/constraints are empty. No defaults are injected.         |
+| `reset`         | Restore the captured configured startup declaration, removing later explicit and automatic additions. |
 
 ```python
 send(requirements={"action": "get"})
@@ -78,6 +83,7 @@ Copy and edit the `requirements` object, then add `action: "set"` to round-trip 
 `python_version` is a list of constraints; `exclude_newer` is a publication cutoff string or null.
 Add accumulates version constraints and can fill an unset cutoff, but cannot replace an existing cutoff.
 Set clears omitted constraints; reset restores startup constraints.
+The reset baseline remains the effective launch configuration even after an early `set` or a configuration-file edit.
 Effective constraint changes on a live worker need restart.
 These actions do not rewrite captured resolver configuration.
 

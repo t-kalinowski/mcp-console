@@ -129,3 +129,16 @@ pub(crate) fn resolve_python_duckdb_extensions(
         on_started,
     )
 }
+
+pub(crate) fn python_duckdb_available(
+    configuration: &PythonConfiguration,
+    python: &ManagedPython,
+    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
+) -> Result<bool, String> {
+    configuration.preparation.call(
+        Operation::PythonDuckdbAvailable {
+            python: python.clone(),
+        },
+        on_started,
+    )
+}

@@ -1,7 +1,7 @@
 use rmcp::schemars;
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::state::{Environment, PythonEnvironment, ensure_managed_python_available};
+use super::state::{Environment, ensure_managed_python_available};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -80,7 +80,7 @@ fn validate_duckdb_extensions(extensions: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_r_requirements(requirements: &[String]) -> Result<(), String> {
+pub(crate) fn validate_r_requirements(requirements: &[String]) -> Result<(), String> {
     if requirements
         .iter()
         .any(|requirement| requirement.trim().is_empty())
@@ -134,11 +134,7 @@ impl RequirementDelta {
             _ => None,
         };
         if pending.is_some() {
-            duckdb.extend(
-                super::super::DEFAULT_DUCKDB_EXTENSIONS
-                    .iter()
-                    .map(|name| (*name).to_string()),
-            );
+            duckdb.extend(environment.startup_declaration().duckdb);
         }
 
         let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
@@ -150,25 +146,9 @@ impl RequirementDelta {
             .collect();
 
         let python_additions = python.into_iter().collect::<BTreeSet<_>>();
-        let mut python_candidate = merge_python_requirements(
-            environment
-                .python
-                .as_ref()
-                .and_then(PythonEnvironment::managed),
-            python_additions.iter().cloned().collect(),
-        );
-        if python_candidate.is_none()
-            && pending.is_some_and(|setup| {
-                PythonEnvironment::uses_managed(setup.configured_python.as_deref())
-            })
-        {
-            python_candidate = Some(crate::worker_protocol::default_python_requirement_manifest());
-        }
-
         let current_python = environment.declaration().python_manifest();
-        let mut candidate = python_candidate
-            .clone()
-            .unwrap_or_else(|| current_python.clone());
+        let mut candidate = current_python.clone();
+        candidate.packages.extend(python_additions.iter().cloned());
         candidate.python_version.extend(python_version);
         if let Some(cutoff) = exclude_newer {
             if current_python.exclude_newer.is_some() && cutoff != current_python.exclude_newer {
@@ -179,9 +159,11 @@ impl RequirementDelta {
         let candidate = candidate.normalized();
         let restart_required = candidate.python_version != current_python.python_version
             || candidate.exclude_newer != current_python.exclude_newer;
+        let python_candidate = (candidate != current_python
+            || (pending.is_some() && environment.manages_python()))
+        .then_some(candidate);
         if restart_required {
             ensure_managed_python_available(environment)?;
-            python_candidate = Some(candidate);
         }
         let (r_requirements, r_changed) = merge_r_requirements(environment, r);
 
@@ -284,39 +266,19 @@ pub(super) fn merge_r_requirements(
     additions: Vec<String>,
 ) -> (Vec<String>, bool) {
     let mut additions = additions.into_iter().collect::<BTreeSet<_>>();
-    if matches!(environment.r_resolver, super::super::RResolver::Pending(_)) {
-        additions.extend(
-            super::super::DEFAULT_R_REQUIREMENTS
-                .iter()
-                .map(|requirement| (*requirement).to_string()),
-        );
+    let pending = matches!(environment.r_resolver, super::super::RResolver::Pending(_));
+    if pending {
+        additions.extend(environment.startup_declaration().r);
     }
     let current = environment
         .r
         .as_ref()
         .map(|managed| managed.requirements().iter().cloned().collect())
         .unwrap_or_default();
-    let changed =
-        !additions.is_subset(&current) || (environment.custom_worker && environment.r.is_none());
+    let changed = pending
+        || !additions.is_subset(&current)
+        || (environment.custom_worker && environment.r.is_none());
     (current.union(&additions).cloned().collect(), changed)
-}
-
-fn merge_python_requirements(
-    current: Option<&crate::resolver::ManagedPython>,
-    additions: Vec<String>,
-) -> Option<crate::worker_protocol::PythonRequirementManifest> {
-    let retained = current
-        .map(|managed| managed.requirements().packages.iter().cloned().collect())
-        .unwrap_or_default();
-    let mut candidate = current
-        .map(|managed| managed.requirements().clone())
-        .unwrap_or_else(crate::worker_protocol::default_python_requirement_manifest);
-    let additions = additions.into_iter().collect::<BTreeSet<_>>();
-    if additions.is_subset(&retained) {
-        return None;
-    }
-    candidate.packages.extend(additions);
-    Some(candidate.normalized())
 }
 
 pub(super) fn select_python_activation(
