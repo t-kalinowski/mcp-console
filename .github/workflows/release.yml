@@ -162,7 +162,7 @@ jobs:
           UV_TOOL_DIR: ${{ runner.temp }}/mcp-console-tool
           UV_TOOL_BIN_DIR: ${{ runner.temp }}/mcp-console-bin
           UV_CACHE_DIR: ${{ runner.temp }}/mcp-console-cache
-          UV_PYTHON_DOWNLOADS: never
+          UV_PYTHON_DOWNLOADS: automatic
           UV_NO_CONFIG: "1"
         run: |
           python3 scripts/release.py \

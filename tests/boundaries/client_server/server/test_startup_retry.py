@@ -3,6 +3,8 @@
 import json
 import os
 import shlex
+import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -43,8 +45,6 @@ from support.processes import (
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import (
-    FRAMEWORK_PYTHON,
-    PYTHON_FRAMEWORK,
     NATIVE_FIXTURES,
     POSIX,
     PROCESS_EVENTS,
@@ -54,6 +54,22 @@ from support.requirements import (
 )
 from support.resolvers import checkpoint_uv_environment, expose_uv
 from support.suites import run_this_suite
+
+
+def managed_python_environment(root: Path) -> dict[str, str]:
+    uv = shutil.which("uv")
+    assert uv is not None, "real uv is required"
+    installations = root / "python-installations"
+    subprocess.run(
+        [uv, "python", "install", "3.13", "--install-dir", str(installations)],
+        env=os.environ | {"UV_PYTHON_DOWNLOADS": "automatic"},
+        check=True,
+        capture_output=True,
+    )
+    return {
+        "UV_PYTHON_INSTALL_DIR": str(installations),
+        "UV_PYTHON_DOWNLOADS": "never",
+    }
 
 
 def preparation_reap_environment(root: Path, python: Path) -> dict[str, str]:
@@ -204,7 +220,7 @@ def test_retry_retains_preparation_startup_and_idle_output(
             ]
 
 
-@requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
+@requires(POSIX, command("uv"))
 @executions(DIRECT, SANDBOXED)
 @execution_snapshots
 def test_code_free_retry_starts_prepared_replacement(
@@ -212,7 +228,6 @@ def test_code_free_retry_starts_prepared_replacement(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory).resolve()
-        (root / "python3").symlink_to(FRAMEWORK_PYTHON)
         hooks = root / "hooks"
         hooks.mkdir()
         with closing(FifoCheckpoint.create(root / "prepared-startup")) as started:
@@ -232,10 +247,9 @@ def test_code_free_retry_starts_prepared_replacement(
                     """),
             )
             environment = without_r(root)
+            environment.update(managed_python_environment(root))
             environment.update(
                 {
-                    "UV_PYTHON_PREFERENCE": "only-system",
-                    "UV_PYTHON_DOWNLOADS": "never",
                     "UV_TOOL_DIR": str(root),
                     "RETICULATE_PYTHONPATH": str(hooks),
                 }
@@ -502,15 +516,9 @@ def test_retry_discards_failed_cell_requirements(
 ) -> Transcript:
     with discovery_environment() as (environment, reached, release, alive):
         root = reached.path.parent
-        (root / "python3").symlink_to(sys.executable)
         expose_uv(root)
-        environment.update(
-            {
-                "UV_PYTHON_PREFERENCE": "system",
-                "UV_PYTHON_DOWNLOADS": "never",
-                "UV_TOOL_DIR": str(root),
-            }
-        )
+        environment.update(managed_python_environment(root))
+        environment["UV_TOOL_DIR"] = str(root)
         with McpClient(
             binary, execution.serve("-c", "cache=host"), environment, root
         ) as client:
@@ -662,9 +670,7 @@ def test_requirements_retry_stdin_reaches_early_input_cell(
                 if name.startswith("MCP_CONSOLE_TEST_") or name == "UV_TOOL_DIR"
             }
         )
-        environment.update(
-            {"UV_PYTHON_PREFERENCE": "system", "UV_PYTHON_DOWNLOADS": "never"}
-        )
+        environment.update(managed_python_environment(root))
         with (
             closing(reached),
             closing(release),
@@ -804,7 +810,7 @@ def test_cancelled_restart_shares_retry_and_preserves_next_cell(
         )
 
 
-@requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
+@requires(POSIX, command("uv"))
 @executions(DIRECT, SANDBOXED)
 @execution_snapshots
 def test_cancelled_retry_preparation_withholds_bundled_cell(
@@ -813,7 +819,7 @@ def test_cancelled_retry_preparation_withholds_bundled_cell(
     return cancelled_retry_preparation(binary, execution, with_cell=True)
 
 
-@requires(POSIX, PYTHON_FRAMEWORK, command("uv"))
+@requires(POSIX, command("uv"))
 @executions(DIRECT, SANDBOXED)
 @execution_snapshots
 def test_cancelled_retry_preparation_withholds_stdin_only(
@@ -827,7 +833,7 @@ def cancelled_retry_preparation(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory).resolve()
-        (root / "python3").symlink_to(FRAMEWORK_PYTHON)
+        (root / "python3").symlink_to(sys.executable)
         fixture, reached, release = checkpoint_uv_environment(root, "six")
         environment = without_r(root)
         environment.update(
@@ -837,9 +843,7 @@ def cancelled_retry_preparation(
                 if name.startswith("MCP_CONSOLE_TEST_") or name == "UV_TOOL_DIR"
             }
         )
-        environment.update(
-            {"UV_PYTHON_PREFERENCE": "only-system", "UV_PYTHON_DOWNLOADS": "never"}
-        )
+        environment.update(managed_python_environment(root))
         with (
             closing(reached),
             closing(release),

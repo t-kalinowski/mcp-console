@@ -1,7 +1,8 @@
 # Native wheel validation on the supported userspace; no checkout enters here.
 FROM ghcr.io/astral-sh/uv:0.12.22 AS uv
 FROM ubuntu:22.04 AS base
-ENV DEBIAN_FRONTEND=noninteractive UV_PYTHON_INSTALL_DIR=/opt/python UV_NO_CONFIG=1
+ENV DEBIAN_FRONTEND=noninteractive UV_NO_CONFIG=1 \
+    UV_PYTHON_INSTALL_DIR=/opt/console-cache/mcp-console/dependencies/uv/python
 COPY --from=uv /uv /usr/local/bin/uv
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates libcap2 libgcc-s1 libstdc++6 binutils \

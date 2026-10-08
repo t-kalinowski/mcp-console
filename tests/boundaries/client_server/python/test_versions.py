@@ -546,7 +546,7 @@ def test_resolves_python_version_constraint_semantics(
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
-def test_falls_back_after_filtering_unsupported_python_versions(
+def test_rejects_system_fallback_after_filtering_unsupported_python_versions(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
@@ -581,20 +581,21 @@ def test_falls_back_after_filtering_unsupported_python_versions(
             },
         )
 
-        client.send(requirements={"python": ["py-yaml12"]})
-        assert last_result_text(client) == "[prepared]"
-        assert recorded_python_preferences(arguments) == [
-            "only-managed",
-            "only-system",
-        ]
-        assert recorded_tool_run_pythons(arguments) == ["3.11.14"]
+        result = client.send(requirements={"python": ["py-yaml12"]})
+        assert result.get("isError"), result
+        assert last_result_text(client) == (
+            "managed Python version resolution failed: "
+            "uv did not report a supported CPython interpreter"
+        ), result
+        assert recorded_python_preferences(arguments) == ["only-managed"]
+        assert recorded_tool_run_pythons(arguments) == []
         return client.finish()
 
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
-def test_respects_system_python_preference_with_custom_install_directory(
+def test_ignores_system_python_selectors_with_custom_install_directory(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
@@ -602,6 +603,7 @@ def test_respects_system_python_preference_with_custom_install_directory(
         temporary = Path(temporary_directory)
         install_directory = temporary / "managed-python"
         install_directory.mkdir()
+        resolver_record = temporary / "uv-resolver.jsonl"
         client, inventories, arguments = python_inventory_client(
             binary,
             execution,
@@ -609,6 +611,11 @@ def test_respects_system_python_preference_with_custom_install_directory(
             preference="system",
             install_directory=install_directory,
             resolver_python=Path(sys.executable),
+            resolver_record=resolver_record,
+            extra_environment={
+                "UV_PYTHON": sys.executable,
+                "UV_MANAGED_PYTHON": "false",
+            },
         )
         write_uv_python_inventories(
             inventories,
@@ -638,11 +645,15 @@ def test_respects_system_python_preference_with_custom_install_directory(
 
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "[prepared]"
-        assert recorded_python_preferences(arguments) == [
-            "only-managed",
-            "only-system",
-        ]
-        assert recorded_tool_run_pythons(arguments) == ["3.13.11"]
+        assert recorded_python_preferences(arguments) == ["only-managed"]
+        assert recorded_tool_run_pythons(arguments) == ["3.12.12"]
+        records = read_uv_resolver_records(resolver_record)
+        assert records, "managed Python resolution did not invoke uv"
+        for record in records:
+            assert record["UV_PYTHON"] is None, record
+            assert record["UV_MANAGED_PYTHON"] is None, record
+            assert record["UV_NO_MANAGED_PYTHON"] is None, record
+            assert record["UV_PYTHON_PREFERENCE"] == "only-managed", record
         return client.finish()
 
 
@@ -799,6 +810,14 @@ def test_uses_reticulate_managed_uv_for_python_resolution(
                 == (managed_root / "python").resolve()
             ), record
         tool_arguments = tool_runs[0]["arguments"]
+        assert tool_arguments[:6] == [
+            "tool",
+            "run",
+            "--isolated",
+            "--python-preference",
+            "only-managed",
+            "--python",
+        ], tool_arguments
         assert tool_arguments[tool_arguments.index("--python") + 1] == "3.12.9"
         return client.finish()
 
@@ -845,7 +864,7 @@ def test_retains_managed_python_when_uv_caching_is_disabled(
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
-def test_removes_disabled_uv_python_source_aliases(
+def test_ignores_uv_python_source_aliases(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary_directory:
@@ -859,7 +878,7 @@ def test_removes_disabled_uv_python_source_aliases(
             resolver_record=resolver_record,
             extra_environment={
                 "UV_MANAGED_PYTHON": "false",
-                "UV_NO_MANAGED_PYTHON": "n",
+                "UV_NO_MANAGED_PYTHON": "1",
             },
         )
 
@@ -871,6 +890,9 @@ def test_removes_disabled_uv_python_source_aliases(
         assert all(record["UV_NO_MANAGED_PYTHON"] is None for record in records), (
             records
         )
+        assert all(
+            record["UV_PYTHON_PREFERENCE"] == "only-managed" for record in records
+        ), records
         return client.finish()
 
 

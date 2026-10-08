@@ -196,7 +196,7 @@ esac
                 }
                 if matches!(mode, "path" | "explicit") {
                     assert!(invocations.contains("python list --all-versions"));
-                    assert!(invocations.contains("tool run --isolated --python 3.12.7 --exclude-newer 2026-01-01 --with six>=1"));
+                    assert!(invocations.contains("tool run --isolated --python-preference only-managed --python 3.12.7 --exclude-newer 2026-01-01 --with six>=1"));
                 }
             }
             fs::remove_dir_all(directory).unwrap();
