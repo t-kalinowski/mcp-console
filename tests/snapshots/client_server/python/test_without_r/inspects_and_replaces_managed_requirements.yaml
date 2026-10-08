@@ -17,6 +17,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -32,6 +34,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -62,6 +66,8 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -74,6 +80,8 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -128,6 +136,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -165,6 +175,8 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -257,6 +269,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -293,6 +307,8 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -340,6 +356,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -355,6 +373,8 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -385,6 +405,8 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
@@ -397,6 +419,8 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~

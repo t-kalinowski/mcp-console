@@ -7,20 +7,27 @@ config:
 ---
 !same-as MCP initialization for this execution mode
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+        Error: selected Python executable is not an absolute file: /mcp-console-startup-missing-python
+        Error: Python initialization is incomplete; SQL withheld; explicit restart required
+
+        [idle]
+  isError: false
+---
 send:
   sql: SELECT 42 AS answer
 result:
   content:
     - type: text
-      text: |
-        Error: selected Python executable is not an absolute file: /mcp-console-startup-missing-python
-        Error: Python initialization is incomplete; SQL withheld; explicit restart required
-        [output produced while idle]
-        Error: SQL unavailable: Python initialization is incomplete; explicit restart required
+      text: >
+        Error: SQL unavailable: Python initialization is incomplete; explicit
+        restart required
   isError: false
 ---
-missing_selected_python: |
-  Error: selected Python executable is not an absolute file: /mcp-console-startup-missing-python
-  Error: Python initialization is incomplete; SQL withheld; explicit restart required
-  [output produced while idle]
-  Error: SQL unavailable: Python initialization is incomplete; explicit restart required
+missing_selected_python: >
+  Error: SQL unavailable: Python initialization is incomplete; explicit
+  restart required

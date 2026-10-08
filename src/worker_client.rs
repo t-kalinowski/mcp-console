@@ -27,6 +27,7 @@ mod platform;
 #[path = "worker_client/unsupported.rs"]
 mod platform;
 
+use crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS;
 pub(crate) use configuration::ClientConfiguration;
 use configuration::RResolver;
 pub(crate) use environment::requirements::validate_r_requirements;
@@ -49,11 +50,6 @@ pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "yyjsonr",
     "ggplot2",
 ];
-
-#[cfg(not(windows))]
-const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json", "sqlite"];
-#[cfg(windows)]
-const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &[];
 
 const CUSTOM_DUCKDB_R_REQUIREMENTS: &[&str] = &["DBI", "duckdb", "jsonlite"];
 pub(crate) const WORKER_SHUTDOWN_GRACE: Duration = Duration::from_secs(1);

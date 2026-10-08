@@ -25,10 +25,38 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
+          },
+          "startup_requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "matplotlib",
+              "plotnine",
+              "duckdb"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "automatic"
+          },
+          "selection": {
+            "r": null,
+            "python": "<selected Python>",
+            "python_source": "default managed"
           },
           "prepared": true,
           "runtime_requirements": {
@@ -46,9 +74,32 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
+    startup_requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - matplotlib
+        - plotnine
+        - duckdb
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    resolution:
+      r: automatic
+      python: automatic
+    selection:
+      r: ~
+      python: <selected Python>
+      python_source: default managed
     prepared: true
     runtime_requirements:
       r: []
@@ -106,10 +157,38 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
+          },
+          "startup_requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "matplotlib",
+              "plotnine",
+              "duckdb"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "automatic"
+          },
+          "selection": {
+            "r": null,
+            "python": "<selected Python>",
+            "python_source": "default managed"
           },
           "prepared": true,
           "runtime_requirements": {
@@ -127,9 +206,32 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
+    startup_requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - matplotlib
+        - plotnine
+        - duckdb
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    resolution:
+      r: automatic
+      python: automatic
+    selection:
+      r: ~
+      python: <selected Python>
+      python_source: default managed
     prepared: true
     runtime_requirements:
       r: []
@@ -187,10 +289,38 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
+          },
+          "startup_requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "matplotlib",
+              "plotnine",
+              "duckdb"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "automatic"
+          },
+          "selection": {
+            "r": null,
+            "python": "<selected Python>",
+            "python_source": "default managed"
           },
           "prepared": true,
           "runtime_requirements": {
@@ -208,9 +338,32 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
+    startup_requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - matplotlib
+        - plotnine
+        - duckdb
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    resolution:
+      r: automatic
+      python: automatic
+    selection:
+      r: ~
+      python: <selected Python>
+      python_source: default managed
     prepared: true
     runtime_requirements:
       r: []
@@ -245,10 +398,38 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
+          },
+          "startup_requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "matplotlib",
+              "plotnine",
+              "duckdb"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "automatic"
+          },
+          "selection": {
+            "r": null,
+            "python": "<selected Python>",
+            "python_source": "default managed"
           },
           "prepared": true,
           "runtime_requirements": {
@@ -266,9 +447,32 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
+    startup_requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - matplotlib
+        - plotnine
+        - duckdb
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    resolution:
+      r: automatic
+      python: automatic
+    selection:
+      r: ~
+      python: <selected Python>
+      python_source: default managed
     prepared: true
     runtime_requirements:
       r: []
@@ -322,10 +526,38 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
+          },
+          "startup_requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "matplotlib",
+              "plotnine",
+              "duckdb"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "automatic"
+          },
+          "selection": {
+            "r": null,
+            "python": "<selected Python>",
+            "python_source": "default managed"
           },
           "prepared": true,
           "runtime_requirements": {
@@ -343,9 +575,32 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
+    startup_requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - matplotlib
+        - plotnine
+        - duckdb
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    resolution:
+      r: automatic
+      python: automatic
+    selection:
+      r: ~
+      python: <selected Python>
+      python_source: default managed
     prepared: true
     runtime_requirements:
       r: []
@@ -399,10 +654,38 @@ result:
               "duckdb"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
             "exclude_newer": null
+          },
+          "startup_requirements": {
+            "r": [],
+            "python": [
+              "numpy",
+              "pandas",
+              "matplotlib",
+              "plotnine",
+              "duckdb"
+            ],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "automatic"
+          },
+          "selection": {
+            "r": null,
+            "python": "<selected Python>",
+            "python_source": "default managed"
           },
           "prepared": true,
           "runtime_requirements": {
@@ -420,9 +703,32 @@ result:
         - plotnine
         - duckdb
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
+    startup_requirements:
+      r: []
+      python:
+        - numpy
+        - pandas
+        - matplotlib
+        - plotnine
+        - duckdb
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    resolution:
+      r: automatic
+      python: automatic
+    selection:
+      r: ~
+      python: <selected Python>
+      python_source: default managed
     prepared: true
     runtime_requirements:
       r: []

@@ -558,7 +558,7 @@ def test_retry_discards_failed_cell_requirements(
                 "plotnine",
                 "duckdb",
             ], retained
-            assert retained["duckdb"] == ["sqlite"], retained
+            assert retained["duckdb"] == ["icu", "json", "sqlite"], retained
             client.expect(
                 "42\n",
                 python="assert 'rejected_cell' not in globals(); answer = 42; answer",

@@ -36,14 +36,17 @@ For native Windows acceptance, use the [Windows validation guide](../../docs/WIN
 
 ```sh
 scripts/test --full --list
+scripts/test --stress --list
 scripts/test --locate client_server/server/test_tools
 scripts/test client_server/server/test_tools::initializes_and_lists_tools
 scripts/test --update client_server/server/test_tools::initializes_and_lists_tools
 ```
 
 A selector names `BOUNDARY/SUITE` or `BOUNDARY/SUITE::CASE`.
-Default runs use the explicit smoke profile; `--full` includes every capability-applicable case.
-Selectors retain their scope under either profile.
+Default runs use the explicit smoke profile; `--full` includes every functional capability-applicable case.
+`--stress` runs the three allocation scale cases with their original workloads and ceilings.
+Short recovery cases in `--full` check delivery, recording, and image aggregation without claiming bounded allocation growth.
+Selectors retain their scope under every profile.
 See the [validation ladder](../../docs/DEVELOPMENT.md#validation-ladder) for the full workflow, installed-binary override, and build ownership.
 
 Cases run in separate processes.
@@ -76,6 +79,11 @@ def test_persistent_state(binary: Path, execution: Execution) -> Transcript:
 ```
 
 `DIRECT.serve()` supplies `--no-sandbox`; `SANDBOXED.serve()` uses the default sandbox.
+Use one mode for ordinary language and representation assertions.
+`RUNTIME` selects the sandbox on macOS/Linux and direct execution for shared Windows cases; native Windows acceptance covers its sandbox policy.
+Keep both modes for permissions, inherited environment, cache placement, executable selection, process cleanup, and other mode-dependent contracts.
+Keep representative direct conformance for each runtime, plots, input, restart, and recording.
+Real-library sandbox workloads, including sklearn/joblib, retain their distinct APIs and initial/live activation scenarios.
 There is no runner `--execution` flag.
 Keep sandbox-only arguments in sandbox fixtures and policy contracts in the owning boundary's `sandbox/` directory.
 Ordinary runtime cases stay with their subject even when sandboxed.
@@ -132,7 +140,10 @@ Narrow exceptions require stronger evidence, not weaker assertions:
   Keep complete inventories in requirements/defaults cases, and never project an error this way.
 - Native-runtime fidelity cases may compare complete output and conditions with a live reference, then record the verified comparison.
   Remove only explicitly irrelevant frontend differences, such as Rscript's `Execution halted` footer.
-- Synthetic stress output may use `support.evidence.compact_text()` after full assertions.
+- Bounded MCP overflow previews remain literal strings in the output-limit and preview cases.
+  Assert the actual response's UTF-8 byte budget and exact emitted head/tail and omission accounting before normalizing fixture-owned paths.
+  Keep full raw-stream byte assertions separate, including Unicode and newline bytes; a response preview is not a raw recording.
+- Other synthetic stress output may use `support.evidence.compact_text()` after full assertions.
   Its literal text and repeat/count entries are lossless; retain diagnostics, boundaries, omissions, paths, images, and final states.
 
 `transcript_normalization` is harness metadata, never a wire field.

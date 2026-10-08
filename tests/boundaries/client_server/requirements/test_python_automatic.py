@@ -14,7 +14,7 @@ from support.previews import (
     compact_previews,
 )
 from support.client import McpClient
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import (
     code,
     normalize_python_resolution_error,
@@ -245,7 +245,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
 
 
 @requires(POSIX)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_infers_python_distributions_for_normal_import_forms(
     binary: Path,
     execution: Execution,
@@ -294,7 +294,7 @@ def test_infers_python_distributions_for_normal_import_forms(
 
 
 @requires(POSIX)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_does_not_resolve_unreached_or_available_python_imports(
     binary: Path,
     execution: Execution,
@@ -377,7 +377,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
 
 
 @requires(POSIX, SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_does_not_resolve_missing_python_imports_from_sql(
     binary: Path,
     execution: Execution,
@@ -514,7 +514,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
 
 
 @requires(POSIX)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_does_not_reenter_automatic_python_resolution(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -763,7 +763,7 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
 
 
 @requires(POSIX)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
     binary: Path,
     execution: Execution,
@@ -842,7 +842,7 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
 
 
 @requires(POSIX)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_reports_unavailable_standard_library_module_without_resolution(
     binary: Path,
     execution: Execution,

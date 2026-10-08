@@ -16,7 +16,7 @@ from boundaries.client_server.python.test_peer_runtime import (
 from support.requirements import POSIX, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import isolated_r_home, r_test_environment
 from support.records import Transcript
@@ -463,7 +463,7 @@ def test_detects_cpu_cores(binary: Path, execution: Execution) -> Transcript:
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_rejects_incomplete_and_invalid_source(
     binary: Path,
     execution: Execution,
@@ -533,7 +533,7 @@ def test_rejects_incomplete_and_invalid_source(
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_rejects_source_without_error_side_effects(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -589,7 +589,7 @@ def test_rejects_source_without_error_side_effects(
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_preserves_parser_warning_behavior(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -634,7 +634,7 @@ def test_preserves_parser_warning_behavior(
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_preserves_parser_warning_handlers(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -673,7 +673,7 @@ def test_preserves_parser_warning_handlers(
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_runs_native_top_level_bookkeeping(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -720,7 +720,7 @@ def test_runs_native_top_level_bookkeeping(
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_preserves_native_stack_and_last_value_binding(
     binary: Path, execution: Execution
 ) -> Transcript:

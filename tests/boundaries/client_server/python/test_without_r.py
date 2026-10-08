@@ -26,7 +26,7 @@ from support.assertions import (
 from support.installation import installed_console
 from support.client import McpClient
 from support.checkpoints import FifoCheckpoint
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.linux_sandbox import retain_system_bwrap
 from support.records import Transcript, TranscriptWithCompanions
 from support.snapshots import execution_snapshots
@@ -240,7 +240,7 @@ exec "{shutil.which("uv")}" "$@"
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_inspects_and_replaces_managed_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -261,7 +261,7 @@ def test_inspects_and_replaces_managed_requirements(
                 return snapshot["requirements"]["python"]
 
             defaults = ["numpy", "pandas", "matplotlib", "plotnine", "duckdb"]
-            assert declaration(("sqlite",)) == defaults
+            assert declaration(("icu", "json", "sqlite")) == defaults
             client.send(requirements={"action": "set", "python": ["six"]})
             assert declaration() == ["six"]
             client.expect("42\n", python="import six; retained = 42; retained")
@@ -286,7 +286,7 @@ def test_inspects_and_replaces_managed_requirements(
             ]
             assert declaration() == []
             client.send(control="restart", requirements={"action": "reset"})
-            assert declaration(("sqlite",)) == defaults
+            assert declaration(("icu", "json", "sqlite")) == defaults
             client.expect(
                 "42\n",
                 # fmt: python
@@ -792,7 +792,7 @@ def test_prepares_managed_python_at_startup_and_restart(
 
 
 @requires(SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_adds_python_packages_to_idle_managed_worker(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1080,7 +1080,7 @@ def test_combines_live_python_and_duckdb_additions(
                     """),
             )
             client.send(
-                requirements={"python": ["py-yaml12"], "duckdb": ["json"]},
+                requirements={"python": ["py-yaml12"], "duckdb": ["parquet"]},
                 sql="select value from chosen",
             )
             assert "7" in last_result_text(client), client.transcript[-1]
@@ -1107,7 +1107,7 @@ def test_combines_live_python_and_duckdb_additions(
                 "structuredContent"
             ]["requirements"]
             assert "py-yaml12" in declaration["python"]
-            assert declaration["duckdb"] == ["json", "sqlite"]
+            assert declaration["duckdb"] == ["icu", "json", "parquet", "sqlite"]
             return client.finish()[3:]
 
 
@@ -1422,7 +1422,7 @@ def test_automatic_imports_stay_on_main_worker_thread_and_process(
 
 
 @requires(POSIX, SQL)
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_limits_live_python_additions_to_new_idle_distributions(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1490,7 +1490,7 @@ def test_limits_live_python_additions_to_new_idle_distributions(
             declaration = client.send(requirements={"action": "get"})[
                 "structuredContent"
             ]["requirements"]
-            assert declaration["duckdb"] == ["json", "sqlite"]
+            assert declaration["duckdb"] == ["icu", "json", "sqlite"]
             assert "NumPy==0" not in declaration["python"]
             return preparation_records(client.finish(), root)
 

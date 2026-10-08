@@ -1000,7 +1000,8 @@ def local_discovery(root: Path, *, image: bool = False, fail: bool = False):
             discovery_environment(r_home=None if fail else home)
         )
         environment.pop("R_HOME", None)
-        environment["PATH"] = discovery["PATH"]
+        # Keep the gated R probe first without hiding host dependency tools.
+        environment["PATH"] = os.pathsep.join((discovery["PATH"], environment["PATH"]))
         environment["RETICULATE_PYTHON"] = sys.executable
         environment[LOADER_VARIABLE] = str(
             build_interposer(root, "discovery_diagnostic")

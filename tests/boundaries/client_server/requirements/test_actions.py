@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.requirements import POSIX, SQL, command, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient, stop_client
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_python_resolution_error
 from support.r import isolated_r_home
 from support.records import Transcript
@@ -253,7 +253,7 @@ def test_empty_declaration_and_round_trip(
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_inspection_validation(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
@@ -505,7 +505,7 @@ def test_r_duckdb_replacement_failure_and_reset(
             return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_large_manifest_round_trip(binary: Path, execution: Execution) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()

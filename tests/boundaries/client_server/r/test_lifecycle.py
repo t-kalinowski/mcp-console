@@ -409,11 +409,19 @@ def test_browser_input(binary: Path, execution: Execution) -> Transcript:
         }
         step()
         """)
-    client.send(r=r, stdin="n\nn\nn\n")
-    output = last_tool_text(client)
-    assert output.count('[input requested: "Browse[1]> "]') == 4, output
-    assert output.endswith("\n[waiting for stdin]"), output
-    assert "n" not in output.splitlines(), output
+    client.expect(
+        "Called from: step()\n"
+        '[input requested: "Browse[1]> "]\n'
+        "debug at #4: value <- value + 1\n"
+        '[input requested: "Browse[1]> "]\n'
+        "debug at #5: value <- value + 1\n"
+        '[input requested: "Browse[1]> "]\n'
+        "debug at #6: value\n"
+        '[input requested: "Browse[1]> "]\n'
+        "[waiting for stdin]",
+        r=r,
+        stdin="n\nn\nn\n",
+    )
     client.send(r="1")
     assert client.transcript[-1]["result"]["isError"] is True
     wait_for_evaluation_output(

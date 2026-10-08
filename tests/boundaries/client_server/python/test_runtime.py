@@ -20,7 +20,7 @@ from support.assertions import (
 )
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
@@ -594,7 +594,7 @@ def inherits_matplotlib_config(
         return transcript
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_runs_async_python_explicitly(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
@@ -695,7 +695,7 @@ def test_runs_python_thread_while_idle(
                 release.touch(exist_ok=True)
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
@@ -904,7 +904,7 @@ def test_routes_python_input(binary: Path, execution: Execution) -> Transcript:
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_reads_unicode_nul_and_long_python_input(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1044,7 +1044,7 @@ def test_python_input_eof_retires_worker(
             gate.close()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
@@ -1077,7 +1077,7 @@ def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript
 
 
 @executions(DIRECT, SANDBOXED)
-def test_restarts_after_python_bridge_failure(
+def test_requires_restart_after_python_bridge_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
     with deferred_selection_client(binary, execution.serve()) as client:
@@ -1109,8 +1109,7 @@ def test_restarts_after_python_bridge_failure(
             "[worker sideband read failed: worker sideband closed]\n"
             "[worker exited with status 1]\n"
             "[worker stopped: in-memory state lost]\n"
-            "[starting new worker]\n"
-            "[idle]"
+            "[startup may have executed; explicit restart required]"
         )
         output = result["content"][0]["text"]
         assert output.endswith(worker_failure), output
@@ -1120,6 +1119,10 @@ def test_restarts_after_python_bridge_failure(
             python_failure,
         )
         result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
+        # The R-first fixture uses configured startup, so replacement requires
+        # explicit authorization before that startup can run again.
+        restarted = client.send(control="restart")
+        assert not restarted.get("isError"), restarted
         client.send(r='exists("python_worker_marker", inherits = FALSE)')
         assert last_result_text(client) == "[1] FALSE\n"
         client.send(python="6 * 7")

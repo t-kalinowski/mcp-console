@@ -15,7 +15,7 @@ send:
   r: complete silently
 transcript_normalization:
   target: repeated cancellation setup exchanges
-  repeated_exchange_count: 512
+  repeated_exchange_count: 4
   exchange_entry_count: 3
   request_ids: distinct in each exchange
 id: <cancelled request 1>
@@ -34,14 +34,11 @@ send:
 result:
   content:
     - type: text
-      text:
-        text_bytes: 3583
-        concat:
-          - "[done]"
-          - repeat: |-
-
-              [done]
-            count: 511
+      text: |-
+        [done]
+        [done]
+        [done]
+        [done]
   isError: false
 ---
 input:

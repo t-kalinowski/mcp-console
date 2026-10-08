@@ -158,6 +158,12 @@ def preview_producer_suffix(context: WorkerContext, source: str) -> None:
     send(context.writer, {"kind": "completed"})
 
 
+def preview_unicode_lines(context: WorkerContext, source: str) -> None:
+    line = "line €🙂 " + "x" * 48 + "\r\n"
+    send_output(context.writer, "preview head\n" + line * 512 + "preview tail 🙂\r\n")
+    send(context.writer, {"kind": "completed"})
+
+
 def preview_large_output(context: WorkerContext, source: str) -> None:
     send_output(context.writer, "preview head\n")
     if source == "preview huge line":

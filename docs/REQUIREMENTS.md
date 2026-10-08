@@ -27,7 +27,11 @@ The default optional declarations are:
 | ----------- | --------------------------------------------------------------------------------------------------------- |
 | R           | `tidyverse`, `dplyr`, `dbplyr`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
 | Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                                      |
-| DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                                                        |
+| DuckDB      | `icu`, `json`, `sqlite` with or without R                                                                 |
+
+Managed DuckDB defaults provide JSON extraction, named-timezone operations, and SQLite attachment with either native provider.
+Preparation skips extensions identified as built-in by the selected engine, including their catalog aliases, and installs the others in the shared extension cache.
+The default declaration is the same even when the engine statically links some of those extensions; loading remains a separate worker operation.
 
 Mixed-runtime R infrastructure is separate: reticulate, jsonlite, DBI, DuckDB, Arrow/nanoarrow, pillar, tibble, and utf8 support the bridge and SQL.
 Clearing optional requirements does not remove that infrastructure, ambient libraries, preinstalled packages, or caches.

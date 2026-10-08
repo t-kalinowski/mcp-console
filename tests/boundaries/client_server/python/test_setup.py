@@ -106,14 +106,18 @@ def deferred_selection_client(
                 """),
         )
         environment = bare_runtime_environment(environment, library)
-        if os.name == "nt":
-            # Windows eagerly inspects a PATH Python in bare R sessions. This
-            # fixture specifically arranges unresolved R-side selection.
-            environment["PATH"] = os.pathsep.join(
-                entry
-                for entry in environment["PATH"].split(os.pathsep)
-                if not (Path(entry) / "python.exe").exists()
-            )
+        # Captured Python can initialize before R. Select the public R-first
+        # startup path so the reticulate selection hook owns this checkpoint.
+        serve = (
+            *serve,
+            "-c",
+            "startup.language=r",
+            "-c",
+            "startup.code="
+            + json.dumps(
+                "console_sql_connection(DBI::dbConnect(duckdb::duckdb(), ':memory:'))"
+            ),
+        )
         with McpClient(binary, serve, environment, directory) as client:
             client.initialize_and_list_tools()
             initialized = client.transcript.copy()
@@ -325,6 +329,7 @@ def test_retries_failed_native_inspection(
             r=code("""
                 retained_pid <- Sys.getpid()
                 retained_value <- 41L
+                Sys.unsetenv("RETICULATE_PYTHON")
                 invisible(asNamespace("reticulate"))
                 return_missing <- TRUE
                 assignInNamespace(
@@ -903,6 +908,7 @@ def test_restores_virtualenv_after_selection_interrupt(
     with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code("""
+            Sys.unsetenv("RETICULATE_PYTHON")
             reticulate::use_python(
               normalizePath(
                 if (.Platform$OS.type == "windows") {

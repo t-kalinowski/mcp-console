@@ -56,3 +56,20 @@ result:
         b:5:10
         c:11:22
   isError: false
+---
+send:
+  r: |
+    rm(list = ls())
+    values <- DBI::dbGetQuery(
+      sql_connection(),
+      "SELECT label, value FROM sql_values ORDER BY label"
+    )
+    writeLines(paste(values$label, values$value, sep = ":"))
+result:
+  content:
+    - type: text
+      text: |
+        a:2
+        b:5
+        c:11
+  isError: false

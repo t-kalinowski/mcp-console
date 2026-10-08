@@ -245,6 +245,7 @@ class TranscriptRunnerFixture(unittest.TestCase):
                     "client_server/server/test_tools::initializes_and_lists_tools",
                     "client_server/server/test_tools::selected",
                 )
+                STRESS = ()
                 """)
         )
         for name in (
@@ -807,6 +808,39 @@ exit 97
                     self.assertEqual(
                         {p.stem for p in self.root.glob("*.marker")}, expected
                     )
+
+    def test_stress_profile_and_explicit_selection(self) -> None:
+        suite = "client_server/server/test_tools"
+        with (self.boundaries / "_profiles.py").open("a") as profile:
+            profile.write(f'STRESS = ("{suite}::unselected",)\n')
+        for arguments, expected in (
+            (("--full", "--list"), {"initializes_and_lists_tools", "selected"}),
+            (("--stress", "--list"), {"unselected"}),
+            (("--full", "--list", f"{suite}::unselected"), {"unselected"}),
+            (("--stress", "--list", f"{suite}::selected"), {"selected"}),
+            (
+                ("--full", "--list", suite),
+                {"initializes_and_lists_tools", "selected", "unselected"},
+            ),
+        ):
+            with self.subTest(arguments=arguments):
+                result = self.run_runner(*arguments)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    {line.split("::")[1] for line in result.stdout.splitlines()},
+                    expected,
+                )
+        stress_snapshot = self.snapshots / "unselected.yaml"
+        original = stress_snapshot.read_bytes()
+        full = self.run_runner("--full", "--update", "--jobs", "1")
+        self.assertEqual(full.returncode, 0, full.stderr)
+        self.assertFalse((self.root / "unselected.marker").exists())
+        self.assertEqual(stress_snapshot.read_bytes(), original)
+        stress = self.run_runner("--stress", "--jobs", "1")
+        self.assertEqual(stress.returncode, 0, stress.stderr)
+        self.assertTrue((self.root / "unselected.marker").is_file())
+        invalid = self.run_runner("--full", "--stress")
+        self.assertEqual(invalid.returncode, 2, invalid.stderr)
 
     def test_smoke_and_focused_runs_do_not_import_unselected_suites(self) -> None:
         other = self.suite.with_name("test_expensive.py")
@@ -1878,7 +1912,9 @@ runner: orphan
             (self.snapshots / f"{name}.yaml").write_text(f"---\nrunner: {name}\n...\n")
         self.suite.write_text("\n".join(programs))
         selectors = [f"client_server/server/test_tools::{name}" for name in names]
-        (self.boundaries / "_profiles.py").write_text(f"SMOKE = {selectors!r}\n")
+        (self.boundaries / "_profiles.py").write_text(
+            f"SMOKE = {selectors!r}\nSTRESS = ()\n"
+        )
         return names
 
     def test_collects_all_failures_through_fifteen_percent(self) -> None:

@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 from support.requirements import SANDBOX, WORKER, Case, Requirement
@@ -39,6 +40,10 @@ class Execution:
 
 DIRECT = Execution("direct", (WORKER,))
 SANDBOXED = Execution("sandbox", (WORKER, SANDBOX))
+
+# Ordinary runtime semantics run once. Windows shared cases use direct execution;
+# its native acceptance suite owns sandbox coverage.
+RUNTIME = DIRECT if os.name == "nt" else SANDBOXED
 
 
 def executions(*modes: Execution) -> Callable[[Case], Case]:

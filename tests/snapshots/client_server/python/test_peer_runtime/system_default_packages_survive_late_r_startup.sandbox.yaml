@@ -13,6 +13,8 @@ result:
             "r": [
               "DBI",
               "arrow",
+              "dbplyr",
+              "dplyr",
               "duckdb",
               "ggplot2",
               "nanoarrow",
@@ -28,6 +30,37 @@ result:
             ],
             "python_version": [],
             "exclude_newer": null
+          },
+          "startup_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "dbplyr",
+              "dplyr",
+              "duckdb",
+              "ggplot2",
+              "nanoarrow",
+              "reticulate",
+              "tidyverse",
+              "yyjsonr"
+            ],
+            "python": [],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "disabled"
+          },
+          "selection": {
+            "r": "<selected R home>",
+            "python": "<selected Python>",
+            "python_source": "RETICULATE_PYTHON"
           },
           "prepared": true,
           "runtime_requirements": {
@@ -50,6 +83,8 @@ result:
       r:
         - DBI
         - arrow
+        - dbplyr
+        - dplyr
         - duckdb
         - ggplot2
         - nanoarrow
@@ -63,6 +98,32 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
+    startup_requirements:
+      r:
+        - DBI
+        - arrow
+        - dbplyr
+        - dplyr
+        - duckdb
+        - ggplot2
+        - nanoarrow
+        - reticulate
+        - tidyverse
+        - yyjsonr
+      python: []
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    resolution:
+      r: automatic
+      python: disabled
+    selection:
+      r: <selected R home>
+      python: <selected Python>
+      python_source: RETICULATE_PYTHON
     prepared: true
     runtime_requirements:
       r:
