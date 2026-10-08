@@ -21,6 +21,11 @@ def inherited_procfs_command(command: list[str]) -> list[str]:
     helper = shutil.which("bwrap")
     assert helper is not None, "the outer namespace fixture requires bwrap on PATH"
     return [
+        sys.executable,
+        str(
+            Path(__file__).resolve().parents[1]
+            / "fixtures/cli/sandbox/inherited_procfs.py"
+        ),
         helper,
         "--unshare-user",
         "--unshare-pid",
@@ -31,9 +36,6 @@ def inherited_procfs_command(command: list[str]) -> list[str]:
         "/dev",
         "--proc",
         "/proc",
-        "--ro-bind",
-        "/proc/sys",
-        "/proc/sys",
         "--",
         *command,
     ]
@@ -42,8 +44,8 @@ def inherited_procfs_command(command: list[str]) -> list[str]:
 def nested_namespaces_available() -> bool:
     if sys.platform != "linux" or shutil.which("bwrap") is None:
         return False
-    # The masked procfs prevents a fresh nested mount. The inner helper must
-    # still be able to create the namespaces used by inherited-procfs execution.
+    # The fixture denies fresh procfs mounts without preventing the inner
+    # helper from creating the namespaces used by inherited-procfs execution.
     command = inherited_procfs_command(
         [
             shutil.which("bwrap"),
@@ -111,8 +113,19 @@ def root_metadata_prefix(directory: Path) -> list[str]:
     # directories or changing the policy under test.
     metadata = directory / "metadata"
     metadata.mkdir()
-    command = inherited_procfs_command([])
-    mounts = []
+    helper = shutil.which("bwrap")
+    assert helper is not None
+    # A bind of the host root cannot create absent mount targets as an ordinary
+    # user. Reconstruct its top-level view on a disposable namespace root.
+    command = [helper, "--unshare-user", "--unshare-pid", "--tmpfs", "/"]
+    for entry in sorted(Path("/").iterdir()):
+        if entry.name in {".git", ".agents", ".codex", "dev", "proc"}:
+            continue
+        if entry.is_symlink():
+            command.extend(["--symlink", os.readlink(entry), str(entry)])
+        else:
+            command.extend(["--bind", str(entry), str(entry)])
+    command.extend(["--dev", "/dev", "--proc", "/proc"])
     for name in (".git", ".agents", ".codex"):
-        mounts.extend(["--ro-bind", str(metadata), f"/{name}"])
-    return [*command[:-1], *mounts, "--"]
+        command.extend(["--ro-bind", str(metadata), f"/{name}"])
+    return [*command, "--"]

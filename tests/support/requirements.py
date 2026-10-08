@@ -61,7 +61,7 @@ LINUX_SANDBOX = Requirement(
 NESTED_PROCFS = Requirement(
     "nested procfs fixture",
     nested_namespaces_available(),
-    "requires an outer bwrap fixture and permission for nested user and PID namespaces",
+    "requires bwrap, libseccomp, and permission for nested user and PID namespaces",
 )
 FRESH_PROCFS = Requirement(
     "fresh procfs fixture",

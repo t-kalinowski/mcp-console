@@ -365,12 +365,12 @@ def cache_locations(
             tools = root / "bin"
             tools.mkdir()
             if git_dependency is not None:
-                (tools / "git").symlink_to(shutil.which("git"))
+                # Git's submodule helper needs these utilities; keep R hidden.
+                for name in ("git", "basename", "sed", "uname"):
+                    (tools / name).symlink_to(shutil.which(name))
                 (tools / "uv").symlink_to(shutil.which("uv"))
             python = preseeded_duckdb_python(root)
             env = environment(tools)
-            if git_dependency is not None:
-                env["PATH"] += os.pathsep + os.defpath
             env["XDG_CACHE_HOME"] = str(root / "cache-base")
             env["CACHE_TEST_ROOT"] = str(root)
             for name in CACHE_VARIABLES:

@@ -178,6 +178,10 @@ def test_preserves_empty_python_environment(
 
 @executions(DIRECT, SANDBOXED)
 @requires(OLD_PYTHON)
+@platform_snapshots(
+    "win32",
+    reason="Windows rejects an old explicit Python before interpreter startup",
+)
 def test_rejects_python_older_than_3_10(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -202,6 +206,21 @@ def test_rejects_python_older_than_3_10(
     environment["RETICULATE_PYTHON"] = str(interpreter)
     client = McpClient(binary, execution.serve(), environment)
     client.initialize_and_list_tools()
+    if os.name == "nt":
+        result = client.send(requirements={"action": "get"})
+        assert result["isError"] is True, result
+        error = last_result_text(client)
+        assert error.startswith(
+            "selected Python inspection failed (exit code: 1): Traceback"
+        ), error
+        assert error.endswith(
+            "RuntimeError: MCP Console requires Python 3.10 or later\r\n"
+        ), error
+        result = client.send(python="6 * 7")
+        assert result["isError"] is True and last_result_text(client) == error, result
+        transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
+        assert errors == error + "\n", errors
+        return transcript + [{"stderr": errors}]
     startup_error = bootstrap_diagnostic(
         client, "RuntimeError: MCP Console requires Python 3.10 or later\n\n"
     )
