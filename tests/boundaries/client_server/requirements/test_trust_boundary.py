@@ -68,6 +68,7 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
         "UV_NO_BINARY",
         "UV_NO_BINARY_PACKAGE",
         "UV_CONFIG_FILE",
+        "UV_ENV_FILE",
         "UV_MANAGED_PYTHON",
         "UV_NO_MANAGED_PYTHON",
         "UV_PYTHON_DOWNLOADS",
@@ -98,6 +99,8 @@ def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
             UV_NO_BUILD_PACKAGE="mcp-console-build-probe",
             UV_NO_BINARY="1",
             UV_NO_BINARY_PACKAGE="mcp-console-trust-probe",
+            UV_ENV_FILE=str(Path(directory) / "missing.env"),
+            UV_NO_ENV_FILE="0",
         ),
     ):
         root = Path(directory).resolve()
