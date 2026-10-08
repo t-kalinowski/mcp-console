@@ -180,9 +180,70 @@ The selected interpreter is captured once, including across worker restarts; lat
 The list is flat and nonempty, with at most one `active_venv` and one optional managed candidate last.
 Exhausting the list fails startup.
 `managed: {}` uses the existing managed Python defaults and also works at the top level to override an inherited `RETICULATE_PYTHON`.
-Managed selection currently accepts an empty options mapping.
+The managed candidate accepts `packages` and `version`, as described below.
+All candidate syntax is validated, but an unreached managed candidate's packages and version are not prepared or checked for runtime availability.
 An explicit managed choice requires available managed preparation; it does not select a PATH interpreter when preparation is unavailable.
 When `python` is omitted, Console retains the launch-time `RETICULATE_PYTHON` compatibility behavior.
+
+## Startup package declarations
+
+Replace the optional startup packages and choose a managed Python version:
+
+```yaml
+r:
+  packages: [dplyr, dbplyr, ggplot2]
+python:
+  managed:
+    version: "3.13"
+    packages: [numpy, pandas, matplotlib]
+```
+
+Omitting `packages` preserves that runtime's bundled defaults; a supplied list replaces them.
+The two languages' lists are independent.
+Use `packages: []` to prepare no optional startup packages for that language.
+This does not disable automatic resolution or remove runtime infrastructure, ambient packages, or caches.
+Preparation makes packages available without attaching or importing them.
+`r.packages` does not set `R_DEFAULT_PACKAGES` or `options(defaultPackages)`.
+A nonempty R list requires R and R preparation support; an empty list does not require R.
+
+Combine an installed R with an existing Python environment:
+
+```yaml
+r:
+  executable: /opt/R/bin/R
+  packages: [dplyr]
+python: .venv
+```
+
+Existing Python uses preinstalled packages and accepts no package or version options.
+Managed `version` must be one nonempty quoted string: a version such as `"3.13"` or a supported constraint such as `">=3.12,<3.14"`.
+Omitting it preserves the existing version-selection behavior.
+Package declarations use the same validators and supported sources as [requirements](REQUIREMENTS.md).
+
+Managed options also belong to an individual fallback candidate:
+
+```yaml
+python:
+  first_available:
+    - existing: .venv
+    - managed:
+        version: ">=3.12,<3.14"
+        packages: [numpy, pandas]
+```
+
+CLI overrides follow the same layering and list-replacement rules:
+
+```sh
+mcp-console serve -c 'r.packages=[dplyr,dbplyr]'
+mcp-console serve -c 'python.managed.version="3.13"'
+mcp-console serve -c 'python.managed.packages=[]'
+mcp-console serve -c 'r=/opt/R/bin/R' -c 'r.packages=[dplyr]'
+```
+
+Console captures the effective startup declaration once per server connection.
+`requirements.reset` restores its packages and Python version constraints, using the existing restart rules.
+A plain restart retains the accepted declaration, including later additions; it does not reread configuration.
+See [requirements replacement](REQUIREMENTS.md#inspecting-and-replacing-requirements).
 
 ## R executable selection
 

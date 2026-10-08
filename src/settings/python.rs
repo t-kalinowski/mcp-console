@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub(crate) struct PythonChoice {
     pub(crate) executable: Option<PathBuf>,
+    pub(crate) managed: Managed,
 }
 
 #[derive(Deserialize)]
@@ -17,9 +18,44 @@ enum Mapping {
     FirstAvailable(Vec<Value>),
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Managed {}
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct Managed {
+    #[serde(deserialize_with = "super::sandbox::supplied")]
+    pub(crate) packages: Option<Vec<String>>,
+    #[serde(deserialize_with = "super::sandbox::supplied")]
+    pub(crate) version: Option<String>,
+}
+
+impl Managed {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(packages) = &self.packages {
+            crate::python_requirement::validate_all(packages)
+                .map_err(|error| format!("packages: {error}"))?;
+        }
+        if let Some(version) = &self.version {
+            crate::python_requirement::validate_version_constraint(version)
+                .map_err(|error| format!("version: {error}"))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn manifest(
+        &self,
+        native: bool,
+    ) -> crate::worker_protocol::PythonRequirementManifest {
+        let mut manifest = if native {
+            crate::worker_protocol::default_native_python_requirement_manifest()
+        } else {
+            crate::worker_protocol::default_python_requirement_manifest()
+        };
+        if let Some(packages) = &self.packages {
+            manifest.packages = packages.clone();
+        }
+        manifest.python_version = self.version.iter().cloned().collect();
+        manifest.normalized()
+    }
+}
 
 pub(super) struct Python(Value);
 
@@ -39,7 +75,7 @@ impl<'de> Deserialize<'de> for Python {
 enum Candidate {
     Existing(PathBuf),
     ActiveVenv,
-    Managed,
+    Managed(Managed),
 }
 
 impl Python {
@@ -49,7 +85,10 @@ impl Python {
         }
         match mapping(self.0)? {
             Mapping::Existing(path) => existing(&capture_path(&path)?),
-            Mapping::Managed(_) => Ok(PythonChoice { executable: None }),
+            Mapping::Managed(managed) => Ok(PythonChoice {
+                executable: None,
+                managed,
+            }),
             Mapping::FirstAvailable(values) => {
                 if values.is_empty() {
                     return Err("python.first_available must not be empty".into());
@@ -62,9 +101,9 @@ impl Python {
                         active = true;
                         Candidate::ActiveVenv
                     } else {
-                        match mapping(value)? {
+                        match mapping(value).map_err(|error| format!("python.first_available[{index}]: {error}"))? {
                             Mapping::Existing(path) => Candidate::Existing(capture_path(&path)?),
-                            Mapping::Managed(_) if index + 1 == count => Candidate::Managed,
+                            Mapping::Managed(managed) if index + 1 == count => Candidate::Managed(managed),
                             _ => return Err("python.first_available permits existing paths, one active_venv, and one optional managed candidate last; nested chains are unsupported".into()),
                         }
                     };
@@ -95,7 +134,12 @@ impl Python {
                             }
                             return existing(&path);
                         }
-                        Candidate::Managed => return Ok(PythonChoice { executable: None }),
+                        Candidate::Managed(managed) => {
+                            return Ok(PythonChoice {
+                                executable: None,
+                                managed,
+                            });
+                        }
                     }
                 }
                 Err("python.first_available: no candidate is available".into())
@@ -106,9 +150,16 @@ impl Python {
 
 fn mapping(value: Value) -> Result<Mapping, String> {
     if !value.is_object() || value.as_object().is_some_and(|value| value.len() != 1) {
-        return Err("python: expected exactly one of existing, managed, first_available; managed accepts an empty mapping".into());
+        return Err("python: expected exactly one of existing, managed, first_available".into());
     }
-    serde_path_to_error::deserialize(value).map_err(|error| format!("python: {error}"))
+    let mapping =
+        serde_path_to_error::deserialize(value).map_err(|error| format!("python: {error}"))?;
+    if let Mapping::Managed(managed) = &mapping {
+        managed
+            .validate()
+            .map_err(|error| format!("python.managed.{error}"))?;
+    }
+    Ok(mapping)
 }
 
 fn capture_path(path: &Path) -> Result<PathBuf, String> {
@@ -183,6 +234,7 @@ fn existing(path: &Path) -> Result<PythonChoice, String> {
     }
     Ok(PythonChoice {
         executable: Some(executable),
+        managed: Default::default(),
     })
 }
 

@@ -8,6 +8,7 @@ use serde_json::{Map, Value};
 
 mod python;
 mod sandbox;
+pub(crate) use python::Managed as ManagedPythonSettings;
 pub(crate) use python::PythonChoice;
 pub(crate) mod startup;
 
@@ -112,6 +113,8 @@ pub(crate) struct R {
     // Workers receive the accepted installation; only the controller selects a launcher.
     #[serde(deserialize_with = "sandbox::supplied", skip_serializing)]
     pub executable: Option<PathBuf>,
+    #[serde(deserialize_with = "sandbox::supplied", skip_serializing)]
+    pub packages: Option<Vec<String>>,
     pub vanilla: bool,
 }
 
@@ -215,6 +218,10 @@ pub fn discover(
         value.unwrap_or_else(|| serde_json::json!({})),
     )
     .map_err(|error| format!("{name}: {error}; see docs/CONFIGURATION.md for the public format"))?;
+    if let Some(packages) = project.r.as_ref().and_then(|r| r.packages.as_ref()) {
+        crate::worker_client::validate_r_requirements(packages)
+            .map_err(|error| format!("{name}: r.packages: {error}"))?;
+    }
     if let Some(r) = &mut project.r
         && let Some(path) = &mut r.executable
     {

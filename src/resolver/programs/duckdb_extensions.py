@@ -6,6 +6,12 @@ import re
 import sys
 
 request = json.load(sys.stdin)
+if request.get("check_available"):
+    import importlib.util
+
+    print(json.dumps(importlib.util.find_spec("duckdb") is not None))
+    sys.exit(0)
+
 extensions = request["extensions"]
 assert isinstance(extensions, list) and extensions
 assert all(

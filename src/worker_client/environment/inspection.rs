@@ -63,45 +63,35 @@ impl Environment {
 
     pub(in crate::worker_client) fn startup_declaration(&self) -> Declaration {
         let managed_r = !self.custom_worker && !matches!(self.r_resolver, RResolver::Disabled);
+        let python = if self.manages_python() {
+            self.startup.python.manifest(
+                self.local_runtime
+                    .as_ref()
+                    .is_some_and(crate::local_runtime::Selection::python_only),
+            )
+        } else {
+            Default::default()
+        };
         Declaration {
             r: if managed_r {
-                super::super::DEFAULT_R_REQUIREMENTS
-                    .iter()
-                    .map(|s| (*s).into())
-                    .collect()
+                self.startup.r.clone().unwrap_or_else(|| {
+                    super::super::DEFAULT_R_REQUIREMENTS
+                        .iter()
+                        .map(|s| (*s).into())
+                        .collect()
+                })
             } else {
                 vec![]
             },
-            python: if self.manages_python() {
-                if self
-                    .local_runtime
-                    .as_ref()
-                    .is_some_and(crate::local_runtime::Selection::python_only)
-                {
-                    crate::worker_protocol::default_native_python_requirement_manifest().packages
-                } else {
-                    crate::worker_protocol::default_python_requirement_manifest().packages
-                }
-            } else {
-                vec![]
-            },
+            python: python.packages,
+            python_version: python.python_version,
             duckdb: if managed_r {
                 super::super::DEFAULT_DUCKDB_EXTENSIONS
                     .iter()
                     .map(|s| (*s).into())
                     .collect()
-            } else if self.manages_python()
-                && self
-                    .local_runtime
-                    .as_ref()
-                    .is_some_and(crate::local_runtime::Selection::python_only)
-            {
-                crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS
-                    .iter()
-                    .map(|s| (*s).into())
-                    .collect()
             } else {
-                vec![]
+                self.startup.native_duckdb.iter().cloned().collect()
             },
             ..Default::default()
         }
