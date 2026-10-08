@@ -29,5 +29,5 @@ pub(crate) fn home_console_directory() -> Result<Option<PathBuf>, String> {
     if !home.is_absolute() {
         return Err(format!("{name} must be an absolute path"));
     }
-    Ok(Some(home.join(".agents/console")))
+    Ok(Some(home.join(".agents").join("console")))
 }
