@@ -22,10 +22,10 @@ They are mutually exclusive, and `...` must be empty.
 
 Sandboxing is enabled by default.
 `no_sandbox = TRUE` skips inner native enforcement and its descendant-cleanup guarantee; an explicitly selected compute target retains its outer boundary.
-See [configuration and safety](../README.md).
+See [configuration and safety](https://github.com/t-kalinowski/mcp-console#limits-and-trust-boundaries).
 Garbage collection closes server input and waits up to 15 seconds before forcibly stopping the server process; that fallback is not proof of descendant cleanup.
 
 The tool accepts the shared requirement actions: `get`, `add` (default), `set`, and `reset`.
 Use `character()` for explicitly empty lists.
 Inspection returns the complete declaration as JSON; changed live replacements normally need `control = "restart"`.
-See [requirements](../docs/REQUIREMENTS.md) for replacement semantics and target limits.
+See [requirements](https://t-kalinowski.github.io/mcp-console/REQUIREMENTS.html) for replacement semantics and target limits.
