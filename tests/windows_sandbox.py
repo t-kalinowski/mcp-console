@@ -700,19 +700,10 @@ class WindowsSandbox(unittest.TestCase):
                 self.assertTrue(handle)
                 try:
                     self.assertEqual(kernel.WaitForSingleObject(handle, 0), 258)
-                finally:
-                    # A retained process handle can keep its executable mapped
-                    # after exit, obstructing retirement of private storage.
-                    kernel.CloseHandle(handle)
-                result = session.send(
-                    control="restart", python="print('answer' in globals())"
-                )
-                self.assertIn("False", json.dumps(result))
-                handle = kernel.OpenProcess(0x100000, False, pid)
-                if not handle:
-                    self.assertEqual(ctypes.get_last_error(), 87)  # Process is gone.
-                    return
-                try:
+                    result = session.send(
+                        control="restart", python="print('answer' in globals())"
+                    )
+                    self.assertIn("False", json.dumps(result))
                     self.assertEqual(
                         kernel.WaitForSingleObject(handle, 0),
                         0,

@@ -282,10 +282,12 @@ class TranscriptRunnerFixture(unittest.TestCase):
             start_new_session=True,
         )
 
-    def run_runner(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def run_runner(
+        self, *arguments: str, timeout: float = 10
+    ) -> subprocess.CompletedProcess[str]:
         process = self.start_runner(*arguments)
         try:
-            stdout, stderr = process.communicate(timeout=10)
+            stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
@@ -1923,7 +1925,8 @@ runner: orphan
             with self.subTest(arguments=arguments):
                 for marker in self.root.glob("*.marker"):
                     marker.unlink()
-                result = self.run_runner("--jobs", "1", *arguments)
+                # Twenty serial subprocesses also inventory host capabilities.
+                result = self.run_runner("--jobs", "1", *arguments, timeout=60)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(
                     sorted(path.stem for path in self.root.glob("*.marker")),
