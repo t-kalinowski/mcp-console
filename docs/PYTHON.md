@@ -9,14 +9,14 @@ From a source checkout, select the appropriate extra:
 uv tool run --python 3.12 --from ".[client]" python your_client.py
 ```
 
-| Integration         | Extra           | Adapter                                                              |
-| ------------------- | --------------- | -------------------------------------------------------------------- |
-| Python client       | `client`        | `MCPConsole`, `AsyncMCPConsole`                                      |
-| chatlas             | `chatlas`       | `mcp_console.chatlas.tool`, `mcp_console.chatlas.register`           |
-| OpenAI Responses    | `openai`        | `mcp_console.openai.responses_tool`                                  |
-| OpenAI Agents       | `openai-agents` | `mcp_console.openai.agents_tool`, `mcp_console.openai.agents_server` |
-| Anthropic           | `anthropic`     | `mcp_console.anthropic.tool`, `mcp_console.anthropic.tools`          |
-| Official thread SDK | `codex`         | `mcp_console.codex.server`                                           |
+| Integration         | Extra           | Adapter                                      |
+| ------------------- | --------------- | -------------------------------------------- |
+| Python client       | `client`        | `MCPConsole`, `AsyncMCPConsole`              |
+| chatlas             | `chatlas`       | `chatlas.tool`, `chatlas.register`           |
+| OpenAI Responses    | `openai`        | `openai.responses_tool`                      |
+| OpenAI Agents       | `openai-agents` | `openai.agents_tool`, `openai.agents_server` |
+| Anthropic           | `anthropic`     | `anthropic.tool`, `anthropic.tools`          |
+| Official thread SDK | `codex`         | `codex.server`                               |
 
 Source installation may build the native bundle; see [installation prerequisites](../RELEASE.md#private-sandbox-executable).
 [`pyproject.toml`](../pyproject.toml) owns dependency versions.
