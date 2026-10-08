@@ -234,3 +234,5 @@ Host cache mode allows preparation to modify artifacts that other host processes
 A custom policy can widen these permissions.
 Use trusted requirements, resolvers, configuration, and package sources.
 The [native runner's lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits) also apply to the resolver.
+
+The [release trust audit](RESOLVER_RELEASE_AUDIT.md) records the bounded mutable-input, native startup, and result-handoff evidence and its release decision.
