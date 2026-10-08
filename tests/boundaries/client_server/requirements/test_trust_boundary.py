@@ -38,7 +38,11 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
     protected.mkdir()
     (protected / "canary").write_text("preserved")
     env = dict(
-        environment(tools),
+        {
+            name: value
+            for name, value in environment(tools).items()
+            if "proxy" not in name.lower()
+        },
         XDG_CACHE_HOME=str(root / "cache"),
         MCP_CONSOLE_TEST_PROTECTED=str(protected),
         MCP_CONSOLE_TEST_ALIAS=str(working / "escape"),

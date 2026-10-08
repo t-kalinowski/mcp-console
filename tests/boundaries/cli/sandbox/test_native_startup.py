@@ -60,7 +60,11 @@ def constructor(
                 alias = working / "target-alias"
                 alias.symlink_to(target)
                 target = alias
-        env = {**os.environ, "MCP_CONSOLE_TEST_PROTECTED_FILE": str(protected)}
+        env = {
+            **os.environ,
+            "MCP_CONSOLE_HOME": str(root / "console-home"),
+            "MCP_CONSOLE_TEST_PROTECTED_FILE": str(protected),
+        }
         if denied_alias:
             (working / "secret").write_text("must not be readable")
             alias = working / "secret-alias"
