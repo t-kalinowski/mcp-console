@@ -24,15 +24,18 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent Python and SQL workbench for calculations, data analysis, and
-        plots. Send one complete `python` or `sql` cell per call. Inspect its
-        output and reuse persistent objects. Results display automatically;
-        supported plots return as images.
+        Persistent R and SQL workbench for local execution on Windows for
+        calculations, data analysis, and plots. Send one complete `r` or `sql`
+        cell per call. Inspect its output and reuse persistent objects. Results
+        display automatically; supported plots return as images.
 
 
         For databases and structured files, consider DuckDB SQL first for
-        inspection, joins, and aggregation. Use Python when its libraries or
-        format-specific parsing simplify the task. Switch languages when useful.
+        inspection, joins, and aggregation. Use R for vectorized data and string
+        operations, statistics, and plots. For a reusable R script, include
+        imports, data inputs, and `#| packages:`/`#| r-version:` metadata for
+        `ir run script.R`, which starts without live Console objects. Switch
+        languages when useful.
 
 
         DuckDB can query CSV, Parquet, JSON, and JSONL directly, including
@@ -59,23 +62,24 @@ result:
         additionalProperties: false
         type: object
         properties:
-          python:
+          r:
             description: >-
-              Evaluate one complete Python cell in persistent `__main__` state. The
-              final visible expression autoprints; leave the primary result last.
-              Import packages normally; managed sessions prepare missing PyPI
-              distributions on first import. Use `requirements.python` when import and
-              distribution names differ or to prepare before execution. Select a
-              user-owned DB-API connection for SQL cells with
-              `_console.sql_connection(connection)`; restore managed DuckDB with
-              `_console.sql_connection(None)`. `_console.sql_connection()` returns the
-              active native Python connection, or errors if another runtime owns SQL;
-              on Python-owned DuckDB, register frames with
-              `_console.sql_connection().register(name, frame)` (globals are not
-              scanned). `matplotlib.pyplot.show()` returns open figures as PNGs
-              immediately and closes them. At cell end, even after errors, remaining
-              open figures return as PNGs and close; `show()` is optional. Closing an
-              unshown figure suppresses capture.
+              Evaluate one complete R cell in persistent global state. Visible
+              top-level expressions autoprint; leave the primary result last. Load
+              CRAN packages normally through `library()`, `require()`,
+              `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; managed
+              sessions prepare missing packages on first use. Avoid availability
+              probes or `install.packages()`. `.console$sql_connection()` returns the
+              active native DBI connection for DBI/dplyr, or errors if another runtime
+              owns SQL. Select a user-owned DBI connection for SQL cells with
+              `.console$sql_connection(connection)`; restore managed DuckDB with
+              `.console$sql_connection(NULL)`. Never disconnect the managed
+              connection; restore it before disconnecting a selection. Default-device
+              plots return as PNGs and finalize at cell end, including after errors;
+              draw each plot in one cell. Explicit devices are not captured. Set
+              persistent dimensions in inches and DPI with
+              `options(console.plot.width_in = ..., console.plot.height_in = ...,
+              console.plot.dpi = ...)`.
             type:
               - string
               - "null"
@@ -84,12 +88,14 @@ result:
               Evaluate one complete SQL cell through the active connection. Managed
               DuckDB keeps a persistent catalog. Results are bounded table previews
               that abbreviate long text cells; query focused subsets or aggregates.
-              The selected driver supplies its own SQL dialect and types. Managed
-              conveniences/extensions apply only to DuckDB. Read SQLite with `ATTACH
-              'path' AS name (TYPE sqlite, READ_ONLY)`. With a sandbox, attach
-              existing DuckDB databases outside writable paths using `ATTACH 'path' AS
-              name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, or
-              `EXPLAIN`; CLI dot commands are not supported.
+              The selected driver supplies its own SQL dialect and types. With R-owned
+              managed DuckDB, query R data frames by name; DuckDB tables/views take
+              precedence. Use DBI from an R cell for commands requiring the statement
+              interface. Managed conveniences/extensions apply only to DuckDB. Read
+              SQLite with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. With a
+              sandbox, attach existing DuckDB databases outside writable paths using
+              `ATTACH 'path' AS name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`,
+              `SUMMARIZE`, or `EXPLAIN`; CLI dot commands are not supported.
             type:
               - string
               - "null"
@@ -146,15 +152,17 @@ result:
               - "null"
             properties:
               action:
-                description: |-
-                  get reads the retained declaration, not an installed-package inventory, without starting a
-                  worker or consuming output; use it alone, without code, stdin, control, or payload fields.
-                  The complete declaration is in structuredContent.requirements.
-                  add (default) accumulates up to 64 entries per language per call; bare {} is invalid.
-                  set replaces the whole declaration without defaults; omitted lists/constraints are empty,
-                  even with only action supplied. reset restores startup defaults and rejects payload fields.
-                  Changed set/reset with a live worker require control="restart"; unchanged declarations are
-                  no-ops. set accepts the complete accumulated manifest without add's per-list limit.
+                description: >-
+                  get reads the retained declaration, not an installed-package inventory,
+                  without starting a worker or consuming output; use it alone, without
+                  code, stdin, control, or payload fields. The complete declaration is in
+                  structuredContent.requirements. add (default) accumulates up to 64
+                  entries per language per call; bare {} is invalid. set replaces the
+                  whole declaration without defaults; omitted lists/constraints are empty,
+                  even with only action supplied. reset restores startup defaults and
+                  rejects payload fields. Changed set/reset with a live worker require
+                  control="restart"; unchanged declarations are no-ops. set accepts the
+                  complete accumulated manifest without add's per-list limit.
                 type: string
                 enum:
                   - get
@@ -162,16 +170,18 @@ result:
                   - set
                   - reset
               python_version:
-                description: |-
-                  Python version numbers or ==, !=, <, <=, >, >= constraints (e.g. >=3.11).
-                  add appends; changes with a live worker require control="restart".
+                description: >-
+                  Runtime version numbers or ==, !=, <, <=, >, >= constraints (e.g.
+                  >=3.11). add appends; changes with a live worker require
+                  control="restart".
                 type: array
                 items:
                   type: string
               exclude_newer:
-                description: |-
-                  Package publication cutoff accepted by uv, e.g. "2026-01-01".
-                  set clears an omitted/null cutoff; add preserves omission and cannot replace an existing one.
+                description: >-
+                  Package publication cutoff accepted by uv, e.g. "2026-01-01". set clears
+                  an omitted/null cutoff; add preserves omission and cannot replace an
+                  existing one.
                 type:
                   - string
                   - "null"
@@ -186,20 +196,21 @@ result:
                   minLength: 1
                   maxLength: 64
               r:
-                description: >-
-                  Single-line ir package references for dependency preparation, e.g. DBI
-                  or duckdb, including supported remote references; local sources and
-                  NUL/line breaks are rejected.
+                description: |-
+                  Single-line ir package references, e.g. data.table or sf, including supported remote
+                  references; local sources and NUL/line breaks are rejected. Automatic R loads accept plain
+                  package names only; use this field for explicit references or preparation before use.
                 type: array
                 items:
                   type: string
                   minLength: 1
               python:
-                description: |-
-                  Named PEP 508 registry requirements with versions, extras, or markers, e.g. polars>=1 or
-                  requests[socks]. Paths, URLs, editable requirements, direct references, and local sources
-                  are rejected. Bare or explicitly selected Python environments and custom workers disable
-                  managed Python requirements.
+                description: >-
+                  Named PEP 508 registry requirements for dependency preparation, e.g.
+                  duckdb>=1, with versions, extras, or markers. Paths, URLs, editable
+                  requirements, direct references, and local sources are rejected. Bare or
+                  user-selected environments and custom workers disable managed registry
+                  requirements.
                 type: array
                 items:
                   type: string

@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.progress import without_elapsed
-from support.requirements import NATIVE_FIXTURES, R, SQL, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, R, SQL, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
@@ -75,7 +75,7 @@ def test_prepares_builtin_extensions_without_downloads(
             return client.finish()[3:]
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_gets_selects_and_resets_the_active_native_connection(
     binary: Path, execution: Execution
@@ -217,7 +217,14 @@ def test_gets_selects_and_resets_the_active_native_connection(
         client.send(python="_console.sql_connection(selected)")
         assert last_tool_text(client) == "[done]"
         client.send(control="restart", sql="SELECT value FROM retained")
-        assert "Table with name retained does not exist" in last_tool_text(client)
+        output = last_tool_text(client)
+        assert "Table with name retained does not exist" in output, output
+        assert "Context: rapi_prepare" in output and "Error type: CATALOG" in output, (
+            output
+        )
+        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+            "\ni Context:", "\nℹ Context:"
+        ).replace("\ni Error type:", "\nℹ Error type:")
         client.send(
             r='stopifnot(inherits(.console$sql_connection(), "duckdb_connection")); writeLines("new managed generation")'
         )
@@ -225,6 +232,7 @@ def test_gets_selects_and_resets_the_active_native_connection(
         return client.finish()
 
 
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_routes_sql_cells_to_a_selected_dbi_connection(
     binary: Path,
@@ -370,7 +378,7 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_python_restores_managed_connection_before_r_reads_it(
     binary: Path,
@@ -464,7 +472,7 @@ def test_python_restores_managed_connection_before_r_reads_it(
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_routes_sql_cells_to_a_selected_python_dbapi_connection(
     binary: Path,
@@ -774,7 +782,7 @@ def test_recovers_when_python_dbapi_connection_raises_base_exception(
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
     binary: Path,
@@ -1001,7 +1009,7 @@ def test_interrupts_selected_python_dbapi_connection(
                 stop_client(client)
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(NATIVE_FIXTURES)
 def test_interrupts_python_dbapi_provider_probe(
@@ -1220,7 +1228,7 @@ def test_recovers_when_python_sql_dispatch_trace_raises_system_exit(
     return client.finish()
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_recovers_when_r_provider_switch_trace_raises_system_exit(
     binary: Path,
@@ -1287,7 +1295,7 @@ def display_width(text: str) -> int:
     )
 
 
-@requires(SQL)
+@requires(R, POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_sql_warmup_without_losing_worker(
     binary: Path, execution: Execution
@@ -1361,7 +1369,7 @@ def test_interrupts_sql_warmup_without_losing_worker(
     return [{"sql_warmup_interrupt_withholds_cell_and_retains_worker": True}]
 
 
-@requires(SQL)
+@requires(R, POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_optional_sql_warmup_failure_preserves_runtime(
     binary: Path, execution: Execution
@@ -1415,7 +1423,7 @@ def test_optional_sql_warmup_failure_preserves_runtime(
     return [{"optional_sql_warmup_failure_preserves_runtime_and_later_sql": True}]
 
 
-@requires(SQL)
+@requires(R, POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_closes_provisional_connections_after_sql_setup_failure(
     binary: Path, execution: Execution
@@ -1532,7 +1540,7 @@ def startup_sql_client(
             release.close()
 
 
-@requires(SQL)
+@requires(R, POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_creates_managed_connection_without_a_send(
     binary: Path, execution: Execution

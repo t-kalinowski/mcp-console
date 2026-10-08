@@ -22,7 +22,7 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import host_process_id, process_exists
 from support.r import r_test_environment
 from support.suites import run_this_suite
-from support.requirements import NATIVE_FIXTURES, POSIX, SQL, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, R, SQL, requires
 
 
 def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[str, str]:
@@ -946,7 +946,7 @@ def test_retries_interrupted_startup_with_prepared_candidate_without_r(
             release.close()
 
 
-@requires(POSIX, SQL)
+@requires(R, POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_retries_interrupted_startup_probe_with_live_r_and_sql(
     binary: Path, execution: Execution

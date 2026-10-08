@@ -24,10 +24,10 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent Python and SQL workbench for calculations, data analysis, and
-        plots. Send one complete `python` or `sql` cell per call. Inspect its
-        output and reuse persistent objects. Results display automatically;
-        supported plots return as images.
+        Persistent Python and SQL workbench for local execution on Windows for
+        calculations, data analysis, and plots. Send one complete `python` or
+        `sql` cell per call. Inspect its output and reuse persistent objects.
+        Results display automatically; supported plots return as images.
 
 
         For databases and structured files, consider DuckDB SQL first for

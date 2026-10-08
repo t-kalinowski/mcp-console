@@ -534,7 +534,10 @@ fn wait_for_resolver_exit(
     program: &Path,
     kind: &str,
 ) -> Result<bool, String> {
+    #[cfg(unix)]
     let mut interrupted = false;
+    #[cfg(windows)]
+    let interrupted = false;
     loop {
         match resolver.event_receiver.recv() {
             Ok(ResolverEvent::Cancel) => return Err(format!("{kind} resolution cancelled")),
@@ -542,8 +545,19 @@ fn wait_for_resolver_exit(
                 reply,
                 clear_marker,
             }) => match interrupt_resolver(child) {
-                Ok(interrupt) => {
-                    interrupted |= matches!(interrupt, ResolverInterrupt::Signaled);
+                Ok(ResolverInterrupt::Signaled) => {
+                    let _ = reply.send(Ok(()));
+                    // Windows interrupts terminate the Job rather than deliver
+                    // a recoverable signal. Attribute that failure here, before
+                    // an adapter turns the forced exit status into another error.
+                    #[cfg(windows)]
+                    return Err(format!("{kind} resolution interrupted"));
+                    #[cfg(unix)]
+                    {
+                        interrupted = true;
+                    }
+                }
+                Ok(ResolverInterrupt::AlreadyExited) => {
                     let _ = reply.send(Ok(()));
                 }
                 Err(error) => {

@@ -23,7 +23,7 @@ from support.records import Transcript
 from support.previews import assert_preview
 from support.progress import elapsed_progress, normalize_elapsed, without_elapsed
 from support.evidence import compact_text
-from support.requirements import POSIX, SQL, WORKER, command, requires
+from support.requirements import POSIX, R, SQL, WORKER, command, requires
 from support.resolvers import (
     bare_runtime_environment,
     fake_ir_environment,
@@ -370,7 +370,7 @@ after image
 
 @requires(WORKER)
 @executions(DIRECT, SANDBOXED)
-@requires(SQL)
+@requires(R, SQL)
 def test_callable_preserves_mixed_language_state(
     binary: Path, execution: Execution
 ) -> Transcript:

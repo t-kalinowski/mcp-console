@@ -1,12 +1,14 @@
 # Windows local execution
 
-Native Windows x64 support is experimental and supports local sandboxed or `--no-sandbox` sessions with R and Python.
+Native Windows x64 support is experimental and supports local sandboxed or `--no-sandbox` sessions with R, Python, and SQL.
 R and Python are peer runtimes: enabled interpreters initialize in the background before the first cell, and either can run without the other installed.
 Persistent state, interactive input, plots, cooperative interruption, restart, and session recording are supported.
 Reticulate provides interoperability when both runtimes and the bridge are available; Python-only sessions do not require R or reticulate.
 
 Managed R and Python dependencies use the shared hidden `resolve` subcommand, with `ir` and `uv` materializing the environments on the host.
-SQL remains deferred; Windows defaults do not prepare DuckDB extensions.
+SQL uses the shared R DBI and Python DB-API providers: R capability selects managed DuckDB when available, and Python owns DuckDB without R.
+Managed sessions prepare the same `icu`, `json`, and `sqlite` defaults as macOS/Linux through trusted host resolution.
+Explicit Python selections need preinstalled DuckDB or a user-selected DB-API connection; captured startup can select a native connection before the first SQL cell.
 The release workflow does not publish Windows wheels; Windows source checkouts can build and install a local wheel.
 
 ## Build and run
@@ -93,7 +95,8 @@ Runner/helper death can terminate Jobs, but does not guarantee storage deletion.
 The Windows relay uses private named pipes with overlapped I/O, inherited events for interrupts and managed stdin wakeups, and process handles for exit observation.
 Pipe permissions use the current logon SID so restricted tokens can open both endpoints; remote clients are rejected and both endpoints are connected before the worker starts.
 The public MCP messages, server-relay JSONL, and worker sideband message shapes remain shared across platforms.
-R and Python interrupts are cooperative and preserve state when handled; a native call that does not check for interruption may require `restart`.
+R, Python, and SQL callback interrupts are cooperative and preserve state when handled; a native call that does not check for interruption may require `restart`.
+R-owned DuckDB queries handle interruption; a long native Python-owned DuckDB query can require `restart` on Windows.
 The worker updates interpreter pending state and invokes the C runtime's current SIGINT handler without requiring a console window.
 Its idle command wait also wakes for interrupts and consumes them before dispatching a following cell, including an interrupt and cell supplied in the same `send`.
 After R initializes, the idle wait also wakes for Windows messages and services R's background event loop, including `later` timers, on the interpreter thread.
@@ -125,7 +128,7 @@ Live Python activation also updates an already imported Joblib process backend's
 ## Validation
 
 Native sandbox acceptance covers policy enforcement, stdio/exit propagation, private storage, and descendant retirement before restart.
-Native runtime acceptance covers Python-first and R-first startup, each runtime without the other, a Unicode virtualenv path, both bridge directions, input, active and idle interrupts including Python sleep and same-call following cells, plots, recording, restart, Python inspection cleanup/cancellation, and packaging serialization.
+Native runtime acceptance covers Python-first and R-first startup, each runtime without the other, SQL-first managed Python sessions, R-owned SQL and native query interruption, DB-API selection and cooperative callback interruption, a Unicode virtualenv path, both bridge directions, input, active and idle interrupts including Python sleep and same-call following cells, plots, recording, restart, Python inspection cleanup/cancellation, and packaging serialization.
 `tests/windows.py` includes `tests/windows_relay.py`, which checks relay framing, fatal-error ordering, stdin failures, and final sideband delivery.
 It also includes `tests/windows_resolver.py`, covering the resolver protocol, ir/uv arguments, real environment materialization, failures, interrupts, and descendant retirement.
 Run native commands exclusively in a checkout.
@@ -202,7 +205,7 @@ These are host-plumbing tests, not sandbox-enforcement evidence.
 The provisioned backend's loopback restriction still needs separate acceptance against its established policy contract; unelevated tests do not imply loopback denial.
 
 Shared discovery reports unavailable capabilities per case and execution mode; a skip is not validation.
-Windows full checks exercise portable R/Python execution, startup, bridge attachment, input, plots, managed activation, process creation, recording, CLI configuration, and protocol behavior in addition to native acceptance.
+Windows full checks exercise portable R/Python/SQL execution, startup, bridge attachment, input, plots, managed activation, process creation, recording, CLI configuration, and protocol behavior in addition to native acceptance.
 The shared Windows pipe reader uses blocking native reads with socket notifications.
 Each shared case runs in a kill-on-close Job; cancellation gives the case 15 seconds to run cleanup, then requires confirmed descendant retirement before deleting its workspace.
 Owner-loss cleanup remains independent of the case interpreter, including native calls holding Python's GIL.
@@ -214,7 +217,6 @@ The native child-launch fixture uses ASCII arguments because the stock `R.exe` d
 
 | Exclusion                                                                                                                  | Assessment and Windows coverage                                                                                                                                                                                                                                                     |
 | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| SQL                                                                                                                        | Runtime features are deferred; cases declare those capabilities rather than failing while launching an unavailable runtime.                                                                                                                                                         |
 | Seatbelt/bubblewrap policy, ELF interposition, procfs, Unix signals, PTYs, descriptor inheritance, and non-UTF-8 filenames | OS-specific contracts and fixtures remain on their owning platforms. Native Windows policy, relay, input, cancellation, and Job retirement have separate acceptance cases. The shared `sandbox` capability refers to Unix fixtures, not absence of a Windows sandbox.               |
 | Shell/shebang fake workers and resolvers, FIFO checkpoints, Unix virtualenv or R-library layouts                           | Remaining fixture debt for otherwise supported behavior. These cases declare `POSIX`; Windows native tests cover some corresponding contracts, but do not replace every skipped admission, SDK, resolver, and lifecycle scenario. Port the fixture before removing its requirement. |
 | Unix staging/release executable fixtures and Rust Unix descriptor fixtures                                                 | Keep the native ABI/build requirements. Windows checkout ownership, packaging, and installation are exercised through the native workflow; portable release-manifest, client, and runner checks run on both platforms.                                                              |

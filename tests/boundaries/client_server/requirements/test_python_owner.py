@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.requirements import SQL, requires
+from support.requirements import R, SQL, requires
 from support.assertions import last_result_text
 from support.client import McpClient
 from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
@@ -15,7 +15,7 @@ from support.records import Transcript
 from support.suites import run_this_suite
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_prepares_without_reticulate_environment_mutators(
     binary: Path, execution: Execution

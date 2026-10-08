@@ -133,21 +133,14 @@ impl Profile {
         description.push_str(" Send one complete ");
         if self.configured_visibility {
             description.push_str(&self.languages.cell_fields());
-        } else if cfg!(windows) && self.builtin {
-            description.push_str("`r` or `python`");
         } else {
             description.push_str("`r`, `python`, or `sql`");
         }
         description.push_str(sections::SEND_WORKFLOW);
         if self.builtin {
             description.push_str(sections::DISPLAY);
-            if !cfg!(windows) || self.configured_visibility {
-                description.push_str("\n\n");
-                description.push_str(&self.language_guidance());
-            } else if self.languages.r {
-                description.push(' ');
-                description.push_str(sections::R_SCRIPT.trim_end());
-            }
+            description.push_str("\n\n");
+            description.push_str(&self.language_guidance());
         } else {
             description.push_str("\n\n");
             description.push_str(if self.restricted_guidance() {
@@ -235,7 +228,6 @@ impl Profile {
 }
 
 // Schemars uses the same named sections for the ordinary field metadata.
-// SQL-only sections are omitted on Windows at construction, never removed by prose matching.
 pub(super) fn r_description() -> String {
     r_description_for(Languages::all())
 }

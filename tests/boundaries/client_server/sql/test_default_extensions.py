@@ -1,9 +1,9 @@
 """Managed R and no-R DuckDB share semantic defaults, not download lists."""
 
-import shutil
 import sqlite3
 import sys
 import tempfile
+from contextlib import closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -16,6 +16,7 @@ from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import R, SQL, requires
 from boundaries.client_server.sql.test_without_r import environment, sql_client
+from support.resolvers import expose_uv
 
 
 def assert_semantic_defaults(
@@ -29,7 +30,7 @@ def assert_semantic_defaults(
         "json",
         "sqlite",
     ], inspected
-    with sqlite3.connect(workspace / "audit.sqlite") as database:
+    with closing(sqlite3.connect(workspace / "audit.sqlite")) as database, database:
         database.execute("CREATE TABLE events (payload TEXT)")
         database.execute("INSERT INTO events VALUES (?)", ('{"answer":42}',))
 
@@ -60,6 +61,13 @@ def assert_semantic_defaults(
     client.send(sql="INSERT INTO audit.events VALUES ('{}')")
     output = last_tool_text(client)
     assert "Error:" in output and "read-only" in output, output
+    if r_backed:
+        assert (
+            "Context: rapi_execute" in output and "Error type: INVALID_INPUT" in output
+        ), output
+        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
+            "\ni Context:", "\nℹ Context:"
+        ).replace("\ni Error type:", "\nℹ Error type:")
     client.send(sql="SELECT count(*) AS events FROM audit.events")
     expected = ["1", "1"] if r_backed else ["1"]
     assert last_tool_text(client).splitlines()[-1].split() == expected
@@ -91,7 +99,7 @@ def test_managed_r_defaults(binary: Path, execution: Execution) -> Transcript:
 def test_managed_python_defaults(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
-        (workspace / "uv").symlink_to(shutil.which("uv"))
+        expose_uv(workspace)
         extensions = workspace / "extensions"
         env = dict(
             environment(workspace),

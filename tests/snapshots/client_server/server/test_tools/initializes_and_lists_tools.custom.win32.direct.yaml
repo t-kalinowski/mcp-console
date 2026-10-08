@@ -66,6 +66,13 @@ result:
             type:
               - string
               - "null"
+          sql:
+            description: >-
+              Evaluate one complete SQL cell; the custom worker supplies the
+              connection, dialect, and display.
+            type:
+              - string
+              - "null"
           timeout_ms:
             description: |-
               Wait for output for up to this many milliseconds (default 60,000). `0` returns without

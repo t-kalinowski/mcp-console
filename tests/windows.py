@@ -260,6 +260,69 @@ def exercise_input_and_interrupt(session: Session) -> None:
     assert "42" in json.dumps(result), result
 
 
+def exercise_sql_interrupt(session: Session) -> None:
+    """Interrupt a SQL callback using the worker's cooperative input boundary."""
+    session.expect(
+        "SQL callback ready",
+        # fmt: python
+        python=code("""
+            import sqlite3
+
+            interrupt_connection = sqlite3.connect(":memory:")
+
+
+            def sql_gate():
+                input("SQL gate> ")
+                return 1
+
+
+            interrupt_connection.create_function("sql_gate", 0, sql_gate)
+            _console.sql_connection(interrupt_connection)
+            print("SQL callback ready")
+            """),
+    )
+    session.expect("waiting for stdin", sql="SELECT sql_gate() AS answer")
+    result = session.send(control="interrupt", timeout_ms=10000)
+    output = json.dumps(result)
+    assert not result.get("isError") and "running;" not in output, result
+    # SQLite reports its UDF failure after the Python callback is interrupted.
+    assert "user-defined function raised exception" in output, result
+    session.expect("[done]", python="_console.sql_connection(None)")
+    session.expect("1234567", sql="SELECT * FROM retained")
+
+
+def exercise_r_sql(session: Session) -> None:
+    session.request("tools/list", {})
+    session.expect("[done]", sql="CREATE TABLE retained AS SELECT 1234567 AS answer")
+    session.expect(
+        "R connection ready",
+        # fmt: r
+        r=code("""
+            retained_pid <- Sys.getpid()
+            managed <- .console$sql_connection()
+            stopifnot(DBI::dbGetQuery(managed, "SELECT * FROM retained")$answer == 1234567)
+            frame <- data.frame(answer = 7654321L)
+            cat("R connection ready")
+            """),
+    )
+    session.expect("7654321", sql="SELECT * FROM frame")
+    result = session.send(
+        sql="SELECT sum(i::DOUBLE) FROM range(1000000000000) AS values(i)",
+        timeout_ms=1000,
+    )
+    assert not result.get("isError") and "running;" in json.dumps(result), result
+    result = session.send(control="interrupt", timeout_ms=10000)
+    assert not result.get("isError"), result
+    assert result["content"] == [{"type": "text", "text": "\n"}], result
+    session.expect("1234567", sql="SELECT * FROM retained")
+    session.expect(
+        "R worker retained",
+        r='stopifnot(Sys.getpid() == retained_pid, identical(.console$sql_connection(), managed)); cat("R worker retained")',
+    )
+    session.expect("worker stopped", control="restart")
+    session.expect("1234567", sql="SELECT 1234567 AS answer")
+
+
 def exercise_later_callbacks(session: Session) -> None:
     """Observe idle timer input, graphics, interruption, and R/Python state."""
     result = session.send(requirements={"r": ["later"]})
@@ -638,7 +701,7 @@ class WindowsConsole(unittest.TestCase):
                 "content": [
                     {
                         "type": "text",
-                        "text": "only one of `r` or `python` may be supplied",
+                        "text": "only one of `r`, `python`, or `sql` may be supplied",
                     }
                 ],
                 "isError": True,
@@ -994,7 +1057,15 @@ class WindowsConsole(unittest.TestCase):
         )
         for custom in (False, True):
             baseline = None
-            for languages in ("r,python", "r", "python"):
+            for languages in (
+                "r,python,sql",
+                "r,python",
+                "r",
+                "python",
+                "sql",
+                "r,sql",
+                "python,sql",
+            ):
                 with self.subTest(custom=custom, languages=languages):
                     environment = dict(
                         os.environ,
@@ -1037,7 +1108,8 @@ class WindowsConsole(unittest.TestCase):
                                 for field, schema in baseline["inputSchema"][
                                     "properties"
                                 ].items()
-                                if field not in {"r", "python"} or field in fields
+                                if field not in {"r", "python", "sql"}
+                                or field in fields
                             }
                             self.assertEqual(properties, expected)
                         if custom:
@@ -1050,19 +1122,21 @@ class WindowsConsole(unittest.TestCase):
                                 len(fields) > 1,
                             )
                         else:
-                            expected_description = baseline["description"]
-                            if "r" not in fields:
-                                expected_description = expected_description.replace(
-                                    " " + script_guidance, ""
-                                )
-                            self.assertEqual(tool["description"], expected_description)
                             self.assertIn(
-                                "SQL is not yet supported.", tool["description"]
+                                "Persistent R, Python, and SQL workbench",
+                                tool["description"],
+                            )
+                            self.assertEqual(
+                                "consider DuckDB SQL first" in tool["description"],
+                                "sql" in fields,
+                            )
+                            self.assertEqual(
+                                "Switch languages when useful" in tool["description"],
+                                len(fields) > 1,
                             )
                             for field in fields:
                                 text = properties[field]["description"].lower()
-                                self.assertNotIn("sql", text)
-                                self.assertNotIn("duckdb", text)
+                                self.assertIn("sql", text)
                         self.assertEqual(
                             session.request("tools/list", {})["tools"], [tool]
                         )
@@ -1082,7 +1156,7 @@ class WindowsConsole(unittest.TestCase):
         schema = session.request("tools/list", {})
         tool = schema["tools"][0]
         properties = tool["inputSchema"]["properties"]
-        self.assertNotIn("sql", properties)
+        self.assertIn("sql", properties)
         self.assertIn(
             "Requires host preparation support",
             properties["requirements"]["description"],
@@ -1091,8 +1165,7 @@ class WindowsConsole(unittest.TestCase):
         for language in ("r", "python"):
             with self.subTest(language=language):
                 description = properties[language]["description"].lower()
-                self.assertNotIn("sql", description)
-                self.assertNotIn("duckdb", description)
+                self.assertIn("sql", description)
                 self.assertIn("managed sessions prepare missing", description)
         self.assertEqual(
             schema["tools"][0]["inputSchema"]["properties"]["requirements"][
@@ -1112,6 +1185,116 @@ class WindowsConsole(unittest.TestCase):
         self.assertTrue(result.get("isError"), result)
         self.assertIn("unavailable", json.dumps(result))
         self.assertIn("42", json.dumps(session.send(python="42")))
+
+    def test_sql_without_r(self):
+        uv = shutil.which("uv")
+        self.assertIsNotNone(uv, "Windows SQL acceptance requires uv")
+        directory = tempfile.TemporaryDirectory(prefix="console SQL 日本語 ")
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        shutil.copyfile(uv, root / "uv.exe")
+        environment = dict(
+            os.environ,
+            PATH=os.pathsep.join(
+                [
+                    str(root),
+                    str(Path(sys.executable).parent),
+                    str(Path(os.environ["SystemRoot"]) / "System32"),
+                ]
+            ),
+            RETICULATE_PYTHON="managed",
+            UV_PYTHON_PREFERENCE="system",
+            UV_PYTHON_DOWNLOADS="never",
+        )
+        environment.pop("R_HOME", None)
+        session = Session(environment, overrides=('languages=["python","sql"]',))
+        self.addCleanup(session.close)
+        session.initialize()
+        properties = session.request("tools/list", {})["tools"][0]["inputSchema"][
+            "properties"
+        ]
+        self.assertIn("sql", properties)
+        self.assertNotIn("r", properties)
+        session.expect("1234567", sql="SELECT 1234567 AS answer")
+        inspection = session.send(requirements={"action": "get"})
+        self.assertEqual(
+            inspection["structuredContent"]["requirements"]["duckdb"],
+            ["icu", "json", "sqlite"],
+        )
+        session.expect("Count", sql="CREATE TABLE retained AS SELECT 1234567 AS answer")
+        session.expect("1234567", sql="SELECT * FROM retained")
+        exercise_sql_interrupt(session)
+        session.expect(
+            "selected sqlite",
+            # fmt: python
+            python=code("""
+                import sqlite3
+
+                selected = sqlite3.connect(":memory:")
+                selected.execute("CREATE TABLE selected(answer INTEGER)")
+                selected.execute("INSERT INTO selected VALUES (7654321)")
+                _console.sql_connection(selected)
+                print("selected sqlite")
+                """),
+        )
+        session.expect("7654321", sql="SELECT * FROM selected")
+        session.expect("[done]", python="_console.sql_connection(None)")
+        session.expect("1234567", sql="SELECT * FROM retained")
+        session.expect("worker stopped", control="restart")
+        result = session.send(
+            sql="SELECT count(*) FROM duckdb_tables() WHERE table_name = 'retained'"
+        )
+        self.assertFalse(result.get("isError"), result)
+        self.assertTrue(result["content"][0]["text"].endswith("0\n"), result)
+        session.expect("1234567", sql="SELECT 1234567 AS answer")
+        result = session.send(
+            sql="SELECT sum(i::DOUBLE) FROM range(1000000000000) AS values(i)",
+            timeout_ms=1000,
+        )
+        self.assertIn("running;", json.dumps(result))
+        session.expect("1234567", control="restart", sql="SELECT 1234567 AS answer")
+
+    def test_sql_with_r(self):
+        session = self.session()
+        exercise_r_sql(session)
+
+    def test_sql_startup_without_r(self):
+        environment = dict(
+            os.environ,
+            PATH=str(Path(os.environ["SystemRoot"]) / "System32"),
+            RETICULATE_PYTHON=sys.executable,
+        )
+        environment.pop("R_HOME", None)
+        # fmt: python
+        source = code("""
+            import sqlite3
+
+            startup_count = globals().get("startup_count", 0) + 1
+            native = sqlite3.connect(":memory:")
+            _ = native.execute("CREATE TABLE selected AS SELECT 1234567 AS answer")
+            _console.sql_connection(native)
+            """)
+        session = Session(
+            environment,
+            overrides=(
+                'languages=["sql"]',
+                "startup=" + json.dumps({"language": "python", "code": source}),
+            ),
+        )
+        self.addCleanup(session.close)
+        session.initialize()
+        properties = session.request("tools/list", {})["tools"][0]["inputSchema"][
+            "properties"
+        ]
+        self.assertEqual(set(properties) & {"r", "python", "sql"}, {"sql"})
+        for restart in (False, True):
+            session.expect(
+                "1234567",
+                sql="SELECT * FROM selected",
+                **({"control": "restart"} if restart else {}),
+            )
+            session.expect("[done]", sql="UPDATE selected SET answer = 7654321")
+            session.expect("7654321", sql="SELECT * FROM selected")
 
     def test_managed_python_requirements_without_r(self):
         uv = shutil.which("uv")
@@ -1611,6 +1794,8 @@ class WindowsConsole(unittest.TestCase):
                 import matplotlib.pyplot as plt
 
                 plt.plot([1, 2, 3])
+                plt.show()
+                plt.close()
                 """).strip()
         )
         self.assertTrue(
