@@ -256,6 +256,10 @@ Console also supplies these values during managed R preparation:
 
 ## Temporary storage, plotting, and native loading
 
+On Windows x64, each Console process defaults an absent or empty `PROCESSOR_ARCHITECTURE` to `AMD64` at entry, before runtime loading or child launches.
+This also applies to preparation and worker processes launched with filtered environments; nonempty supplied values are retained.
+R DuckDB's native teardown can crash without this ordinary Windows runtime variable.
+
 | Variable                              | Built-in worker or launcher behavior                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TMPDIR`                              | Set to private worker temporary storage, including for built-in workers with `--no-sandbox`. The worker requires it. Console's managed DuckDB connections place spill files and stored secrets below it. The host's temporary-directory settings can still affect allocation of host-side temporary files.                                                                 |

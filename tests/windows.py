@@ -1337,6 +1337,48 @@ class WindowsConsole(unittest.TestCase):
         session = self.session()
         exercise_r_sql(session)
 
+    def test_startup_without_processor_architecture(self):
+        # MCP clients can filter this ordinary Windows variable. R's native
+        # DuckDB teardown crashes when it is absent, before any cell can run.
+        environment = dict(os.environ, RETICULATE_PYTHON=sys.executable)
+        environment.pop("PROCESSOR_ARCHITECTURE", None)
+        for filtered, value in ((False, None), (True, None), (False, "")):
+            with self.subTest(filtered=filtered, value=value):
+                if value is not None:
+                    environment["PROCESSOR_ARCHITECTURE"] = value
+                overrides = ()
+                if filtered:
+                    overrides = (
+                        "inherit_environment=false",
+                        "environment=" + json.dumps(environment),
+                    )
+                session = Session(environment, overrides=overrides)
+                try:
+                    session.initialize()
+                    session.request("tools/list", {})
+                    session.expect("R_SMOKE 4", r='cat("R_SMOKE", 2 + 2, "\\n")')
+                    inspection = session.send(requirements={"action": "get"})
+                    self.assertFalse(inspection.get("isError"), inspection)
+                    self.assertTrue(inspection["structuredContent"]["prepared"])
+                    session.expect(
+                        "PYTHON_SMOKE 4",
+                        # fmt: python
+                        python=code("""
+                            import os
+
+                            assert os.environ["PROCESSOR_ARCHITECTURE"] == "AMD64"
+                            print("PYTHON_SMOKE", 2 + 2)
+                            """),
+                    )
+                    session.expect("1234567", sql="SELECT 1234567 AS sql_smoke")
+                    session.expect(
+                        "RESTART_SMOKE 4",
+                        control="restart",
+                        python="print('RESTART_SMOKE', 2 + 2)",
+                    )
+                finally:
+                    session.close()
+
     def test_sql_startup_without_r(self):
         environment = dict(
             os.environ,
