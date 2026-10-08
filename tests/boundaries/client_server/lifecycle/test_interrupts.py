@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.progress import without_elapsed, without_elapsed_result
-from support.assertions import last_tool_text
+from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
@@ -22,7 +22,8 @@ from support.processes import (
     stop_process_group,
 )
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
+from support.normalization import code
 from support.resolvers import resolver_interrupt_permission_environment
 from support.suites import run_this_suite
 
@@ -37,6 +38,55 @@ from boundaries.client_server._harness import (
     wait_for_stopped_worker,
     wait_for_worker_retirement,
 )
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_interrupt_with_requirements_in_mixed_managed_session(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(
+        binary,
+        execution.serve("-c", "r.packages=[DBI]", "-c", "python.managed.packages=[]"),
+    ) as client:
+        client.initialize_and_list_tools()
+        inspected = client.send(requirements={"action": "get"})["structuredContent"]
+        assert inspected["selection"]["python_source"] == "python.managed", inspected
+        assert inspected["requirements"]["r"] == ["DBI"], inspected
+        client.expect("[1] 0\n", r="print(0)")
+        client.expect("0\n", python="0")
+        client.expect(
+            "\n[output produced while idle]\n[1] 42\n[done]",
+            control="interrupt",
+            requirements={"r": ["DBI"]},
+            r="print(42)",
+        )
+        # The public input request proves that the old R evaluation is active.
+        wait_for_evaluation_output(
+            client,
+            '[input requested: "old> "]\n[waiting for stdin]',
+            "interruptible R input",
+            # fmt: r
+            r=code("""
+                tryCatch(
+                  {
+                    readline("old> ")
+                    old_cell_completed <- TRUE
+                  },
+                  interrupt = function(e) cat("interrupted\\n")
+                )
+                """),
+        )
+        interrupted = client.send(
+            control="interrupt",
+            requirements={"r": ["DBI"]},
+            r='stopifnot(!exists("old_cell_completed")); print(43)',
+        )
+        assert not interrupted.get("isError"), interrupted
+        output = last_tool_text(client)
+        assert output == "interrupted\n[1] 43\n[done]", repr(output)
+        client.expect("42\n", python="40 + 2")
+        return client.finish()
 
 
 @requires(POSIX)
