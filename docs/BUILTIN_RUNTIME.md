@@ -286,6 +286,7 @@ Python's `plt.show()` immediately returns all open pyplot figures as PNGs in fig
 The images remain available after an explicit `plt.close()` or a later exception.
 The `block` argument is accepted without waiting for a GUI.
 `plt.pause()` captures each frame while keeping figures open for its canvas event loop and subsequent updates.
+These display rules also apply when R calls Matplotlib through reticulate.
 An interrupt during explicit display stops the cell; automatic cell-end capture remains best effort.
 At cell end, including after an exception, remaining open figures are captured and closed the same way; `show()` is optional.
 `savefig()` does not suppress capture, but closing an unshown figure does.
