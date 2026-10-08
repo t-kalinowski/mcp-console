@@ -1,0 +1,16 @@
+---
+distribution: console_optional_fixture
+metadata: missing name
+restart: true
+---
+distribution: console_optional_fixture
+metadata: invalid encoding
+restart: true
+---
+distribution: duckdb
+metadata: missing name
+restart: true
+---
+distribution: duckdb
+metadata: invalid encoding
+restart: true

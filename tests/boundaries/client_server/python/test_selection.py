@@ -109,6 +109,67 @@ def test_existing_paths_and_fallback_capture(
 
 
 @requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_malformed_optional_metadata_preserves_selected_python(
+    binary: Path, execution: Execution
+) -> Transcript:
+    audit = []
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        selected = venv(root)
+        executable = virtualenv_python(selected)
+        site = Path(
+            subprocess.check_output(
+                [
+                    executable,
+                    "-I",
+                    "-c",
+                    "import sysconfig; print(sysconfig.get_path('purelib'))",
+                ],
+                text=True,
+            ).strip()
+        )
+        programs = root / "tools"
+        programs.mkdir()
+        configure(root, {"existing": str(selected)}, cache="host", languages=["python"])
+        package = site / "console_optional_fixture"
+        package.mkdir()
+        (package / "__init__.py").write_text(
+            "raise AssertionError('inspection imported an optional package')\n"
+        )
+        for name in ("console_optional_fixture", "duckdb"):
+            distribution = site / f"{name}-1.0.dist-info"
+            distribution.mkdir()
+            metadata = distribution / "METADATA"
+            for label, content in (
+                ("missing name", b"Version: 1.0\n"),
+                ("invalid encoding", b"\xff"),
+            ):
+                metadata.write_bytes(content)
+                with McpClient(
+                    binary, execution.serve(), environment(programs), root
+                ) as client:
+                    client.initialize_and_list_tools()
+                    # fmt: python
+                    program = code("""
+                        import sys
+                        from pathlib import Path
+
+                        assert Path(sys.prefix) == Path.cwd() / "ordinary venv"
+                        assert not {"duckdb", "console_optional_fixture"}.intersection(sys.modules)
+                        print("selected Python ready")
+                        """)
+                    client.expect("selected Python ready\n", python=program)
+                    client.send(control="restart")
+                    client.expect("selected Python ready\n", python=program)
+                    client.finish()
+                audit.append({"distribution": name, "metadata": label, "restart": True})
+            metadata.unlink()
+            distribution.rmdir()
+    return audit
+
+
+@requires(POSIX)
 def test_broken_executable_does_not_select_later_candidate(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()

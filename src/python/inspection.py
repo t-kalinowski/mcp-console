@@ -122,11 +122,16 @@ def describe() -> dict[str, object]:
         # Missing or unusable optional metadata does not invalidate CPython.
         pass
 
+    duckdb = False
+    try:
+        name = importlib.metadata.distribution("duckdb").metadata.get("Name")
+        duckdb = isinstance(name, str) and name.lower() == "duckdb"
+    except Exception:
+        # DuckDB is optional; malformed metadata is treated as absent.
+        pass
+
     return {
-        "duckdb": any(
-            distribution.metadata["Name"].lower() == "duckdb"
-            for distribution in importlib.metadata.distributions()
-        ),
+        "duckdb": duckdb,
         "metadata": {
             "base_executable": sys._base_executable,
             "pythonpath": os.pathsep.join(sys.path),
