@@ -88,7 +88,12 @@ else:
         assert current_process_identity(parent[0]) == parent
         children = set()
         for task in Path(f"/proc/{parent[0]}/task").iterdir():
-            children.update(map(int, (task / "children").read_text().split()))
+            try:
+                task_children = (task / "children").read_text()
+            except (FileNotFoundError, ProcessLookupError):
+                # Threads may retire while their owning process stays gated.
+                continue
+            children.update(map(int, task_children.split()))
         assert current_process_identity(parent[0]) == parent
         return tuple(capture_process_identity(pid) for pid in sorted(children))
 
