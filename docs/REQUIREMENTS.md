@@ -145,6 +145,8 @@ Failed automatic resolution preserves the original operation's behavior, includi
 
 The host resolves the complete candidate and retained extensions.
 The worker applies the candidate `.libPaths()` and reports `RActivated`; only a matching current-generation receipt commits it.
+It replaces Console's managed library at its current position, preserving native project and ambient libraries and their order.
+If native startup removed the managed entry, activation adds the candidate ahead of those libraries without removing them.
 The original load then resumes, attaching only when that operation normally attaches.
 A later namespace/cell failure does not undo acceptance.
 An activation failure leaves recoverable state available but requires restart before further requirement changes.
