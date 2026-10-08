@@ -251,13 +251,13 @@ impl ResolverProcess {
             cleanup: Vec::new(),
         };
         #[cfg(windows)]
-        let interrupt_requested = invocation.child.interrupt_requested();
+        let interrupted = invocation.child.interrupted();
         let retirement = invocation.retire(program, kind);
         self.cleanup.store(retirement.confirmed(), Ordering::SeqCst);
-        // Job termination can race with a natural exit. Its accepted request
-        // alone is not evidence that it supplied the final process exit code.
+        // Native root termination retains its cause independently of the exit
+        // code; Job retirement still has to confirm the process exited.
         #[cfg(windows)]
-        if interrupt_requested && retirement.process.as_ref().is_ok_and(native::interrupted) {
+        if interrupted && retirement.process.is_ok() {
             failure
                 .primary
                 .get_or_insert_with(|| format!("{kind} resolution interrupted"));
@@ -533,7 +533,7 @@ fn wait_for_resolver_exit(
                 Ok(ResolverInterrupt::Signaled) => {
                     let _ = reply.send(Ok(()));
                     // Windows terminates the owned Job. Retirement confirms
-                    // the final status before attributing it to interruption.
+                    // exit before using the recorded root termination cause.
                     #[cfg(windows)]
                     return Ok(());
                 }

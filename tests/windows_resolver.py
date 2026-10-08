@@ -230,11 +230,15 @@ class WindowsResolver(unittest.TestCase):
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         kernel.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
         kernel.WaitForSingleObject.restype = ctypes.c_uint32
-        for pid, handle in processes.items():
+        # Root exit observation is part of Completed. Job accounting can reach
+        # zero while descendant process objects finish kernel teardown; wait
+        # on their pinned handles without reopening PIDs or interval polling.
+        for index, (pid, handle) in enumerate(processes.items()):
+            role = "root" if index == 0 else "descendant"
             self.assertEqual(
-                kernel.WaitForSingleObject(handle, 0),
+                kernel.WaitForSingleObject(handle, 0 if index == 0 else 5000),
                 0,
-                f"resolver process {pid} survived completion",
+                f"resolver {role} process {pid} survived completion",
             )
 
     def test_interrupt_confirms_descendant_retirement(self):
@@ -349,9 +353,11 @@ class WindowsResolver(unittest.TestCase):
         # but Job termination must not replace the resolver's original failure.
         # https://learn.microsoft.com/en-us/windows/win32/debug/debugging-events
         kernel, checked, next_event, resume = self.resolver_debugger()
-        for exit_code in (1, 23):
+        for exit_code in (1, 23, 0xC000013A):
             with self.subTest(exit_code=exit_code):
-                self.environment["TEST_RESOLVER_EXIT_CODE"] = str(exit_code)
+                self.environment["TEST_RESOLVER_EXIT_CODE"] = str(
+                    ctypes.c_int32(exit_code).value
+                )
                 gate = Gate()
                 resolver, processes = self.blocked_resolver(
                     "failed", release=False, gate=gate

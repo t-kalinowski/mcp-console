@@ -105,7 +105,8 @@ Incomplete command frames survive message and interrupt wakeups.
 
 Resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code.
 Cancellation and resolver interruption terminate the Job, and results are accepted only after the Job has no active processes.
-Resolver interruption uses the final process exit status after Job retirement to retain its interruption cause through error formatting; a natural exit racing with termination keeps its original diagnostics.
+Resolver interruption records whether native root termination began or the process was already terminating, then confirms Job retirement before reporting the result.
+A natural exit racing with termination keeps its original diagnostics, even when its exit code matches the interruption status.
 These Jobs own trusted host preparation, not evaluated user code, and are not sandboxes.
 The server invokes `mcp-console resolve` over cancellable pipes; a lost or unconfirmed cleanup receipt blocks replacement.
 After spawning a resolver, the parent releases the command builder's child-side pipe handles so a rejected startup can confirm shutdown and EOF without a spurious retirement timeout.
@@ -183,10 +184,11 @@ Native input/interrupt acceptance uses the public `waiting for stdin` receipt be
 It requires no networking or host-to-sandbox fixture access.
 The same scenario runs directly and with the public `network: enabled` selection in `WindowsSandbox.test_network_enabled_input_and_interrupt`.
 Public-policy tests use the default elevated backend and default persistent state directory (`%LOCALAPPDATA%/mcp-console`).
-To run them against an already-provisioned default backend, set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to that absolute state directory.
+They run against the default backend without a provisioning opt-in.
 `WindowsSandbox.test_provisioned_network_restricted_input_and_interrupt` exercises the public network-restricted selection against that default backend.
 The test never provisions accounts or chooses another backend.
-Without that opt-in directory, it reports unavailable coverage; a skip does not establish network-restricted compatibility.
+Missing provisioning reports a test failure with setup guidance.
+Setup-reuse and private-installation checks discover the state directory through `sandbox-setup --status`; `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` can still select an explicit directory for those checks.
 Windows CI builds the staged Console and runs `python scripts/prepare-windows-tests` before the full gate.
 GitHub-hosted Windows runners [run as administrators with UAC disabled](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges), so setup can provision their sandbox without an interactive elevation prompt.
 Preparation provisions the runner's sandbox state when needed, verifies setup readiness, and exports both `R_HOME` and `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to subsequent steps.
@@ -194,7 +196,7 @@ Hosted Console and runtime installations can live outside the native backend's s
 CI passes those asset directories to preparation with repeated `--read-root` arguments, which grant read/execute ACLs to the verified Console sandbox accounts before exporting the test environment.
 This is a trusted host preparation operation requiring permission to update the selected directories; local callers can omit these grants when their installations are already readable.
 The full gate therefore includes the provisioned elevated test in both checkout and installed-wheel acceptance.
-Local validation uses the same test: inspect `mcp-console sandbox-setup --status`, then set `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to its reported state directory before running `scripts/check.cmd` or `scripts/check.cmd --full`.
+Local validation uses the same tests: inspect `mcp-console sandbox-setup --status`, then run `scripts/check.cmd` or `scripts/check.cmd --full`.
 The private-installation regression uses preparation's `--require-configured` mode so an unavailable setup fails without provisioning accounts.
 Provision an unconfigured local machine explicitly with `mcp-console sandbox-setup`; the acceptance tests themselves do not provision it.
 
