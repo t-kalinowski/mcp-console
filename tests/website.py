@@ -2,6 +2,7 @@
 """Render the documentation website and check its public pages and links."""
 
 from html.parser import HTMLParser
+import ast
 import json
 from pathlib import Path
 import shutil
@@ -21,6 +22,9 @@ class Page(HTMLParser):
         self.links: list[str] = []
         self.title = ""
         self.in_title = False
+        self.code_blocks: list[str] = []
+        self.in_pre = False
+        self.code = ""
         self.feed(path.read_text())
 
     def handle_starttag(
@@ -34,14 +38,22 @@ class Page(HTMLParser):
                 self.links.append(attrs[name])
         if tag == "title":
             self.in_title = True
+        if tag == "pre":
+            self.in_pre = True
+            self.code = ""
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "title":
             self.in_title = False
+        if tag == "pre":
+            self.in_pre = False
+            self.code_blocks.append(self.code)
 
     def handle_data(self, data: str) -> None:
         if self.in_title:
             self.title += data
+        if self.in_pre:
+            self.code += data
 
 
 class WebsiteTests(unittest.TestCase):
@@ -58,6 +70,9 @@ class WebsiteTests(unittest.TestCase):
             docs.parent / "r",
             ignore=shutil.ignore_patterns("docs", "*.Rcheck", "*.tar.gz"),
         )
+        shutil.copytree(ROOT / "python", docs.parent / "python")
+        for name in ("pyproject.toml", "great-docs.yml", "LICENSE"):
+            shutil.copy2(ROOT / name, docs.parent / name)
         result = subprocess.run(
             ["quarto", "render", str(docs), "--to", "html"],
             capture_output=True,
@@ -137,6 +152,120 @@ class WebsiteTests(unittest.TestCase):
                     "https://github.com/t-kalinowski/mcp-console/blob/main/r/README.md",
                     self.pages[page].links,
                 )
+
+    def test_python_package_subsite(self) -> None:
+        home = (self.site / "python/index.html").resolve()
+        self.assertIn(home, self.pages, "Great Docs home page is missing")
+        reference = (self.site / "python/reference/index.html").resolve()
+        self.assertIn(reference, self.pages, "Python API index is missing")
+        for name in (
+            "MCPConsole",
+            "AsyncMCPConsole",
+            "Requirements",
+            "chatlas.tool",
+            "chatlas.register",
+            "openai.responses_tool",
+            "openai.agents_tool",
+            "openai.agents_server",
+            "anthropic.tool",
+            "anthropic.tools",
+            "codex.server",
+        ):
+            with self.subTest(symbol=name):
+                page = (self.site / f"python/reference/{name}.html").resolve()
+                self.assertIn(page, self.pages, "Python API page is missing")
+                self.assertIn(name, self.pages[page].title)
+        search = json.loads((self.site / "python/search.json").read_text())
+        self.assertIn("reference/MCPConsole.html", {entry["href"] for entry in search})
+        sitemap = ElementTree.parse(self.site / "python/sitemap.xml")
+        urls = {
+            element.text
+            for element in sitemap.findall(
+                ".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
+            )
+        }
+        self.assertIn(
+            "https://t-kalinowski.github.io/mcp-console/python/reference/MCPConsole.html",
+            urls,
+        )
+        self.assertTrue((self.site / "python/llms-full.txt").is_file())
+        for name in ("index.html", "reference/MCPConsole.html"):
+            with self.subTest(package_page=name):
+                page = self.site / "python" / name
+                destinations = {
+                    (page.parent / unquote(urlsplit(link).path)).resolve()
+                    for link in self.pages[page].links
+                    if not urlsplit(link).scheme and not urlsplit(link).netloc
+                }
+                for target in ("index.html", "PYTHON.html", "r/index.html"):
+                    self.assertIn(self.site / target, destinations)
+        self.assertIn(
+            "https://github.com/t-kalinowski/mcp-console/blob/main/python/mcp_console/_sync.py",
+            {
+                link.split("#")[0]
+                for link in self.pages[
+                    (self.site / "python/reference/MCPConsole.html").resolve()
+                ].links
+            },
+        )
+        for name in ("index.html", "README.html", "PYTHON.html"):
+            with self.subTest(page=name):
+                page = self.site / name
+                destinations = {
+                    (page.parent / unquote(urlsplit(link).path)).resolve()
+                    for link in self.pages[page].links
+                    if not urlsplit(link).scheme and not urlsplit(link).netloc
+                }
+                self.assertIn(home, destinations)
+
+    def test_python_methods_are_inline(self) -> None:
+        for name, context_methods in (
+            ("MCPConsole", ("__enter__", "__exit__")),
+            ("AsyncMCPConsole", ("__aenter__", "__aexit__")),
+        ):
+            with self.subTest(client=name):
+                path = self.site / f"python/reference/{name}.html"
+                page = self.pages[path]
+                for method in (
+                    "connect",
+                    "close",
+                    "send",
+                    "send_tool",
+                    *context_methods,
+                ):
+                    self.assertIn(f"mcp_console.{name}.{method}", page.ids)
+                    self.assertEqual(
+                        path.read_text().count(f'id="mcp_console.{name}.{method}"'), 1
+                    )
+                    self.assertFalse(
+                        (self.site / f"python/reference/{name}.{method}.html").exists(),
+                        "methods should be documented on the class page",
+                    )
+
+    def test_python_adapters_show_complete_examples(self) -> None:
+        for name, factory in (
+            ("chatlas.tool", "chatlas.tool"),
+            ("chatlas.register", "chatlas.register"),
+            ("openai.responses_tool", "openai.responses_tool"),
+            ("openai.ResponsesTool", "openai.responses_tool"),
+            ("openai.AsyncResponsesTool", "openai.responses_tool"),
+            ("openai.agents_tool", "openai.agents_tool"),
+            ("openai.agents_server", "openai.agents_server"),
+            ("anthropic.tool", "anthropic.tool"),
+            ("anthropic.tools", "anthropic.tools"),
+            ("codex.server", "codex.server"),
+        ):
+            with self.subTest(adapter=name):
+                page = self.pages[self.site / f"python/reference/{name}.html"]
+                examples = [
+                    code
+                    for code in page.code_blocks
+                    if "import mcp_console" in code
+                    and f"mcp_console.{factory}(" in code
+                ]
+                self.assertTrue(examples, "missing standalone usage example")
+                for code in examples:
+                    ast.parse(code)
 
     def test_local_links_and_anchors_resolve(self) -> None:
         self.assertTrue(self.pages, "the website has no rendered pages")

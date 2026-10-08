@@ -14,7 +14,6 @@ send:
     restricted.mkdir()
     (restricted / "retained.txt").write_text("private contents")
     restricted.chmod(0)
-    temporary.parent.chmod(0o555)
 result:
   content:
     - type: text
@@ -60,7 +59,6 @@ send:
     restricted.mkdir()
     (restricted / "retained.txt").write_text("private contents")
     restricted.chmod(0)
-    temporary.parent.chmod(0o555)
 result:
   content:
     - type: text

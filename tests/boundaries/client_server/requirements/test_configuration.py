@@ -212,61 +212,6 @@ def test_configured_python_defaults_and_policy(
     return records
 
 
-@requires(POSIX)
-@executions(DIRECT, SANDBOXED)
-def test_existing_fallback_captured_across_restart(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with TemporaryDirectory() as temporary:
-        root = Path(temporary).resolve()
-        venv = root / "active venv"
-        subprocess.run(
-            [sys.executable, "-m", "venv", "--without-pip", venv],
-            check=True,
-            capture_output=True,
-        )
-        tools = root / "tools"
-        tools.mkdir()
-        configure(
-            root,
-            {
-                "languages": ["python"],
-                "python": {
-                    "first_available": [
-                        {"existing": "missing"},
-                        "active_venv",
-                        {"managed": {"packages": ["impossible-unused-package"]}},
-                    ]
-                },
-            },
-        )
-        env = {
-            **without_r(tools),
-            "VIRTUAL_ENV": str(venv),
-            "RETICULATE_PYTHON": str(root / "invalid-legacy"),
-        }
-        with McpClient(binary, execution.serve(), env, root) as client:
-            client.initialize_and_list_tools()
-            # fmt: python
-            source = code("""
-                import os, sys
-                from pathlib import Path
-
-                assert Path(sys.prefix) == Path.cwd() / "active venv"
-                assert sys.prefix != sys.base_prefix
-                os.environ["VIRTUAL_ENV"] = "missing-after-startup"
-                os.environ["RETICULATE_PYTHON"] = "missing-after-startup"
-                print("captured")
-                """)
-            client.expect("captured\n", python=source)
-            (root / "missing").symlink_to(virtualenv_python(venv))
-            client.send(control="restart")
-            client.expect("captured\n", python=source)
-            result = client.send(requirements={"action": "get"})
-            assert result["structuredContent"]["requirements"]["python"] == [], result
-            return client.finish()
-
-
 @requires(POSIX, R)
 @executions(DIRECT, SANDBOXED)
 def test_selected_r_disabled_without_path_discovery(

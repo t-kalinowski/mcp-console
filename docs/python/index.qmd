@@ -1,0 +1,63 @@
+---
+title: MCP Console Python
+description: >-
+  Python clients and framework adapters for persistent R, Python, and SQL
+  sessions.
+---
+
+The `mcp_console` package gives Python applications and model frameworks a persistent R, Python, and SQL session.
+A model requests a `send` tool call, Console evaluates the cell, and the framework sends the output back to the model.
+Variables and loaded packages stay available for later cells in the same session.
+
+## Install
+
+Use Python 3.11 or newer and install the extra for your framework.
+For example, to use Anthropic:
+
+```sh
+pip install 'mcp-console[anthropic]'
+```
+
+The extra installs the framework and MCP client dependencies alongside Console.
+Set your provider's API key and choose a model before running a model example; each reference page lists its setup.
+The examples read the model ID from `OPENAI_MODEL` or `ANTHROPIC_MODEL` so you can use a model available to your account.
+
+## Choose an integration
+
+Each link below includes a complete usage example and explains who owns the connection and tool loop.
+
+| Framework        | Extra           | Use an existing Console connection                                                  | Let the framework open Console                        |
+| ---------------- | --------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| chatlas          | `chatlas`       | [tool()](reference/chatlas.tool.qmd)                                                | [register()](reference/chatlas.register.qmd)          |
+| OpenAI Responses | `openai`        | [responses_tool()](reference/openai.responses_tool.qmd), with an explicit tool loop |                                                       |
+| OpenAI Agents    | `openai-agents` | [agents_tool()](reference/openai.agents_tool.qmd)                                   | [agents_server()](reference/openai.agents_server.qmd) |
+| Anthropic        | `anthropic`     | [tool()](reference/anthropic.tool.qmd)                                              | [tools()](reference/anthropic.tools.qmd)              |
+| Thread SDK       | `codex`         |                                                                                     | [server()](reference/codex.server.qmd)                |
+
+The adapters use the connected server's `send` schema.
+The Responses and native MCP integrations preserve images, allowing a model to inspect a plot that Console produces.
+The `chatlas.tool()`, `agents_tool()`, and `anthropic.tool()` adapters return text, representing images as MIME placeholders.
+
+## Call Console directly
+
+Install `mcp-console[client]` to run cells without a model or API key.
+Use [MCPConsole](reference/MCPConsole.qmd) for synchronous code or [AsyncMCPConsole](reference/AsyncMCPConsole.qmd) for async code.
+Keep one connection for the conversation:
+
+```python
+from mcp_console import MCPConsole
+
+with MCPConsole() as console:
+    print(console.send(python="values = [12, 15, 18, 20, 25]; values"))
+    print(console.send(python="import statistics; statistics.mean(values)"))
+```
+
+The context starts the server and closes it when you leave.
+Create adapters inside the context and keep it open until the model finishes using its tools.
+Reconnect starts a new session; recreate adapters after reconnecting.
+
+`timeout_ms` limits how long a call waits for output; it does not cancel execution.
+If a call returns `[running; poll with an empty send]`, call `send()` without code to collect the remaining output before submitting another cell.
+See [send()](reference/AsyncMCPConsole.qmd#send) for a polling example and [Requirements](reference/Requirements.qmd) for adding packages to the worker environment.
+
+The [Python integration guide](https://t-kalinowski.github.io/mcp-console/PYTHON.html) also covers source-checkout installation and requirements inspection.

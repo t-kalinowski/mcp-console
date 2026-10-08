@@ -3,6 +3,8 @@
 The Python package supplies sync/async clients and framework adapters around the same persistent MCP session.
 It requires Python 3.11 or newer; the executable alone does not require framework dependencies.
 
+The [Python API reference](https://t-kalinowski.github.io/mcp-console/python/reference/index.html) documents the clients and adapters.
+
 From a source checkout, select the appropriate extra:
 
 ```sh

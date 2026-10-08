@@ -80,6 +80,92 @@ impl Selection {
         std::env::var_os("R_HOME").is_some() || crate::resolver::find_r_path_entry().is_some()
     }
 
+    #[cfg(any(unix, windows))]
+    pub(crate) fn python(
+        configured: Option<OsString>,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
+        resolver: &crate::resolver::execution::PythonConfiguration,
+        extension_directory: Option<PathBuf>,
+        inspect_explicit: impl FnOnce(
+            &Path,
+            &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+        ) -> Result<crate::python::NativePython, String>,
+        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<(Self, Option<ManagedPython>), String> {
+        let explicit = configured
+            .as_ref()
+            .is_some_and(|python| !python.is_empty() && python != "managed");
+        Self::python_with(
+            configured,
+            resolver.has_uv(),
+            extension_directory,
+            |started| {
+                crate::resolver::execution::resolve_python_manifest(
+                    requirements,
+                    resolver,
+                    None,
+                    None,
+                    started,
+                )
+            },
+            |executable, started| {
+                if explicit {
+                    inspect_explicit(executable, started)
+                } else {
+                    crate::resolver::execution::inspect_native(resolver, executable, started)
+                }
+            },
+            on_started,
+        )
+    }
+
+    #[cfg(any(unix, windows))]
+    fn python_with(
+        configured: Option<OsString>,
+        has_uv: bool,
+        extension_directory: Option<PathBuf>,
+        resolve: impl FnOnce(
+            &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+        ) -> Result<ManagedPython, String>,
+        inspect: impl FnOnce(
+            &Path,
+            &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+        ) -> Result<crate::python::NativePython, String>,
+        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<(Self, Option<ManagedPython>), String> {
+        let explicit = configured.filter(|value| !value.is_empty() && value != "managed");
+        let (executable, managed) = if let Some(explicit) = &explicit {
+            let executable = crate::python::explicit_executable(explicit)?;
+            (executable, None)
+        } else {
+            if !has_uv {
+                return Err("Python sessions without R require `uv` on PATH; set python in .agents/console/config.yaml to use an existing environment".into());
+            }
+            let managed = resolve(on_started)?;
+            (managed.python().to_path_buf(), Some(managed))
+        };
+        // Preserve virtualenv symlinks: canonicalizing here would lose the
+        // environment even though its base executable has the same identity.
+        let executable = std::path::absolute(executable)
+            .map_err(|error| format!("cannot locate selected Python: {error}"))?;
+        let selected = inspect(&executable, on_started)?;
+        // Default and requested extensions share the host cache across generations.
+        let duckdb_extension_directory = managed.as_ref().and(extension_directory);
+        let selection = Self {
+            r_home: None,
+            installation: None,
+            r_settings: Default::default(),
+            python_resolution: Default::default(),
+            python: Some(Python {
+                selected: Box::new(selected),
+                explicit,
+                managed: managed.is_some(),
+                duckdb_extension_directory,
+            }),
+        };
+        Ok((selection, managed))
+    }
+
     pub(crate) fn python_only(&self) -> bool {
         self.r_home.is_none()
     }
@@ -94,6 +180,9 @@ impl Selection {
         let Some(managed) = managed.filter(|_| !DEFAULT_DUCKDB_EXTENSIONS.is_empty()) else {
             return Ok(Default::default());
         };
+        if !crate::resolver::execution::python_duckdb_available(resolver, managed, on_started)? {
+            return Ok(Default::default());
+        }
         let directory = self
             .duckdb_extension_directory()
             .ok_or("DuckDB extension preparation requires an absolute HOME at server startup")?;

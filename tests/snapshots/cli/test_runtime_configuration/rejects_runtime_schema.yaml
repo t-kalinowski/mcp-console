@@ -42,12 +42,12 @@ stderr: |
 path: python.managed
 value: []
 stderr: |
-  python: managed: expected managed options as a mapping
+  python.managed: expected managed options as a mapping
 ---
 path: python.managed
 value: ~
 stderr: |
-  python: managed: expected managed options as a mapping
+  python.managed: expected managed options as a mapping
 ---
 path: r.packages
 value: ~
@@ -65,8 +65,8 @@ stderr: |
 path: python.managed.version
 value: 3.13
 stderr: >
-  python: managed: version: invalid type: floating point `3.13`, expected
-  a string
+  python: managed.version: invalid type: floating point `3.13`, expected a
+  string
 ---
 path: python.managed.version
 value: python3
@@ -113,8 +113,9 @@ path: python.first_available
 value:
   - active_venv
   - active_venv
-stderr: |
-  python: expected exactly one of existing, managed, first_available
+stderr: >
+  python.first_available[1]: python: expected exactly one of existing,
+  managed, first_available
 ---
 path: python.first_available
 value:

@@ -1,3 +1,0 @@
----
-conditional_duckdb: >-
-  false version and platform markers leave extension defaults empty

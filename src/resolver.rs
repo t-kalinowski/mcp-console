@@ -88,6 +88,8 @@ pub(crate) use python_configuration::ManagedPythonResolverConfiguration;
 #[cfg(any(unix, windows))]
 pub(crate) use managed_duckdb::resolve_duckdb_extensions;
 #[cfg(any(unix, windows))]
+pub(crate) use managed_duckdb_python::python_duckdb_available;
+#[cfg(any(unix, windows))]
 pub(crate) use managed_duckdb_python::resolve_python_duckdb_extensions;
 #[cfg(all(test, unix))]
 use managed_python::resolve_python_manifest;

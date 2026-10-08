@@ -1,0 +1,181 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  requirements:
+    action: set
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
+    action: get
+  timeout_ms: 600000
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "automatic"
+          },
+          "selection": {
+            "r": "<selected R home>",
+            "python": "<selected Python>",
+            "python_source": "python.managed"
+          },
+          "prepared": true
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+    resolution:
+      r: automatic
+      python: automatic
+    selection:
+      r: <selected R home>
+      python: <selected Python>
+      python_source: python.managed
+    prepared: true
+  isError: false
+---
+send:
+  requirements:
+    action: reset
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
+    action: get
+  timeout_ms: 600000
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [
+              "praise"
+            ],
+            "python": [],
+            "duckdb": [
+              "icu",
+              "json",
+              "sqlite"
+            ],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "arrow",
+              "duckdb",
+              "jsonlite",
+              "nanoarrow",
+              "pillar",
+              "reticulate",
+              "tibble",
+              "utf8"
+            ],
+            "python": []
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "automatic"
+          },
+          "selection": {
+            "r": "<selected R home>",
+            "python": "<selected Python>",
+            "python_source": "python.managed"
+          },
+          "prepared": true
+        }
+  structuredContent:
+    requirements:
+      r:
+        - praise
+      python: []
+      duckdb:
+        - icu
+        - json
+        - sqlite
+      python_version: []
+      exclude_newer: ~
+    runtime_requirements:
+      r:
+        - DBI
+        - arrow
+        - duckdb
+        - jsonlite
+        - nanoarrow
+        - pillar
+        - reticulate
+        - tibble
+        - utf8
+      python: []
+    resolution:
+      r: automatic
+      python: automatic
+    selection:
+      r: <selected R home>
+      python: <selected Python>
+      python_source: python.managed
+    prepared: true
+  isError: false
+---
+send:
+  r: >-
+    stopifnot(requireNamespace('praise', quietly = TRUE)); cat('configured R
+    available\n')
+result:
+  content:
+    - type: text
+      text: |
+        configured R available
+  isError: false

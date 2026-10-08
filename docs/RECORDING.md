@@ -26,6 +26,7 @@ Retrieving omitted text requires filesystem access there; Console has no log rea
 
 The journal schema is unversioned, with nullable runtime metadata before discovery.
 `startup_requirements` records the captured startup declaration once discovery supplies it.
+It uses configured startup packages and Python version constraints, including replacements and empty package lists.
 `artifact_created.call_id` is `null` for session-owned images and an integer for cell-owned images.
 
 The journal is flushed before derived projections.

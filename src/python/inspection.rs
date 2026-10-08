@@ -36,10 +36,6 @@ pub(crate) struct NativePython {
     pub(crate) base_prefix: String,
     pub(crate) base_exec_prefix: String,
     pub(crate) metadata: ConversionMetadata,
-    // Optional installed-package inventory for Python-only SQL startup defaults.
-    // R-attached interpreters do not need Python-only SQL startup defaults.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) duckdb: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -136,7 +132,6 @@ pub(crate) fn inspect_native(
         base_prefix: description.base_prefix,
         base_exec_prefix: description.base_exec_prefix,
         metadata: description.metadata,
-        duckdb: description.duckdb,
     })
 }
 
@@ -150,8 +145,6 @@ struct Description {
     base_prefix: String,
     base_exec_prefix: String,
     metadata: ConversionMetadata,
-    #[serde(default)]
-    duckdb: bool,
 }
 
 impl Description {

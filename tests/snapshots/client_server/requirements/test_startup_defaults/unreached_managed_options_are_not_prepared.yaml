@@ -1,0 +1,82 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: print('selected existing Python')
+result:
+  content:
+    - type: text
+      text: |
+        selected existing Python
+  isError: false
+---
+send:
+  requirements:
+    action: get
+  timeout_ms: 600000
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "runtime_requirements": {
+            "r": [],
+            "python": []
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "disabled"
+          },
+          "selection": {
+            "r": null,
+            "python": "<selected Python>",
+            "python_source": "python.first_available[0]"
+          },
+          "prepared": false
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    runtime_requirements:
+      r: []
+      python: []
+    resolution:
+      r: automatic
+      python: disabled
+    selection:
+      r: ~
+      python: <selected Python>
+      python_source: python.first_available[0]
+    prepared: false
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  python: print('selected existing Python')
+result:
+  content:
+    - type: text
+      text: |
+        selected existing Python
+  isError: false

@@ -15,21 +15,11 @@ pub(crate) struct PythonChoice {
 #[serde(rename_all = "snake_case")]
 enum Mapping {
     Existing(PathBuf),
-    Managed(#[serde(deserialize_with = "managed")] super::ManagedPython),
+    Managed(super::ManagedPython),
     FirstAvailable(Vec<Value>),
 }
 
 pub(super) struct Python(Value);
-
-fn managed<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<super::ManagedPython, D::Error> {
-    let value = Value::deserialize(deserializer)?;
-    if !value.is_object() {
-        return Err(D::Error::custom("expected managed options as a mapping"));
-    }
-    serde_path_to_error::deserialize(value).map_err(D::Error::custom)
-}
 
 impl<'de> Deserialize<'de> for Python {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -70,7 +60,7 @@ impl Python {
                         active = true;
                         Candidate::ActiveVenv
                     } else {
-                        match mapping(value)? {
+                        match mapping(value).map_err(|error| format!("python.first_available[{index}]: {error}"))? {
                             Mapping::Existing(path) => Candidate::Existing(capture_path(&path)?),
                             Mapping::Managed(options) if index + 1 == count => Candidate::Managed(options),
                             _ => return Err("python.first_available permits existing paths, one active_venv, and one optional managed candidate last; nested chains are unsupported".into()),
@@ -118,6 +108,12 @@ impl Python {
 fn mapping(value: Value) -> Result<Mapping, String> {
     if !value.is_object() || value.as_object().is_some_and(|value| value.len() != 1) {
         return Err("python: expected exactly one of existing, managed, first_available".into());
+    }
+    if value
+        .get("managed")
+        .is_some_and(|options| !options.is_object())
+    {
+        return Err("python.managed: expected managed options as a mapping".into());
     }
     let mapping =
         serde_path_to_error::deserialize(value).map_err(|error| format!("python: {error}"))?;

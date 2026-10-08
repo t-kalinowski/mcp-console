@@ -7,10 +7,9 @@ result:
   content:
     - type: text
       text: >-
-        r.packages: configured R requirements need an available R installation;
-        configure r.executable
+        r.packages: requested startup packages require R and R preparation
+        support
   isError: true
 ---
-stderr: >
-  r.packages: configured R requirements need an available R installation;
-  configure r.executable
+stderr: |
+  r.packages: requested startup packages require R and R preparation support

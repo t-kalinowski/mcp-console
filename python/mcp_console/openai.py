@@ -19,7 +19,49 @@ if TYPE_CHECKING:
 
 
 def agents_tool(console: MCPConsole | AsyncMCPConsole) -> FunctionTool:
-    """Return an Agents function tool using the connected server's MCP schema."""
+    """Give an OpenAI agent access to an existing Console session.
+
+    The Agents SDK runs the tool loop and sends Console's output back to the
+    model. Keep the connection open throughout `Runner.run_sync()` or
+    `await Runner.run()`. Later tool calls in that run share the same cell state.
+    Both sync and async clients are supported.
+
+    This function tool returns text, with placeholders for images. Use
+    [agents_server()](openai.agents_server.html) for native MCP image results.
+    The live server schema is retained with `strict_json_schema=False` so
+    optional `send` arguments remain optional.
+
+    Args:
+        console: A connected `MCPConsole` or `AsyncMCPConsole`.
+
+    Returns:
+        An Agents `FunctionTool` to include in `Agent(tools=...)`.
+
+    Examples:
+        Install with `pip install 'mcp-console[openai-agents]'`. Set
+        `OPENAI_API_KEY` and set `OPENAI_MODEL` to your model ID. The runner
+        executes any Console calls and returns the model's final answer:
+
+        ```python
+        import os
+        import mcp_console
+        from agents import Agent, Runner
+        from mcp_console import MCPConsole
+
+        with MCPConsole() as console:
+            agent = Agent(
+                name="Data analyst",
+                model=os.environ["OPENAI_MODEL"],
+                tools=[mcp_console.openai.agents_tool(console)],
+            )
+            result = Runner.run_sync(
+                agent,
+                "Use Python in Console to calculate the mean and sample "
+                "standard deviation of [12, 15, 18, 20, 25].",
+            )
+            print(result.final_output)
+        ```
+    """
     from agents import FunctionTool
     from anyio import to_thread
 
@@ -51,7 +93,61 @@ def responses_tool(console: AsyncMCPConsole) -> AsyncResponsesTool: ...
 def responses_tool(
     console: MCPConsole | AsyncMCPConsole,
 ) -> ResponsesTool | AsyncResponsesTool:
-    """Return a sync or async tool for an application-owned Responses loop."""
+    """Connect Console to an application-owned OpenAI Responses tool loop.
+
+    Pass `tool.definition` to `responses.create(tools=...)`. When the model
+    returns a `send` function call, `tool(call)` executes it and returns the
+    `function_call_output` item for the next API request. Text and images are
+    preserved. The application runs this loop and routes any other tools.
+
+    Create the adapter after connecting Console, and keep that connection open
+    for the entire loop. With `AsyncMCPConsole`, the factory returns an
+    `AsyncResponsesTool`; await both the model requests and `tool(call)`.
+
+    Args:
+        console: A connected `MCPConsole` or `AsyncMCPConsole`.
+
+    Returns:
+        A `ResponsesTool` or `AsyncResponsesTool` matching the client.
+
+    Examples:
+        Install with `pip install 'mcp-console[openai]'`. Set `OPENAI_API_KEY`
+        and set `OPENAI_MODEL` to your model ID. This example registers only
+        Console, feeds each tool result back into the response chain, and
+        prints the final answer:
+
+        ```python
+        import os
+        import mcp_console
+        from mcp_console import MCPConsole
+        from openai import OpenAI
+
+        with OpenAI() as client, MCPConsole() as console:
+            tool = mcp_console.openai.responses_tool(console)
+            response = client.responses.create(
+                model=os.environ["OPENAI_MODEL"],
+                input="Use Python in Console to calculate the mean and sample "
+                "standard deviation of [12, 15, 18, 20, 25].",
+                tools=[tool.definition],
+                parallel_tool_calls=False,
+            )
+            while calls := [
+                item for item in response.output if item.type == "function_call"
+            ]:
+                response = client.responses.create(
+                    model=os.environ["OPENAI_MODEL"],
+                    previous_response_id=response.id,
+                    input=[tool(call) for call in calls],
+                    tools=[tool.definition],
+                    parallel_tool_calls=False,
+                )
+            print(response.output_text)
+        ```
+
+        `previous_response_id` keeps the conversation, including earlier tool
+        calls. `parallel_tool_calls=False` requests sequential calls to the
+        persistent Console. Keep passing the tool definition on each request.
+    """
     from ._sync import MCPConsole
 
     tool = console.send_tool
@@ -69,7 +165,58 @@ def agents_server(
     client_session_timeout_seconds: float | None = None,
     **kwargs: Any,
 ) -> Any:
-    """Return the native OpenAI Agents ``MCPServerStdio`` object."""
+    """Start Console as a native MCP server for an OpenAI agent.
+
+    Enter the returned async context and pass the server to
+    `Agent(mcp_servers=...)`. The Agents SDK discovers Console's tools, runs
+    model tool calls, and returns text and image results to the model. Leaving
+    the context closes the server. You do not need a separate `AsyncMCPConsole`.
+    Use [agents_tool()](openai.agents_tool.html) to share an existing connection.
+
+    Args:
+        command: Console executable. Defaults to the installed `mcp-console`.
+        args: Server arguments. Defaults to `["serve"]`.
+        name: Display name for this MCP server.
+        params: MCP stdio settings such as `cwd` and `env`.
+        client_session_timeout_seconds: MCP request deadline. `None` leaves
+            requests without a client deadline, including long Console startup.
+        **kwargs: Other options passed to `MCPServerStdio`.
+
+    Returns:
+        An Agents `MCPServerStdio` async context manager.
+
+    Examples:
+        Install with `pip install 'mcp-console[openai-agents]'`. Set
+        `OPENAI_API_KEY` and set `OPENAI_MODEL` to your model ID. This example
+        gives the agent access to files in the current directory:
+
+        ```python
+        import asyncio
+        import os
+        import mcp_console
+        from agents import Agent, Runner
+
+
+        async def main():
+            async with mcp_console.openai.agents_server(
+                params={"cwd": os.getcwd()},
+            ) as server:
+                agent = Agent(
+                    name="Data analyst",
+                    model=os.environ["OPENAI_MODEL"],
+                    mcp_servers=[server],
+                )
+                result = await Runner.run(
+                    agent,
+                    "Use Python in Console to plot monthly sales "
+                    "[12, 15, 18, 20, 25] and describe the trend.",
+                )
+                print(result.final_output)
+
+
+        asyncio.run(main())
+        ```
+    """
     from agents.mcp import MCPServerStdio
 
     command, args = stdio_command(command, args)
@@ -82,7 +229,35 @@ def agents_server(
 
 
 class AsyncResponsesTool:
-    """MCP Console as one function tool for the OpenAI Responses API."""
+    """An async Responses function tool that preserves Console text and images.
+
+    Create this through [responses_tool()](openai.responses_tool.html) with an
+    `AsyncMCPConsole`. Use `definition` when requesting a model response, then
+    `await tool(call)` to build the next request's function-call output. The
+    factory page shows the complete model loop.
+
+    Examples:
+        Install with `pip install 'mcp-console[openai]'`. You can also invoke
+        `call()` directly to inspect the output without a model or API key:
+
+        ```python
+        import asyncio
+        import mcp_console
+        from mcp_console import AsyncMCPConsole
+
+
+        async def main():
+            async with AsyncMCPConsole() as console:
+                tool = mcp_console.openai.responses_tool(console)
+                output = await tool.call(
+                    {"python": "sum([12, 15, 18, 20, 25])"}
+                )
+                print(output)
+
+
+        asyncio.run(main())
+        ```
+    """
 
     def __init__(self, console: AsyncMCPConsole, tool: Tool) -> None:
         self._console = console
@@ -100,7 +275,12 @@ class AsyncResponsesTool:
         }
 
     async def call(self, arguments: str | Mapping[str, Any]) -> str | list[dict]:
-        """Execute one function call's JSON arguments and preserve rich output."""
+        """Execute `send` arguments supplied as a JSON string or mapping.
+
+        Returns text for text-only output, or Responses `input_text` and
+        `input_image` blocks for rich output. A model call's `arguments` can be
+        passed directly; `output()` also attaches its `call_id`.
+        """
         parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
         if not isinstance(parsed, Mapping):
             raise TypeError("OpenAI function arguments must decode to a JSON object")
@@ -120,7 +300,12 @@ class AsyncResponsesTool:
         ]
 
     async def output(self, call: Any) -> dict[str, Any]:
-        """Return one ``function_call_output`` item for an OpenAI call."""
+        """Execute a model function call and return its `function_call_output`.
+
+        Accepts a Responses function-call object or a mapping with `call_id`
+        and `arguments`. Pass the returned item in the next request's `input`.
+        `await tool(call)` is shorthand for `await tool.output(call)`.
+        """
         if isinstance(call, Mapping):
             call_id, arguments = call["call_id"], call["arguments"]
         else:
@@ -135,7 +320,26 @@ class AsyncResponsesTool:
 
 
 class ResponsesTool:
-    """A synchronous function tool for the OpenAI Responses API."""
+    """A synchronous Responses tool that preserves Console text and images.
+
+    Create this through [responses_tool()](openai.responses_tool.html) with an
+    `MCPConsole`. The factory page shows how to register `definition` and return
+    `tool(call)` results in a complete model loop.
+
+    Examples:
+        Install with `pip install 'mcp-console[openai]'`. You can also invoke
+        `call()` directly to inspect the output without a model or API key:
+
+        ```python
+        import mcp_console
+        from mcp_console import MCPConsole
+
+        with MCPConsole() as console:
+            tool = mcp_console.openai.responses_tool(console)
+            output = tool.call({"python": "sum([12, 15, 18, 20, 25])"})
+            print(output)
+        ```
+    """
 
     def __init__(self, console: MCPConsole, tool: AsyncResponsesTool) -> None:
         self._console = console
@@ -147,11 +351,21 @@ class ResponsesTool:
         return self._async.definition
 
     def call(self, arguments: str | Mapping[str, Any]) -> str | list[dict]:
-        """Execute one function call's JSON arguments and preserve rich output."""
+        """Execute `send` arguments supplied as a JSON string or mapping.
+
+        Returns text for text-only output, or Responses `input_text` and
+        `input_image` blocks for rich output. A model call's `arguments` can be
+        passed directly; `output()` also attaches its `call_id`.
+        """
         return self._console._run(self._async.call, arguments)
 
     def output(self, call: Any) -> dict[str, Any]:
-        """Return one ``function_call_output`` item for an OpenAI call."""
+        """Execute a model function call and return its `function_call_output`.
+
+        Accepts a Responses function-call object or a mapping with `call_id`
+        and `arguments`. Pass the returned item in the next request's `input`.
+        `tool(call)` is shorthand for `tool.output(call)`.
+        """
         return self._console._run(self._async.output, call)
 
     __call__ = output

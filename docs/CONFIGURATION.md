@@ -135,6 +135,146 @@ Custom workers retain their own language, SQL, and preparation contracts; Consol
 This is a usability setting.
 It does not restrict what SQL can do or change the sandbox and dependency trust boundaries.
 
+## Python environment selection
+
+Select an existing interpreter or standard virtual environment with:
+
+```yaml
+python: .venv
+```
+
+This overrides inherited `RETICULATE_PYTHON`, is retained across restarts, and is unavailable with custom workers.
+Paths, including bare filenames, are relative to the launch directory.
+The equivalent mapping is `python: {existing: .venv}`.
+Directories require `pyvenv.cfg` and `bin/python` on Unix or `Scripts/python.exe` on Windows.
+Executable paths retain their spelling and symlinks so a selected venv keeps its package environment.
+Recognized Conda installations are unsupported; unrelated Conda environment variables do not exclude ordinary venvs.
+Interpreter symlink targets are checked for Conda installations without changing the selected executable path.
+
+A leading `~` expands using the server's absolute `HOME`, including in a quoted override such as `-c 'python=~/.venv/bin/python'`.
+Missing, empty, or relative `HOME` is an error when expansion is requested; `~user` and environment-variable references are not expanded.
+
+Explicit selection uses preinstalled Python packages and bypasses managed Python preparation.
+Without R or an explicit selection, Console uses uv on the local host.
+Managed environments use uv-managed CPython; Console does not fall back to a system interpreter.
+A broken selected interpreter is an error, not a reason to fall back.
+Existing interpreter inspection, including any environment startup hooks, uses the worker's captured permissions.
+See [runtime selection](BUILTIN_RUNTIME.md).
+
+Choose the first available Python candidate with:
+
+```yaml
+python:
+  first_available:
+    - existing: .venv
+    - active_venv
+    - managed: {}
+```
+
+Only an absent existing path advances the list.
+A present broken environment, dangling interpreter symlink, or invalid activation path fails selection.
+`active_venv` reads the incoming `VIRTUAL_ENV`; unset or empty means absent.
+Launchers must preserve this variable, or select an explicit path.
+The selected interpreter is captured once, including across worker restarts; later candidates are never inspected or prepared.
+
+The list is flat and nonempty, with at most one `active_venv` and one optional managed candidate last.
+Exhausting the list fails startup.
+`managed: {}` uses the existing managed Python defaults and also works at the top level to override an inherited `RETICULATE_PYTHON`.
+The managed candidate accepts `packages`, `version`, and `resolution`, as described below.
+All candidate syntax is validated, but an unreached managed candidate's packages and version are not prepared or checked for runtime availability.
+An explicit managed choice requires available managed preparation; it does not select a PATH interpreter when preparation is unavailable.
+When `python` is omitted, Console retains the launch-time `RETICULATE_PYTHON` compatibility behavior.
+Managed selection ignores ambient uv interpreter preferences.
+With explicit managed Python configuration, conflicting selection controls supplied through `environment` or `resolver.environment` are errors; use the Python settings instead.
+Inspection exposes the selected Python path and branch provenance.
+
+## Startup package declarations
+
+Replace the optional startup packages and choose a managed Python version:
+
+```yaml
+r:
+  packages: [dplyr, dbplyr, ggplot2]
+python:
+  managed:
+    version: "3.13"
+    packages: [numpy, pandas, matplotlib]
+```
+
+Omitting `packages` preserves that runtime's bundled defaults; a supplied list replaces them.
+The two languages' lists are independent.
+Use `packages: []` to prepare no optional startup packages for that language.
+This does not disable automatic resolution or remove runtime infrastructure, ambient packages, or caches.
+Preparation makes packages available without attaching or importing them.
+`r.packages` does not set `R_DEFAULT_PACKAGES` or `options(defaultPackages)`.
+A nonempty R list requires R and R preparation support; an empty list does not require R.
+
+Combine an installed R with an existing Python environment:
+
+```yaml
+r:
+  executable: /opt/R/bin/R
+  packages: [dplyr]
+python: .venv
+```
+
+Existing Python uses preinstalled packages and accepts no package or version options.
+Managed `version` must be one nonempty quoted string: a version such as `"3.13"` or a supported constraint such as `">=3.12,<3.14"`.
+Omitting it preserves the existing version-selection behavior.
+Package declarations use the same validators and supported sources as [requirements](REQUIREMENTS.md).
+
+Managed options also belong to an individual fallback candidate:
+
+```yaml
+python:
+  first_available:
+    - existing: .venv
+    - managed:
+        version: ">=3.12,<3.14"
+        packages: [numpy, pandas]
+```
+
+CLI overrides follow the same layering and list-replacement rules:
+
+```sh
+mcp-console serve -c 'r.packages=[dplyr,dbplyr]'
+mcp-console serve -c 'python.managed.version="3.13"'
+mcp-console serve -c 'python.managed.packages=[]'
+mcp-console serve -c 'r=/opt/R/bin/R' -c 'r.packages=[dplyr]'
+```
+
+Console captures the effective startup declaration once per server connection.
+`requirements.reset` restores its packages and Python version constraints, using the existing restart rules.
+A plain restart retains the accepted declaration, including later additions; it does not reread configuration.
+See [requirements replacement](REQUIREMENTS.md#inspecting-and-replacing-requirements).
+
+## Resolution policy
+
+Choose independent preparation policies for R and managed Python:
+
+```yaml
+r:
+  resolution: explicit
+python:
+  managed:
+    resolution: startup_only
+```
+
+R accepts `automatic`, `explicit`, `startup_only`, and `disabled`; managed Python accepts the first three.
+Both default to `automatic`.
+`explicit` prepares startup requirements and deliberate MCP requirements changes, without automatic missing-package preparation.
+`startup_only` prepares the captured startup declaration and rejects later changes.
+Unchanged requirements remain no-ops.
+R `disabled` and existing Python suppress Console preparation for their language.
+Nonempty R packages with disabled resolution are invalid; use `startup_only` to prepare them once.
+R `explicit` and `startup_only` require startup preparation support even when `packages` is omitted and selects the bundled defaults.
+When R is available but Python preparation is unavailable, omitting Python configuration preserves bare R startup; explicitly requested managed Python still requires preparation support.
+
+Available ambient packages remain usable in every policy.
+Missing dependencies retain ordinary runtime failures.
+These policies do not restrict installation code submitted by the user or promise offline operation.
+See [requirements](REQUIREMENTS.md#resolution-policy), [startup-only preparation](../examples/config-startup-only.yaml), and [Python fallback](../examples/config-fallback.yaml).
+
 ## R executable selection
 
 Select an installed R executable or its ordinary launcher:
@@ -168,104 +308,6 @@ Inspection uses worker permissions and suppresses startup files; native R startu
 The installation and all code it loads remain [trusted preparation inputs](REQUIREMENTS.md#host-resolution-and-trust).
 These checks do not protect against concurrent file replacement or changes to uncaptured dependencies.
 Keep those inputs outside worker-writable paths when relying on worker isolation.
-
-## Python environment selection
-
-Omitting `python` selects uv-managed CPython with an isolated package environment.
-Managed Python requires uv; unavailable versions or failed preparation do not select system Python.
-A nonempty incoming `RETICULATE_PYTHON` other than `managed` preserves the legacy existing-environment selection only when `python` is omitted.
-Any explicit Python configuration takes precedence.
-
-```yaml
-python:
-  managed:
-    version: ">=3.12,<3.14"
-    packages: [numpy, pandas, matplotlib]
-    resolution: explicit
-```
-
-A mapping contains exactly one of `managed`, `existing`, or `first_available`.
-`managed: {}` uses managed defaults.
-Quote version strings; use the same constraints as `requirements.python_version`.
-Omission preserves the bundled version-selection rule.
-Managed selection ignores ambient uv interpreter preferences.
-With explicit managed Python configuration, conflicting selection controls supplied through `environment` or `resolver.environment` are errors; use the Python settings instead.
-Other shared resolver environment and cache settings retain their existing roles.
-
-Select an existing executable or standard venv root:
-
-```yaml
-python: .venv
-```
-
-This is equivalent to `python: {existing: .venv}`.
-A directory requires `pyvenv.cfg` and `bin/python` on Unix or `Scripts/python.exe` on Windows.
-An executable path uses CPython embedding validation.
-Paths follow the R path conventions above; Console preserves the venv interpreter symlink spelling.
-Existing environments use preinstalled packages and have no package, version, or resolution options.
-Inspection requires neither uv nor IR and runs under worker permissions, including environment-owned site hooks.
-Recognized Conda targets are unsupported; unrelated ambient Conda variables do not reject a standard venv.
-Missing or invalid explicit selections fail.
-
-A bounded fallback can prefer an existing project or active venv:
-
-```yaml
-python:
-  first_available:
-    - existing: .venv
-    - active_venv
-    - managed:
-        packages: [numpy, pandas]
-        resolution: explicit
-```
-
-The nonempty list accepts existing paths, one literal `active_venv`, and at most one managed candidate last.
-Nested chains are unsupported.
-Only an absent explicit path advances the chain; present broken environments, dangling symlinks, permission errors, and incompatible interpreters stop selection.
-`active_venv` uses captured incoming `VIRTUAL_ENV`; unset or empty is absent, and a supplied invalid path fails.
-Launchers must preserve that variable; an explicit path is the deterministic alternative.
-Every branch is syntax-validated, but unreached environments and resolvers do no work.
-The selected branch stays fixed across restarts, even if a preferred path appears later.
-Inspection exposes the selected Python path and branch provenance.
-
-Explicit R and Python configuration requires the built-in worker and relay.
-See [runtime selection](BUILTIN_RUNTIME.md) and [requirements policies](REQUIREMENTS.md#resolution-policy).
-
-## Startup packages and resolution policy
-
-See [startup-only preparation](../examples/config-startup-only.yaml) and [Python fallback](../examples/config-fallback.yaml) for complete example files.
-
-Each enabled language uses bundled optional packages when `packages` is omitted.
-A supplied list replaces those defaults; `packages: []` requests none.
-Preparation makes packages available without attaching R packages or importing Python modules.
-Runtime infrastructure remains separate from optional declarations.
-Python requirement markers are evaluated for the selected interpreter.
-Python-only sessions prepare default DuckDB extensions only when the prepared environment contains DuckDB.
-When R is available but Python preparation is unavailable, omitting Python configuration preserves bare R startup; explicitly requested managed Python still requires preparation support.
-
-R accepts `automatic`, `explicit`, `startup_only`, and `disabled`; managed Python accepts the first three.
-Both default to `automatic`.
-R `explicit` and `startup_only` require startup preparation support even when `packages` is omitted and selects the bundled defaults.
-`explicit` prepares startup requirements and deliberate MCP requirements changes, without automatic missing-package preparation.
-`startup_only` prepares the captured startup declaration and rejects later changes.
-Unchanged requirements remain no-ops.
-R `disabled` and existing Python suppress Console preparation for their language.
-Nonempty R packages with disabled resolution are invalid; use `startup_only` to prepare them once.
-R policy and managed Python policy are independent.
-
-```yaml
-r:
-  resolution: disabled
-python: .venv
-```
-
-This uses ordinary R project startup and an externally prepared Python venv.
-It initiates no Console package preparation.
-Available ambient packages remain usable in every policy.
-Missing dependencies retain ordinary runtime failures.
-These policies do not restrict installation code submitted by the user or promise offline operation.
-`requirements.reset` restores the configured startup declaration without changing interpreter selection or policy.
-See [requirements](REQUIREMENTS.md) for mixed requests, extension preparation, and restart rules.
 
 ## Native R startup
 
@@ -401,10 +443,6 @@ An empty project file mapping (`{}`) preserves all global settings; an empty lis
 For example, global `environment: {KEEP: global, CHANGE: global}` and project `environment: {CHANGE: project}` produce `environment: {KEEP: global, CHANGE: project}`.
 To clear and rebuild one, assign `null`, then the new mapping in a later override.
 Only the final result is validated.
-
-R path shorthand is the one syntax expansion before merging: a file `r: PATH` plus `-c r.resolution=explicit` retains the executable, and `-c r=PATH` retains previously configured behavior fields.
-To replace the whole R configuration, use `-c r=null -c r=PATH`.
-Python variants use ordinary mapping merge; switch incompatible variants with `-c python=null -c python.managed.resolution=explicit`.
 
 These rules are schema-independent: changing `sandbox.network.proxy.mode` does not remove an explicitly configured `socks5` sibling.
 Selecting `limited` with that sibling still present is an error.

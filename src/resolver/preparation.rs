@@ -79,6 +79,9 @@ pub(crate) enum Operation {
         extensions: Vec<String>,
         extension_directory: std::path::PathBuf,
     },
+    PythonDuckdbAvailable {
+        python: ManagedPython,
+    },
 }
 
 #[derive(Clone, Copy, Default, Deserialize, Serialize)]

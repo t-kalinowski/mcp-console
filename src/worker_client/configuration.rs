@@ -162,13 +162,16 @@ impl ClientConfiguration {
                     PathBuf::from(OsString::from_vec(bytes.clone()))
                 })
                 .or(home);
-            if home.is_none()
+            if (home.is_none() || !discovery.managed)
                 && r_settings
                     .packages
                     .as_ref()
                     .is_some_and(|packages| !packages.is_empty())
             {
-                return Err("r.packages: configured R requirements need an available R installation; configure r.executable".into());
+                return Err(
+                    "r.packages: requested startup packages require R and R preparation support"
+                        .into(),
+                );
             }
             if !discovery.managed
                 && home.is_some()
@@ -189,22 +192,20 @@ impl ClientConfiguration {
                     .ok_or("local discovery has no uv result")?,
             };
             let without_r = home.is_none();
-            let inspected_python = choice
-                .executable
-                .as_ref()
-                .filter(|_| cfg!(windows) || without_r || choice.source != "RETICULATE_PYTHON")
-                .map(|explicit| {
-                    crate::resolver::preparation::Preparation::inspect(
-                        crate::resolver::preparation::Operation::InspectPython {
-                            executable: explicit.into(),
-                        },
-                        sandbox_settings.clone(),
-                        no_sandbox,
-                        diagnostics.clone(),
-                        on_started,
-                    )
-                })
-                .transpose()?;
+            let inspect_explicit = |executable: &std::path::Path,
+                                    started: &dyn Fn(
+                crate::resolver::ResolverStopHandle,
+            ) -> Result<(), String>| {
+                crate::resolver::preparation::Preparation::inspect(
+                    crate::resolver::preparation::Operation::InspectPython {
+                        executable: executable.to_owned(),
+                    },
+                    sandbox_settings.clone(),
+                    no_sandbox,
+                    diagnostics.clone(),
+                    started,
+                )
+            };
             let mut runtime = crate::local_runtime::Selection {
                 r_home: home,
                 installation,
@@ -260,52 +261,40 @@ impl ClientConfiguration {
                 // Typed configuration still captures an inspected interpreter.
                 python = Some(PythonEnvironment::bare(configured_python.clone()));
             } else if let Some(explicit) = &choice.executable {
-                let selected = inspected_python.expect("explicit Python was inspected");
-                runtime.python = Some(crate::local_runtime::Python {
-                    selected: Box::new(selected),
-                    explicit: Some(explicit.clone().into_os_string()),
-                    managed: false,
-                    duckdb_extension_directory: None,
-                });
+                let (selection, _) = crate::local_runtime::Selection::python(
+                    Some(explicit.clone().into_os_string()),
+                    Default::default(),
+                    &resolver,
+                    None,
+                    inspect_explicit,
+                    on_started,
+                )?;
+                runtime.python = selection.python;
                 python = Some(PythonEnvironment::bare(Some(
                     explicit.clone().into_os_string(),
                 )));
             } else if resolver.has_uv()
                 && (without_r || !matches!(r_resolver, RResolver::Pending(_)))
             {
-                let managed = crate::resolver::execution::resolve_python_manifest(
+                let (selection, managed) = crate::local_runtime::Selection::python(
+                    configured_python.clone(),
                     manifest.clone().expect("managed choice"),
                     &resolver,
-                    None,
-                    None,
-                    on_started,
-                )?;
-                let selected = crate::resolver::execution::inspect_native(
-                    &resolver,
-                    managed.python(),
-                    on_started,
-                )?;
-                // uv evaluates markers for the selected interpreter. Installed
-                // metadata determines whether its implicit SQL defaults apply.
-                let has_duckdb = selected.duckdb;
-                runtime.python = Some(crate::local_runtime::Python {
-                    selected: Box::new(selected),
-                    explicit: None,
-                    managed: true,
-                    duckdb_extension_directory: without_r
+                    without_r
                         .then(|| duckdb_extension_directory.clone())
                         .flatten(),
-                });
-                if without_r && has_duckdb {
-                    startup.duckdb = crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS
-                        .iter()
-                        .map(|name| (*name).into())
-                        .collect();
+                    inspect_explicit,
+                    on_started,
+                )?;
+                let managed = managed.expect("managed choice resolved a managed environment");
+                runtime.python = selection.python;
+                if without_r {
                     extensions = runtime.prepare_default_duckdb_extensions(
                         Some(&managed),
                         &resolver,
                         on_started,
                     )?;
+                    startup.duckdb = extensions.iter().cloned().collect();
                 }
                 python = Some(PythonEnvironment::Managed {
                     selected: managed,
