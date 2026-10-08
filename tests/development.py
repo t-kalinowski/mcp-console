@@ -16,6 +16,85 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class DevelopmentTests(unittest.TestCase):
+    def test_windows_ci_reuses_complete_sandbox_builds(self) -> None:
+        workflow = (ROOT / ".github/workflows/ci.yaml").read_text()
+        windows = workflow.split("  windows:\n", 1)[1].split("\n  check:", 1)[0]
+        self.assertIn(
+            "      MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source",
+            windows,
+        )
+
+        def step(name):
+            return windows.split(f"      - name: {name}\n", 1)[1].split(
+                "\n      - ", 1
+            )[0]
+
+        outputs = step("Restore native Windows sandbox outputs")
+        build = step("Restore native Windows sandbox build intermediates")
+        downloads = step("Restore Windows Cargo downloads")
+        for path in ("~/.cargo/registry", "~/.cargo/git"):
+            self.assertIn(path, downloads)
+            self.assertIn(path, step("Save Windows Cargo downloads"))
+            self.assertNotIn(path, step("Restore Windows build and dependency caches"))
+        for path in ("wheel-data/data", "target/sandbox-runner-build.json"):
+            self.assertIn(path, outputs)
+            self.assertIn(path, step("Save native Windows sandbox outputs"))
+        self.assertNotIn("restore-keys:", outputs)
+        self.assertIn(".sandbox-runner-source/codex-rs/target", build)
+        self.assertIn("restore-keys:", build)
+        self.assertIn("steps.sandbox-source.outputs.archive-sha256", build)
+        for cache in (outputs, build):
+            self.assertNotIn("steps.rust.outputs.cachekey", cache)
+            for identity in (
+                "CI_BUILD_CACHE_VERSION",
+                "steps.epoch.outputs.week",
+                "steps.epoch.outputs.image",
+                "runner.os",
+                "runner.arch",
+                "x86_64-pc-windows-msvc",
+                ".sandbox-runner-source/codex-rs/rust-toolchain.toml",
+            ):
+                self.assertIn(identity, cache)
+        for input in (
+            "sandbox-runner.json",
+            "scripts/stage-sandbox-runner",
+            "build.rs",
+        ):
+            self.assertIn(input, outputs)
+        staging = step("Stage native Windows sandbox")
+        for cache in ("sandbox-cache", "sandbox-build-cache"):
+            self.assertIn(f"steps.{cache}.outputs.cache-hit != 'true'", staging)
+        validation = step("Validate native Windows sandbox artifacts")
+        self.assertIn(
+            "scripts/with-checkout.cmd cargo build --target-dir target", validation
+        )
+        self.assertIn("LastWriteTimeUtc", validation)
+        for name in (
+            "Save native Windows sandbox source timestamps",
+            "Save native Windows sandbox outputs",
+            "Save native Windows sandbox build intermediates",
+            "Save Windows Cargo downloads",
+        ):
+            saving = step(name)
+            self.assertNotIn("always()", saving)
+            self.assertNotIn("!cancelled()", saving)
+            self.assertLess(
+                windows.index("Validate native Windows sandbox artifacts"),
+                windows.index(name),
+            )
+            self.assertLess(
+                windows.index(name),
+                windows.index("Provision native Windows sandbox acceptance"),
+            )
+        self.assertIn("scripts/check.cmd --full", windows)
+        source = step("Prepare native Windows sandbox source archive")
+        self.assertIn("--exclude=./.git", source)
+        self.assertIn("--exclude=./codex-rs/target", source)
+        self.assertIn(
+            "persist-credentials: false",
+            step("Check out native Windows sandbox source"),
+        )
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
