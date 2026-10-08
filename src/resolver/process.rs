@@ -520,7 +520,15 @@ fn wait_for_resolver_exit(
                 reply,
                 clear_marker,
             }) => match interrupt_resolver(child) {
-                Ok(ResolverInterrupt::Signaled | ResolverInterrupt::AlreadyExited) => {
+                Ok(ResolverInterrupt::Signaled) => {
+                    let _ = reply.send(Ok(()));
+                    // Windows interruption terminates the owned Job rather
+                    // than asking the resolver to unwind cooperatively. Retain
+                    // that cause before a domain adapter formats its exit code.
+                    #[cfg(windows)]
+                    return Err(format!("{kind} resolution interrupted"));
+                }
+                Ok(ResolverInterrupt::AlreadyExited) => {
                     let _ = reply.send(Ok(()));
                 }
                 Err(error) => {

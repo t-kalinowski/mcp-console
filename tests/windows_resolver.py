@@ -245,7 +245,9 @@ class WindowsResolver(unittest.TestCase):
         completed = resolver.receive()["Completed"]
         self.assertTrue(completed["confirmed"], completed)
         self.assertEqual(completed["control"], "Interrupted")
-        self.assertIn("Err", completed["result"])
+        self.assertEqual(
+            completed["result"], {"Err": "managed Python resolution interrupted"}
+        )
         self.assert_retired(processes)
         # A settled interrupt belongs to the old operation; a later call works.
         self.assertEqual(
@@ -277,7 +279,10 @@ class WindowsResolver(unittest.TestCase):
                     completed = resolver.receive()["Completed"]
                     self.assertTrue(completed["confirmed"], completed)
                     self.assertEqual(completed["control"], action)
-                    self.assertIn("Err", completed["result"])
+                    self.assertEqual(
+                        completed["result"],
+                        {"Err": "managed Python resolution interrupted"},
+                    )
                 self.assert_retired(processes)
 
     def test_delayed_exit_reports_unconfirmed_retirement(self) -> None:

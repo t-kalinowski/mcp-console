@@ -105,6 +105,7 @@ Incomplete command frames survive message and interrupt wakeups.
 
 Resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code.
 Cancellation and resolver interruption terminate the Job, and results are accepted only after the Job has no active processes.
+Successful resolver interruption retains its interruption cause through error formatting; an already exited resolver keeps its original result.
 These Jobs own trusted host preparation, not evaluated user code, and are not sandboxes.
 The server invokes `mcp-console resolve` over cancellable pipes; a lost or unconfirmed cleanup receipt blocks replacement.
 After spawning a resolver, the parent releases the command builder's child-side pipe handles so a rejected startup can confirm shutdown and EOF without a spurious retirement timeout.
