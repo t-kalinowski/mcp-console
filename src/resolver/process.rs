@@ -102,7 +102,10 @@ enum ResolverEvent {
 }
 
 enum ResolverInterrupt {
+    #[cfg(unix)]
     Signaled,
+    #[cfg(windows)]
+    Stopped,
     AlreadyExited,
 }
 
@@ -520,8 +523,19 @@ fn wait_for_resolver_exit(
                 reply,
                 clear_marker,
             }) => match interrupt_resolver(child) {
-                Ok(ResolverInterrupt::Signaled | ResolverInterrupt::AlreadyExited) => {
+                #[cfg(unix)]
+                Ok(ResolverInterrupt::Signaled) => {
                     let _ = reply.send(Ok(()));
+                }
+                Ok(ResolverInterrupt::AlreadyExited) => {
+                    let _ = reply.send(Ok(()));
+                }
+                #[cfg(windows)]
+                Ok(ResolverInterrupt::Stopped) => {
+                    // Job termination is the interrupt itself. Preserve its
+                    // cause before a materializer formats the nonzero status.
+                    let _ = reply.send(Ok(()));
+                    return Err(format!("{kind} resolution interrupted"));
                 }
                 Err(error) => {
                     if let Some(control) = clear_marker {

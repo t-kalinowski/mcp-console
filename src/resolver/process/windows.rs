@@ -236,7 +236,7 @@ pub(super) fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterr
         return Ok(ResolverInterrupt::AlreadyExited);
     }
     child.terminate()?;
-    Ok(ResolverInterrupt::Signaled)
+    Ok(ResolverInterrupt::Stopped)
 }
 
 pub(super) fn stop_resolver(
