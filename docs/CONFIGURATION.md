@@ -59,7 +59,6 @@ It can affect executable selection, child environments, and requested sandbox pe
 Trusting code to run inside a sandbox is not equivalent to trusting it to define the sandbox.
 Global configuration supplies defaults, not a mandatory security ceiling: project settings may override global settings under the ordinary merge rules.
 Integrations opening unfamiliar projects should use `--no-project-config` until they authorize project configuration.
-Discovery opt-outs are not a general safe mode: they do not disable native runtime startup files, clear inherited environment variables, or make selected executables trustworthy.
 
 Paths keep their existing launch-relative meaning, including paths supplied by global configuration.
 They are not rebased onto the configuration file's directory.

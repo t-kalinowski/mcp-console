@@ -3,6 +3,11 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+const PROJECT_CONFIG_HELP: &str = "\
+Skip launch-directory project configuration; still load global configuration and apply -c overrides.
+Automatic project configuration is trusted launcher input: it can select executables, child environments, and sandbox permissions. Trusting sandboxed code is not equivalent to trusting it to define the sandbox.
+Global settings supply defaults, not a mandatory security ceiling; projects may override them. Integrations opening unfamiliar projects should use this flag until they authorize project configuration.";
+
 const ROOT_EXAMPLES: &str = "\
 Examples:
   mcp-console serve
@@ -46,17 +51,14 @@ pub struct Cli {
 #[derive(Debug, Args)]
 pub struct ConfigOverrides {
     /// Skip trusted launch-directory project configuration; still load global configuration and apply -c overrides
-    #[arg(
-        long,
-        long_help = "Skip launch-directory project configuration; still load global configuration and apply -c overrides.\nAutomatic project configuration is trusted launcher input: it can select executables, child environments, and sandbox permissions. Trusting sandboxed code is not equivalent to trusting it to define the sandbox.\nGlobal settings supply defaults, not a mandatory security ceiling; projects may override them. Integrations opening unfamiliar projects should use this flag until they authorize project configuration.\nDiscovery flags are not a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy."
-    )]
+    #[arg(long, long_help = PROJECT_CONFIG_HELP)]
     pub no_project_config: bool,
 
     /// Skip global configuration; still load project configuration and apply -c overrides
     #[arg(long)]
     pub no_global_config: bool,
 
-    /// Skip global and project configuration; apply only -c overrides (not a general safe mode)
+    /// Skip global and project configuration; apply only -c overrides
     #[arg(long)]
     pub no_config: bool,
 
