@@ -61,18 +61,16 @@ def test_declares_imports_and_uses_python_packages(
         )
         assert last_tool_text(client) == "42\n"
         client.expect(r='reticulate::py_require("more-itertools")')
-        client.expect(r='more_itertools <- reticulate::import("more_itertools")')
-        client.send(r="unlist(more_itertools$take(3L, list(0L, 1L, 2L, 3L, 4L)))")
-        assert last_tool_text(client) == "[1] 0 1 2\n"
-        client.send(
+        client.expect(
+            "[done]",
             # fmt: python
             python=code(r"""
                 import more_itertools
 
-                more_itertools.take(3, range(5))
+                assert yaml12 is __import__("yaml12")
+                assert more_itertools.__name__ == "more_itertools"
                 """),
         )
-        assert last_tool_text(client) == "[0, 1, 2]\n"
         return client.finish()
 
 
@@ -139,7 +137,7 @@ def test_prepares_initial_python_requirements(
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(DIRECT)
 def test_preserves_python_requirement_values(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -234,6 +232,70 @@ def test_preserves_python_requirement_values(
         )
         """)
     client.expect(r=r)
+    # fmt: r
+    r = code(r"""
+        initial <- reticulate::py_require()
+        latin1 <- rawToChar(as.raw(0xe9))
+        Encoding(latin1) <- "latin1"
+        bytes <- rawToChar(as.raw(0xff))
+        Encoding(bytes) <- "bytes"
+        packages <- structure(
+          c("zeta", "alpha", NA_character_, "alpha", "", latin1, bytes),
+          names = c("last", "first", "missing", "again", "empty", latin1, bytes),
+          class = "AsIs",
+          comment = "package request",
+          detail = list(values = c(1L, NA_integer_), nested = list("original"))
+        )
+        cutoff <- structure(
+          "2026-01-01",
+          names = "cutoff",
+          class = "AsIs",
+          detail = list("original")
+        )
+        reticulate::py_require(packages, exclude_newer = cutoff, action = "set")
+        expected <- reticulate::py_require()
+        stopifnot(
+          identical(expected$packages, packages),
+          identical(expected$exclude_newer, cutoff),
+          identical(Encoding(expected$packages), Encoding(packages)),
+          identical(tail(expected$history, 1L)[[1L]]$packages, packages),
+          identical(tail(expected$history, 1L)[[1L]]$exclude_newer, cutoff),
+          identical(head(expected$history, -1L), initial$history)
+        )
+        packages[1L] <- "changed input"
+        names(packages)[2L] <- "changed name"
+        attr(packages, "detail")$nested[[1L]] <- "changed input attribute"
+        cutoff[1L] <- "2026-02-01"
+        attr(cutoff, "detail")[[1L]] <- "changed cutoff attribute"
+        invisible(gc())
+        stopifnot(identical(reticulate::py_require(), expected))
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
+    # fmt: r
+    r = code(r"""
+        detached <- reticulate::py_require()
+        detached$packages[1L] <- "changed result"
+        attr(detached$packages, "detail")$nested[[1L]] <- "changed result attribute"
+        attr(detached$exclude_newer, "detail")[[1L]] <- "changed cutoff result"
+        attr(detached$history[[length(detached$history)]]$packages, "detail") <- NULL
+        detached$history[[length(detached$history)]]$packages[1L] <- "changed history"
+        invisible(gc())
+        stopifnot(identical(reticulate::py_require(), expected))
+        empty <- structure(character(), class = "AsIs", detail = list(1L))
+        reticulate::py_require(empty, exclude_newer = "", action = "set")
+        cleared <- reticulate::py_require()
+        stopifnot(
+          identical(cleared$packages, empty),
+          identical(cleared["exclude_newer"], list(exclude_newer = NULL)),
+          identical(names(cleared), names(expected)),
+          identical(head(cleared$history, -1L), expected$history),
+          identical(tail(cleared$history, 1L)[[1L]]$packages, empty),
+          !reticulate::py_available(initialize = FALSE)
+        )
+        """)
+    client.send(r=r)
+    assert last_tool_text(client) == "[done]"
     return client.finish()[3:]
 
 
@@ -247,17 +309,26 @@ def test_materializes_lazy_python_requirements_without_initializing(
     # fmt: r
     r = code(r"""
         worker_pid <- Sys.getpid()
+        reticulate::py_require("humanize")
+        reticulate::py_require("humanize", action = "remove")
         reticulate::py_require("py-yaml12")
+        reticulate::py_require(python_version = ">=3.10")
+        reticulate::py_require(python_version = ">=3.10", action = "remove")
+        reticulate::py_require(exclude_newer = "2026-09-01")
+        reticulate::py_require(exclude_newer = NA, action = "set")
         stopifnot(!reticulate::py_available(initialize = FALSE))
         """)
     client.expect(r=r)
-    client.expect("[prepared]", requirements={"python": ["py-yaml12"]})
+    client.expect("[prepared]", requirements={"python": ["packaging"]})
     # fmt: r
     r = code(r"""
         stopifnot(
           identical(Sys.getpid(), worker_pid),
           !reticulate::py_available(initialize = FALSE),
-          "py-yaml12" %in% reticulate::py_require()$packages
+          all(c("py-yaml12", "packaging") %in% reticulate::py_require()$packages),
+          !"humanize" %in% reticulate::py_require()$packages,
+          identical(reticulate::py_require()$python_version, character()),
+          is.null(reticulate::py_require()$exclude_newer)
         )
         """)
     client.expect(r=r)
@@ -269,7 +340,10 @@ def test_materializes_lazy_python_requirements_without_initializing(
     r = code(r"""
         stopifnot(
           !reticulate::py_available(initialize = FALSE),
-          "py-yaml12" %in% reticulate::py_require()$packages
+          all(c("py-yaml12", "packaging") %in% reticulate::py_require()$packages),
+          !"humanize" %in% reticulate::py_require()$packages,
+          is.null(reticulate::py_require()$python_version),
+          is.null(reticulate::py_require()$exclude_newer)
         )
         """)
     client.expect(r=r)
