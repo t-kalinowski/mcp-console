@@ -111,21 +111,6 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
 def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
-    if sys.platform == "win32":
-        # SQL companions need deferred runtimes. Initialization does not
-        # launch the custom worker; its schema is a portable reference.
-        return TranscriptWithCompanions(
-            _initializes_and_lists_tools(binary, execution),
-            {
-                "bare.yaml": _initializes_and_lists_tools(binary, execution, bare=True),
-                "custom.yaml": _initializes_and_lists_tools(
-                    binary, execution, custom=True
-                ),
-                "r-only.yaml": _initializes_and_lists_tools(
-                    binary, execution, bootstrap_languages="r"
-                ),
-            },
-        )
     companions = {
         "custom.yaml": _initializes_and_lists_tools(binary, execution, custom=True),
         "custom-sql.yaml": _initializes_and_lists_tools(
@@ -203,8 +188,11 @@ def _initializes_and_lists_tools(
             python_bin.mkdir()
             retain_system_bwrap(python_bin, environment.get("PATH"))
             if python_managed:
-                (python_bin / "uv").symlink_to(shutil.which("uv"))
-            else:
+                if os.name == "nt":
+                    shutil.copyfile(shutil.which("uv"), python_bin / "uv.exe")
+                else:
+                    (python_bin / "uv").symlink_to(shutil.which("uv"))
+            elif os.name != "nt":
                 (python_bin / "python3").symlink_to(sys.executable)
             environment["PATH"] = str(python_bin)
             for name in (
@@ -216,7 +204,9 @@ def _initializes_and_lists_tools(
             ):
                 environment.pop(name, None)
             if not python_managed:
-                environment["RETICULATE_PYTHON"] = str(python_bin / "python3")
+                environment["RETICULATE_PYTHON"] = str(
+                    sys.executable if os.name == "nt" else python_bin / "python3"
+                )
         workspace = (Path(library) / "workspace").resolve()
         workspace.mkdir()
         if proxy or workspace_profile:

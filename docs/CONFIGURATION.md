@@ -70,7 +70,7 @@ languages: [sql]
 mcp-console serve -c 'languages=[sql,python]'
 ```
 
-The list accepts a nonempty subset of `r`, `python`, and `sql`; SQL is not yet supported on Windows.
+The list accepts a nonempty subset of `r`, `python`, and `sql` on every supported host.
 An override replaces the entire list.
 Omitting `languages` preserves the standard full interface and the internal `MCP_CONSOLE_LANGUAGES` filter.
 An explicit list determines the public interface independently of that internal runtime setting.
@@ -322,9 +322,8 @@ After successful startup, ordinary connection selection and reset apply: reset r
 A failed startup receipt cannot be cleared by resetting the connection helper.
 See [native connection selection](BUILTIN_RUNTIME.md#sql-and-duckdb).
 
-Startup requires the built-in worker and relay and is currently supported on macOS and Linux.
+Startup requires the built-in worker and relay and is supported on macOS, Linux, and Windows.
 It does not grant access to databases or other host paths, or add network permissions; persistent writable databases still need an existing sandbox write grant.
-SQL remains unsupported on Windows.
 
 ## Keys and values
 

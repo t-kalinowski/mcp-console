@@ -166,7 +166,10 @@ def test_python_and_sql_without_r(binary: Path, execution: Execution) -> Transcr
 
             registered = pd.DataFrame({"value": np.array([20, 22])})
             _console.sql_connection().register("registered", registered)
-            assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")
+            if os.name == "nt":
+                assert ctypes.windll.kernel32.GetModuleHandleW("R.dll") == 0
+            else:
+                assert not hasattr(ctypes.CDLL(None), "Rf_initialize_R")
             assert _console.sql_connection().execute("SELECT answer FROM answers").fetchone() == (
                 42,
             )
@@ -268,7 +271,9 @@ def test_no_r_interrupt_requirements_reject_before_control_and_stdin(
         return client.finish()[3:]
 
 
-@requires(SQL)
+# Native DuckDB query cancellation uses Unix SIGINT; Windows covers cooperative
+# DB-API callbacks and native R queries in its acceptance suite.
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_no_r_sql_interrupt_and_worker_crash(
     binary: Path, execution: Execution
@@ -406,8 +411,10 @@ def test_no_r_extension_preparation_accepts_older_duckdb(
         platform = re.search(r"/v0\.9\.2/([^/]+)/not_a_real_duckdb_extension", output)
         assert platform is not None, output
         assert client.transcript[-1]["result"]["isError"] is True
-        client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
-            platform[1], "<duckdb platform>"
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            normalize_process_diagnostic(output).replace(
+                platform[1], "<duckdb platform>"
+            )
         )
         client.expect("42\n", python="retained")
         return client.finish()

@@ -5,7 +5,7 @@ send:
     from pathlib import Path
 
     first_temporary = Path(os.environ["TMPDIR"])
-    assert "duckdb" not in sys.modules
+    assert "duckdb" in sys.modules
     assert not (first_temporary / "mcp-console-duckdb").exists()
     print(first_temporary)
 result:

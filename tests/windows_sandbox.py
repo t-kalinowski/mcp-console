@@ -230,6 +230,64 @@ class WindowsSandbox(unittest.TestCase):
         os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
         "provisioned default Windows sandbox",
     )
+    def test_network_enabled_sql(self):
+        from windows import Session, exercise_r_sql
+
+        session = Session(sandbox=True, overrides=['sandbox.network="enabled"'])
+        try:
+            session.initialize()
+            exercise_r_sql(session)
+        finally:
+            session.close()
+
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
+    def test_network_enabled_python_sql(self):
+        from windows import Session, exercise_sql_interrupt
+        from support.resolvers import expose_uv
+
+        with workspace() as root:
+            expose_uv(root)
+            environment = dict(
+                os.environ,
+                PATH=os.pathsep.join(
+                    [
+                        str(root),
+                        str(Path(sys.executable).parent),
+                        str(Path(os.environ["SystemRoot"]) / "System32"),
+                    ]
+                ),
+                RETICULATE_PYTHON="managed",
+                UV_PYTHON_PREFERENCE="system",
+                UV_PYTHON_DOWNLOADS="never",
+            )
+            environment.pop("R_HOME", None)
+            session = Session(
+                environment,
+                sandbox=True,
+                overrides=['sandbox.network="enabled"'],
+            )
+            try:
+                session.initialize()
+                session.request("tools/list", {})
+                session.expect("1234567", sql="SELECT 1234567 AS answer")
+                session.expect(
+                    "Count", sql="CREATE TABLE retained AS SELECT 1234567 AS answer"
+                )
+                exercise_sql_interrupt(session)
+                session.expect(
+                    "1234567", control="restart", sql="SELECT 1234567 AS answer"
+                )
+            finally:
+                session.close()
+
+    @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
     def test_network_enabled_input_and_interrupt(self):
         from windows import Session, exercise_input_and_interrupt
 

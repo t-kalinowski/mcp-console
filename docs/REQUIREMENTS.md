@@ -1,7 +1,7 @@
 # Requirements and environments
 
 Local [Windows](WINDOWS.md) sessions use the same managed R/Python resolution and hidden `resolve` subcommand as macOS and Linux.
-Windows SQL remains unavailable, and Windows defaults do not prepare DuckDB extensions.
+Managed DuckDB prepares the same `icu`, `json`, and `sqlite` extension defaults on all supported hosts, including Windows.
 
 The server retains dependency declarations and resolved environments across worker generations.
 Preparation makes packages or extensions **available**; it does not attach R packages, import Python modules, or load DuckDB extensions.

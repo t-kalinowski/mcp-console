@@ -206,14 +206,7 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
                 match language {
                     crate::cell::Language::R => languages.r = true,
                     crate::cell::Language::Python => languages.python = true,
-                    crate::cell::Language::Sql => {
-                        if cfg!(windows) {
-                            return Err(format!(
-                                "{name}: languages: SQL is not yet supported on Windows"
-                            ));
-                        }
-                        languages.sql = true;
-                    }
+                    crate::cell::Language::Sql => languages.sql = true,
                 }
             }
             Ok(languages)

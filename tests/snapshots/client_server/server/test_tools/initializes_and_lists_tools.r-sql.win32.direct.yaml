@@ -30,10 +30,16 @@ result:
         supported plots return as images.
 
 
-        Use R for vectorized data and string operations, statistics, and plots.
-        For a reusable R script, include imports, data inputs, and `#|
-        packages:`/`#| r-version:` metadata for `ir run script.R`, which starts
-        without live Console objects.
+        For databases and structured files, consider DuckDB SQL first for
+        inspection, joins, and aggregation. Use R for vectorized data and string
+        operations, statistics, and plots. For a reusable R script, include
+        imports, data inputs, and `#| packages:`/`#| r-version:` metadata for
+        `ir run script.R`, which starts without live Console objects. Switch
+        languages when useful.
+
+
+        DuckDB can query CSV, Parquet, JSON, and JSONL directly, including
+        nested JSON.
 
 
         Run one cell at a time. Wait for its `send` to return before another
@@ -74,6 +80,22 @@ result:
               not captured. Set persistent dimensions in inches and DPI with
               `options(console.plot.width_in = ..., console.plot.height_in = ...,
               console.plot.dpi = ...)`.
+            type:
+              - string
+              - "null"
+          sql:
+            description: >-
+              Evaluate one complete SQL cell through the active connection. Managed
+              DuckDB keeps a persistent catalog. Results are bounded table previews
+              that abbreviate long text cells; query focused subsets or aggregates.
+              The selected driver supplies its own SQL dialect and types. With R-owned
+              managed DuckDB, query R data frames by name; DuckDB tables/views take
+              precedence. Use DBI from an R cell for commands requiring the statement
+              interface. Managed conveniences/extensions apply only to DuckDB. Read
+              SQLite with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. With a
+              sandbox, attach existing DuckDB databases outside writable paths using
+              `ATTACH 'path' AS name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`,
+              `SUMMARIZE`, or `EXPLAIN`; CLI dot commands are not supported.
             type:
               - string
               - "null"

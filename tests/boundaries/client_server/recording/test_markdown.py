@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.requirements import POSIX, SQL, command, requires
+from support.requirements import POSIX, R, SQL, command, requires
 from support.assertions import assert_result_content
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -80,7 +80,7 @@ def test_records_configured_startup_requirements(
         )
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_records_real_mixed_language_session(
     binary: Path,
