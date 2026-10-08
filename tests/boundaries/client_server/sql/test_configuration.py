@@ -22,6 +22,7 @@ SQL_R_REQUIREMENTS = (
     "nanoarrow",
     "pillar",
     "tibble",
+    "tzdb",
 )
 
 

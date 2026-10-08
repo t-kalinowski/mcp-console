@@ -459,7 +459,11 @@ result:
   isError: false
 ---
 send:
-  r: stopifnot(identical(2L + 2L, 4L))
+  r: |
+    stopifnot(
+      suppressPackageStartupMessages(requireNamespace("arrow", quietly = TRUE)),
+      identical(2L + 2L, 4L)
+    )
 result:
   content:
     - type: text
