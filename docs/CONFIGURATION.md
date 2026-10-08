@@ -166,6 +166,7 @@ Omitting `executable` preserves ordinary discovery, including with a behavior-on
 Console captures the launcher and its matching Rscript, runtime library, and resource directories.
 Workers and preparation use that installation across restarts, including after a cell changes PATH or R_HOME.
 Changing an accepted installation's files or symlink targets requires a new server connection; Console fails rather than switching runtimes.
+For sandboxed R preparation, the selected installation's files and directories must be read-only to workers; remove overlapping write grants or use `resolution: disabled`.
 Failed initial discovery can be retried with explicit restart after repairing the configured path.
 Execution-based inspection runs under worker permissions and suppresses R startup files.
 Native startup still runs inside the worker as described below.

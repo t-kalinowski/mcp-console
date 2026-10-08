@@ -2,6 +2,7 @@
 use super::RInstallation;
 use crate::resolver::ResolverStopHandle;
 use crate::resolver::process::{ResolverProcess, resolver_command};
+use sha2::{Digest as _, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -11,6 +12,7 @@ pub(super) struct FileIdentity {
     target: PathBuf,
     length: u64,
     modified: std::time::SystemTime,
+    content: [u8; 32],
     #[cfg(unix)]
     device: u64,
     #[cfg(unix)]
@@ -33,6 +35,7 @@ impl FileIdentity {
             target: std::fs::canonicalize(path).map_err(|error| error.to_string())?,
             length: metadata.len(),
             modified: metadata.modified().map_err(|error| error.to_string())?,
+            content: Sha256::digest(std::fs::read(path).map_err(|error| error.to_string())?).into(),
             #[cfg(unix)]
             device: metadata.dev(),
             #[cfg(unix)]
@@ -45,6 +48,7 @@ impl FileIdentity {
 impl RInstallation {
     pub(crate) fn inspect(
         executable: &Path,
+        require_read_only: bool,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<Self, String> {
         let context = |error: String| format!("r.executable {}: {error}", executable.display());
@@ -158,13 +162,17 @@ impl RInstallation {
             } else {
                 "etc/Renviron"
             }))?);
-            Self {
+            let installation = Self {
                 home,
                 resources,
                 identity,
                 resource_targets: Vec::new(),
             }
-            .capture_resource_targets()
+            .capture_resource_targets()?;
+            if require_read_only {
+                installation.verify_read_only()?;
+            }
+            Ok(installation)
         })()
         .map_err(context)
     }
@@ -175,6 +183,45 @@ impl RInstallation {
             .map(|path| std::fs::canonicalize(Path::new(path)).map_err(|error| error.to_string()))
             .collect::<Result<_, _>>()?;
         Ok(self)
+    }
+    /// Runs in the inspection process under worker permissions. Metadata or a
+    /// digest alone cannot prevent a worker from changing code after validation.
+    fn verify_read_only(&self) -> Result<(), String> {
+        let reject = |path: &Path| {
+            format!(
+                "R preparation requires a worker-read-only installation: {}; remove its worker write grants or use resolution: disabled",
+                path.display()
+            )
+        };
+        for identity in &self.identity {
+            for path in [&identity.path, &identity.target] {
+                if writable(std::fs::OpenOptions::new().write(true).open(path))? {
+                    return Err(reject(path));
+                }
+                let parent = path.parent().ok_or("R installation file has no parent")?;
+                for directory in std::iter::once(parent).chain(
+                    parent
+                        .ancestors()
+                        .skip(1)
+                        .take_while(|directory| directory.starts_with(&self.home)),
+                ) {
+                    if writable(tempfile::NamedTempFile::new_in(directory))? {
+                        return Err(reject(directory));
+                    }
+                }
+            }
+        }
+        for directory in std::iter::once(self.home.as_path()).chain(
+            self.resources
+                .iter()
+                .map(Path::new)
+                .chain(self.resource_targets.iter().map(PathBuf::as_path)),
+        ) {
+            if writable(tempfile::NamedTempFile::new_in(directory))? {
+                return Err(reject(directory));
+            }
+        }
+        Ok(())
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
         for expected in &self.identity {
@@ -205,6 +252,20 @@ impl RInstallation {
             command.env(name, value);
         }
         Ok(())
+    }
+}
+fn writable<T>(result: std::io::Result<T>) -> Result<bool, String> {
+    match result {
+        Ok(_) => Ok(true),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error.to_string()),
     }
 }
 fn probe(

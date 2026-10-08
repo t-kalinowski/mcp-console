@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -16,7 +17,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, isolated_r_home
 from support.records import Transcript
-from support.requirements import POSIX, R, command, requires
+from support.requirements import POSIX, R, SANDBOX, command, requires
 from support.resolvers import recording_ir_environment, ir_run_records
 from support.snapshots import execution_snapshots
 from support.suites import run_this_suite
@@ -180,6 +181,141 @@ def test_native_r_executable_uses_matching_installation(
             client.send(control="restart")
             client.expect("native R selected\n", r=program)
             return client.finish()
+
+
+@requires(POSIX, R, SANDBOX)
+def test_rejects_worker_writable_r_preparation(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment, _ = r_test_environment()
+        installed = isolated_r_home(root, environment)
+        rscript = installed / "bin/Rscript"
+        original = rscript.resolve()
+        rscript.unlink()
+        shutil.copy2(original, rscript)
+        configure(
+            root,
+            {
+                "r": {
+                    "executable": str(installed / "bin/R"),
+                    "resolution": "explicit",
+                    "packages": [],
+                },
+                "python": sys.executable,
+            },
+        )
+        with McpClient(
+            binary, SANDBOXED.serve("--writable-root", str(root)), environment, root
+        ) as client:
+            client.initialize_and_list_tools()
+            result = client.send(r='cat("must not run\\n")')
+            assert (
+                result.get("isError")
+                and "R preparation requires a worker-read-only installation"
+                in result["content"][0]["text"]
+            ), result
+            client.finish_with_standard_error(expected_exit_status=1)
+    return [{"worker_writable_r": "rejected before dependency preparation"}]
+
+
+@requires(POSIX, R, command("ir"))
+@executions(DIRECT, SANDBOXED)
+def test_r_preparation_detects_content_changes_with_retained_metadata(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment, record = recording_ir_environment(root)
+        original = Path(environment["R_HOME"]) / "bin/Rscript"
+        installed = isolated_r_home(root, environment)
+        rscript = installed / "bin/Rscript"
+        rscript.unlink()
+        source = (
+            "#!/bin/sh\nexec "
+            + shlex.quote(str(original))
+            + ' "$@"\n'
+            + "#" * 1024
+            + "\n"
+        )
+        rscript.write_text(source)
+        rscript.chmod(0o755)
+        marker = root / "modified-rscript-ran"
+        configure(
+            root,
+            {
+                "r": {
+                    "executable": str(installed / "bin/R"),
+                    "resolution": "explicit",
+                    "packages": [],
+                },
+                "python": sys.executable,
+                **(
+                    {
+                        "sandbox": {
+                            "filesystem": {
+                                "read_only": [str(installed)],
+                                "read_write": [str(root)],
+                            }
+                        }
+                    }
+                    if execution == SANDBOXED
+                    else {}
+                ),
+            },
+        )
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment, root
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("selected R ready\n", r='cat("selected R ready\\n")')
+            if execution == SANDBOXED:
+                # fmt: python
+                program = code("""
+                    from pathlib import Path
+
+                    for mutate in (
+                        lambda: Path("R/bin/Rscript").open("r+b"),
+                        lambda: Path("R/bin").rename("changed-bin"),
+                        lambda: Path("R").rename("changed-R"),
+                    ):
+                        try:
+                            mutate()
+                        except OSError:
+                            pass
+                        else:
+                            raise AssertionError("worker changed the selected installation")
+                    assert Path("R/bin/Rscript").is_file()
+                    print("selected R protected")
+                    """)
+                client.expect("selected R protected\n", python=program)
+            before = rscript.stat()
+            changed = (
+                "#!/bin/sh\nprintf changed > "
+                + shlex.quote(str(marker))
+                + "\nexit 91\n"
+            ).encode()
+            rscript.write_bytes(changed.ljust(len(source), b"#"))
+            os.utime(rscript, ns=(before.st_atime_ns, before.st_mtime_ns))
+            after = rscript.stat()
+            assert (
+                before.st_size,
+                before.st_mtime_ns,
+                before.st_ino,
+                before.st_mode,
+            ) == (after.st_size, after.st_mtime_ns, after.st_ino, after.st_mode)
+            runs = ir_run_records(record)
+            result = client.send(requirements={"r": ["DBI"]})
+            assert (
+                result.get("isError")
+                and "selected R installation changed" in result["content"][0]["text"]
+            ), result
+            assert ir_run_records(record) == runs and not marker.exists()
+            client.finish()
+    return [
+        {
+            "retained_r_identity": "content changes rejected despite matching file metadata"
+        }
+    ]
 
 
 if __name__ == "__main__":

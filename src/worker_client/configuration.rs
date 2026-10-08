@@ -126,6 +126,7 @@ impl ClientConfiguration {
                 >(
                     crate::resolver::preparation::Operation::InspectR {
                         executable: executable.clone(),
+                        require_read_only: !no_sandbox && r_settings.resolution.enabled(),
                     },
                     sandbox_settings.clone(),
                     no_sandbox,

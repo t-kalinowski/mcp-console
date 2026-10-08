@@ -44,6 +44,7 @@ pub(crate) struct Discovery {
 pub(crate) enum Operation {
     InspectR {
         executable: std::path::PathBuf,
+        require_read_only: bool,
     },
     Bootstrap,
     ResolveRStandalone {
