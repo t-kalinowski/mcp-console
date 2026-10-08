@@ -273,6 +273,7 @@ False excludes inherited launch variables and retains explicit configuration val
 An isolated environment must explicitly supply any workload variables it needs, including paths used for cache selection.
 These controls apply to workloads, including `serve --no-sandbox`, without changing the supervisor's own loader/helper environment.
 Settings are captured once; worker environment mutations and restarts do not reconfigure preparation.
+See [environment variables](ENVIRONMENT.md) for launch settings, runtime selection, cache locations, and Console-owned assignments.
 
 ## Expanded example
 
