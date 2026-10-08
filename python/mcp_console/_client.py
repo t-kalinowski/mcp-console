@@ -10,6 +10,40 @@ if TYPE_CHECKING:
 
 
 class Requirements(TypedDict, total=False):
+    """Dependency declarations accepted by the clients' `send(requirements=...)`.
+
+    `add` merges packages into the session declaration. `get` inspects it, `set`
+    replaces it (emptying omitted fields), and `reset` restores startup defaults.
+    Changed replacements of a live worker require `control="restart"`, which
+    also discards its variables. Python packages run in Console's worker
+    environment; installing a framework extra prepares the calling application.
+
+    Attributes:
+        action: `get`, `add` (the default), `set`, or `reset`.
+        python_version: Python version constraints, such as `[">=3.11"]`.
+        exclude_newer: Optional cutoff date for dependency resolution.
+        r: R package requirements.
+        python: Python package requirements.
+        duckdb: DuckDB extensions.
+
+    Examples:
+        Install with `pip install 'mcp-console[client]'`. Add NumPy to Console's
+        managed Python environment and use it in the same call:
+
+        ```python
+        from mcp_console import MCPConsole, Requirements
+
+        requirements: Requirements = {"python": ["numpy"]}
+        with MCPConsole() as console:
+            print(
+                console.send(
+                    requirements=requirements,
+                    python="import numpy as np; np.mean([12, 15, 18, 20, 25])",
+                )
+            )
+        ```
+    """
+
     action: Literal["get", "add", "set", "reset"]
     python_version: list[str]
     exclude_newer: str | None
@@ -22,7 +56,45 @@ class AsyncMCPConsole:
     """A persistent, callable connection to ``mcp-console serve``.
 
     Enter and close the connection in the same async task. The application owns
-    its model clients, agents, and tool loops.
+    its model clients, agents, and tool loops. The context starts the server and
+    discovers its tools; leaving the context closes its connection and process.
+    Variables persist across `send()` calls on this connection. A new connection
+    starts a new session.
+
+    Args:
+        command: Console executable. Defaults to the installed `mcp-console`.
+        args: Server arguments. Defaults to `["serve"]`.
+        server_parameters: MCP stdio settings such as `cwd` and `env`.
+
+    Examples:
+        Install with `pip install 'mcp-console[client]'`. This script defines
+        values in one cell and uses them in a second cell:
+
+        ```python
+        import asyncio
+        from mcp_console import AsyncMCPConsole
+
+
+        async def main():
+            async with AsyncMCPConsole() as console:
+                print(
+                    await console.send(
+                        python="values = [12, 15, 18, 20, 25]; values"
+                    )
+                )
+                print(
+                    await console.send(
+                        python="import statistics; statistics.mean(values)"
+                    )
+                )
+
+
+        asyncio.run(main())
+        ```
+
+        Framework adapters are created inside this context, after discovery.
+        See [Anthropic](anthropic.tool.html), [chatlas](chatlas.tool.html),
+        [Responses](openai.responses_tool.html), or [Agents](openai.agents_tool.html).
     """
 
     def __init__(
@@ -115,6 +187,35 @@ class AsyncMCPConsole:
                 Changed replacements of a live worker require control="restart".
             stdin: Exact input for an active prompt or debugger.
             timeout_ms: Maximum wait after dispatch; timeout does not cancel work.
+
+        Returns:
+            Collected text output and lifecycle notices. Images appear as MIME
+            placeholders. MCP tool errors raise `RuntimeError`.
+
+        Examples:
+            A short observation window may return before the cell finishes.
+            Poll with an empty call, collecting each chunk without rerunning
+            the cell:
+
+            ```python
+            import asyncio
+            from mcp_console import AsyncMCPConsole
+
+
+            async def main():
+                async with AsyncMCPConsole() as console:
+                    output = await console.send(
+                        python="sum(range(1_000_000))",
+                        timeout_ms=0,
+                    )
+                    print(output, end="")
+                    while output.endswith("[running; poll with an empty send]"):
+                        output = await console.send()
+                        print(output, end="")
+
+
+            asyncio.run(main())
+            ```
         """
         arguments = {
             "r": r,
@@ -136,7 +237,13 @@ class AsyncMCPConsole:
 
     @property
     def send_tool(self) -> "Tool":
-        """The connected server's MCP tool definition, used by SDK adapters."""
+        """The connected server's MCP tool definition, used by SDK adapters.
+
+        Available after connecting. Its input schema reflects the server's
+        configured capabilities. Use a framework adapter to register this
+        schema; automatic inference from `send()` annotations loses that detail.
+        Recreate adapters after reconnecting.
+        """
         if self._send_tool is None:
             raise RuntimeError(
                 "Connect the console before creating tools; enter its context or call connect()"

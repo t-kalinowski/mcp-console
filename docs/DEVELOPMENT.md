@@ -198,6 +198,7 @@ The package site links back to the Quarto home page; its configuration lives in 
 In local previews, pkgdown search results link to the configured GitHub Pages URL; direct page links stay local.
 The Python site's configuration lives in `great-docs.yml`; `docs/python/index.qmd` supplies its home page.
 Class methods are documented together on their class page (`inline_methods: true`).
+Public API docstrings supply the reference pages' standalone examples, including framework setup, tool registration, and cleanup.
 Great Docs generates the Python reference through static source analysis (`dynamic: false`), so framework dependencies and a native build are unnecessary.
 Its shared navigation links back to the guides and R site in both local previews and Pages deployment.
 Code examples are displayed without execution; building the website does not require API credentials or a Console executable.

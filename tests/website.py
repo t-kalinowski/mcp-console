@@ -2,6 +2,7 @@
 """Render the documentation website and check its public pages and links."""
 
 from html.parser import HTMLParser
+import ast
 import json
 from pathlib import Path
 import shutil
@@ -21,6 +22,9 @@ class Page(HTMLParser):
         self.links: list[str] = []
         self.title = ""
         self.in_title = False
+        self.code_blocks: list[str] = []
+        self.in_pre = False
+        self.code = ""
         self.feed(path.read_text())
 
     def handle_starttag(
@@ -34,14 +38,22 @@ class Page(HTMLParser):
                 self.links.append(attrs[name])
         if tag == "title":
             self.in_title = True
+        if tag == "pre":
+            self.in_pre = True
+            self.code = ""
 
     def handle_endtag(self, tag: str) -> None:
         if tag == "title":
             self.in_title = False
+        if tag == "pre":
+            self.in_pre = False
+            self.code_blocks.append(self.code)
 
     def handle_data(self, data: str) -> None:
         if self.in_title:
             self.title += data
+        if self.in_pre:
+            self.code += data
 
 
 class WebsiteTests(unittest.TestCase):
@@ -229,6 +241,31 @@ class WebsiteTests(unittest.TestCase):
                         (self.site / f"python/reference/{name}.{method}.html").exists(),
                         "methods should be documented on the class page",
                     )
+
+    def test_python_adapters_show_complete_examples(self) -> None:
+        for name, factory in (
+            ("chatlas.tool", "chatlas.tool"),
+            ("chatlas.register", "chatlas.register"),
+            ("openai.responses_tool", "openai.responses_tool"),
+            ("openai.ResponsesTool", "openai.responses_tool"),
+            ("openai.AsyncResponsesTool", "openai.responses_tool"),
+            ("openai.agents_tool", "openai.agents_tool"),
+            ("openai.agents_server", "openai.agents_server"),
+            ("anthropic.tool", "anthropic.tool"),
+            ("anthropic.tools", "anthropic.tools"),
+            ("codex.server", "codex.server"),
+        ):
+            with self.subTest(adapter=name):
+                page = self.pages[self.site / f"python/reference/{name}.html"]
+                examples = [
+                    code
+                    for code in page.code_blocks
+                    if "import mcp_console" in code
+                    and f"mcp_console.{factory}(" in code
+                ]
+                self.assertTrue(examples, "missing standalone usage example")
+                for code in examples:
+                    ast.parse(code)
 
     def test_local_links_and_anchors_resolve(self) -> None:
         self.assertTrue(self.pages, "the website has no rendered pages")

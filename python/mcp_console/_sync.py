@@ -15,7 +15,34 @@ class MCPConsole:
     """A synchronous, persistent connection to ``mcp-console serve``.
 
     Use as a context manager or explicitly call ``connect()`` and ``close()``.
+    The context starts Console and discovers its tools; leaving it closes the
+    connection and subprocess. Variables persist across calls on this connection.
     The application owns its model clients, agents, and tool loops.
+
+    Args:
+        command: Console executable. Defaults to the installed `mcp-console`.
+        args: Server arguments. Defaults to `["serve"]`.
+        server_parameters: MCP stdio settings such as `cwd` and `env`.
+
+    Examples:
+        Install with `pip install 'mcp-console[client]'`. Define values in one
+        cell and use them in the next:
+
+        ```python
+        from mcp_console import MCPConsole
+
+        with MCPConsole() as console:
+            print(console.send(python="values = [12, 15, 18, 20, 25]; values"))
+            print(
+                console.send(
+                    python="import statistics; statistics.mean(values)"
+                )
+            )
+        ```
+
+        Create framework adapters inside this context, after discovery. See
+        [chatlas](chatlas.tool.html), [Anthropic](anthropic.tool.html),
+        [Responses](openai.responses_tool.html), or [Agents](openai.agents_tool.html).
     """
 
     def __init__(
@@ -76,6 +103,14 @@ class MCPConsole:
         stdin: str | None = None,
         timeout_ms: int = 60_000,
     ) -> str:
+        """Run or control a cell on this connection and return its text output.
+
+        The arguments and polling behavior match
+        [AsyncMCPConsole.send()](AsyncMCPConsole.html#send). Send one language
+        per call. If output ends in `[running; poll with an empty send]`, collect
+        the remaining output with `console.send()` before submitting another cell.
+        Images appear as MIME placeholders; MCP tool errors raise `RuntimeError`.
+        """
         return self._run(
             self._async.send,
             r=r,
@@ -92,5 +127,10 @@ class MCPConsole:
 
     @property
     def send_tool(self) -> "Tool":
-        """The connected server's MCP tool definition, used by SDK adapters."""
+        """The connected server's MCP tool definition, used by SDK adapters.
+
+        Available after connecting. Its input schema reflects the server's
+        configured capabilities. Use a framework adapter to register this
+        schema; recreate adapters after reconnecting.
+        """
         return self._async.send_tool
