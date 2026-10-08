@@ -114,7 +114,10 @@ from agents import Agent, Runner
 from mcp_console import MCPConsole
 
 with MCPConsole() as console:
-    agent = Agent(name="Data analyst", tools=[mcp_console.openai.agents_tool(console)])
+    agent = Agent(
+        name="Data analyst",
+        tools=[mcp_console.openai.agents_tool(console)],
+    )
     result = Runner.run_sync(agent, "Use the console to calculate 20!.")
     print(result.final_output)
 ```
