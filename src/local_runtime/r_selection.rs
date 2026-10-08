@@ -216,6 +216,9 @@ impl RInstallation {
         Ok(self)
     }
     pub(crate) fn validate(&self) -> Result<(), String> {
+        // Drift check for trusted installation inputs. This neither pins
+        // execution to the opened files nor captures their dependency closure;
+        // see docs/REQUIREMENTS.md#host-resolution-and-trust.
         for expected in &self.identity {
             if FileIdentity::capture(&expected.path)? != *expected {
                 return Err(format!(

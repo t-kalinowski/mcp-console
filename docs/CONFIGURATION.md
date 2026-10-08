@@ -208,10 +208,14 @@ An explicit selection overrides inherited R installation hints and PATH discover
 Omitting `executable` preserves ordinary discovery; `r: null` clears the R settings before subsequent overrides.
 
 Console captures the installation's matching Rscript, runtime library, and resource directories for workers and preparation across restarts.
-It checks accepted installation file contents and resource directory targets before each worker launch and preparation operation; changing them requires a new server connection.
+It checks selected installation file contents and resource directory targets before each worker launch and preparation operation; detected changes require a new server connection.
 Ordinary changes within resource directories remain allowed.
 Failed initial discovery can be retried with explicit restart after repairing the captured path.
 Inspection uses worker permissions and suppresses startup files; native R startup retains the behavior below.
+
+The installation and all code it loads remain [trusted preparation inputs](REQUIREMENTS.md#host-resolution-and-trust).
+These checks do not protect against concurrent file replacement or changes to uncaptured dependencies.
+Keep those inputs outside worker-writable paths when relying on worker isolation.
 
 ## Native R startup
 
