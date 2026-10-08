@@ -45,6 +45,9 @@ impl ResolverPhase {
 }
 
 impl ResolverStopHandle {
+    pub(crate) fn terminal_report(&self) -> Option<super::ResolverTerminalReport> {
+        None
+    }
     pub(crate) fn phase_observation(&self) -> ResolverPhase {
         ResolverPhase
     }

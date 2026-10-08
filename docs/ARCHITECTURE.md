@@ -166,6 +166,24 @@ Its default host reads and Console-specific writable caches still require truste
 
 ## Retirement and cancellation
 
+Each worker launch owns one retained retirement operation.
+Lifecycle reserves its original budgets while holding admission, then releases that mutex before command writes, preparation cancellation, process observation or task joins.
+Restart, EOF, startup failure and failed-worker recovery observe the same request and terminal cleanup/I/O result.
+They send Shutdown once and join every owned transport task once; a late startup registration retires through its launch's owner before startup completion permits connection shutdown to finish.
+Publishing a failed-worker transition checks that its generation still owns it.
+If restart takes over during failed-worker retirement, the retiring caller keeps the captured process outcome in the old generation's output region for response settlement.
+
+The operation keeps normal command/barrier failure separate from physical cleanup and the dispatcher outcome.
+Confirmed physical cleanup and joined tasks can supersede a failed normal barrier; failed native cleanup still blocks replacement.
+Launcher reaping and successful I/O settlement also supersede that barrier when launcher-status or temporary-storage cleanup reports an independent error; the cleanup error remains authoritative.
+Process and worker consumers read separate cleanup and I/O views of that retained result, avoiding duplicate diagnostics within one shutdown response.
+Restart and EOF check the retiring launch's retained I/O result even when an initial launch failed before readiness, a failed evaluation has already stopped the logical worker or physical cleanup fails.
+Failed-worker replacement also requires launcher reaping and confirmed retirement of its owned temporary storage.
+Available output is drained even when cleanup fails.
+The existing worker, relay, launcher and force-stop allowances are captured once.
+Relay drain eligibility uses when the local dispatcher processes ShutdownStarted.
+Connection closure passes its original worker deadline into startup cancellation.
+
 The relay bounds shutdown and reaps its direct worker.
 Its stream draining must not wait forever for descendants retaining descriptors or for a blocked output consumer.
 It does not infer process-tree membership from a process group.
@@ -188,6 +206,10 @@ Worker, relay, and native retirement allowances have different owners; none is a
 
 Connection closure that refuses the next preparation stage is separate from control of a completed operation.
 It permits a quiet exit only after the refused stage's cleanup is confirmed.
+Preparation retains the operation's terminal result, control cause and cleanup confirmation.
+The subprocess owner captures its cause when collection finishes; a later control acknowledgment cannot replace an independent setup failure.
+Preparation that consumes control after successful collection retains that cause before publishing its terminal result.
+For multistage preparation, only a subprocess report matching the operation's final result supplies its control cause; cleanup confirmation still includes every stage.
 Errors closing the preparation connection remain visible.
 Cancellation of a preparation operation does not suppress an independent failure of the preparation connection's close handshake.
 

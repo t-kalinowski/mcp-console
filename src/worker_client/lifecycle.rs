@@ -87,6 +87,7 @@ impl LifecycleControl {
     ) -> (ProcessStopHandles, Instant, WorkerGeneration) {
         let deadline = Instant::now() + grace;
         let stop_handles = self.processes.clone();
+        stop_handles.reserve_shutdown(deadline);
         self.retiring_generation = Some(RetiringGeneration {
             generation: self.generation.clone(),
             disposition,
@@ -273,44 +274,36 @@ pub(super) struct ProcessStopHandles {
 }
 
 impl ProcessStopHandles {
+    fn reserve_shutdown(&self, deadline: Instant) {
+        if let Some(worker) = &self.worker {
+            worker.reserve_shutdown(deadline, deadline);
+        }
+    }
     fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        let (allowance, errors) = self.request_shutdown(deadline);
-        self.finish_shutdown(deadline, allowance, errors)
+        let errors = self.request_shutdown(deadline);
+        self.finish_shutdown(errors)
     }
 
-    fn request_shutdown(
-        &self,
-        deadline: Instant,
-    ) -> (Option<platform::RelayRetirementAllowance>, Vec<String>) {
+    fn request_shutdown(&self, deadline: Instant) -> Vec<String> {
         let mut errors = Vec::new();
-        let mut worker_allowance = None;
         // Queue worker shutdown before resolver cancellation can release a
         // response command onto the retiring relay connection.
-        if let Some(worker) = self.worker.as_ref() {
-            let (allowance, requested) = worker.request_shutdown(deadline, deadline);
-            worker_allowance = Some(allowance);
-            if let Err(error) = requested {
-                errors.push(error);
-            }
+        if let Some(worker) = &self.worker {
+            worker.request_shutdown(deadline, deadline);
         }
         if let Some(resolver) = self.resolver.as_ref()
             && let Err(error) = resolver.stop()
         {
             errors.push(error);
         }
-        (worker_allowance, errors)
+        errors
     }
 
-    fn finish_shutdown(
-        &self,
-        deadline: Instant,
-        worker_allowance: Option<platform::RelayRetirementAllowance>,
-        mut errors: Vec<String>,
-    ) -> Result<(), String> {
+    fn finish_shutdown(&self, mut errors: Vec<String>) -> Result<(), String> {
         // The barrier lets the ordered consumer apply failures and finish a
         // cancelled resolver callback before relay retirement is enforced.
-        if let (Some(worker), Some(allowance)) = (self.worker.as_ref(), worker_allowance)
-            && let Err(error) = worker.finish_shutdown(deadline, allowance)
+        if let Some(worker) = &self.worker
+            && let Err(error) = worker.finish_shutdown()
         {
             errors.push(error);
         }
@@ -389,8 +382,8 @@ impl Client {
     pub(crate) async fn cancel_startup(&self, deadline: Instant) -> Result<(), String> {
         let processes = self.close_lifecycle(deadline)?.unwrap_or_default();
         tokio::task::spawn_blocking(move || {
-            let (allowance, errors) = processes.request_shutdown(deadline);
-            processes.finish_shutdown(deadline, allowance, errors)
+            let errors = processes.request_shutdown(deadline);
+            processes.finish_shutdown(errors)
         })
         .await
         .map_err(|error| format!("startup shutdown task failed: {error}"))?
@@ -568,7 +561,18 @@ impl Client {
             self.resolve_and_begin_restart(requirements, grace, control)?
         };
         if let Err(mut error) = restart.processes.shutdown(restart.deadline) {
-            let retirement = self.finish_worker_retirement();
+            let retirement = self.finish_worker_retirement().and_then(|retirement| {
+                if matches!(
+                    retirement,
+                    WorkerRetirement::NeverStarted | WorkerRetirement::AlreadyStopped
+                ) && let Some(worker) = &restart.processes.worker
+                {
+                    // A failed launch may never become Running or may already
+                    // be Stopped. Cleanup failure does not settle retained I/O.
+                    worker.finish_retirement()?;
+                }
+                Ok(retirement)
+            });
             let retired_worker = matches!(retirement, Ok(WorkerRetirement::Stopped { .. }));
             let outcome = match retirement {
                 Ok(WorkerRetirement::Stopped {
@@ -612,6 +616,7 @@ impl Client {
             &mut restart.evaluation,
             restart.generation.clone(),
             !defer_idle,
+            restart.processes.worker.as_ref(),
         ) {
             Ok(replacement) => {
                 let transition = self.finish_restart(&restart.generation);
@@ -759,6 +764,7 @@ impl Client {
         evaluation: &mut Option<EvaluationReservation>,
         generation: WorkerGeneration,
         report_idle: bool,
+        retiring_worker: Option<&platform::WorkerShutdownHandle>,
     ) -> Result<WorkerReplacement, RestartFailure> {
         let mut worker = self
             .0
@@ -767,6 +773,18 @@ impl Client {
             .map_err(|_| RestartFailure::new("worker lock poisoned".to_string()))?;
         self.ensure_restarting().map_err(RestartFailure::new)?;
         let retirement = worker.finish_retirement().map_err(RestartFailure::new)?;
+        if matches!(
+            retirement,
+            WorkerRetirement::NeverStarted | WorkerRetirement::AlreadyStopped
+        ) && let Some(retiring_worker) = retiring_worker
+        {
+            // An initial launch can fail before becoming Running; a failed
+            // evaluation can already have stopped it. Neither logical state
+            // settles the launch's retained I/O result for this replacing caller.
+            retiring_worker
+                .finish_retirement()
+                .map_err(RestartFailure::new)?;
+        }
         self.clear_restart_stop_handle()
             .map_err(RestartFailure::new)?;
         if matches!(retirement, WorkerRetirement::NeverStarted) {
@@ -1192,7 +1210,7 @@ impl Client {
         worker: &mut WorkerState,
         expected: &WorkerGeneration,
     ) -> Result<FailedWorkerStop, WorkerRetirementFailure> {
-        let mut lifecycle = self.0.lifecycle.lock().map_err(|_| {
+        let lifecycle = self.0.lifecycle.lock().map_err(|_| {
             WorkerRetirementFailure::from("worker lifecycle lock poisoned".to_string())
         })?;
         if lifecycle.state != LifecycleState::Ready || !lifecycle.generation.is(expected) {
@@ -1203,7 +1221,39 @@ impl Client {
                 "failed worker was not running".to_string(),
             ));
         }
-        let outcome = match worker.stop_failed() {
+        let processes = lifecycle.processes.clone();
+        let deadline = Instant::now();
+        // The failed-worker path retains its unconditional relay drainage
+        // allowance. Reserve before releasing admission, then cancel the real
+        // callback outside lifecycle before joining its dispatcher.
+        if let Some(handle) = &processes.worker {
+            handle.reserve_failed_shutdown(deadline);
+        }
+        drop(lifecycle);
+        let requested = processes.request_shutdown(deadline);
+        let retirement = worker.stop_failed();
+        let mut lifecycle = self.0.lifecycle.lock().map_err(|_| {
+            WorkerRetirementFailure::from("worker lifecycle lock poisoned".to_string())
+        })?;
+        // Restart/EOF may now have joined the same operation. They own the
+        // transition if generation/admission changed during teardown.
+        let current = lifecycle.generation.is(expected) && lifecycle.state == LifecycleState::Ready;
+        if !current {
+            return retirement.map(|retirement| {
+                // This caller consumed the outcome before marking the worker
+                // Stopped. Retain it in the old output region before restart
+                // settles that region; its worker view is now AlreadyStopped.
+                if let WorkerRetirement::Stopped {
+                    outcome: Some(outcome),
+                    ..
+                } = retirement
+                {
+                    self.0.output.push_notice_line(outcome.diagnostic());
+                }
+                FailedWorkerStop::RestartOwnsWorker
+            });
+        }
+        let outcome = match retirement {
             Ok(WorkerRetirement::Stopped { outcome, .. }) => outcome,
             Ok(WorkerRetirement::NeverStarted | WorkerRetirement::AlreadyStopped) => {
                 unreachable!("a running failed worker should retire")
@@ -1222,6 +1272,12 @@ impl Client {
             }
         };
         lifecycle.processes.worker = None;
+        if !requested.is_empty() {
+            return Err(WorkerRetirementFailure::new(
+                requested.join("; additionally "),
+                outcome,
+            ));
+        }
         Ok(FailedWorkerStop::Stopped(outcome))
     }
 
@@ -1394,7 +1450,12 @@ impl Client {
         if !matches!(lifecycle.state, LifecycleState::ShuttingDown { .. }) {
             lifecycle.state = LifecycleState::ShuttingDown { deadline };
         }
-        let handles = std::mem::take(&mut lifecycle.processes);
+        let handles = lifecycle.processes.clone();
+        let deadline = match lifecycle.state {
+            LifecycleState::ShuttingDown { deadline } => deadline,
+            _ => unreachable!("closed lifecycle"),
+        };
+        handles.reserve_shutdown(deadline);
         Ok(
             (handles.worker.is_some() || handles.resolver.is_some() || lifecycle.startup.is_some())
                 .then_some(handles),
@@ -1414,14 +1475,26 @@ impl Client {
                 .clone();
             // Queue relay shutdown and resolver cancellation before Close can
             // retire the preparation host and its control-input pipe.
-            let (allowance, errors) = stop_handles.request_shutdown(deadline);
+            let errors = stop_handles.request_shutdown(deadline);
             let preparation = preparation.map(|preparation| {
                 // Resolver and worker retirement run together. A lost
                 // preparation connection must not extend worker shutdown.
                 std::thread::spawn(move || preparation.close())
             });
-            let stopped = stop_handles.finish_shutdown(deadline, allowance, errors);
-            let retired = client.finish_worker_retirement().map(|_| ());
+            let stopped = stop_handles.finish_shutdown(errors);
+            let retired = client.finish_worker_retirement().and_then(|retirement| {
+                if matches!(
+                    retirement,
+                    WorkerRetirement::NeverStarted | WorkerRetirement::AlreadyStopped
+                ) && let Some(worker) = &stop_handles.worker
+                {
+                    // A failed launch may never become Running or may already
+                    // be Stopped before EOF. Observe its retained I/O result;
+                    // a running worker already reports that result above.
+                    worker.finish_retirement()?;
+                }
+                Ok(())
+            });
             let preparation = preparation.map_or(Ok(()), |task| {
                 task.join()
                     .map_err(|_| "preparation shutdown task panicked")?
@@ -1483,10 +1556,11 @@ mod tests {
         };
         let response = render_response(SendResponse::Completed(response));
         let mut reservation = Some(evaluation.reserve_for_restart().unwrap());
-        let failure = match client.replace_worker(&mut reservation, WorkerGeneration::new(), true) {
-            Ok(_) => panic!("replacement unexpectedly succeeded outside a restart"),
-            Err(failure) => failure,
-        };
+        let failure =
+            match client.replace_worker(&mut reservation, WorkerGeneration::new(), true, None) {
+                Ok(_) => panic!("replacement unexpectedly succeeded outside a restart"),
+                Err(failure) => failure,
+            };
         assert_eq!(failure.message, "worker restart state changed");
         assert!(reservation.is_some());
         let (_, _, delivery) = response.into_parts();

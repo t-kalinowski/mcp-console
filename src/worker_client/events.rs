@@ -68,7 +68,7 @@ impl WorkerEventDispatcher {
         startup: mpsc::SyncSender<Result<(), String>>,
         ready_commit: mpsc::Receiver<ReadyCommitOutcome>,
         interrupts: super::platform::InterruptRequests,
-        shutdown_started: super::platform::ShutdownAcceptance,
+        shutdown_started: super::platform::LocalShutdownObservation,
     ) -> Self {
         let thread = thread::spawn(move || {
             dispatch_worker_events(
@@ -103,7 +103,7 @@ fn dispatch_worker_events(
     startup: mpsc::SyncSender<Result<(), String>>,
     ready_commit: mpsc::Receiver<ReadyCommitOutcome>,
     interrupts: super::platform::InterruptRequests,
-    shutdown_started: super::platform::ShutdownAcceptance,
+    shutdown_started: super::platform::LocalShutdownObservation,
 ) -> Result<Option<WorkerProcessOutcome>, String> {
     let mut startup = Some(startup);
     let stdout = output.direct_stdout();
