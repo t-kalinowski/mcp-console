@@ -13,6 +13,15 @@ __attribute__((constructor)) static void before_main(void) {
         _exit(81);
     }
     if (errno != EACCES && errno != EPERM && errno != EROFS) _exit(82);
+    const char *alias = getenv("MCP_CONSOLE_TEST_DENIED_ALIAS");
+    if (alias != NULL) {
+        file = open(alias, O_RDONLY);
+        if (file >= 0) {
+            close(file);
+            _exit(83);
+        }
+        if (errno != EACCES && errno != EPERM && errno != ENOENT) _exit(84);
+    }
 }
 
 int main(void) {

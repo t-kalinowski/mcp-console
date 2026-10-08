@@ -10,10 +10,12 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, SANDBOX, requires
 
 
-def constructor(binary: Path, *, restricted_reads: bool) -> Transcript:
+def constructor(
+    binary: Path, *, restricted_reads: bool, denied_alias: bool = False
+) -> Transcript:
     with TemporaryDirectory(prefix="native-startup-", dir=Path.home()) as directory:
         root = Path(directory).resolve()
         working = root / "workspace"
@@ -29,9 +31,13 @@ def constructor(binary: Path, *, restricted_reads: bool) -> Transcript:
             check=True,
             capture_output=True,
         )
-        if restricted_reads:
+        if restricted_reads or denied_alias:
             # ELF's interpreter and libraries may use /lib or /lib64 aliases.
-            reads = ["/usr", "/bin", "/lib", "/lib64", str(working)]
+            reads = (
+                ["/usr", "/bin", "/lib", "/lib64", str(root)]
+                if restricted_reads
+                else ["/"]
+            )
             if sys.platform == "darwin":
                 reads.extend(["/System", "/Library"])
             config = working / ".agents/console/config.yaml"
@@ -42,18 +48,28 @@ def constructor(binary: Path, *, restricted_reads: bool) -> Transcript:
                         "sandbox": {
                             "filesystem": {
                                 "read_only": reads,
+                                "deny": [str(working / "secret")]
+                                if denied_alias
+                                else [],
                             }
                         }
                     }
                 )
             )
-            alias = working / "target-alias"
-            alias.symlink_to(target)
-            target = alias
+            if restricted_reads:
+                alias = working / "target-alias"
+                alias.symlink_to(target)
+                target = alias
+        env = {**os.environ, "MCP_CONSOLE_TEST_PROTECTED_FILE": str(protected)}
+        if denied_alias:
+            (working / "secret").write_text("must not be readable")
+            alias = working / "secret-alias"
+            alias.symlink_to(working / "secret")
+            env["MCP_CONSOLE_TEST_DENIED_ALIAS"] = str(alias)
         result = subprocess.run(
             [binary, "sandbox", "--", str(target)],
             cwd=working,
-            env={**os.environ, "MCP_CONSOLE_TEST_PROTECTED_FILE": str(protected)},
+            env=env,
             capture_output=True,
             text=True,
             timeout=30,
@@ -64,12 +80,15 @@ def constructor(binary: Path, *, restricted_reads: bool) -> Transcript:
             result
         )
         assert protected.read_text() == "preserved"
-    return [
+    evidence = [
         {
             "target_constructor_contained": True,
             "restricted_system_read_grants": restricted_reads,
         }
     ]
+    if denied_alias:
+        evidence[0]["denied_read_through_alias"] = True
+    return evidence
 
 
 @requires(SANDBOX, NATIVE_FIXTURES)
@@ -82,3 +101,36 @@ def test_restricted_read_aliases_preserve_loader_and_containment(
     binary: Path,
 ) -> Transcript:
     return constructor(binary, restricted_reads=True)
+
+
+@requires(SANDBOX, NATIVE_FIXTURES)
+def test_denials_apply_through_aliases_before_main(binary: Path) -> Transcript:
+    return constructor(binary, restricted_reads=False, denied_alias=True)
+
+
+@requires(POSIX)
+def test_rejects_native_external_resolver_mode(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            "resolver:\n  sandbox:\n    filesystem:\n      kind: external-sandbox\n"
+        )
+        result = subprocess.run(
+            [binary, "serve"],
+            cwd=root,
+            input="",
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 1, result
+        assert result.stdout == "", result
+        assert "unknown field `kind`" in result.stderr, result
+        return [
+            {
+                "exit_code": result.returncode,
+                "stderr": result.stderr.replace(str(root), "<workspace>"),
+            }
+        ]
