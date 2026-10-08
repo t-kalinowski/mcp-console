@@ -81,6 +81,12 @@ NATIVE_FIXTURES = Requirement(
     sys.platform in {"darwin", "linux"},
     "requires macOS or Linux native fixture compilation and interposition",
 )
+NATIVE_LOADER_INSPECTION = Requirement(
+    "native loader inspection",
+    sys.platform == "darwin"
+    or (sys.platform == "linux" and shutil.which("ldd") is not None),
+    "requires macOS system loaders or Linux ldd",
+)
 PTHREAD_RUNTIME_PARKING = Requirement(
     "pthread runtime parking",
     sys.platform == "darwin",

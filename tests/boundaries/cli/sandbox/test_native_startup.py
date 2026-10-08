@@ -11,7 +11,12 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
+from support.requirements import (
+    NATIVE_FIXTURES,
+    NATIVE_LOADER_INSPECTION,
+    SANDBOX,
+    requires,
+)
 
 
 def constructor(
@@ -41,6 +46,25 @@ def constructor(
             )
             if sys.platform == "darwin":
                 reads.extend(["/System", "/Library"])
+            elif restricted_reads:
+                dependencies = subprocess.run(
+                    ["ldd", target],
+                    env={**os.environ, "LC_ALL": "C"},
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                # Include both the target's interpreter and ldd's tracer mapping.
+                # Toolchains may place them and shared libraries outside /usr/lib.
+                paths = [
+                    Path(path)
+                    for line in dependencies.stdout.splitlines()
+                    for path in line.split(" (", 1)[0].strip().split(" => ")
+                    if path.startswith("/")
+                ]
+                assert paths, dependencies
+                reads.extend(str(path.parent) for path in paths)
             config = working / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
             config.write_text(
@@ -101,7 +125,7 @@ def test_contains_target_loader_before_main(binary: Path) -> Transcript:
     return constructor(binary, restricted_reads=False)
 
 
-@requires(SANDBOX, NATIVE_FIXTURES)
+@requires(SANDBOX, NATIVE_FIXTURES, NATIVE_LOADER_INSPECTION)
 def test_restricted_read_aliases_preserve_loader_and_containment(
     binary: Path,
 ) -> Transcript:
