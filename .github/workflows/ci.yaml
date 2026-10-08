@@ -29,6 +29,8 @@ jobs:
     runs-on: windows-latest
     env:
       LC_ALL: C
+      # Packaging/source installs must reuse the same restored Cargo workspace.
+      MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source
     steps:
       - uses: actions/checkout@v7
       - name: Set Windows dependency directories
@@ -61,19 +63,62 @@ jobs:
           "week=$year-$week" >> $env:GITHUB_OUTPUT
           "image=$env:ImageOS" >> $env:GITHUB_OUTPUT
           Write-Output "Runner image: $env:ImageOS-$env:ImageVersion"
+      - name: Read native Windows sandbox source pin
+        id: sandbox-pin
+        run: |
+          git config --global core.longpaths true
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          scripts/stage-sandbox-runner.cmd --github-output "$env:GITHUB_OUTPUT"
+      - name: Check out native Windows sandbox source
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.sandbox-pin.outputs.repository }}
+          ref: ${{ steps.sandbox-pin.outputs.commit }}
+          path: .sandbox-runner-source
+          persist-credentials: false
+      - name: Restore native Windows sandbox source timestamps
+        id: sandbox-source-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/sandbox-source.tar
+          key: sandbox-source-v1-${{ steps.epoch.outputs.week }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.sandbox-pin.outputs.commit }}
+      - name: Prepare native Windows sandbox source archive
+        id: sandbox-source
+        run: |
+          if (Test-Path "$env:RUNNER_TEMP/sandbox-source.tar") {
+            tar -xf "$env:RUNNER_TEMP/sandbox-source.tar" -C .sandbox-runner-source
+          } else {
+            # Use the Unix timestamp archive convention; never cache .git.
+            tar -cf "$env:RUNNER_TEMP/sandbox-source.tar" --exclude=./.git --exclude=./codex-rs/target -C .sandbox-runner-source .
+          }
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $status = git -C .sandbox-runner-source status --porcelain --untracked-files=all
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($status) { throw "Sandbox source is not clean: $status" }
+          # A regenerated/evicted archive must not leave an exact build hit
+          # paired with different source mtimes on every subsequent run.
+          "archive-sha256=$((Get-FileHash "$env:RUNNER_TEMP/sandbox-source.tar" -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
       - name: Restore Windows build and dependency caches
         uses: actions/cache/restore@v6
         id: cache
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
             target/debug
             target/release
             ${{ runner.temp }}/console-windows-cache
-          key: windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**') }}
+          key: windows-v2-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/**') }}
           restore-keys: |
-            windows-v1-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-
+            windows-v2-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.arch }}-${{ steps.rust.outputs.cachekey }}-r-${{ steps.r.outputs.installed-r-version }}-
+      - name: Restore Windows Cargo downloads
+        id: cargo-downloads
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-downloads-v1-${{ steps.epoch.outputs.week }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', '.sandbox-runner-source/codex-rs/Cargo.lock') }}
+          restore-keys: |
+            cargo-downloads-v1-${{ steps.epoch.outputs.week }}-${{ runner.os }}-${{ runner.arch }}-
       - name: Install Windows runtime packages
         run: |
           uv python install 3.13 3.9
@@ -108,12 +153,68 @@ jobs:
       - name: Inventory Windows development prerequisites
         run: |
           scripts/preflight.cmd --json
+      - name: Restore native Windows sandbox outputs
+        id: sandbox-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            wheel-data/data
+            target/sandbox-runner-build.json
+          # Exact artifacts only: pin, pinned toolchain, target, OS and recipe.
+          key: sandbox-runner-v3-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-x86_64-pc-windows-msvc-recipe-${{ env.CI_BUILD_CACHE_VERSION }}-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml', 'sandbox-runner.json', 'scripts/stage-sandbox-runner', 'scripts/stage-sandbox-runner.cmd', 'scripts/checkout_workflow.py', 'scripts/checkout_windows.py', 'build.rs') }}
+      - name: Restore native Windows sandbox build intermediates
+        id: sandbox-build-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .sandbox-runner-source/codex-rs/target
+          # Compatible fallbacks still run Cargo, including later source builds.
+          key: sandbox-build-v${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-x86_64-pc-windows-msvc-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**') }}-${{ steps.sandbox-pin.outputs.commit }}-${{ steps.sandbox-source.outputs.archive-sha256 }}
+          restore-keys: |
+            sandbox-build-v${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-x86_64-pc-windows-msvc-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-${{ hashFiles('.sandbox-runner-source/codex-rs/Cargo.toml', '.sandbox-runner-source/codex-rs/Cargo.lock', '.sandbox-runner-source/codex-rs/.cargo/**') }}-
+            sandbox-build-v${{ env.CI_BUILD_CACHE_VERSION }}-${{ steps.epoch.outputs.week }}-${{ steps.epoch.outputs.image }}-${{ runner.os }}-${{ runner.arch }}-x86_64-pc-windows-msvc-${{ hashFiles('.sandbox-runner-source/codex-rs/rust-toolchain.toml') }}-
       - name: Stage native Windows sandbox
-        run: scripts/stage-sandbox-runner.cmd
-      - name: Provision native Windows sandbox acceptance
+        if: >-
+          steps.sandbox-cache.outputs.cache-hit != 'true' ||
+          steps.sandbox-build-cache.outputs.cache-hit != 'true'
+        run: scripts/stage-sandbox-runner.cmd --target x86_64-pc-windows-msvc
+      - name: Validate native Windows sandbox artifacts
         run: |
+          # Force build.rs to validate even an exact restore against the pin,
+          # native target and every required helper/license digest before use.
+          (Get-Item target/sandbox-runner-build.json).LastWriteTimeUtc = [DateTime]::UtcNow
           scripts/with-checkout.cmd cargo build --target-dir target
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      # Save only successful, validated builds, before provisioning or tests.
+      - name: Save native Windows sandbox source timestamps
+        if: steps.sandbox-source-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/sandbox-source.tar
+          key: ${{ steps.sandbox-source-cache.outputs.cache-primary-key }}
+      - name: Save native Windows sandbox outputs
+        if: steps.sandbox-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            wheel-data/data
+            target/sandbox-runner-build.json
+          key: ${{ steps.sandbox-cache.outputs.cache-primary-key }}
+      - name: Save native Windows sandbox build intermediates
+        if: steps.sandbox-build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .sandbox-runner-source/codex-rs/target
+          key: ${{ steps.sandbox-build-cache.outputs.cache-primary-key }}
+      - name: Save Windows Cargo downloads
+        if: steps.cargo-downloads.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ steps.cargo-downloads.outputs.cache-primary-key }}
+      - name: Provision native Windows sandbox acceptance
+        run: |
           # Hosted runtimes and the checkout live outside the sandbox's
           # standard read roots. Prepare their read ACLs on the trusted host.
           $ciReadRoots = @("$env:GITHUB_WORKSPACE/target", $env:UV_CACHE_DIR)
@@ -140,8 +241,6 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
             target/debug
             target/release
             ${{ runner.temp }}/console-windows-cache

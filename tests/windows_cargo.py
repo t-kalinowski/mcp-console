@@ -23,6 +23,7 @@ class WindowsCargo(unittest.TestCase):
             checkout = root / ("source-" + "a" * 45)
             checkout.mkdir()
             files = {
+                ".gitattributes": "* text eol=lf\n",
                 ".gitignore": "codex-rs/target/\n",
                 "LICENSE": "fixture license\n",
                 "NOTICE": "fixture notice\n",
@@ -61,7 +62,7 @@ path = "main.rs"
             for relative, contents in files.items():
                 path = checkout / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(contents)
+                path.write_text(contents, newline="\n")
             snapshot = (
                 checkout
                 / "codex-rs/snapshots"
@@ -69,7 +70,7 @@ path = "main.rs"
             )
             self.assertGreater(len(str(snapshot)), 260)
             snapshot.parent.mkdir()
-            snapshot.write_text("tracked fixture\n")
+            snapshot.write_text("tracked fixture\n", newline="\n")
             subprocess.run(
                 ["cargo", "generate-lockfile", "--offline"],
                 cwd=checkout / "codex-rs",
@@ -153,6 +154,67 @@ path = "main.rs"
                 timeout=180,
             )
             self.assertEqual(repeated.returncode, 0, repeated.stderr)
+            self.assertEqual(
+                {path: path.stat().st_mtime_ns for path in staged}, timestamps
+            )
+
+            # Rehearse CI's separate source-mtime and Cargo-target restores at
+            # the same path as a fresh checkout; neither archive contains .git.
+            source_archive = root / "source.tar"
+            build_archive = root / "build.tar"
+            for archive, extra in (
+                (
+                    source_archive,
+                    ["--exclude=./.git", "--exclude=./codex-rs/target", "."],
+                ),
+                (build_archive, ["codex-rs/target"]),
+            ):
+                subprocess.run(
+                    ["tar", "-cf", str(archive), "-C", str(checkout), *extra],
+                    check=True,
+                    capture_output=True,
+                )
+            build_outputs = list((checkout / "codex-rs/target").rglob("*.exe"))
+            previous = checkout.with_name("previous-source")
+            checkout.rename(previous)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.longpaths=true",
+                    "clone",
+                    str(previous),
+                    str(checkout),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            for archive in (source_archive, build_archive):
+                subprocess.run(
+                    ["tar", "-xf", str(archive), "-C", str(checkout)],
+                    check=True,
+                    capture_output=True,
+                )
+            # Tar can round timestamps; require Cargo to retain the restored
+            # executables, rather than requiring nanosecond archive precision.
+            build_times = {path: path.stat().st_mtime_ns for path in build_outputs}
+            restored = subprocess.run(
+                result.args[:2],
+                cwd=root,
+                env=dict(
+                    os.environ,
+                    MCP_CONSOLE_HOME=str(root / "home"),
+                    MCP_CONSOLE_SANDBOX_SOURCE=str(checkout),
+                ),
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            self.assertEqual(restored.returncode, 0, restored.stderr)
+            self.assertNotIn("Compiling", restored.stderr)
+            self.assertEqual(
+                {path: path.stat().st_mtime_ns for path in build_outputs}, build_times
+            )
             self.assertEqual(
                 {path: path.stat().st_mtime_ns for path in staged}, timestamps
             )
@@ -294,6 +356,45 @@ path = "main.rs"
                 finally:
                     running.communicate("exit\n", timeout=10)
                 self.assertEqual(running.returncode, 0)
+
+            # The workflow forces this existing public Cargo validation before
+            # saving or using exact cache hits, including incomplete restores.
+            record = root / "target/sandbox-runner-build.json"
+            for invalid in ("pin", "target", "digest", "json", "record", *artifacts):
+                with self.subTest(invalid=invalid):
+                    stage()
+                    manifest = json.loads(record.read_text())
+                    if invalid in ("pin", "target"):
+                        field = "source_revision" if invalid == "pin" else "target"
+                        manifest[field] = "incompatible"
+                        record.write_text(json.dumps(manifest))
+                    elif invalid == "digest":
+                        manifest["artifacts"][name] = "0" * 64
+                        record.write_text(json.dumps(manifest))
+                    elif invalid == "json":
+                        record.write_text("incomplete JSON")
+                    elif invalid == "record":
+                        record.unlink()
+                    else:
+                        directory = (
+                            "libexec"
+                            if invalid.endswith(".exe")
+                            else "share/licenses/mcp-console"
+                        )
+                        (root / "wheel-data/data" / directory / invalid).unlink()
+                    # Match CI's touch: a cached Console build must revalidate.
+                    if record.exists():
+                        os.utime(record, None)
+                    rejected = subprocess.run(
+                        arguments,
+                        cwd=root,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=180,
+                    )
+                    self.assertNotEqual(rejected.returncode, 0, rejected.stderr)
+                    self.assertIn("failed to run custom build command", rejected.stderr)
 
 
 if __name__ == "__main__":

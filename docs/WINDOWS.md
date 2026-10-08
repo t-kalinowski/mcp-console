@@ -120,6 +120,8 @@ Windows MCP input has one reader and a bounded 128 KiB queue shared between star
 Startup EOF cancels active Python inspection once the reader observes it; queue backpressure can delay EOF observation until input is consumed.
 After startup finishes, EOF is reported only after the queued MCP input is consumed, preserving final request responses.
 Windows uses a UTF-8 executable manifest, UTF-16 Python configuration, and native executable suffixes.
+On Windows x64, each Console process restores an absent or empty `PROCESSOR_ARCHITECTURE` to `AMD64` before runtime loading.
+This keeps R DuckDB preparation and teardown usable when an MCP client or configured environment filters ordinary Windows variables; nonempty supplied values are retained.
 The built-in worker uses the C runtime's inherited stdin descriptor because R subprocess helpers can clear the Windows standard-handle table.
 After R compatibility calls, Console restores that table from the live CRT descriptors so Python subprocesses can inherit stdio.
 R/Python interoperability markers synchronize the Win32 and CRT environment views before native R startup.
