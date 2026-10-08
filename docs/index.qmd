@@ -54,7 +54,7 @@ Inspect recorded sessions and use their Quarto source as the starting point for 
 
 Use Console from a Python client or through the R ellmer integration.
 
-[Python clients](PYTHON.md) · [R and ellmer](../r/README.md)
+[Python clients](PYTHON.md) · [Python API](python/index.html) · [R and ellmer](../r/README.md)
 :::
 :::
 
