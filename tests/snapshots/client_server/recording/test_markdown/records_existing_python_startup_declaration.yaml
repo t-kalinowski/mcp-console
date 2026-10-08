@@ -3,6 +3,8 @@ recorded_startup_requirements:
   r:
     - DBI
     - arrow
+    - dbplyr
+    - dplyr
     - duckdb
     - ggplot2
     - nanoarrow
