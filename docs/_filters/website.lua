@@ -9,7 +9,7 @@ function Pandoc(doc)
   return doc
 end
 
--- Source files and guides outside the website remain links into the repository.
+-- Link the package README to pkgdown; other files outside the site stay on GitHub.
 function Link(link)
   local path, suffix = link.target:match("^([^#?]+)(.*)$")
   if path and not path:match("^[/#]") and not path:match("^%a[%w+.-]*:") then
@@ -21,7 +21,11 @@ function Link(link)
     while source:match("[^/]+/%.%./") do
       source = source:gsub("[^/]+/%.%./", "")
     end
-    if not source:match("^docs/") or source:match("^docs/templates/") then
+    if source == "r/README.md" then
+      link.target = pandoc.path.make_relative(
+        pandoc.path.join({quarto.project.directory, "r/index.html"}), input_dir
+      ) .. suffix
+    elseif not source:match("^docs/") or source:match("^docs/templates/") then
       link.target = "https://github.com/t-kalinowski/mcp-console/blob/main/" .. source .. suffix
     end
   end

@@ -166,10 +166,14 @@ See the [timing comparison](benchmarks/transcript-concurrency.md) for the measur
 ## Documentation website
 
 The documentation website renders the Markdown guides in `docs/` directly, with a home page and getting-started page written in Quarto.
-The website filter derives page titles from the guides' first headings and points links outside `docs/` to the repository on GitHub.
+The website filter derives page titles from the guides' first headings, links the R package README to pkgdown, and points other links outside `docs/` to the repository on GitHub.
 Keep the Markdown guides usable on GitHub; they do not need website front matter.
 
-Install [Quarto](https://quarto.org/docs/get-started/), then run from the repository root:
+Install [Quarto](https://quarto.org/docs/get-started/), R, `pkgdown`, and the R package's dependencies, then run from the repository root:
+
+```r
+pak::pak(c("pkgdown", "local::r"))
+```
 
 ```sh
 quarto preview docs
@@ -182,8 +186,11 @@ quarto render docs
 python3 tests/website.py
 ```
 
-The check renders a fresh copy in a temporary directory and verifies page titles, navigation, search coverage, and local links and section anchors.
-Code examples are displayed without execution; building the website does not require R, Python packages, or a Console executable.
+The check renders a fresh copy in a temporary directory and verifies page titles, navigation, search coverage, and local links and section anchors, including the R package pages.
+Quarto's post-render script builds the `mcp.console` pkgdown site from `r/` into `docs/_site/r/`, alongside the guides in the same Pages artifact.
+The package site links back to the Quarto home page; its configuration lives in `r/_pkgdown.yml`.
+In local previews, pkgdown search results link to the configured GitHub Pages URL; direct page links stay local.
+Code examples are displayed without execution; building the website does not require Python packages, API credentials, or a Console executable.
 Generated files in `docs/_site/` and `docs/.quarto/` are ignored.
 Add new guides to the sidebar in `docs/_quarto.yml`; the render list includes top-level Markdown guides and benchmark pages, excluding task templates.
 

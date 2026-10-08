@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 from urllib.parse import unquote, urlsplit
+from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -52,6 +53,11 @@ class WebsiteTests(unittest.TestCase):
         shutil.copytree(
             ROOT / "docs", docs, ignore=shutil.ignore_patterns(".quarto", "_site")
         )
+        shutil.copytree(
+            ROOT / "r",
+            docs.parent / "r",
+            ignore=shutil.ignore_patterns("docs", "*.Rcheck", "*.tar.gz"),
+        )
         result = subprocess.run(
             ["quarto", "render", str(docs), "--to", "html"],
             capture_output=True,
@@ -87,12 +93,61 @@ class WebsiteTests(unittest.TestCase):
             self.assertIn((self.site / name).resolve(), self.pages)
         self.assertFalse((self.site / "templates").exists())
 
+    def test_r_package_subsite(self) -> None:
+        home = (self.site / "r/index.html").resolve()
+        reference = (self.site / "r/reference/console_tool.html").resolve()
+        self.assertIn(home, self.pages, "pkgdown home page is missing")
+        self.assertIn(reference, self.pages, "console_tool reference is missing")
+        self.assertIn("mcp.console", self.pages[home].title)
+        self.assertIn("console_tool", self.pages[reference].title)
+        sitemap = ElementTree.parse(self.site / "r/sitemap.xml")
+        urls = {
+            element.text
+            for element in sitemap.findall(
+                ".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
+            )
+        }
+        reference_url = (
+            "https://t-kalinowski.github.io/mcp-console/r/reference/console_tool.html"
+        )
+        self.assertIn(reference_url, urls)
+        search = json.loads((self.site / "r/search.json").read_text())
+        self.assertIn(reference_url, {entry["path"] for entry in search})
+        self.assertIn("arguments", self.pages[reference].ids)
+        self.assertIn("../../index.html", self.pages[reference].links)
+        self.assertIn(
+            "https://github.com/t-kalinowski/mcp-console/blob/main/r/R/console-tool.R",
+            self.pages[reference].links,
+        )
+        for name in (
+            "index.html",
+            "README.html",
+            "DEVELOPMENT.html",
+            "benchmarks/transcript-concurrency.html",
+        ):
+            with self.subTest(page=name):
+                page = self.site / name
+                destinations = {
+                    (page.parent / unquote(urlsplit(link).path)).resolve()
+                    for link in self.pages[page].links
+                    if not urlsplit(link).scheme and not urlsplit(link).netloc
+                }
+                self.assertIn(home, destinations)
+                self.assertNotIn(
+                    "https://github.com/t-kalinowski/mcp-console/blob/main/r/README.md",
+                    self.pages[page].links,
+                )
+
     def test_local_links_and_anchors_resolve(self) -> None:
         self.assertTrue(self.pages, "the website has no rendered pages")
         for path, page in self.pages.items():
             for link in page.links:
                 url = urlsplit(link)
-                if url.scheme or url.netloc:
+                same_site = (
+                    url.netloc == "t-kalinowski.github.io"
+                    and url.path.startswith("/mcp-console/")
+                )
+                if (url.scheme or url.netloc) and not same_site:
                     if url.netloc == "github.com" and url.path.startswith(
                         "/t-kalinowski/mcp-console/blob/main/"
                     ):
