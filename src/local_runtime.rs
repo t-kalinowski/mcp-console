@@ -79,6 +79,7 @@ impl Selection {
     #[cfg(any(unix, windows))]
     pub(crate) fn python(
         configured: Option<OsString>,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
         resolver: &crate::resolver::execution::PythonConfiguration,
         extension_directory: Option<PathBuf>,
         inspect_explicit: impl FnOnce(
@@ -96,7 +97,7 @@ impl Selection {
             extension_directory,
             |started| {
                 crate::resolver::execution::resolve_python_manifest(
-                    crate::worker_protocol::default_native_python_requirement_manifest(),
+                    requirements,
                     resolver,
                     None,
                     None,
@@ -174,6 +175,9 @@ impl Selection {
         let Some(managed) = managed.filter(|_| !DEFAULT_DUCKDB_EXTENSIONS.is_empty()) else {
             return Ok(Default::default());
         };
+        if !crate::resolver::execution::python_duckdb_available(resolver, managed, on_started)? {
+            return Ok(Default::default());
+        }
         let directory = self
             .duckdb_extension_directory()
             .ok_or("DuckDB extension preparation requires an absolute HOME at server startup")?;
