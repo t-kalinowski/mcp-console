@@ -546,7 +546,7 @@ def test_resolves_python_version_constraint_semantics(
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
-def test_falls_back_after_filtering_unsupported_python_versions(
+def test_rejects_system_fallback_after_filtering_unsupported_python_versions(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
@@ -581,20 +581,19 @@ def test_falls_back_after_filtering_unsupported_python_versions(
             },
         )
 
-        client.send(requirements={"python": ["py-yaml12"]})
-        assert last_result_text(client) == "[prepared]"
-        assert recorded_python_preferences(arguments) == [
-            "only-managed",
-            "only-system",
-        ]
-        assert recorded_tool_run_pythons(arguments) == ["3.11.14"]
+        result = client.send(requirements={"python": ["py-yaml12"]})
+        assert result.get(
+            "isError"
+        ) and "version resolution failed" in last_result_text(client), result
+        assert recorded_python_preferences(arguments) == ["only-managed"]
+        assert recorded_tool_run_pythons(arguments) == []
         return client.finish()
 
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
-def test_respects_system_python_preference_with_custom_install_directory(
+def test_ignores_system_python_preference_with_custom_install_directory(
     binary: Path,
     execution: Execution,
 ) -> Transcript:
@@ -638,11 +637,8 @@ def test_respects_system_python_preference_with_custom_install_directory(
 
         client.send(requirements={"python": ["py-yaml12"]})
         assert last_result_text(client) == "[prepared]"
-        assert recorded_python_preferences(arguments) == [
-            "only-managed",
-            "only-system",
-        ]
-        assert recorded_tool_run_pythons(arguments) == ["3.13.11"]
+        assert recorded_python_preferences(arguments) == ["only-managed"]
+        assert recorded_tool_run_pythons(arguments) == ["3.12.12"]
         return client.finish()
 
 

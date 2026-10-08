@@ -373,28 +373,19 @@ def cache_locations(
                 capture_output=True,
             )
             python = selected / "bin/python3"
-            site = Path(
-                subprocess.check_output(
-                    [
-                        python,
-                        "-I",
-                        "-c",
-                        "import site; print(site.getsitepackages()[0])",
-                    ],
-                    text=True,
-                ).strip()
-            )
             env = environment(tools)
             if git_dependency is not None:
                 env["PATH"] += os.pathsep + os.defpath
-            env["RETICULATE_PYTHON"] = str(python)
             env["XDG_CACHE_HOME"] = str(root / "cache-base")
             env["CACHE_TEST_ROOT"] = str(root)
             for name in CACHE_VARIABLES:
                 env[name] = str(root / "host" / name)
             config = root / ".agents/console/config.yaml"
             config.parent.mkdir(parents=True)
-            settings = {"languages": ["python"]} if git_dependency is not None else {}
+            settings = {
+                "languages": ["python"],
+                "python": {"managed": {"packages": []}},
+            }
             console_base = root / "cache-base/mcp-console"
             if source == "platform":
                 env.pop("XDG_CACHE_HOME")
@@ -431,7 +422,7 @@ def cache_locations(
             if source == "config":
                 settings["cache"] = "host"
             if source == "isolated":
-                settings = {"inherit_environment": False, "environment": dict(env)}
+                settings.update(inherit_environment=False, environment=dict(env))
             if source == "xdg_without_home":
                 env.pop("HOME", None)
             if source == "explicit_entries":
@@ -446,9 +437,7 @@ def cache_locations(
                 assert not console_root.exists()
             config.write_text(json.dumps(settings))
             expected = {
-                name: env[name]
-                if host or name == "PYTHONUSERBASE"
-                else str(console_root)
+                name: env[name] if host else str(console_root)
                 for name in CACHE_VARIABLES
             }
             env["CACHE_TEST_EXPECTED"] = json.dumps(expected)
@@ -464,8 +453,9 @@ def cache_locations(
                     "CACHE_TEST_EXPECTED"
                 ]
                 config.write_text(json.dumps(settings))
-            # Selected Python inspection runs in the resolver before the worker.
-            # The hook tests real cache permissions, without requiring downloads.
+            # Mutable existing Python runs with worker permissions. Exercise
+            # trusted preparation through its uv endpoint instead, reusing a
+            # preseeded interpreter so cache-policy tests need no downloads.
             # fmt: python
             probe = code(f"""
                 import errno
@@ -531,7 +521,36 @@ def cache_locations(
                         assert result.stdout == "42\\n", result
                         cache.joinpath("git-check-passed").write_text("checked")
                 """)
-            (site / "sitecustomize.py").write_text(probe)
+            probe_path = root / "cache-probe.py"
+            probe_path.write_text(probe)
+            uv = tools / "uv"
+            if uv.exists():
+                uv.unlink()
+            uv.write_text(
+                # fmt: python
+                code(f"""
+                    #!{sys.executable} -S
+                    import json
+                    import os
+                    import runpy
+                    import sys
+
+                    arguments = sys.argv[1:]
+                    if arguments[0] == "--no-config":
+                        os.execv({shutil.which("uv")!r}, [{shutil.which("uv")!r}, *arguments])
+                    assert arguments[arguments.index("--python-preference") + 1] == "only-managed", arguments
+                    if arguments[:2] == ["python", "list"]:
+                        major, minor, patch = sys.version_info[:3]
+                        print(json.dumps([{{"version": f"{{major}}.{{minor}}.{{patch}}", "version_parts": {{"major": major, "minor": minor, "patch": patch}}, "variant": "default", "implementation": "cpython"}}]))
+                    else:
+                        assert arguments[:2] == ["tool", "run"] and "--isolated" in arguments, arguments
+                        runpy.run_path({str(probe_path)!r})
+                        command = arguments[arguments.index("--") + 1:]
+                        assert command[0] == "python", command
+                        os.execv({str(python)!r}, [{str(python)!r}, *command[1:]])
+                    """)
+            )
+            uv.chmod(0o755)
             arguments = ["serve"]
             if source == "direct":
                 arguments.append("--no-sandbox")
@@ -554,7 +573,7 @@ def cache_locations(
                         from pathlib import Path
 
                         expected = json.loads(os.environ["CACHE_TEST_EXPECTED"])
-                        # Explicit Python uses its preinstalled DuckDB extensions.
+                        # The managed DuckDB cache case covers extension storage.
                         expected.pop("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY")
                         for name, value in expected.items():
                             actual = Path(os.environ[name])

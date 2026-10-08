@@ -21,7 +21,6 @@ def test_rejects_invalid_r_settings(binary: Path) -> Transcript:
             "r.vanilla=null",
             'r.vanilla="false"',
             "r=[]",
-            "r=null",
             "r.profiles=true",
         ):
             result = subprocess.run(

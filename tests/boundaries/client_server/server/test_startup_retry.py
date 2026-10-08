@@ -115,7 +115,7 @@ def test_retry_retains_preparation_startup_and_idle_output(
             python.symlink_to(sys.executable)
             restart = client.start_send(control="restart", timeout_ms=60_000)
             wait_for_checkpoint(
-                lambda: log if log.read_bytes() == preparation * 2 else None,
+                lambda: log if log.read_bytes() == preparation * 3 else None,
                 "retry preparation appends to the original session log",
                 root=log.parent,
                 client=client,
@@ -123,12 +123,14 @@ def test_retry_retains_preparation_startup_and_idle_output(
             client.receive(restart)
             repaired = restart["result"]
             assert not repaired.get("isError"), repaired
-            assert last_tool_text(client) == preparation.decode() + "\n[idle]", repaired
+            assert last_tool_text(client) == preparation.decode() * 2 + "\n[idle]", (
+                repaired
+            )
             startup.release()
             wait_for_idle_output(
                 client, startup_text + "\n[idle]", "repaired startup output"
             )
-            assert log.read_bytes() == preparation * 2 + startup_text.encode()
+            assert log.read_bytes() == preparation * 3 + startup_text.encode()
 
             client.expect(
                 "[done]",
@@ -147,7 +149,7 @@ def test_retry_retains_preparation_startup_and_idle_output(
                     """),
             )
             idle.release()
-            expected_raw = preparation * 2 + startup_text.encode() + idle_text.encode()
+            expected_raw = preparation * 3 + startup_text.encode() + idle_text.encode()
             wait_for_checkpoint(
                 lambda: log if log.read_bytes() == expected_raw else None,
                 "post-repair idle text is retained outside the completed cell",
@@ -379,7 +381,7 @@ def test_restart_repairs_missing_selected_python(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         python = root / "selected-python"
         environment = without_r(root)
         environment["RETICULATE_PYTHON"] = str(python)
@@ -450,11 +452,12 @@ def test_restart_repairs_failed_r_discovery(binary: Path) -> Transcript:
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_restart_refreshes_failed_inspection_evidence(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         python = root / "selected-python"
         attempts = root / "attempts"
         environment = without_r(root)
@@ -470,7 +473,14 @@ def test_restart_refreshes_failed_inspection_evidence(
 
         break_inspection("initial setup is broken")
         with McpClient(
-            binary, execution.serve("-c", "cache=host"), environment, root
+            binary,
+            execution.serve(
+                "-c",
+                "cache=host",
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+            ),
+            environment,
+            root,
         ) as client:
             client.initialize_and_list_tools()
             failure = client.send(python="raise AssertionError('must not run')")
@@ -492,6 +502,7 @@ def test_restart_refreshes_failed_inspection_evidence(
 
 @requires(POSIX, command("uv"))
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_retry_discards_failed_cell_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -499,6 +510,7 @@ def test_retry_discards_failed_cell_requirements(
         root = reached.path.parent
         (root / "python3").symlink_to(sys.executable)
         expose_uv(root)
+        environment.pop("RETICULATE_PYTHON", None)
         environment.update(
             {
                 "UV_PYTHON_PREFERENCE": "system",
@@ -507,7 +519,14 @@ def test_retry_discards_failed_cell_requirements(
             }
         )
         with McpClient(
-            binary, execution.serve("-c", "cache=host"), environment, root
+            binary,
+            execution.serve(
+                "-c",
+                "cache=host",
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+            ),
+            environment,
+            root,
         ) as client:
             reached.wait("initial discovery is blocked before cell admission")
             assert os.read(alive, 1) == b"1"
@@ -554,7 +573,7 @@ def retry_inspection(
     binary: Path, execution: Execution, *, interruptible: bool = False
 ) -> Iterator[tuple[McpClient, FifoCheckpoint, FifoCheckpoint, Path]]:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory)
+        root = Path(directory).resolve()
         python, site = isolated_python(root)
         python.unlink()
         attempts = root / "attempts"
@@ -567,7 +586,14 @@ def retry_inspection(
             closing(FifoCheckpoint.create(root / "reached")) as reached,
             closing(FifoCheckpoint.create(root / "release")) as release,
             McpClient(
-                binary, execution.serve("-c", "cache=host"), environment, root
+                binary,
+                execution.serve(
+                    "-c",
+                    "cache=host",
+                    *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+                ),
+                environment,
+                root,
             ) as client,
         ):
             client.initialize_and_list_tools()
@@ -602,6 +628,7 @@ def retry_inspection(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_retry_stdin_reaches_early_input_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -636,6 +663,7 @@ def test_retry_stdin_reaches_early_input_cell(
 
 @requires(POSIX, command("uv"))
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_requirements_retry_stdin_reaches_early_input_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -658,7 +686,14 @@ def test_requirements_retry_stdin_reaches_early_input_cell(
             closing(reached),
             closing(release),
             McpClient(
-                binary, execution.serve("-c", "cache=host"), environment, root
+                binary,
+                execution.serve(
+                    "-c",
+                    "cache=host",
+                    *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+                ),
+                environment,
+                root,
             ) as client,
         ):
             client.initialize_and_list_tools()
@@ -701,6 +736,7 @@ def test_requirements_retry_stdin_reaches_early_input_cell(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_cancelled_restart_shares_retry_and_preserves_next_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -973,6 +1009,7 @@ def cancelled_retry_preparation(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_interrupted_retry_can_be_restarted(
     binary: Path, execution: Execution
 ) -> Transcript:

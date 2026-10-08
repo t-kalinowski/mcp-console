@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 from support.assertions import last_result_text, wait_for_evaluation_output
@@ -335,7 +336,7 @@ def bare_runtime_environment(
         )
     )
     environment.pop("RETICULATE_UV", None)
-    environment.pop("RETICULATE_PYTHON", None)
+    environment["RETICULATE_PYTHON"] = sys.executable
     for name in ("R_LIBS", "R_LIBS_SITE", "R_LIBS_USER"):
         environment[name] = str(library)
     return environment

@@ -1,7 +1,10 @@
 # Resolver sandbox
 
 On macOS and Linux, local dependency preparation runs inside the native sandbox runner.
-The existing preparation process, including discovery, installation, package builds, Python inspection, and DuckDB extension installation, uses one resolver policy.
+Discovery, installation, package builds, managed Python inspection, and DuckDB extension installation use the resolver policy.
+Execution-based inspection of an explicitly selected R launcher or existing Python environment uses the captured worker policy, including existing Python site hooks.
+Selecting a path does not grant resolver permissions to executable code in that environment.
+Interpreter choices, startup package declarations, and per-language resolution policies belong to top-level `r` and `python`; see [configuration](CONFIGURATION.md).
 `serve --no-sandbox` uses ordinary host permissions.
 Windows retains its host resolver and Job lifecycle; its native runner does not support managed proxy routing.
 

@@ -202,6 +202,52 @@ struct Pending {
 const LABEL: &str = "local resolver";
 
 impl Preparation {
+    /// Inspect mutable interpreter code with the captured worker permissions.
+    pub(crate) fn inspect<T: serde::de::DeserializeOwned>(
+        operation: Operation,
+        mut settings: crate::settings::SandboxSettings,
+        no_sandbox: bool,
+        diagnostics: crate::process_output::Diagnostics,
+        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
+    ) -> Result<T, String> {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let mut command = std::process::Command::new(&executable);
+        if no_sandbox {
+            crate::settings::configure_environment(&mut command, &settings);
+        } else {
+            crate::settings::preserve_environment(
+                &mut settings,
+                [("RETICULATE_PYTHON".as_ref(), None)],
+            )?;
+            command
+                .args(["sandbox", "--exit-with-parent"])
+                .arg(std::process::id().to_string())
+                .args(["--settings-env", crate::settings::ENVIRONMENT, "--"])
+                .arg(&executable)
+                .env(
+                    crate::settings::ENVIRONMENT,
+                    serde_json::to_string(&settings).map_err(|error| error.to_string())?,
+                );
+        }
+        command.arg("resolve").env_remove("RETICULATE_PYTHON");
+        let (preparation, _) = Self::open_with(
+            command,
+            Arc::default(),
+            Input::Open {
+                mode: Mode::PythonOnly,
+            },
+            diagnostics,
+            on_started,
+        )?;
+        let result = preparation.call(operation, on_started);
+        let closed = preparation.close();
+        match (result, closed) {
+            (result, Ok(())) => result,
+            (Ok(_), Err(error)) => Err(error),
+            (Err(error), Err(close)) => Err(format!("{error}; {close}")),
+        }
+    }
+
     pub(crate) fn check_ready(&self) -> Result<(), String> {
         if let Some(error) = &*self
             .0

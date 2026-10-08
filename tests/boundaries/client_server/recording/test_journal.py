@@ -1196,7 +1196,8 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
                 event for event in events if event["event"] == "session_output"
             ]
             raw = (session / "outputs/session.log").read_bytes()
-            assert raw == b"preparation detail\n"
+            # Existing Python inspection and R discovery each own a process.
+            assert raw == b"preparation detail\n" * 2, raw
             assert session_output["retained_bytes"] == len(raw), session_output
             assert session_output["discarded_bytes"] == 0, session_output
             assert events[0]["dynamic_resolution"] is None, events[0]

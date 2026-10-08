@@ -17,15 +17,12 @@ stderr: >
 ---
 setting: r=[]
 stderr: >
-  configuration with CLI overrides: r: expected a mapping; see
-  docs/CONFIGURATION.md for the public format
----
-setting: r=null
-stderr: >
-  configuration with CLI overrides: r: expected a mapping; see
-  docs/CONFIGURATION.md for the public format
+  configuration with CLI overrides: r: expected an R mapping or path; use
+  null to clear R settings; see docs/CONFIGURATION.md for the public
+  format
 ---
 setting: r.profiles=true
 stderr: >
   configuration with CLI overrides: r: profiles: unknown field `profiles`,
-  expected `vanilla`; see docs/CONFIGURATION.md for the public format
+  expected one of `executable`, `vanilla`, `resolution`, `packages`; see
+  docs/CONFIGURATION.md for the public format

@@ -51,6 +51,9 @@ impl Client {
     ) -> Result<Environment, EnvironmentResolutionFailure> {
         self.ensure_startup(generation)
             .map_err(EnvironmentResolutionFailure::Operation)?;
+        environment
+            .validate_r_selection()
+            .map_err(EnvironmentResolutionFailure::Host)?;
         let RequirementDelta {
             duckdb_extensions,
             duckdb_changed,

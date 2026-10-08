@@ -1,0 +1,147 @@
+---
+path: r.executable
+value: ""
+stderr: |
+  r.executable: expected a nonempty path
+---
+path: r.packages
+value:
+  - ~
+stderr: >
+  configuration with CLI overrides: r: packages[0]: invalid type: null,
+  expected a string; see docs/CONFIGURATION.md for the public format
+---
+path: r.packages
+value:
+  - ""
+stderr: |
+  r.packages: R requirement strings must not be empty
+---
+path: r
+value:
+  resolution: disabled
+  packages:
+    - dplyr
+stderr: >
+  r.packages: nonempty packages require R resolution; use resolution:
+  startup_only to prepare them once
+---
+path: r.resolution
+value: sometimes
+stderr: >
+  configuration with CLI overrides: r: resolution: unknown variant
+  `sometimes`, expected one of `automatic`, `explicit`, `startup_only`,
+  `disabled`; see docs/CONFIGURATION.md for the public format
+---
+path: python
+value: {}
+stderr: >
+  configuration with CLI overrides: python: expected a path or exactly one
+  of managed, existing, first_available; clear python with null before
+  changing variants; see docs/CONFIGURATION.md for the public format
+---
+path: python.managed
+value: []
+stderr: >
+  configuration with CLI overrides: python: managed: expected managed
+  options as a mapping; see docs/CONFIGURATION.md for the public format
+---
+path: python.managed
+value: ~
+stderr: >
+  configuration with CLI overrides: python: managed: expected managed
+  options as a mapping; see docs/CONFIGURATION.md for the public format
+---
+path: r.packages
+value: ~
+stderr: >
+  configuration with CLI overrides: r: packages: invalid type: null,
+  expected a sequence; see docs/CONFIGURATION.md for the public format
+---
+path: python
+value:
+  managed: {}
+  existing: .venv
+stderr: >
+  configuration with CLI overrides: python: expected a path or exactly one
+  of managed, existing, first_available; clear python with null before
+  changing variants; see docs/CONFIGURATION.md for the public format
+---
+path: python.managed.version
+value: 3.13
+stderr: >
+  configuration with CLI overrides: python: managed: version: invalid
+  type: floating point `3.13`, expected a string; see
+  docs/CONFIGURATION.md for the public format
+---
+path: python.managed.version
+value: python3
+stderr: >
+  python.managed.version: Python version constraint `python3` is not
+  accepted: host-side managed resolution accepts version numbers and
+  supported PEP 440 version specifiers only
+---
+path: python.managed.resolution
+value: disabled
+stderr: >
+  python.managed.resolution: disabled is unsupported; choose an existing
+  environment or startup_only
+---
+path: python.managed.packages
+value:
+  - ""
+stderr: >
+  python.managed.packages: Python requirement `` is not accepted:
+  host-side managed resolution accepts named package requirements only
+---
+path: python.managed.packages
+value:
+  - https://example.com/package.whl
+stderr: >
+  python.managed.packages: Python requirement
+  `https://example.com/package.whl` is not accepted: host-side managed
+  resolution accepts named package requirements only
+---
+path: python
+value:
+  existing: .venv
+  packages:
+    - numpy
+stderr: >
+  configuration with CLI overrides: python: expected a path or exactly one
+  of managed, existing, first_available; clear python with null before
+  changing variants; see docs/CONFIGURATION.md for the public format
+---
+path: python.first_available
+value: []
+stderr: >
+  configuration with CLI overrides: python: first_available must not be
+  empty; see docs/CONFIGURATION.md for the public format
+---
+path: python.first_available
+value:
+  - active_venv
+  - active_venv
+stderr: >
+  configuration with CLI overrides: python: first_available permits only
+  one active_venv; see docs/CONFIGURATION.md for the public format
+---
+path: python.first_available
+value:
+  - managed: {}
+  - existing: .venv
+stderr: >
+  configuration with CLI overrides: python: first_available permits
+  existing paths, active_venv, and at most one managed candidate last;
+  nested chains are unsupported; see docs/CONFIGURATION.md for the public
+  format
+---
+path: python.first_available
+value:
+  - first_available:
+    - active_venv
+stderr: >
+  configuration with CLI overrides: python: first_available permits
+  existing paths, active_venv, and at most one managed candidate last;
+  nested chains are unsupported; see docs/CONFIGURATION.md for the public
+  format

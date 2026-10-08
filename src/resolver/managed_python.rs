@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -113,7 +112,11 @@ uv output:
             python.display()
         ));
     }
-    warm_matplotlib(&python, &resolver, &mut on_started)?;
+    if requirements.packages.iter().any(|package| {
+        crate::python_requirement::distribution_name(package).is_ok_and(|name| name == "matplotlib")
+    }) {
+        warm_matplotlib(&python, &resolver, &mut on_started)?;
+    }
     Ok(ManagedPython {
         python,
         requirements,
@@ -152,64 +155,13 @@ fn resolve_python_versions_with<F>(
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
 {
-    let configured_preference = configuration.python_preference();
-    let managed = OsStr::new("only-managed");
-    let system = OsStr::new("only-system");
-    match configured_preference {
-        None => {
-            let versions = run_uv_python_list(configuration, resolver, on_started, managed, true)?;
-            if versions.is_empty() {
-                return Ok(
-                    run_uv_python_list(configuration, resolver, on_started, system, false)?
-                        .rank(false),
-                );
-            }
-            Ok(versions.rank(true))
-        }
-        Some(preference) if preference == OsStr::new("managed") => {
-            let mut versions =
-                run_uv_python_list(configuration, resolver, on_started, managed, true)?;
-            versions.extend(run_uv_python_list(
-                configuration,
-                resolver,
-                on_started,
-                system,
-                false,
-            )?);
-            Ok(versions.rank(true))
-        }
-        Some(preference) if preference == OsStr::new("system") => {
-            let mut versions =
-                run_uv_python_list(configuration, resolver, on_started, managed, true)?;
-            versions.extend(run_uv_python_list(
-                configuration,
-                resolver,
-                on_started,
-                system,
-                false,
-            )?);
-            Ok(versions.rank(false))
-        }
-        Some(preference) => {
-            let prefer_managed = preference != system;
-            Ok(run_uv_python_list(
-                configuration,
-                resolver,
-                on_started,
-                preference,
-                prefer_managed,
-            )?
-            .rank(prefer_managed))
-        }
-    }
+    Ok(run_uv_python_list(configuration, resolver, on_started)?.rank())
 }
 
 fn run_uv_python_list<F>(
     configuration: &super::ManagedPythonResolverConfiguration,
     resolver: &ResolverProcess,
     on_started: &mut Option<F>,
-    preference: &OsStr,
-    managed: bool,
 ) -> Result<super::python_version::PythonVersions, String>
 where
     F: FnOnce(ResolverStopHandle) -> Result<(), String>,
@@ -228,7 +180,7 @@ where
             "json",
             "--python-preference",
         ])
-        .arg(preference)
+        .arg("only-managed")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -249,7 +201,7 @@ where
         ));
     }
     check_resolver_control(resolver, "managed Python version resolution")?;
-    super::python_version::PythonVersions::parse(&output.stdout, managed).map_err(|error| {
+    super::python_version::PythonVersions::parse(&output.stdout).map_err(|error| {
         format!("managed Python version resolver returned invalid output: {error}")
     })
 }
@@ -269,7 +221,14 @@ where
     let program = Path::new(uv);
     let mut command = resolver_command(program);
     command
-        .args(["tool", "run", "--isolated", "--python"])
+        .args([
+            "tool",
+            "run",
+            "--isolated",
+            "--python-preference",
+            "only-managed",
+            "--python",
+        ])
         .arg(resolved_python);
     if let Some(exclude_newer) = requirements.exclude_newer.as_deref() {
         command.args(["--exclude-newer", exclude_newer]);

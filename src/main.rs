@@ -153,7 +153,7 @@ fn run_server(
     resolver::cache::configure(
         cache,
         no_sandbox,
-        python.as_deref(),
+        python.as_ref(),
         &mut resolver,
         &mut policy,
     )?;

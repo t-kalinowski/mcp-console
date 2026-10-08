@@ -615,7 +615,7 @@ fn handle_semantic_event(
             }
             let import_resolution = request.import_resolution.clone();
             let response = match callbacks
-                .resolve_python(request, operation.python_preparation_extensions()?)
+                .resolve_python(request, operation.python_preparation_intent()?)
             {
                 Ok((managed, configuration)) => {
                     let python = managed.python().to_string_lossy().into_owned();
@@ -661,7 +661,7 @@ fn handle_semantic_event(
                 requirements,
                 managed,
                 configuration,
-                operation.python_preparation_extensions()?,
+                operation.python_preparation_intent()?.1,
             )?;
             if disposition == OldGenerationCommitDisposition::Commit
                 && let Some(resolution) = resolution

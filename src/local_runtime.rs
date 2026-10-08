@@ -3,6 +3,9 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+mod r_selection;
+mod selection;
+pub(crate) use selection::PythonChoice;
 
 #[cfg(any(unix, windows))]
 use crate::resolver::{ManagedPython, ResolverStopHandle};
@@ -14,7 +17,6 @@ pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["sqlite"];
 // SQL is not exposed on Windows, so startup does not load its native adapter.
 #[cfg(windows)]
 pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &[];
-pub(crate) const PREPARATION_DISABLED: &str = "Python requirements are unavailable in this non-managed Python session; install packages before starting the session";
 pub(crate) const RESOLUTION_UNAVAILABLE: &str =
     "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console";
 pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other than idle Python package or DuckDB extension additions require control: restart in a Python session without R";
@@ -23,8 +25,12 @@ pub(crate) const LIVE_PREPARATION_DISABLED: &str = "changed requirements other t
 #[serde(deny_unknown_fields)]
 pub(crate) struct Selection {
     pub(crate) r_home: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) installation: Option<RInstallation>,
     #[serde(default)]
     pub(crate) r_settings: crate::settings::R,
+    #[serde(default)]
+    pub(crate) python_resolution: crate::settings::Resolution,
     // In managed sessions, None leaves R declarations and selection hints lazy.
     pub(crate) python: Option<Python>,
 }
@@ -43,8 +49,12 @@ pub(crate) struct Python {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkerSelection {
     pub(crate) r: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) installation: Option<RInstallation>,
     #[serde(default)]
     pub(crate) r_settings: crate::settings::R,
+    #[serde(default)]
+    pub(crate) python_resolution: crate::settings::Resolution,
     pub(crate) python: Option<Python>,
 }
 
@@ -53,78 +63,6 @@ impl Selection {
         // An explicit but invalid R_HOME, or a broken discovered installation,
         // must stay on the R path and report its own failure.
         std::env::var_os("R_HOME").is_some() || crate::resolver::find_r_path_entry().is_some()
-    }
-
-    #[cfg(any(unix, windows))]
-    pub(crate) fn python(
-        configured: Option<OsString>,
-        resolver: &crate::resolver::execution::PythonConfiguration,
-        extension_directory: Option<PathBuf>,
-        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<(Self, Option<ManagedPython>), String> {
-        Self::python_with(
-            configured,
-            resolver.has_uv(),
-            extension_directory,
-            |started| {
-                crate::resolver::execution::resolve_python_manifest(
-                    crate::worker_protocol::default_native_python_requirement_manifest(),
-                    resolver,
-                    None,
-                    None,
-                    started,
-                )
-            },
-            |executable, started| {
-                crate::resolver::execution::inspect_native(resolver, executable, started)
-            },
-            on_started,
-        )
-    }
-
-    #[cfg(any(unix, windows))]
-    fn python_with(
-        configured: Option<OsString>,
-        has_uv: bool,
-        extension_directory: Option<PathBuf>,
-        resolve: impl FnOnce(
-            &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-        ) -> Result<ManagedPython, String>,
-        inspect: impl FnOnce(
-            &Path,
-            &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-        ) -> Result<crate::python::NativePython, String>,
-        on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
-    ) -> Result<(Self, Option<ManagedPython>), String> {
-        let explicit = configured.filter(|value| !value.is_empty() && value != "managed");
-        let (executable, managed) = if let Some(explicit) = &explicit {
-            let executable = crate::python::explicit_executable(explicit)?;
-            (executable, None)
-        } else {
-            if !has_uv {
-                return Err("Python sessions without R require `uv` on PATH; set python in .agents/console/config.yaml to use an existing environment".into());
-            }
-            let managed = resolve(on_started)?;
-            (managed.python().to_path_buf(), Some(managed))
-        };
-        // Preserve virtualenv symlinks: canonicalizing here would lose the
-        // environment even though its base executable has the same identity.
-        let executable = std::path::absolute(executable)
-            .map_err(|error| format!("cannot locate selected Python: {error}"))?;
-        let selected = inspect(&executable, on_started)?;
-        // Default and requested extensions share the host cache across generations.
-        let duckdb_extension_directory = managed.as_ref().and(extension_directory);
-        let selection = Self {
-            r_home: None,
-            r_settings: Default::default(),
-            python: Some(Python {
-                selected: Box::new(selected),
-                explicit,
-                managed: managed.is_some(),
-                duckdb_extension_directory,
-            }),
-        };
-        Ok((selection, managed))
     }
 
     pub(crate) fn python_only(&self) -> bool {
@@ -165,6 +103,9 @@ impl Selection {
     }
 
     pub(crate) fn configure(&self, command: &mut Command) -> Result<(), String> {
+        if let Some(installation) = &self.installation {
+            installation.configure(command)?;
+        }
         if let Some(home) = &self.r_home {
             // Preserve native filename bytes through R_HOME. The structured
             // Python handoff does not need to encode the R path as UTF-8.
@@ -174,7 +115,9 @@ impl Selection {
             ENVIRONMENT,
             serde_json::to_string(&WorkerSelection {
                 r: self.r_home.is_some(),
-                r_settings: self.r_settings,
+                installation: self.installation.clone(),
+                r_settings: self.r_settings.clone(),
+                python_resolution: self.python_resolution,
                 python: self.python.clone(),
             })
             .map_err(|error| format!("cannot encode runtime selections: {error}"))?,
@@ -215,9 +158,14 @@ impl Selection {
     }
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RInstallation {
     pub(crate) home: PathBuf,
     resources: [OsString; 3],
+    #[serde(default)]
+    identity: Vec<r_selection::FileIdentity>,
+    #[serde(default)]
+    resource_targets: Vec<PathBuf>,
 }
 
 impl RInstallation {
@@ -282,6 +230,8 @@ pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Erro
     }
     let installation = RInstallation {
         home,
+        identity: Vec::new(),
+        resource_targets: Vec::new(),
         resources: std::array::from_fn(|index| OsString::from_vec(values[index].to_vec())),
     };
     installation.configure_environment();
@@ -327,7 +277,15 @@ impl TemporaryDirectory {
         let Some(path) = self.0.take() else {
             return Ok(());
         };
-        match std::fs::remove_dir_all(&path) {
+        let remove = || {
+            // Native startup can create read-only directories, as renv does
+            // for its base-package view. Only unlock owned temporary
+            // directories after retirement; package symlinks stay untouched.
+            #[cfg(unix)]
+            unlock_temporary_directories(&path)?;
+            std::fs::remove_dir_all(&path)
+        };
+        match remove() {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!(
@@ -336,6 +294,26 @@ impl TemporaryDirectory {
             )),
         }
     }
+}
+
+#[cfg(unix)]
+fn unlock_temporary_directories(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    std::fs::set_permissions(
+        path,
+        std::fs::Permissions::from_mode(metadata.permissions().mode() | 0o700),
+    )?;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            unlock_temporary_directories(&entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 impl Drop for TemporaryDirectory {
@@ -351,6 +329,8 @@ impl Drop for TemporaryDirectory {
 pub(crate) fn r_installation() -> Result<RInstallation, Box<dyn std::error::Error>> {
     let home = harp::command::r_home_setup()?;
     let installation = RInstallation {
+        identity: Vec::new(),
+        resource_targets: Vec::new(),
         resources: ["share", "include", "doc"].map(|name| home.join(name).into_os_string()),
         home,
     };

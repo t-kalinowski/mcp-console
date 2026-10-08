@@ -29,8 +29,9 @@ mod platform;
 
 pub(crate) use configuration::ClientConfiguration;
 use configuration::RResolver;
+pub(crate) use environment::requirements::validate_r_requirements;
+pub(crate) use environment::{Declaration, Requirements, RequirementsAction};
 use environment::{Environment, PythonEnvironment, RuntimeRResolutionFailure};
-pub(crate) use environment::{Requirements, RequirementsAction};
 use evaluation::Evaluation;
 use lifecycle::{LifecycleControl, OldGenerationCommitDisposition, WorkerGeneration};
 pub(crate) use output::{Content, Response, ResponseDelivery};
@@ -38,6 +39,8 @@ use output::{OutputTape, SendFailure};
 
 pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "tidyverse",
+    "dplyr",
+    "dbplyr",
     "reticulate",
     "DBI",
     "duckdb",
@@ -546,10 +549,10 @@ impl WorkerCallbacks {
     fn resolve_python(
         &self,
         request: crate::worker_protocol::PythonResolveRequest,
-        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
+        intent: (bool, Option<std::collections::BTreeSet<String>>),
     ) -> Result<PythonCandidate, String> {
         self.client
-            .resolve_runtime_python(self.generation.clone(), request, duckdb_extensions)
+            .resolve_runtime_python(self.generation.clone(), request, intent.0, intent.1)
     }
 
     fn fail_python_activation(&self) -> Result<OldGenerationCommitDisposition, String> {

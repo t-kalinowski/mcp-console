@@ -2502,7 +2502,10 @@ def test_preserves_explicit_python_selection(
             for control in ({}, {"control": "restart"}):
                 result = client.send(**control, requirements={"python": ["py-yaml12"]})
                 assert result["isError"], result
-                assert "non-managed Python session" in last_result_text(client)
+                assert (
+                    "Python resolution is disabled by configuration"
+                    in last_result_text(client)
+                )
                 client.expect("42\n", python="assert id(identity) == identity_id; 42")
             return client.finish()
 
@@ -3103,6 +3106,8 @@ def test_reports_direct_storage_retirement_failure(
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             venv = workspace / "environment"
+            storage_parent = workspace / "storage-parent"
+            storage_parent.mkdir()
             subprocess.run(
                 [sys.executable, "-m", "venv", "--without-pip", venv],
                 check=True,
@@ -3130,6 +3135,7 @@ def test_reports_direct_storage_retirement_failure(
                 restricted.mkdir()
                 (restricted / "retained.txt").write_text("private contents")
                 restricted.chmod(0)
+                temporary.parent.chmod(0o555)
                 """)
             if stage == "startup failure":
                 # fmt: python
@@ -3144,6 +3150,7 @@ def test_reports_direct_storage_retirement_failure(
                         restricted.mkdir()
                         (restricted / "retained.txt").write_text("private contents")
                         restricted.chmod(0)
+                        temporary.parent.chmod(0o555)
                         os._exit(47)
                     """)
                 (site / "sitecustomize.py").write_text(hook)
@@ -3151,7 +3158,10 @@ def test_reports_direct_storage_retirement_failure(
                 with McpClient(
                     binary,
                     execution.serve(),
-                    selected_environment(virtualenv_python(venv).parent),
+                    dict(
+                        selected_environment(virtualenv_python(venv).parent),
+                        TMPDIR=str(storage_parent),
+                    ),
                     workspace,
                 ) as client:
                     client.initialize_and_list_tools()
@@ -3195,11 +3205,13 @@ def test_reports_direct_storage_retirement_failure(
                                 str(temporary), "<worker temporary>"
                             )
             finally:
+                storage_parent.chmod(0o700)
                 marker = workspace / "worker-temporary"
                 if marker.exists():
                     temporary = Path(marker.read_text())
                     if temporary.exists():
                         temporary.chmod(0o700)
-                        (temporary / "restricted").chmod(0o700)
+                        if (temporary / "restricted").exists():
+                            (temporary / "restricted").chmod(0o700)
                         shutil.rmtree(temporary)
     return records

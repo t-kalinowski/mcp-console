@@ -96,7 +96,7 @@ pub(super) struct Requirements {
     /// The complete declaration is in structuredContent.requirements.
     /// add (default) accumulates up to 64 entries per language per call; bare {} is invalid.
     /// set replaces the whole declaration without defaults; omitted lists/constraints are empty,
-    /// even with only action supplied. reset restores startup defaults and rejects payload fields.
+    /// even with only action supplied. reset restores configured startup defaults and rejects payload fields.
     /// Changed set/reset with a live worker require control="restart"; unchanged declarations are
     /// no-ops. set accepts the complete accumulated manifest without add's per-list limit.
     #[serde(default)]

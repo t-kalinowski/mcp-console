@@ -12,10 +12,9 @@ pub(crate) struct ManagedPythonResolverConfiguration {
 
 impl ManagedPythonResolverConfiguration {
     pub(crate) fn capture() -> Self {
-        let mut environment = std::env::vars_os()
+        let environment = std::env::vars_os()
             .filter(|(name, _)| is_uv_environment_variable(name) && name != "UV_OFFLINE")
             .collect::<BTreeMap<_, _>>();
-        normalize_python_preference(&mut environment);
         let explicit_uv = std::env::var_os("RETICULATE_UV");
         let reticulate_uv = explicit_uv
             .clone()
@@ -58,12 +57,6 @@ impl ManagedPythonResolverConfiguration {
             .ok_or_else(|| "managed Python resolver has no reticulate `uv` selection".to_string())
     }
 
-    pub(super) fn python_preference(&self) -> Option<&OsStr> {
-        self.environment.iter().find_map(|(name, value)| {
-            (name.as_os_str() == OsStr::new("UV_PYTHON_PREFERENCE")).then_some(value.as_os_str())
-        })
-    }
-
     pub(crate) fn has_uv(&self) -> bool {
         self.uv.is_some()
     }
@@ -89,7 +82,11 @@ impl ManagedPythonResolverConfiguration {
         command
             .envs(self.environment.iter())
             .env("RETICULATE_UV", uv)
-            .env_remove("UV_OFFLINE");
+            .env_remove("UV_OFFLINE")
+            .env_remove("UV_PYTHON")
+            .env_remove("UV_NO_MANAGED_PYTHON")
+            .env_remove("UV_MANAGED_PYTHON")
+            .env("UV_PYTHON_PREFERENCE", "only-managed");
     }
 
     pub(super) fn configure_uv_bootstrap(&self, command: &mut std::process::Command) {
@@ -119,45 +116,6 @@ impl ManagedPythonResolverConfiguration {
         }
         Ok(())
     }
-}
-
-fn normalize_python_preference(environment: &mut BTreeMap<OsString, OsString>) {
-    let managed_name = OsStr::new("UV_MANAGED_PYTHON");
-    let system_name = OsStr::new("UV_NO_MANAGED_PYTHON");
-    let managed = uv_flag_value(environment, managed_name);
-    let system = uv_flag_value(environment, system_name);
-    if managed == Some(false) {
-        environment.remove(managed_name);
-    }
-    if system == Some(false) {
-        environment.remove(system_name);
-    }
-    if environment.contains_key(OsStr::new("UV_PYTHON_PREFERENCE")) {
-        return;
-    }
-    let (name, preference) = if managed == Some(true) && !environment.contains_key(system_name) {
-        (managed_name, "only-managed")
-    } else if system == Some(true) && !environment.contains_key(managed_name) {
-        (system_name, "only-system")
-    } else {
-        return;
-    };
-    environment.remove(name);
-    environment.insert(
-        OsString::from("UV_PYTHON_PREFERENCE"),
-        OsString::from(preference),
-    );
-}
-
-fn uv_flag_value(environment: &BTreeMap<OsString, OsString>, name: &OsStr) -> Option<bool> {
-    environment
-        .get(name)
-        .and_then(|value| value.to_str())
-        .and_then(|value| match value.to_ascii_lowercase().as_str() {
-            "1" | "true" | "t" | "yes" | "y" | "on" => Some(true),
-            "0" | "false" | "f" | "no" | "n" | "off" => Some(false),
-            _ => None,
-        })
 }
 
 fn is_uv_environment_variable(name: &OsStr) -> bool {

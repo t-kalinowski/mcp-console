@@ -31,6 +31,9 @@ pub fn load(path: Option<&Path>, overrides: &[String]) -> Result<Option<Value>, 
     } else {
         None
     };
+    if let Some(value) = &mut value {
+        expand_r_shorthand(value);
+    }
     for argument in overrides {
         let (key, source) = argument
             .split_once('=')
@@ -45,12 +48,23 @@ pub fn load(path: Option<&Path>, overrides: &[String]) -> Result<Option<Value>, 
         for key in keys.into_iter().rev() {
             overlay = Value::Object(Map::from_iter([(key.to_string(), overlay)]));
         }
+        expand_r_shorthand(&mut overlay);
         merge(
             value.get_or_insert_with(|| Value::Object(Map::new())),
             overlay,
         );
     }
     Ok(value)
+}
+
+// The R path is syntax sugar for a mapping at each input boundary, before
+// generic recursive merging. Null still replaces the complete R mapping.
+fn expand_r_shorthand(value: &mut Value) {
+    if let Some(r) = value.get_mut("r")
+        && r.is_string()
+    {
+        *r = serde_json::json!({"executable": r.take()});
+    }
 }
 
 /// Objects merge recursively; arrays, scalars, and null replace the old value.

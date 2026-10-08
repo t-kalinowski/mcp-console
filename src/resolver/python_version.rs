@@ -16,7 +16,6 @@ struct Candidate {
     minor: u64,
     patch: u64,
     prerelease: bool,
-    managed: bool,
     latest_patch: bool,
 }
 
@@ -36,29 +35,21 @@ struct VersionParts {
 }
 
 impl PythonVersions {
-    pub(super) fn parse(output: &[u8], managed: bool) -> Result<Self, String> {
+    pub(super) fn parse(output: &[u8]) -> Result<Self, String> {
         let rows = serde_json::from_slice::<Vec<UvPython>>(output)
             .map_err(|error| format!("uv returned invalid Python inventory JSON: {error}"))?;
         let mut versions = BTreeSet::new();
         let candidates = rows
             .into_iter()
-            .filter_map(|row| Candidate::from_uv(row, managed))
+            .filter_map(Candidate::from_uv)
             .filter(|candidate| versions.insert(candidate.version.clone()))
             .collect::<Vec<_>>();
         Ok(Self { candidates })
     }
 
-    pub(super) fn is_empty(&self) -> bool {
-        self.candidates.is_empty()
-    }
-
-    pub(super) fn extend(&mut self, other: Self) {
-        self.candidates.extend(other.candidates);
-    }
-
-    pub(super) fn rank(mut self, prefer_managed: bool) -> Self {
+    pub(super) fn rank(mut self) -> Self {
         if !self.candidates.is_empty() {
-            rank(&mut self.candidates, prefer_managed);
+            rank(&mut self.candidates);
         }
         self
     }
@@ -116,7 +107,7 @@ Available Python versions found: {available}
 }
 
 impl Candidate {
-    fn from_uv(row: UvPython, managed: bool) -> Option<Self> {
+    fn from_uv(row: UvPython) -> Option<Self> {
         if row.variant != "default" || row.implementation != "cpython" {
             return None;
         }
@@ -134,7 +125,6 @@ impl Candidate {
             minor,
             patch,
             prerelease,
-            managed,
             latest_patch: false,
         })
     }
@@ -145,8 +135,8 @@ impl Candidate {
     }
 }
 
-fn rank(candidates: &mut [Candidate], prefer_managed: bool) {
-    candidates.sort_by(|left, right| initial_order(left, right, prefer_managed));
+fn rank(candidates: &mut [Candidate]) {
+    candidates.sort_by(initial_order);
     let mut seen = BTreeSet::new();
     for candidate in candidates.iter_mut() {
         candidate.latest_patch = seen.insert((candidate.major, candidate.minor));
@@ -159,35 +149,20 @@ fn rank(candidates: &mut [Candidate], prefer_managed: bool) {
         .or_else(|| candidates.iter().map(|candidate| candidate.minor).max())
         .expect("ranked Python candidates should not be empty");
     let preferred_minor = i128::from(latest_minor) - 2;
-    candidates.sort_by(|left, right| final_order(left, right, preferred_minor, prefer_managed));
+    candidates.sort_by(|left, right| final_order(left, right, preferred_minor));
 }
 
-fn source_order(left: &Candidate, right: &Candidate, prefer_managed: bool) -> Ordering {
-    if prefer_managed {
-        right.managed.cmp(&left.managed)
-    } else {
-        left.managed.cmp(&right.managed)
-    }
-}
-
-fn initial_order(left: &Candidate, right: &Candidate, prefer_managed: bool) -> Ordering {
+fn initial_order(left: &Candidate, right: &Candidate) -> Ordering {
     left.prerelease
         .cmp(&right.prerelease)
-        .then_with(|| source_order(left, right, prefer_managed))
         .then_with(|| right.major.cmp(&left.major))
         .then_with(|| right.minor.cmp(&left.minor))
         .then_with(|| right.patch.cmp(&left.patch))
 }
 
-fn final_order(
-    left: &Candidate,
-    right: &Candidate,
-    preferred_minor: i128,
-    prefer_managed: bool,
-) -> Ordering {
+fn final_order(left: &Candidate, right: &Candidate, preferred_minor: i128) -> Ordering {
     left.prerelease
         .cmp(&right.prerelease)
-        .then_with(|| source_order(left, right, prefer_managed))
         .then_with(|| right.latest_patch.cmp(&left.latest_patch))
         .then_with(|| {
             right

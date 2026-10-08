@@ -74,8 +74,8 @@ Rendering requires R on the render host even when the original Console session h
 SQL chunks need a user-supplied DBI connection.
 
 Front matter supplies dependency declarations, not a lockfile.
-R-present sessions combine built-in defaults and recorded declarations, which need not match every successfully accepted or automatically inferred package.
-Managed Python-only sessions also track accepted Python environments and omit rejected candidates; neither mode pins the complete environment or Python version.
+Sessions use the captured configured startup declaration and recorded additions, which need not match every successfully accepted or automatically inferred package.
+Managed Python sessions also track accepted Python environments and omit rejected candidates; neither mode pins the complete environment or Python version.
 Bare sessions omit managed defaults.
 
 Committed `set`/`reset` operations create requirement boundaries and disable QMD evaluation: one header manifest cannot reproduce cells that used incompatible historical environments.

@@ -544,7 +544,9 @@ fn native_probe() {
         .expect("configure native worker environment");
         let mut runtime = crate::python::Runtime::new(crate::local_runtime::WorkerSelection {
             r_settings: Default::default(),
+            python_resolution: Default::default(),
             r: false,
+            installation: None,
             python: Some(crate::local_runtime::Python {
                 selected: Box::new(initial.clone()),
                 explicit: None,

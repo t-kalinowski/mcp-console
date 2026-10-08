@@ -448,7 +448,7 @@ def test_python_home_expansion_requires_absolute_home(binary: Path) -> Transcrip
             )
             assert result.returncode == 1 and result.stdout == "", result
             assert (
-                "configured Python home expansion requires an absolute HOME"
+                "python.existing: home expansion requires an absolute HOME"
                 in result.stderr
             )
             records.append({"HOME": home, "stderr": result.stderr})

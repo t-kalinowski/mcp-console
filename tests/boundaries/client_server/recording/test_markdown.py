@@ -18,6 +18,68 @@ from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
 
 
+@requires(POSIX, command("R"), command("ir"), command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_records_configured_startup_requirements(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary).resolve()
+        environment, _ = r_test_environment()
+        environment.pop("RETICULATE_PYTHON", None)
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c",
+                "r.packages=[]",
+                "-c",
+                "r.resolution=explicit",
+                "-c",
+                "python.managed.packages=[six]",
+                "-c",
+                "python.managed.resolution=explicit",
+            ),
+            environment,
+            workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            # fmt: python
+            source = code("""
+                import six
+
+                print("configured")
+                """)
+            client.expect("configured\n", python=source)
+            inspection = client.send(requirements={"action": "get"})[
+                "structuredContent"
+            ]
+            declaration = inspection["requirements"]
+            assert declaration["r"] == [] and declaration["python"] == ["six"], (
+                declaration
+            )
+            transcript = client.finish()
+        session = next((workspace / ".agents/console/sessions").iterdir())
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        recorded = [
+            event["startup_requirements"]
+            for event in events
+            if event.get("startup_requirements") is not None
+        ]
+        assert recorded and all(
+            declaration == inspection["startup_requirements"]
+            for declaration in recorded
+        ), recorded
+        quarto = (session / "transcript.qmd").read_text()
+        assert "  packages: []\n  python-packages:\n    - six\n---\n" in quarto, quarto
+        return TranscriptWithCompanions(
+            transcript=transcript,
+            companions={"qmd": quarto.replace(str(workspace), "<workspace>")},
+        )
+
+
 @requires(SQL)
 @executions(DIRECT, SANDBOXED)
 def test_records_real_mixed_language_session(

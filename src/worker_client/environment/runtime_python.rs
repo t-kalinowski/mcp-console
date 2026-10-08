@@ -12,6 +12,7 @@ impl Client {
         &self,
         generation: WorkerGeneration,
         request: crate::worker_protocol::PythonResolveRequest,
+        explicit_preparation: bool,
         duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     ) -> Result<super::super::PythonCandidate, String> {
         self.ensure_generation(&generation)?;
@@ -30,6 +31,23 @@ impl Client {
             .as_ref()
             .ok_or_else(|| "managed Python environment is unavailable".to_string())?
             .managed_parts()?;
+        if !environment.python_policy().automatic() && !explicit_preparation {
+            if request.requirements.clone().normalized() != *current.requirements()
+                || request.retained_requirements.clone().normalized() != *current.requirements()
+            {
+                return Err(environment.python_policy().reject("runtime Python"));
+            }
+            let inspected = environment
+                .local_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.python.as_ref())
+                .ok_or("accepted Python inspection is unavailable")?
+                .selected
+                .as_ref()
+                .clone();
+            return Ok((current.clone(), inspected));
+        }
+        environment.validate_r_selection()?;
         let current = current.clone();
         let crate::worker_protocol::PythonResolveRequest {
             requirements,
@@ -175,6 +193,10 @@ impl Client {
         if environment.custom_worker {
             return Err("Python requirements are unavailable with a custom worker".to_string());
         }
+        if !environment.python_policy().automatic() {
+            return Err(environment.python_policy().reject("runtime Python version"));
+        }
+        environment.validate_r_selection()?;
         let (_, resolver) = environment
             .python
             .as_ref()

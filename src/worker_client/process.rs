@@ -242,7 +242,21 @@ impl WorkerRuntime {
         }
         command.env(
             "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
-            if dynamic_resolution { "1" } else { "0" },
+            if dynamic_resolution
+                && local_runtime.is_none_or(|runtime| runtime.r_settings.resolution.automatic())
+            {
+                "1"
+            } else {
+                "0"
+            },
+        );
+        command.env(
+            "MCP_CONSOLE_PYTHON_AUTOMATIC_RESOLUTION",
+            if local_runtime.is_none_or(|runtime| runtime.python_resolution.automatic()) {
+                "1"
+            } else {
+                "0"
+            },
         );
         if let Some(languages) = languages {
             languages.configure(&mut command);

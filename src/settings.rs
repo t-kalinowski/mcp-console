@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+mod runtime;
 mod sandbox;
+pub(crate) use runtime::{Candidate, ManagedPython, Python, R, Resolution};
 pub(crate) mod startup;
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
@@ -90,8 +92,8 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 struct Project {
     startup: Option<startup::Startup>,
     cache: Option<Cache>,
-    python: Option<std::path::PathBuf>,
-    #[serde(deserialize_with = "sandbox::supplied_mapping")]
+    python: Option<Python>,
+    #[serde(deserialize_with = "runtime::r")]
     r: Option<R>,
     languages: Option<Vec<crate::cell::Language>>,
     #[serde(default = "inherit_by_default")]
@@ -102,12 +104,6 @@ struct Project {
     sandbox: Option<sandbox::Sandbox>,
     #[serde(deserialize_with = "sandbox::mapping")]
     resolver: Resolver,
-}
-
-#[derive(Clone, Copy, Default, serde::Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct R {
-    pub vanilla: bool,
 }
 
 fn inherit_by_default() -> bool {
@@ -145,7 +141,7 @@ fn environment<'de, D: serde::Deserializer<'de>>(
 pub(crate) struct Captured {
     pub startup: Option<startup::Startup>,
     pub cache: Option<Cache>,
-    pub python: Option<std::path::PathBuf>,
+    pub python: Option<Python>,
     pub r: Option<R>,
     pub languages: Option<crate::cell::Languages>,
     pub source: Option<String>,
@@ -188,7 +184,7 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
     } else {
         "configuration with CLI overrides".into()
     };
-    let project: Project = serde_path_to_error::deserialize(
+    let mut project: Project = serde_path_to_error::deserialize(
         value.unwrap_or_else(|| serde_json::json!({})),
     )
     .map_err(|error| format!("{name}: {error}; see docs/CONFIGURATION.md for the public format"))?;
@@ -223,6 +219,12 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
             Ok(languages)
         })
         .transpose()?;
+    if let Some(r) = &mut project.r {
+        r.capture()?;
+    }
+    if let Some(python) = &mut project.python {
+        python.capture()?;
+    }
     let sandbox_requested = project.sandbox.is_some();
     let resolver_sandbox_requested = project.resolver.sandbox.is_some();
     if cfg!(windows) && resolver_sandbox_requested {
@@ -273,25 +275,7 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
         startup: project.startup,
         cache: project.cache,
         languages,
-        python: project
-            .python
-            .map(|path| {
-                if path.as_os_str().is_empty() {
-                    return Err("python must name an executable; omit it to use uv".into());
-                }
-                let path = if let Ok(relative) = path.strip_prefix("~") {
-                    let home = std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .filter(|home| home.is_absolute())
-                        .ok_or("configured Python home expansion requires an absolute HOME")?;
-                    home.join(relative)
-                } else {
-                    path
-                };
-                std::path::absolute(path)
-                    .map_err(|error| format!("cannot locate configured Python: {error}"))
-            })
-            .transpose()?,
+        python: project.python,
         source: configured.then_some(name),
         policy,
         resolver,

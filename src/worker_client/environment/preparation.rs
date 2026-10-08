@@ -190,6 +190,7 @@ impl Client {
                 r_changed,
             } = delta;
             let managed_r = if r_changed {
+                environment.validate_r_selection()?;
                 match self.resolve_managed_r(generation, &environment.r_resolver, r_requirements) {
                     Ok(managed_r) => Some(managed_r),
                     Err(failure) => {

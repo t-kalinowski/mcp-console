@@ -70,12 +70,14 @@ def test_connection_closure_joins_preparation_owner(binary: Path) -> Transcript:
                 ),
                 "MCP_CONSOLE_TEST_REAP_PID": str(root / "resolver-pid"),
                 "MCP_CONSOLE_TEST_REAP_DONE": str(root / "reaped"),
+                "MCP_CONSOLE_TEST_REAP_ARMED": str(root / "armed-close"),
             }
         )
         with McpClient(binary, DIRECT.serve(), environment, root) as client:
             client.initialize_and_list_tools()
             client.send(python="42")
             assert last_result_text(client) == "42\n"
+            (root / "armed-close").touch()
             client.finish()
             assert (root / "resolver-pid").exists(), (
                 "resolver did not acknowledge closure"
@@ -121,6 +123,7 @@ def closes_stalled_preparation(binary: Path, *, deny_kill: bool) -> Transcript:
                 "MCP_CONSOLE_TEST_REAP_PID": str(root / "resolver-pid"),
                 "MCP_CONSOLE_TEST_REAP_DONE": str(root / "reaped"),
                 "MCP_CONSOLE_TEST_REAP_BLOCK_CLOSE": str(blocked.path),
+                "MCP_CONSOLE_TEST_REAP_ARMED": str(root / "armed-close"),
             }
         )
         if deny_kill:
@@ -130,6 +133,7 @@ def closes_stalled_preparation(binary: Path, *, deny_kill: bool) -> Transcript:
             try:
                 client.initialize_and_list_tools()
                 client.expect("42\n", python="42")
+                (root / "armed-close").touch()
                 client.stdin.close()
                 blocked.wait("preparation received Close and remains alive")
                 identity = capture_process_identity(
@@ -241,6 +245,7 @@ def retains_failed_preparation(binary: Path, *, retry_on_close: bool) -> Transcr
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_invalid_early_cell_does_not_poison_default_startup(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -274,7 +279,14 @@ def test_invalid_early_cell_does_not_poison_default_startup(
         environment["PATH"] = str(root)
         environment["UV_TOOL_DIR"] = str(root)
         with McpClient(
-            binary, execution.serve("-c", "cache=host"), environment, root
+            binary,
+            execution.serve(
+                "-c",
+                "cache=host",
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+            ),
+            environment,
+            root,
         ) as client:
             try:
                 reached.wait("selected Python inspection is blocked")

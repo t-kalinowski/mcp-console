@@ -23,11 +23,11 @@ A plain restart reuses accepted requirements, including successful automatic add
 
 The default optional declarations are:
 
-| Environment | Defaults                                                                               |
-| ----------- | -------------------------------------------------------------------------------------- |
-| R           | `tidyverse`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
-| Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                   |
-| DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                                     |
+| Environment | Defaults                                                                                                  |
+| ----------- | --------------------------------------------------------------------------------------------------------- |
+| R           | `tidyverse`, `dplyr`, `dbplyr`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
+| Python      | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                                      |
+| DuckDB      | `icu`, `json`, `sqlite` with R; `sqlite` without R                                                        |
 
 Mixed-runtime R infrastructure is separate: reticulate, jsonlite, DBI, DuckDB, Arrow/nanoarrow, pillar, tibble, and utf8 support the bridge and SQL.
 Clearing optional requirements does not remove that infrastructure, ambient libraries, preinstalled packages, or caches.
@@ -39,6 +39,31 @@ When SQL is enabled and its optional provider is installed, bootstrap opens the 
 Discovery and first-use preparation are different stages.
 See [shared readiness](SEND_OPERATIONS.md#server-readiness), including early requirements and replacement of an unused prewarmed worker.
 
+## Resolution policy
+
+Configure policies and optional startup lists through [runtime configuration](CONFIGURATION.md#startup-packages-and-resolution-policy).
+
+| Policy                         | Startup preparation | Later MCP changes | Automatic missing packages |
+| ------------------------------ | ------------------- | ----------------- | -------------------------- |
+| `automatic`                    | Yes                 | Yes               | Yes                        |
+| `explicit`                     | Yes                 | Yes               | No                         |
+| `startup_only`                 | Yes                 | No                | No                         |
+| R `disabled` / existing Python | No                  | No                | No                         |
+
+R and Python policies are independent.
+R `disabled` also suppresses infrastructure bootstrap; affected features need preinstalled dependencies.
+A configured nonempty R list without an available R is an error.
+An omitted list uses bundled optional defaults, a supplied list replaces them, and an empty list stays empty.
+The server captures the startup declaration before preparation; early calls and restarts cannot replace a locked baseline.
+
+The server checks actual changes per language before preparation, control, or bundled cell effects.
+A mixed request changing a locked language fails before preparing its permitted portion.
+Set replaces the whole declaration, so omitting a locked language cannot clear it.
+Unchanged declarations may succeed in every mode, including set and reset.
+Reset restores the captured configured startup requirements and follows ordinary restart and policy checks.
+Runtime callbacks, including reticulate callbacks, cannot initiate implicit downloads in explicit mode.
+Policies govern Console preparation, not installation code run by the user under worker permissions.
+
 ## Inspecting and replacing requirements
 
 | Action          | Meaning                                                                                       |
@@ -46,7 +71,7 @@ See [shared readiness](SEND_OPERATIONS.md#server-readiness), including early req
 | `get`           | Read the last committed declaration; no resolution, output consumption, or worker launch.     |
 | `add` (default) | Accumulate requirements; exact repeats are no-ops.                                            |
 | `set`           | Replace the whole declaration; omitted lists/constraints are empty. No defaults are injected. |
-| `reset`         | Restore startup defaults, removing explicit and automatic additions from the declaration.     |
+| `reset`         | Restore captured configured startup defaults, removing explicit and automatic additions.      |
 
 ```python
 send(requirements={"action": "get"})
@@ -65,7 +90,8 @@ Interpreter initialization alone does not require explicit restart for the first
 Failed candidate preparation resumes the existing bootstrap; successful replacement retires it before its successor's hooks run.
 Removing declarations does not uninstall or prohibit later runtime use, and automatic resolution may acquire packages again.
 
-Inspection returns `requirements`, `prepared`, and `runtime_requirements` in structured content.
+Inspection returns `requirements`, `startup_requirements`, `prepared`, and `runtime_requirements` in structured content.
+`resolution` reports each configured policy; `selection` reports captured R/Python paths and Python branch provenance.
 It is a declaration, not an installed-package inventory.
 While resolution is pending, it shows only the last commit.
 Large manifests are complete in structured content even when omitted from the bounded text preview.
@@ -183,6 +209,8 @@ Finish interactive work before preparing dependencies.
 ### Live R preparation
 
 The worker replaces its managed library entry, preserving other paths and live objects.
+The actual Console-owned library is tracked independently of native startup lookup order.
+Replacing it preserves project library entries and their relative order; a project library at index one is not treated as Console-owned.
 A sandbox's temporary writable library remains first.
 The server commits only the confirmed normalized path.
 Ordinary activation failure can leave live library state different from retained state: preserve the worker for recovery, but require restart for further changes.
@@ -208,6 +236,9 @@ Successful activation is its own commit boundary: it survives later import/cell 
 
 ### DuckDB extension preparation
 
+Extension preparation follows the selected SQL provider's resolution policy.
+It cannot switch providers to bypass disabled preparation.
+Empty no-R Python startup packages omit DuckDB and automatic extensions; explicitly requested extensions need a usable provider.
 The resolver uses DuckDB's installation API and normal repository/signature checks.
 Extensions built into the selected DuckDB library are already available and need no download.
 Under managed native networking, it explicitly supplies the runner's HTTP proxy to DuckDB.
@@ -276,6 +307,8 @@ Cache separation does not protect cache contents from processes explicitly grant
 ### Host resolver uv configuration
 
 The preparation owner captures startup `UV_*` values except `UV_OFFLINE`, restores that snapshot for later calls, and uses its captured uv selection.
+Managed Python forces uv-managed CPython for inventory and isolated environment creation; ambient interpreter controls do not select host Python.
+Explicitly configured conflicting controls are rejected.
 R-present sessions respect `RETICULATE_UV`; the special `managed` value uses reticulate's managed tool/cache.
 Environment changes in evaluated cells do not configure later host resolution, though mutable files still can.
 Default local resolver writes are confined to the Console cache root and private temporary storage.

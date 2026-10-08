@@ -35,15 +35,23 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
     let selection = crate::local_runtime::Selection::from_environment()?.unwrap_or(
         crate::local_runtime::WorkerSelection {
             r: true,
+            installation: None,
             r_settings: Default::default(),
+            python_resolution: Default::default(),
             python: None,
         },
     );
     interrupt::normalize_signal()?;
-    let r_installation = selection
-        .r
-        .then(crate::local_runtime::r_installation)
-        .transpose()?;
+    let r_installation = if let Some(installation) = &selection.installation {
+        installation.validate()?;
+        installation.configure_environment();
+        Some(installation.clone())
+    } else {
+        selection
+            .r
+            .then(crate::local_runtime::r_installation)
+            .transpose()?
+    };
     bootstrap::prepare_r_library_path(
         r_installation.as_ref(),
         &reader,
@@ -57,7 +65,7 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
         std::env::var_os("TMPDIR").ok_or("worker launch did not supply temporary storage")?;
     crate::python::configure_native_worker_environment(std::path::Path::new(&temporary))?;
     core::initialize(reader, writer.clone())?;
-    let r = Integration::new(r_installation, selection.r_settings)?;
+    let r = Integration::new(r_installation, selection.r_settings.clone())?;
     let python = crate::python::Runtime::new(selection)?;
     let sql = crate::sql::Bridge::new();
     writer.send(&WorkerMessage::Ready)?;

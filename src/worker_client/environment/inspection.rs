@@ -3,8 +3,8 @@ use super::state::{Environment, PythonEnvironment};
 use crate::worker_protocol::PythonRequirementManifest;
 
 /// The declaration is derived from retained resolver results, never a candidate.
-#[derive(Clone, Default, PartialEq, Eq, serde::Serialize)]
-pub(in crate::worker_client) struct Declaration {
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Declaration {
     pub r: Vec<String>,
     pub python: Vec<String>,
     pub duckdb: Vec<String>,
@@ -13,7 +13,7 @@ pub(in crate::worker_client) struct Declaration {
 }
 
 impl Declaration {
-    pub(super) fn python_manifest(&self) -> PythonRequirementManifest {
+    pub(in crate::worker_client) fn python_manifest(&self) -> PythonRequirementManifest {
         PythonRequirementManifest {
             packages: self.python.clone(),
             python_version: self.python_version.clone(),
@@ -21,7 +21,7 @@ impl Declaration {
         }
     }
 
-    pub(super) fn normalized(mut self) -> Self {
+    pub(in crate::worker_client) fn normalized(mut self) -> Self {
         self.r.sort();
         self.r.dedup();
         self.duckdb.sort();
@@ -62,50 +62,7 @@ impl Environment {
     }
 
     pub(in crate::worker_client) fn startup_declaration(&self) -> Declaration {
-        let managed_r = !self.custom_worker && !matches!(self.r_resolver, RResolver::Disabled);
-        Declaration {
-            r: if managed_r {
-                super::super::DEFAULT_R_REQUIREMENTS
-                    .iter()
-                    .map(|s| (*s).into())
-                    .collect()
-            } else {
-                vec![]
-            },
-            python: if self.manages_python() {
-                if self
-                    .local_runtime
-                    .as_ref()
-                    .is_some_and(crate::local_runtime::Selection::python_only)
-                {
-                    crate::worker_protocol::default_native_python_requirement_manifest().packages
-                } else {
-                    crate::worker_protocol::default_python_requirement_manifest().packages
-                }
-            } else {
-                vec![]
-            },
-            duckdb: if managed_r {
-                super::super::DEFAULT_DUCKDB_EXTENSIONS
-                    .iter()
-                    .map(|s| (*s).into())
-                    .collect()
-            } else if self.manages_python()
-                && self
-                    .local_runtime
-                    .as_ref()
-                    .is_some_and(crate::local_runtime::Selection::python_only)
-            {
-                crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS
-                    .iter()
-                    .map(|s| (*s).into())
-                    .collect()
-            } else {
-                vec![]
-            },
-            ..Default::default()
-        }
-        .normalized()
+        self.startup.clone().unwrap_or_default()
     }
 
     pub(super) fn declaration(&self) -> Declaration {
@@ -145,6 +102,13 @@ impl Environment {
     pub(in crate::worker_client) fn inspection(&self) -> serde_json::Value {
         serde_json::json!({
             "requirements": self.declaration(),
+            "startup_requirements": self.startup_declaration(),
+            "resolution": {"r": self.r_policy(), "python": self.python_policy()},
+            "selection": {
+                "r": self.local_runtime.as_ref().and_then(|runtime| runtime.r_home.as_ref()),
+                "python": self.local_runtime.as_ref().and_then(|runtime| runtime.python.as_ref()).map(|python| &python.selected.embedding.python),
+                "python_source": self.python_source,
+            },
             "prepared": self.r.is_some() || self.python.as_ref().and_then(PythonEnvironment::managed).is_some(),
             "runtime_requirements": {"r": self.runtime_r_requirements(), "python": []},
         })

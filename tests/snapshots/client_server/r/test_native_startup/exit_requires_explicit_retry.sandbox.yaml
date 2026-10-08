@@ -46,6 +46,22 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "startup_requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "resolution": {
+            "r": "automatic",
+            "python": "disabled"
+          },
+          "selection": {
+            "r": "<selected R home>",
+            "python": "<selected Python>",
+            "python_source": "RETICULATE_PYTHON"
+          },
           "prepared": false,
           "runtime_requirements": {
             "r": [],
@@ -59,6 +75,19 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    startup_requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    resolution:
+      r: automatic
+      python: disabled
+    selection:
+      r: <selected R home>
+      python: <selected Python>
+      python_source: RETICULATE_PYTHON
     prepared: false
     runtime_requirements:
       r: []
@@ -72,10 +101,8 @@ send:
 result:
   content:
     - type: text
-      text: >-
-        dynamic environment resolution is unavailable; install `ir` or `uv` and
-        restart MCP Console
-  isError: true
+      text: "[prepared]"
+  isError: false
 ---
 send:
   control: restart

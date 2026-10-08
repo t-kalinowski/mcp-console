@@ -1,6 +1,9 @@
 base::local(
   {
-    managed <- base::.libPaths()[[1L]]
+    managed <- base::Sys.getenv("MCP_CONSOLE_R_LIBRARY", unset = "")
+    if (base::nzchar(managed)) {
+      managed <- base::normalizePath(managed, winslash = "/", mustWork = TRUE)
+    }
     temporary_library <- NULL
     if (base::identical(base::Sys.getenv("MCP_CONSOLE_SANDBOX"), "1")) {
       temporary_library <- base::tempfile(
@@ -58,10 +61,19 @@ base::local(
         mustWork = TRUE
       )
       paths <- base::.libPaths()
-      paths <- paths[!paths %in% base::c(managed, temporary_library)]
-      base::.libPaths(base::c(temporary_library, library, paths))
-      managed_index <- if (base::is.null(temporary_library)) 1L else 2L
-      if (!base::identical(base::.libPaths()[[managed_index]], library)) {
+      paths <- paths[!paths %in% temporary_library]
+      index <- base::match(managed, paths)
+      paths <- paths[!paths %in% managed]
+      if (base::is.na(index)) {
+        index <- 1L
+      }
+      paths <- base::append(
+        paths,
+        library,
+        after = base::min(index - 1L, base::length(paths))
+      )
+      base::.libPaths(base::c(temporary_library, paths))
+      if (!library %in% base::.libPaths()) {
         base::stop("resolved R library was not added to .libPaths()")
       }
       managed <<- library

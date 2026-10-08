@@ -301,16 +301,16 @@ impl WorkerOperationState {
         })
     }
 
-    pub(super) fn python_preparation_extensions(
+    pub(super) fn python_preparation_intent(
         &self,
-    ) -> Result<Option<std::collections::BTreeSet<String>>, String> {
+    ) -> Result<(bool, Option<std::collections::BTreeSet<String>>), String> {
         let state = self.lock()?;
         Ok(
             match state.operation.as_ref().map(|operation| &operation.kind) {
                 Some(OperationKind::PreparePython {
                     duckdb_extensions, ..
-                }) => duckdb_extensions.clone(),
-                _ => None,
+                }) => (true, duckdb_extensions.clone()),
+                _ => (false, None),
             },
         )
     }

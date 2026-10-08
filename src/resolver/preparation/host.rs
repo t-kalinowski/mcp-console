@@ -23,9 +23,13 @@ impl Context {
         mode: Mode,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
-        let mode = if matches!(mode, Mode::Auto) {
+        let mode = if matches!(mode, Mode::Auto | Mode::AutoBareR) {
             if crate::local_runtime::Selection::r_is_present() {
-                Mode::R
+                if matches!(mode, Mode::AutoBareR) {
+                    Mode::BareR
+                } else {
+                    Mode::R
+                }
             } else {
                 Mode::PythonOnly
             }
@@ -37,7 +41,7 @@ impl Context {
             .as_deref()
             .is_some_and(|python| !python.is_empty() && python != OsStr::new("managed"));
         let configured_python = configured_python.and_then(|python| python.into_string().ok());
-        if !matches!(mode, Mode::R) {
+        if !matches!(mode, Mode::R | Mode::BareR) {
             let python =
                 resolver::ManagedPythonResolverConfiguration::capture().without_r_bootstrap();
             let has_uv = python.has_uv();
@@ -62,7 +66,11 @@ impl Context {
             ));
         }
         let python = resolver::ManagedPythonResolverConfiguration::capture();
-        let (bootstrap, rscript) = resolver::discover(&python, on_started)?;
+        let (bootstrap, rscript) = if matches!(mode, Mode::BareR) {
+            (None, resolver::selected_rscript(on_started)?)
+        } else {
+            resolver::discover(&python, on_started)?
+        };
         let home = rscript
             .parent()
             .and_then(std::path::Path::parent)
@@ -107,6 +115,10 @@ impl Context {
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<serde_json::Value, String> {
         match operation {
+            Operation::InspectR { executable } => serde_json::to_value(
+                crate::local_runtime::RInstallation::inspect(&executable, on_started)?,
+            )
+            .map_err(|error| error.to_string()),
             Operation::Bootstrap => {
                 let bootstrap = self
                     .bootstrap

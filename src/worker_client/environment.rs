@@ -1,11 +1,12 @@
 mod inspection;
 mod preparation;
-mod requirements;
+pub(super) mod requirements;
 mod resolution;
 mod runtime_python;
 mod runtime_r;
 mod state;
 
+pub(crate) use inspection::Declaration;
 pub(super) use preparation::{PreparationIntent, PrepareResult};
 pub(super) use requirements::RequirementDelta;
 pub(crate) use requirements::{Requirements, RequirementsAction};
