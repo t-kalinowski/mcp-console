@@ -75,7 +75,7 @@ send:
         return pause_provider_probe
 
 
-    console_sql_connection(ProbeConnection())
+    _console.sql_connection(ProbeConnection())
     sys.settrace(pause_provider_probe)
 result:
   content:
@@ -114,7 +114,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 261, in dispatch
+          File "<string>", line 276, in dispatch
           File "<mcp-console:python:e1>", line 45, in pause_provider_probe
         KeyboardInterrupt
   isError: false

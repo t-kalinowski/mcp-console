@@ -165,7 +165,7 @@ startup:
   code: |
     import sqlite3
     connection = sqlite3.connect("analysis.sqlite")
-    console_sql_connection(connection)
+    _console.sql_connection(connection)
 ```
 
 For R, set `language: r` and construct a normal DBI connection:
@@ -175,7 +175,7 @@ startup:
   language: r
   code: |
     connection <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
-    console_sql_connection(connection)
+    .console$sql_connection(connection)
 ```
 
 Use normal driver arguments for database paths, read-only access, threads, memory, and other engine settings.
@@ -193,7 +193,7 @@ Sandboxed launch grants access only to this private transport directory, which i
 Output explicitly emitted by the program and runtime errors remain visible.
 Python figures are finalized and published before startup completes, including when the program fails; the first cell response or idle poll can collect them without running a Python cell.
 
-The program must finish by leaving a usable connection selected through the existing `console_sql_connection(connection)` helper.
+The program must finish by leaving a usable connection selected through `.console$sql_connection(connection)` in R or `_console.sql_connection(connection)` in Python.
 It must be a user-created native connection; selecting or retrieving Console's managed default does not satisfy startup.
 The final selection must remain on the startup interpreter; a reset or provider switch from the other interpreter does not satisfy startup.
 It runs once per worker generation, on the serialized interpreter thread with the ordinary resolver, input, output, and interrupt services.

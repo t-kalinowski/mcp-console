@@ -550,7 +550,7 @@ def test_console_startup_resolves_python_version_and_import(
             )
             writeBin(charToRaw("1"), completed)
             close(completed)
-            console_sql_connection(DBI::dbConnect(duckdb::duckdb()))
+            .console$sql_connection(DBI::dbConnect(duckdb::duckdb()))
             """)
         configuration = root / ".agents/console/config.yaml"
         configuration.parent.mkdir(parents=True)

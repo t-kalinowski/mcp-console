@@ -161,7 +161,7 @@ def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
         connection = sqlite3.connect(":memory:")
         connection.execute("create table peer(value integer)")
         connection.execute("insert into peer values (42)")
-        console_sql_connection(connection)
+        _console.sql_connection(connection)
         np.set_printoptions(linewidth=73)
         before = (id(persistent), id(connection), sys.executable, sys.prefix,
                   os.environ["MPLCONFIGDIR"], os.environ["XDG_CACHE_HOME"])
@@ -1614,8 +1614,7 @@ def r_startup_with_python(
                       identical(isTRUE(reticulate::py_config()$ephemeral), MANAGED_PYTHON),
                       identical(search()[[2L]], "tools:mcp-console"),
                       identical(find("py")[[1L]], "tools:mcp-console"),
-                      identical(find("sql_connection")[[1L]], "tools:mcp-console"),
-                      identical(find("console_sql_connection")[[1L]], "tools:mcp-console")
+                      identical(find(".console")[[1L]], "tools:mcp-console")
                     )
                     """).replace("MANAGED_PYTHON", "TRUE" if managed else "FALSE"),
             )

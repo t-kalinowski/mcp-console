@@ -68,7 +68,7 @@ send:
             return Cursor()
 
 
-    console_sql_connection(Connection())
+    _console.sql_connection(Connection())
 result:
   content:
     - type: text
@@ -110,7 +110,7 @@ send:
         return restore_hook
 
 
-    console_sql_connection(None)
+    _console.sql_connection(None)
     sys.settrace(restore_hook)
 result:
   content:
@@ -125,10 +125,10 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 262, in dispatch
+          File "<string>", line 277, in dispatch
           File "<string>", line 721, in _mcp_console_without_automatic_resolution
-          File "<string>", line 256, in _dispatch
-          File "<string>", line 52, in use_r
+          File "<string>", line 271, in _dispatch
+          File "<string>", line 67, in use_r
           File "<mcp-console:python:e4>", line 10, in restore_hook
         SystemExit: managed SQL restoration exit
   isError: false

@@ -52,7 +52,7 @@ pub(super) const R_RUNTIME: &str = r#"Evaluate one complete R cell in persistent
 
 pub(super) const R_BRIDGE: &str = " Access Python globals through `py$name`.";
 
-pub(super) const R_SQL: &str = r#" `sql_connection()` returns the R-owned SQL connection for DBI/dplyr. Select a user-owned DBI connection for SQL cells with `console_sql_connection(connection)`; restore managed DuckDB with `console_sql_connection(NULL)`. Never disconnect the managed connection; restore it before disconnecting a selection."#;
+pub(super) const R_SQL: &str = r#" `.console$sql_connection()` returns the active native DBI connection for DBI/dplyr, or errors if another runtime owns SQL. Select a user-owned DBI connection for SQL cells with `.console$sql_connection(connection)`; restore managed DuckDB with `.console$sql_connection(NULL)`. Never disconnect the managed connection; restore it before disconnecting a selection."#;
 
 pub(super) const R_PLOTS: &str = r#" Default-device plots return as PNGs and finalize at cell end, including after errors; draw each plot in one cell. Explicit devices are not captured. Set persistent dimensions in inches and DPI with `options(console.plot.width_in = ..., console.plot.height_in = ..., console.plot.dpi = ...)`."#;
 
@@ -60,14 +60,14 @@ pub(super) const PYTHON_RUNTIME: &str = r#"Evaluate one complete Python cell in 
 
 pub(super) const PYTHON_BRIDGE: &str = " Access R globals and call functions through `r.name`.";
 
-pub(super) const PYTHON_SQL: &str = r#" Select a user-owned DB-API connection for SQL cells with `console_sql_connection(connection)`; restore managed DuckDB with `console_sql_connection(None)`."#;
+pub(super) const PYTHON_SQL: &str = r#" Select a user-owned DB-API connection for SQL cells with `_console.sql_connection(connection)`; restore managed DuckDB with `_console.sql_connection(None)`."#;
 
 pub(super) const PYTHON_SQL_R: &str =
     " For R-owned DuckDB, bind Python frames to an R name through `r` before querying.";
 
-pub(super) const PYTHON_SQL_CONNECTION: &str = r#" For Python-owned DuckDB, `sql_connection()` returns the connection; register frames with `sql_connection().register(name, frame)` (globals are not scanned)."#;
+pub(super) const PYTHON_SQL_CONNECTION: &str = r#" `_console.sql_connection()` returns the active native Python connection, or errors if SQL uses R; on Python-owned DuckDB, register frames with `_console.sql_connection().register(name, frame)` (globals are not scanned)."#;
 
-pub(super) const PYTHON_SQL_CONNECTION_SELECTED: &str = r#" `sql_connection()` requires Python-owned DuckDB; register frames with `sql_connection().register(name, frame)` (globals are not scanned)."#;
+pub(super) const PYTHON_SQL_CONNECTION_SELECTED: &str = r#" `_console.sql_connection()` returns the active native Python connection, or errors if another runtime owns SQL; on Python-owned DuckDB, register frames with `_console.sql_connection().register(name, frame)` (globals are not scanned)."#;
 
 pub(super) const PYTHON_PLOTS: &str = r#" At cell end, even after errors, open `matplotlib.pyplot` figures return once as PNGs and close; `show()` is optional. Closing a figure suppresses capture."#;
 

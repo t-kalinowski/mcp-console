@@ -78,10 +78,14 @@ def _assert_guidance(tool: dict, languages: set[str], *, custom: bool) -> None:
             assert "DBI" in sql
         if "python" in languages:
             python = properties["python"]["description"]
-            assert "console_sql_connection(connection)" in python
+            assert "_console.sql_connection(connection)" in python
             assert "register(name, frame)" in python
-            if "r" not in languages:
-                assert "requires Python-owned DuckDB" in python
+            assert "active native Python connection" in python
+            if "r" in languages:
+                assert "errors if SQL uses R" in python
+            else:
+                assert "errors if another runtime owns SQL" in python
+                assert "on Python-owned DuckDB" in python
 
 
 def _matrix(binary: Path, *, custom: bool, sql: bool = False) -> Transcript:
@@ -189,7 +193,16 @@ def test_hidden_sql_provider_guidance(binary: Path, execution: Execution) -> Tra
                     assert "42" in last_tool_text(client), last_tool_text(client)
                     if "python" in languages:
                         client.send(
-                            python='print("sql_connection" in dir(__import__("builtins")))'
+                            # fmt: python
+                            python=code("""
+                                try:
+                                    _console.sql_connection()
+                                except RuntimeError as error:
+                                    assert "active SQL connection belongs to R" in str(error)
+                                    print(False)
+                                else:
+                                    print(True)
+                                """),
                         )
                         assert last_tool_text(client) == f"{without_r}\n"
                         if without_r:
@@ -199,7 +212,7 @@ def test_hidden_sql_provider_guidance(binary: Path, execution: Execution) -> Tra
                                     import pandas as pd
 
                                     frame = pd.DataFrame({"value": [19, 23]})
-                                    _ = sql_connection().register("visible_frame", frame)
+                                    _ = _console.sql_connection().register("visible_frame", frame)
                                     """)
                             )
                         else:
@@ -211,7 +224,7 @@ def test_hidden_sql_provider_guidance(binary: Path, execution: Execution) -> Tra
                                     connection = sqlite3.connect(":memory:")
                                     _ = connection.execute("CREATE TABLE visible_frame(value INTEGER)")
                                     _ = connection.executemany("INSERT INTO visible_frame VALUES (?)", [(19,), (23,)])
-                                    console_sql_connection(connection)
+                                    _console.sql_connection(connection)
                                     """)
                             )
                         assert "Error" not in last_tool_text(client), last_tool_text(

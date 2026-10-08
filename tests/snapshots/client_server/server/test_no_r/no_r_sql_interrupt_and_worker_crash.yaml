@@ -40,7 +40,9 @@ send:
         return value
 
 
-    _ = sql_connection().create_function("sql_gate", sql_gate, ["BIGINT"], "BIGINT")
+    _ = _console.sql_connection().create_function(
+        "sql_gate", sql_gate, ["BIGINT"], "BIGINT"
+    )
 result:
   content:
     - type: text
@@ -68,10 +70,10 @@ result:
         At:
           <string>(50): _console_input
           <mcp-console:python:e1>(2): sql_gate
-          <string>(221): _evaluate
-          <string>(253): _dispatch
+          <string>(236): _evaluate
+          <string>(268): _dispatch
           <string>(721): _mcp_console_without_automatic_resolution
-          <string>(262): dispatch
+          <string>(277): dispatch
 
   isError: false
 ---

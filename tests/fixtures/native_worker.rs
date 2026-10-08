@@ -617,10 +617,10 @@ fn native_probe() {
         let candidate_prefix = serde_json::to_string(&candidate.prefix).unwrap();
         let source = match scenario.as_str() {
             "python_activation_success" => format!(
-                "import yaml12\nprint('activation-success', sql_connection().execute('SELECT answer FROM native_activation').fetchone()[0], id(identity) == identity_id, sys.prefix == {candidate_prefix}, sys.executable == {candidate_path}, subprocess.check_output([sys.executable, '-c', 'import sys; print(sys.executable)'], text=True).strip() == {candidate_path})"
+                "import yaml12\nprint('activation-success', _console.sql_connection().execute('SELECT answer FROM native_activation').fetchone()[0], id(identity) == identity_id, sys.prefix == {candidate_prefix}, sys.executable == {candidate_path}, subprocess.check_output([sys.executable, '-c', 'import sys; print(sys.executable)'], text=True).strip() == {candidate_path})"
             ),
-            "python_activation_incompatible" => "import importlib.util\nassert importlib.util.find_spec('yaml12') is None\nprint('activation-rejected', sql_connection().execute('SELECT answer FROM native_activation').fetchone()[0], id(identity) == identity_id, sys.executable == original_executable)".into(),
-            "python_activation_exception" => "print('activation-continued', sql_connection().execute('SELECT answer FROM native_activation').fetchone()[0], id(identity) == identity_id, sys.executable == original_executable)".into(),
+            "python_activation_incompatible" => "import importlib.util\nassert importlib.util.find_spec('yaml12') is None\nprint('activation-rejected', _console.sql_connection().execute('SELECT answer FROM native_activation').fetchone()[0], id(identity) == identity_id, sys.executable == original_executable)".into(),
+            "python_activation_exception" => "print('activation-continued', _console.sql_connection().execute('SELECT answer FROM native_activation').fetchone()[0], id(identity) == identity_id, sys.executable == original_executable)".into(),
             _ => unreachable!(),
         };
         runtime

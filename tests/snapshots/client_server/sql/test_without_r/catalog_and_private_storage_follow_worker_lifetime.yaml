@@ -28,7 +28,7 @@ result:
 ---
 send:
   python: |
-    connection = sql_connection()
+    connection = _console.sql_connection()
     spill = Path(
         connection.execute("SELECT current_setting('temp_directory')").fetchone()[0]
     )

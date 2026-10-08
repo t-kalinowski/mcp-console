@@ -67,13 +67,13 @@ def test_startup_source_absent_from_exec_environments(
                     import sqlite3
 
                     native = sqlite3.connect(":memory:")
-                    console_sql_connection(native)
+                    _console.sql_connection(native)
                     """)
             else:
                 # fmt: r
                 source = code("""
                     native <- DBI::dbConnect(duckdb::duckdb(), dbdir = ":memory:")
-                    console_sql_connection(native)
+                    .console$sql_connection(native)
                     """)
             config = configure(workspace, language, f"# {marker}\n" + source)
             configuration = captured_configuration(config)
@@ -169,7 +169,7 @@ def aliased_connection(
                 native = AliasedConnection()
                 _ = native.execute("CREATE TABLE selected (answer INTEGER)")
                 _ = native.execute("INSERT INTO selected VALUES (42)")
-                console_sql_connection(native)
+                _console.sql_connection(native)
                 """)
             if startup:
                 config = configure(workspace, "python", source)
@@ -293,7 +293,7 @@ def startup_plots(
 
                 startup_count = globals().get("startup_count", 0) + 1
                 native = sqlite3.connect(":memory:")
-                console_sql_connection(native)
+                _console.sql_connection(native)
                 figure, axes = plt.subplots(figsize=(3, 2), dpi=100)
                 _ = axes.plot([1, 2, 3], [3, 1, 2])
                 figure.savefig(Path(os.environ["TMPDIR"]) / "startup.png", format="png")
@@ -379,7 +379,7 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
             native = sqlite3.connect(":memory:")
             _ = native.execute("CREATE TABLE selected (answer INTEGER)")
             _ = native.execute("INSERT INTO selected VALUES (42)")
-            console_sql_connection(native)
+            _console.sql_connection(native)
             """)
         # Exercise the documented limit with UTF-8 and JSON-escaped characters,
         # including disabled environment inheritance and captured restart.
@@ -440,10 +440,10 @@ def test_python_startup_preserves_identity_transactions_and_captured_restart(
                     assert native.execute("SELECT count(*) FROM selected").fetchone() == (0,)
                     """),
             )
-            client.expect(python="console_sql_connection(None)")
+            client.expect(python="_console.sql_connection(None)")
             client.expect(sql="CREATE TABLE managed_retained AS SELECT 7 AS answer")
             client.expect(
-                python="console_sql_connection(None); assert startup_count == 1 and id(native) == native_identity"
+                python="_console.sql_connection(None); assert startup_count == 1 and id(native) == native_identity"
             )
             client.expect(
                 "# A tibble: 1 × 1\n   answer\n  <int32>\n1       7\n",
@@ -502,7 +502,7 @@ def test_python_startup_without_r(binary: Path, execution: Execution) -> Transcr
 
             native = sqlite3.connect(":memory:")
             _ = native.execute("CREATE TABLE selected AS SELECT 42 AS answer")
-            console_sql_connection(native)
+            _console.sql_connection(native)
             """)
         config = configure(workspace, "python", source)
         settings = json.loads(config.read_text())
@@ -512,7 +512,7 @@ def test_python_startup_without_r(binary: Path, execution: Execution) -> Transcr
         with sql_client(binary, execution, environment(workspace), workspace) as client:
             client.expect("answer\n------\n42\n", sql="SELECT answer FROM selected")
             client.expect(
-                python="assert_startup_transport_consumed(); assert sql_connection() is native; assert native.execute('SELECT answer FROM selected').fetchone() == (42,)"
+                python="assert_startup_transport_consumed(); assert _console.sql_connection() is native; assert native.execute('SELECT answer FROM selected').fetchone() == (42,)"
             )
             transcript = client.finish()
     return [
@@ -549,7 +549,7 @@ def test_r_startup_preserves_native_identity_and_transaction(
             invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
             DBI::dbBegin(native)
             invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
-            console_sql_connection(native)
+            .console$sql_connection(native)
             """)
         config = configure(workspace, "r", source)
         configuration = captured_configuration(config)
@@ -563,7 +563,7 @@ def test_r_startup_preserves_native_identity_and_transaction(
                 # fmt: r
                 r=code("""
                     assert_startup_transport_consumed()
-                    stopifnot(startup_count == 1L, identical(sql_connection(), native))
+                    stopifnot(startup_count == 1L, identical(.console$sql_connection(), native))
                     DBI::dbRollback(native)
                     stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
                     """),
@@ -574,7 +574,7 @@ def test_r_startup_preserves_native_identity_and_transaction(
                 sql="SELECT answer FROM selected",
             )
             client.expect(
-                r="assert_startup_transport_consumed(); stopifnot(startup_count == 1L, identical(sql_connection(), native))"
+                r="assert_startup_transport_consumed(); stopifnot(startup_count == 1L, identical(.console$sql_connection(), native))"
             )
             transcript = client.finish()
     return [
@@ -595,17 +595,17 @@ def test_r_startup_rejects_managed_connection(
 ) -> TranscriptWithCompanions:
     transcripts = {}
     sources = {
-        "reset": "console_sql_connection(NULL)",
-        "getter": "invisible(sql_connection())",
-        "alias": "managed <- sql_connection(); console_sql_connection(managed)",
+        "reset": ".console$sql_connection(NULL)",
+        "getter": "invisible(.console$sql_connection())",
+        "alias": "managed <- .console$sql_connection(); .console$sql_connection(managed)",
         # fmt: r
         "native-then-reset": code("""
             native <- DBI::dbConnect(duckdb::duckdb())
             invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
             DBI::dbBegin(native)
-            console_sql_connection(native)
+            .console$sql_connection(native)
             invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
-            console_sql_connection(NULL)
+            .console$sql_connection(NULL)
             """),
     }
     for name, selection in sources.items():
@@ -628,7 +628,7 @@ def test_r_startup_rejects_managed_connection(
                     first
                 )
                 client.expect(
-                    r='stopifnot(startup_count == 1L, !"never_run" %in% DBI::dbListTables(sql_connection()))'
+                    r='stopifnot(startup_count == 1L, !"never_run" %in% DBI::dbListTables(.console$sql_connection()))'
                 )
                 if name == "native-then-reset":
                     client.expect(
@@ -638,7 +638,7 @@ def test_r_startup_rejects_managed_connection(
                             stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 42)
                             DBI::dbRollback(native)
                             stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
-                            console_sql_connection(native)
+                            .console$sql_connection(native)
                             """),
                     )
                 client.send(sql="SELECT 42 AS answer")
@@ -661,9 +661,9 @@ def test_python_startup_rejects_managed_connection_without_r(
 
     transcripts = {}
     sources = {
-        "getter": "_ = sql_connection()",
-        "alias": "managed = sql_connection(); console_sql_connection(managed)",
-        "reset": "console_sql_connection(None)",
+        "getter": "_ = _console.sql_connection()",
+        "alias": "managed = _console.sql_connection(); _console.sql_connection(managed)",
+        "reset": "_console.sql_connection(None)",
     }
     for name, selection in sources.items():
         with tempfile.TemporaryDirectory() as temporary:
@@ -688,7 +688,7 @@ def test_python_startup_rejects_managed_connection_without_r(
                     # fmt: python
                     python=code("""
                         assert startup_count == 1
-                        assert sql_connection().execute(
+                        assert _console.sql_connection().execute(
                             "SELECT count(*) FROM information_schema.tables WHERE table_name = 'never_run'"
                         ).fetchone() == (0,)
                         """),
@@ -715,23 +715,23 @@ def test_r_startup_validates_active_provider(
         native <- DBI::dbConnect(duckdb::duckdb())
         invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
         DBI::dbBegin(native)
-        console_sql_connection(native)
+        .console$sql_connection(native)
         invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
         """)
-    reset = 'reticulate::py_run_string("console_sql_connection(None)")'
+    reset = 'reticulate::py_run_string("_console.sql_connection(None)")'
     selections = {
         "reset": reset,
-        "consumed-reset": reset + "\ninvisible(sql_connection())",
+        "consumed-reset": reset + "\ninvisible(.console$sql_connection())",
         # fmt: r
         "python-native": code(r"""
             reticulate::py_run_string(paste(
               "import sqlite3",
               "py_native = sqlite3.connect(':memory:')",
-              "console_sql_connection(py_native)",
+              "_console.sql_connection(py_native)",
               sep = "\n"
             ))
             """),
-        "reselected": reset + "\nconsole_sql_connection(native)",
+        "reselected": reset + "\n.console$sql_connection(native)",
     }
     transcripts = {}
     for name, selection in selections.items():
@@ -770,8 +770,8 @@ def test_r_startup_validates_active_provider(
                     r=code("""
                         DBI::dbRollback(native)
                         stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
-                        console_sql_connection(native)
-                        stopifnot(identical(sql_connection(), native))
+                        .console$sql_connection(native)
+                        stopifnot(identical(.console$sql_connection(), native))
                         """),
                 )
                 client.send(sql="SELECT 42 AS answer")
@@ -810,14 +810,14 @@ def test_failed_startup_withholds_sql_and_preserves_partial_effects(
                     "startup failure",
                 ),
                 ("private_credential = 'sentinel-secret'; invalid !!!", "SyntaxError"),
-                ("console_sql_connection(object())", "cursor()"),
+                ("_console.sql_connection(object())", "cursor()"),
                 (
-                    "import sqlite3\nnative = sqlite3.connect(':memory:')\nnative.close()\nconsole_sql_connection(native)",
+                    "import sqlite3\nnative = sqlite3.connect(':memory:')\nnative.close()\n_console.sql_connection(native)",
                     "closed database",
                 ),
                 ("startup_count = 1", "startup must select"),
                 (
-                    "import sqlite3\nnative = sqlite3.connect(':memory:')\nconsole_sql_connection(native)\nstartup_count = 1\nraise RuntimeError('after selection')",
+                    "import sqlite3\nnative = sqlite3.connect(':memory:')\n_console.sql_connection(native)\nstartup_count = 1\nraise RuntimeError('after selection')",
                     "after selection",
                 ),
             ]
@@ -828,14 +828,14 @@ def test_failed_startup_withholds_sql_and_preserves_partial_effects(
                     'private_credential <- "sentinel-secret"; invalid !!!',
                     "R startup syntax error",
                 ),
-                ("console_sql_connection(new.env())", "valid DBIConnection"),
+                (".console$sql_connection(new.env())", "valid DBIConnection"),
                 (
-                    "native <- DBI::dbConnect(duckdb::duckdb()); DBI::dbDisconnect(native); console_sql_connection(native)",
+                    "native <- DBI::dbConnect(duckdb::duckdb()); DBI::dbDisconnect(native); .console$sql_connection(native)",
                     "valid DBIConnection",
                 ),
                 ("startup_count <- 1L", "startup must select"),
                 (
-                    'native <- DBI::dbConnect(duckdb::duckdb()); console_sql_connection(native); startup_count <- 1L; stop("after selection")',
+                    'native <- DBI::dbConnect(duckdb::duckdb()); .console$sql_connection(native); startup_count <- 1L; stop("after selection")',
                     "after selection",
                 ),
             ]
@@ -870,9 +870,9 @@ def test_failed_startup_withholds_sql_and_preserves_partial_effects(
                         # the managed default but cannot erase a failed startup receipt.
                         client.expect(
                             **{
-                                language: "console_sql_connection(None)"
+                                language: "_console.sql_connection(None)"
                                 if language == "python"
-                                else "console_sql_connection(NULL)"
+                                else ".console$sql_connection(NULL)"
                             }
                         )
                         client.send(sql="SELECT 42 AS answer")
@@ -977,7 +977,7 @@ def test_startup_gate_preserves_discovery_ordering_and_interrupt(
 
                 startup_count = globals().get("startup_count", 0) + 1
                 native = sqlite3.connect(":memory:")
-                console_sql_connection(native)
+                _console.sql_connection(native)
                 input("Startup gate> ")
                 _ = native.execute("CREATE TABLE selected AS SELECT 42 AS answer")
                 """)
@@ -1048,7 +1048,7 @@ def test_crashed_startup_is_not_automatically_replayed(
             if not previous:
                 os._exit(17)
             native = sqlite3.connect(":memory:")
-            console_sql_connection(native)
+            _console.sql_connection(native)
             """)
         config = configure(workspace, "python", source)
         configuration = captured_configuration(config)
@@ -1124,7 +1124,7 @@ def test_r_startup_interrupt_preserves_transaction_without_replay(
             native <- DBI::dbConnect(duckdb::duckdb())
             invisible(DBI::dbExecute(native, "CREATE TABLE selected AS SELECT 1 AS answer"))
             DBI::dbBegin(native)
-            console_sql_connection(native)
+            .console$sql_connection(native)
             invisible(readline("R startup gate> "))
             invisible(DBI::dbExecute(native, "UPDATE selected SET answer = 42"))
             """)
@@ -1141,7 +1141,7 @@ def test_r_startup_interrupt_preserves_transaction_without_replay(
             client.expect(
                 # fmt: r
                 r=code("""
-                    stopifnot(startup_count == 1L, identical(sql_connection(), native))
+                    stopifnot(startup_count == 1L, identical(.console$sql_connection(), native))
                     stopifnot(DBI::dbGetQuery(native, "SELECT answer FROM selected")[[1L]] == 1)
                     DBI::dbRollback(native)
                     """),

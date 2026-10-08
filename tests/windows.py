@@ -277,7 +277,7 @@ def exercise_sql_interrupt(session: Session) -> None:
 
 
             interrupt_connection.create_function("sql_gate", 0, sql_gate)
-            console_sql_connection(interrupt_connection)
+            _console.sql_connection(interrupt_connection)
             print("SQL callback ready")
             """),
     )
@@ -287,7 +287,7 @@ def exercise_sql_interrupt(session: Session) -> None:
     assert not result.get("isError") and "running;" not in output, result
     # SQLite reports its UDF failure after the Python callback is interrupted.
     assert "user-defined function raised exception" in output, result
-    session.expect("[done]", python="console_sql_connection(None)")
+    session.expect("[done]", python="_console.sql_connection(None)")
     session.expect("1234567", sql="SELECT * FROM retained")
 
 
@@ -299,7 +299,7 @@ def exercise_r_sql(session: Session) -> None:
         # fmt: r
         r=code("""
             retained_pid <- Sys.getpid()
-            managed <- sql_connection()
+            managed <- .console$sql_connection()
             stopifnot(DBI::dbGetQuery(managed, "SELECT * FROM retained")$answer == 1234567)
             frame <- data.frame(answer = 7654321L)
             cat("R connection ready")
@@ -317,7 +317,7 @@ def exercise_r_sql(session: Session) -> None:
     session.expect("1234567", sql="SELECT * FROM retained")
     session.expect(
         "R worker retained",
-        r='stopifnot(Sys.getpid() == retained_pid, identical(sql_connection(), managed)); cat("R worker retained")',
+        r='stopifnot(Sys.getpid() == retained_pid, identical(.console$sql_connection(), managed)); cat("R worker retained")',
     )
     session.expect("worker stopped", control="restart")
     session.expect("1234567", sql="SELECT 1234567 AS answer")
@@ -1233,12 +1233,12 @@ class WindowsConsole(unittest.TestCase):
                 selected = sqlite3.connect(":memory:")
                 selected.execute("CREATE TABLE selected(answer INTEGER)")
                 selected.execute("INSERT INTO selected VALUES (7654321)")
-                console_sql_connection(selected)
+                _console.sql_connection(selected)
                 print("selected sqlite")
                 """),
         )
         session.expect("7654321", sql="SELECT * FROM selected")
-        session.expect("[done]", python="console_sql_connection(None)")
+        session.expect("[done]", python="_console.sql_connection(None)")
         session.expect("1234567", sql="SELECT * FROM retained")
         session.expect("worker stopped", control="restart")
         result = session.send(
@@ -1272,7 +1272,7 @@ class WindowsConsole(unittest.TestCase):
             startup_count = globals().get("startup_count", 0) + 1
             native = sqlite3.connect(":memory:")
             _ = native.execute("CREATE TABLE selected AS SELECT 1234567 AS answer")
-            console_sql_connection(native)
+            _console.sql_connection(native)
             """)
         session = Session(
             environment,

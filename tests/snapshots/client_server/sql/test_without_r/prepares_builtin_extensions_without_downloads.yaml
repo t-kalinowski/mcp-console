@@ -21,7 +21,9 @@ result:
   isError: false
 ---
 send:
-  python: sql_connection().execute('SELECT ?::JSON', [retained]).fetchone()
+  python: >-
+    _console.sql_connection().execute('SELECT ?::JSON',
+    [retained]).fetchone()
 result:
   content:
     - type: text

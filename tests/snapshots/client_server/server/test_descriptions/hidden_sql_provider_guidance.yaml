@@ -54,7 +54,14 @@ result:
   isError: false
 ---
 send:
-  python: print("sql_connection" in dir(__import__("builtins")))
+  python: |
+    try:
+        _console.sql_connection()
+    except RuntimeError as error:
+        assert "active SQL connection belongs to R" in str(error)
+        print(False)
+    else:
+        print(True)
 result:
   content:
     - type: text
@@ -69,7 +76,7 @@ send:
     connection = sqlite3.connect(":memory:")
     _ = connection.execute("CREATE TABLE visible_frame(value INTEGER)")
     _ = connection.executemany("INSERT INTO visible_frame VALUES (?)", [(19,), (23,)])
-    console_sql_connection(connection)
+    _console.sql_connection(connection)
 result:
   content:
     - type: text
@@ -106,7 +113,14 @@ result:
   isError: false
 ---
 send:
-  python: print("sql_connection" in dir(__import__("builtins")))
+  python: |
+    try:
+        _console.sql_connection()
+    except RuntimeError as error:
+        assert "active SQL connection belongs to R" in str(error)
+        print(False)
+    else:
+        print(True)
 result:
   content:
     - type: text
@@ -119,7 +133,7 @@ send:
     import pandas as pd
 
     frame = pd.DataFrame({"value": [19, 23]})
-    _ = sql_connection().register("visible_frame", frame)
+    _ = _console.sql_connection().register("visible_frame", frame)
 result:
   content:
     - type: text

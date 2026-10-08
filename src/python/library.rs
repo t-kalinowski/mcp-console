@@ -846,7 +846,14 @@ pub(super) fn take_sql_restore_request() -> Result<bool, String> {
     let Some(api) = installed_sql_api()? else {
         return Ok(false);
     };
-    api.with_gil(PythonApi::call_take_sql_restore_request)
+    api.with_gil(|api| api.call_sql_bool(c"take_managed_restore_request"))
+}
+
+pub(super) fn has_selected_sql_connection() -> Result<bool, String> {
+    let Some(api) = installed_sql_api()? else {
+        return Ok(false);
+    };
+    api.with_gil(|api| api.call_sql_bool(c"has_selected_connection"))
 }
 
 fn installed_sql_api() -> Result<Option<PythonApi>, String> {
@@ -1224,21 +1231,24 @@ impl PythonApi {
         }
     }
 
-    fn call_take_sql_restore_request(&self) -> Result<bool, String> {
+    fn call_sql_bool(&self, name: &CStr) -> Result<bool, String> {
         // SAFETY: The GIL is held for the private Python call and reference release.
         unsafe {
-            let function = self.function(c"_mcp_console_sql", c"take_managed_restore_request")?;
+            let function = self.function(c"_mcp_console_sql", name)?;
             let result = (self.call_no_args)(function);
             if result.is_null() {
                 self.display_pending_exception();
-                return Err("Python SQL restore request failed".to_string());
+                return Err(python_function_error(c"_mcp_console_sql", name));
             }
             let requested = (self.long_as_long)(result);
             (self.dec_ref)(result);
             match requested {
                 0 => Ok(false),
                 1 => Ok(true),
-                _ => Err("Python SQL restore request returned an invalid value".to_string()),
+                _ => Err(format!(
+                    "Python SQL `{}` returned an invalid boolean",
+                    name.to_string_lossy()
+                )),
             }
         }
     }

@@ -152,9 +152,7 @@ def test_builtin_guidance_matches_visible_languages(
                     assert "from an R cell" not in sql_guidance
                 if "python" in languages:
                     python_guidance = properties["python"]["description"]
-                    assert "requires Python-owned DuckDB" in " ".join(
-                        python_guidance.split()
-                    )
+                    assert "on Python-owned DuckDB" in " ".join(python_guidance.split())
                     assert "`r.name`" not in python_guidance
                     assert "R plot rules" not in properties["python"]["description"]
                 else:
@@ -201,7 +199,7 @@ def test_sql_provider_guidance_is_independent_of_visibility(
                         assert tool == advertised
                     if "python" in languages:
                         assert (
-                            "requires Python-owned DuckDB"
+                            "on Python-owned DuckDB"
                             in tool["inputSchema"]["properties"]["python"][
                                 "description"
                             ]
@@ -217,7 +215,7 @@ def test_sql_provider_guidance_is_independent_of_visibility(
                         assert "Error" not in last_tool_text(client)
                         if without_r:
                             client.send(
-                                python='_ = sql_connection().register("visible_frame", frame)'
+                                python='_ = _console.sql_connection().register("visible_frame", frame)'
                             )
                         else:
                             client.send(python="r.visible_frame = frame")

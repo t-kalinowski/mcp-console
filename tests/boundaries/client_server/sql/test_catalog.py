@@ -303,7 +303,7 @@ def test_queries_a_ragnar_store_created_in_r(
         stopifnot(
           identical(
             DBI::dbGetQuery(
-              sql_connection(),
+              .console$sql_connection(),
               "SELECT value FROM before_prepare"
             )$value,
             42L
@@ -352,13 +352,31 @@ def test_queries_a_ragnar_store_created_in_r(
           DBI::dbIsValid(store@con),
           DBI::dbIsValid(reader@con),
           DBI::dbGetQuery(store@con, "SELECT count(*) AS n FROM chunks")$n == 2,
-          DBI::dbGetQuery(sql_connection(), "SELECT value FROM before_prepare")$value ==
+          DBI::dbGetQuery(
+            .console$sql_connection(),
+            "SELECT value FROM before_prepare"
+          )$value ==
             42L
         )
         ragnar::ragnar_store_build_index(store, type = c("vss", "fts"))
         retrieved <- ragnar::ragnar_retrieve(store, "bananas", top_k = 1L)
         stopifnot(identical(retrieved$origin, "beta.md"))
-        connection <- sql_connection()
+        .console$sql_connection(reader@con)
+        stopifnot(identical(.console$sql_connection(), reader@con))
+        writeLines("selected the open ragnar reader")
+        """)
+    client.send(r=r)
+    assert normalize_duckdb_progress(client) == "selected the open ragnar reader\n"
+    client.send(sql="SELECT origin FROM chunks ORDER BY origin")
+    preview = normalize_trailing_spaces(client)
+    assert [line.split() for line in preview.splitlines()[-2:]] == [
+        ["1", '"alpha.md"'],
+        ["2", '"beta.md"'],
+    ]
+    # fmt: r
+    r = code(r"""
+        .console$sql_connection(NULL)
+        connection <- .console$sql_connection()
         stopifnot(
           !identical(connection, store@con),
           !identical(connection, reader@con)
@@ -509,9 +527,15 @@ def test_interrupts_running_sql_query(binary: Path, execution: Execution) -> Tra
             # fmt: r
             r = code(r"""
                 dyn.load(Sys.getenv("MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"))
-                invisible(DBI::dbExecute(sql_connection(), "SET threads = 1"))
-                invisible(DBI::dbExecute(sql_connection(), "SET enable_progress_bar = true"))
-                invisible(DBI::dbExecute(sql_connection(), "SET progress_bar_time = 0"))
+                invisible(DBI::dbExecute(.console$sql_connection(), "SET threads = 1"))
+                invisible(DBI::dbExecute(
+                  .console$sql_connection(),
+                  "SET enable_progress_bar = true"
+                ))
+                invisible(DBI::dbExecute(
+                  .console$sql_connection(),
+                  "SET progress_bar_time = 0"
+                ))
                 query_started <- FALSE
                 options(duckdb.progress_display = function(percentage) {
                   if (!query_started && percentage < 100) {
@@ -666,12 +690,16 @@ def test_exposes_catalog_as_lazy_r_relations(
 
     # fmt: r
     r = code(r"""
-        connection <- sql_connection()
+        connection <- .console$sql_connection()
         table_values <- dplyr::tbl(connection, "sql_values")
         lazy_values <- dplyr::tbl(connection, "live_sql_values") |>
           dplyr::mutate(doubled = value * 2L)
         cat(
-          c("same connection: ", identical(connection, sql_connection()), "\n"),
+          c(
+            "same connection: ",
+            identical(connection, .console$sql_connection()),
+            "\n"
+          ),
           c("lazy table: ", inherits(table_values, "tbl_lazy"), "\n"),
           c("lazy view: ", inherits(lazy_values, "tbl_lazy"), "\n"),
           sep = ""
@@ -710,7 +738,7 @@ c:11:22
     r = code(r"""
         rm(list = ls())
         values <- DBI::dbGetQuery(
-          sql_connection(),
+          .console$sql_connection(),
           "SELECT label, value FROM sql_values ORDER BY label"
         )
         writeLines(paste(values$label, values$value, sep = ":"))
