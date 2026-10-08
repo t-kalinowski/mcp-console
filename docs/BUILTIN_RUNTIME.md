@@ -282,8 +282,11 @@ options(
 Explicit user devices are not closed or captured by Console.
 R plots invoked through Python follow these same rules.
 
-At Python cell end, including after an exception, all open pyplot figures are returned in figure-number order and closed.
-`show()` is optional; `savefig()` does not suppress capture, but closing a figure does.
+Python's `plt.show()` immediately returns all open pyplot figures as PNGs in figure-number order and closes them.
+The images remain available after an explicit `plt.close()` or a later exception.
+The `block` argument is accepted without waiting for a GUI.
+At cell end, including after an exception, remaining open figures are captured and closed the same way; `show()` is optional.
+`savefig()` does not suppress capture, but closing an unshown figure does.
 Figures outside pyplot are not captured.
 An inherited `MPLBACKEND` is respected; otherwise Console uses `Agg`.
 Host configuration/font caches may be read while new cache writes are redirected to private worker storage.

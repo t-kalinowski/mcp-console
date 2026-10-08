@@ -453,16 +453,6 @@ if _mcp_console_import_finder is None:
     _sys.meta_path.append(_mcp_console_import_finder)
 
 
-def _mcp_console_disable_matplotlib_show(
-    _setattr=_builtins.setattr,
-    _sys=_sys,
-):
-    pyplot = _sys.modules.get("matplotlib.pyplot")
-    if pyplot is not None:
-        _setattr(pyplot, "show", lambda *args, **kwargs: None)
-    return None
-
-
 def _mcp_console_print_exception(
     error,
     source_error=False,
@@ -554,6 +544,19 @@ def _mcp_console_finalize_plots(
             _publish_plot(image)
     except _BaseException as error:
         _print_exception(error)
+    return None
+
+
+def _mcp_console_install_matplotlib_show(
+    _finalize_plots=_mcp_console_finalize_plots,
+    _setattr=_builtins.setattr,
+    _sys=_sys,
+):
+    pyplot = _sys.modules.get("matplotlib.pyplot")
+    if pyplot is not None:
+        # Explicit show is a display boundary, like an inline notebook backend.
+        # Closing after capture also prevents a duplicate at cell end.
+        _setattr(pyplot, "show", lambda *args, **kwargs: _finalize_plots())
     return None
 
 
@@ -724,7 +727,7 @@ def _mcp_console_without_automatic_resolution(
 
 
 _mcp_console.activate_process_environment = _mcp_console_activate_process_environment
-_mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
+_mcp_console.install_matplotlib_show = _mcp_console_install_matplotlib_show
 _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.without_automatic_resolution = _mcp_console_without_automatic_resolution
 _mcp_console.eval_cell = _mcp_console_eval_cell
@@ -859,13 +862,13 @@ class _McpConsoleModuleDefaults:
         threading,
         finder,
         loader,
-        disable_show,
+        install_show,
     ) -> None:
         self._sys = sys
         self._state = threading.local()
         self._finder = finder
         self._loader = loader
-        self._disable_show = disable_show
+        self._install_show = install_show
         self._pending = {"numpy", "pandas", "matplotlib.pyplot"}
 
     def apply(self, name: str) -> None:
@@ -880,7 +883,7 @@ class _McpConsoleModuleDefaults:
             if module.get_option("display.width") == 80:
                 module.set_option("display.width", 200)
         elif getattr(module.show, "__module__", None) == "matplotlib.pyplot":
-            self._disable_show()
+            self._install_show()
         self._pending.remove(name)
 
     def find_spec(self, fullname: str, path=None, target=None):
@@ -907,7 +910,7 @@ _mcp_console_module_defaults = _McpConsoleModuleDefaults(
     _threading,
     _mcp_console_import_finder,
     _McpConsoleModuleLoader,
-    _mcp_console_disable_matplotlib_show,
+    _mcp_console_install_matplotlib_show,
 )
 _sys.meta_path.insert(0, _mcp_console_module_defaults)
 

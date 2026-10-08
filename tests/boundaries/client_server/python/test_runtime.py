@@ -306,6 +306,7 @@ def returns_matplotlib_plots(
             shown_figure.savefig(shown_reference, format="png")
             print("before show")
             plt.show()
+            plt.close(shown_figure)
             print("after show")
             shown_figure
             """)
@@ -316,18 +317,63 @@ def returns_matplotlib_plots(
             client,
         )
         result = client.transcript[-1]["result"]
-        output = result["content"][0]["text"]
-        assert output.startswith("before show\nafter show\n<Figure size "), output
+        assert result["content"][0] == {"type": "text", "text": "before show\n"}
+        output = result["content"][-1]["text"]
+        assert output.startswith("after show\n<Figure size "), output
         assert output.endswith(" with 1 Axes>\n"), output
-        result["content"][0]["text"] = """before show
-after show
+        result["content"][-1]["text"] = """after show
 <matplotlib figure displayhook representation>
 """
         assert_result_content(
             client,
-            [result["content"][0]["text"], shown_reference.read_bytes()],
+            [
+                "before show\n",
+                shown_reference.read_bytes(),
+                result["content"][-1]["text"],
+            ],
             image_reference="live shown matplotlib savefig {page}",
         )
+
+        client.send(
+            # fmt: python
+            python=code("""
+                for index in range(3):
+                    loop_figure, loop_axes = plt.subplots(num=10)
+                    loop_axes.plot([0, 1, 2], [index, 2, 1])
+                    loop_figure.savefig(
+                        Path(os.environ["TMPDIR"]) / f"matplotlib-loop-{index}.png",
+                        format="png",
+                    )
+                    plt.show(block=False)
+                    assert plt.get_fignums() == []
+                    plt.close(loop_figure)
+                    plt.show()
+
+                # An unshown figure using the same number still captures at cell end.
+                remaining_figure, remaining_axes = plt.subplots(num=10)
+                remaining_axes.plot([0, 1], [3, 1])
+                remaining_figure.savefig(
+                    Path(os.environ["TMPDIR"]) / "matplotlib-remaining.png",
+                    format="png",
+                )
+                """),
+        )
+        assert_result_content(
+            client,
+            [
+                wait_for_worker_file(
+                    temporary, f"matplotlib-loop-{index}.png", client
+                ).read_bytes()
+                for index in range(3)
+            ]
+            + [
+                wait_for_worker_file(
+                    temporary, "matplotlib-remaining.png", client
+                ).read_bytes()
+            ],
+            image_reference="live repeated-show matplotlib savefig {page}",
+        )
+        client.expect("[]\n", python="plt.get_fignums()")
 
         # fmt: python
         python = code("""
