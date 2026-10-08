@@ -200,6 +200,63 @@ def _overlapping_failed_retirement(
         return transcript + [{"exit_status": 1, "stderr": stderr}]
 
 
+@requires(POSIX, UNPRIVILEGED)
+def test_readonly_temporary_directories_retire_without_following_symlinks(
+    binary: Path,
+) -> Transcript:
+    # Direct built-in launches own private TMPDIR; the sandbox runner owns its
+    # own storage. Retirement must remove private children, not linked libraries.
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory).resolve()
+        owned = root / "owned"
+        owned.mkdir()
+        external = root / "external-library"
+        external.mkdir()
+        (external / "retained.txt").write_text("external contents")
+        external.chmod(0o500)
+        environment = dict(
+            os.environ,
+            PATH=str(root),
+            RETICULATE_PYTHON=sys.executable,
+            TMPDIR=str(owned),
+        )
+        environment.pop("R_HOME", None)
+        try:
+            with McpClient(binary, DIRECT.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                # fmt: python
+                python = code("""
+                    import os
+                    from pathlib import Path
+
+                    temporary = Path(os.environ["TMPDIR"])
+                    Path("worker-temporary").write_text(str(temporary))
+                    restricted = temporary / "readonly" / "nested"
+                    restricted.mkdir(parents=True)
+                    (restricted / "retained.txt").write_text("private contents")
+                    (restricted / "library").symlink_to(Path.cwd() / "external-library")
+                    restricted.chmod(0o500)
+                    restricted.parent.chmod(0o500)
+                    print("readonly storage created")
+                    """)
+                client.expect("readonly storage created\n", python=python)
+                first = Path((root / "worker-temporary").read_text())
+                assert first.is_relative_to(owned), first
+                restarted = client.send(control="restart")
+                assert not restarted.get("isError"), restarted
+                assert not first.exists(), first
+                client.expect("readonly storage created\n", python=python)
+                second = Path((root / "worker-temporary").read_text())
+                assert second != first and second.is_relative_to(owned), second
+                transcript = client.finish()
+                assert not second.exists(), second
+                assert external.stat().st_mode & 0o777 == 0o500
+                assert (external / "retained.txt").read_text() == "external contents"
+                return transcript
+        finally:
+            external.chmod(0o700)
+
+
 @requires(POSIX, NATIVE_FIXTURES, UNPRIVILEGED)
 def test_failed_storage_retirement_blocks_replacement(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
@@ -249,6 +306,9 @@ def test_failed_storage_retirement_blocks_replacement(binary: Path) -> Transcrip
                 client.send(python=python)
                 temporary = Path((root / "worker-temporary").read_text())
                 assert temporary.is_relative_to(owned), temporary
+                # The private directory can be unlocked after retirement. An
+                # unowned parent still prevents unlinking its directory entry.
+                owned.chmod(0o500)
                 failed = client.start_send(python="os._exit(47)")
                 reaped.wait("real relay reaped the worker that exited with status 47")
                 shutdown.wait("server wrote the generation's complete Shutdown command")
@@ -284,7 +344,8 @@ def test_failed_storage_retirement_blocks_replacement(binary: Path) -> Transcrip
                     }
                 ]
         finally:
-            if temporary is not None:
+            owned.chmod(0o700)
+            if temporary is not None and (temporary / "restricted").exists():
                 (temporary / "restricted").chmod(0o700)
 
 

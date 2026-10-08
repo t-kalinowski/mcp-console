@@ -323,7 +323,15 @@ impl TemporaryDirectory {
         let Some(path) = self.0.take() else {
             return Ok(());
         };
-        match std::fs::remove_dir_all(&path) {
+        let remove = || {
+            // Native startup can create read-only directories, as renv does
+            // for its base-package view. Only unlock owned temporary
+            // directories after retirement; package symlinks stay untouched.
+            #[cfg(unix)]
+            unlock_temporary_directories(&path)?;
+            std::fs::remove_dir_all(&path)
+        };
+        match remove() {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!(
@@ -332,6 +340,26 @@ impl TemporaryDirectory {
             )),
         }
     }
+}
+
+#[cfg(unix)]
+fn unlock_temporary_directories(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    std::fs::set_permissions(
+        path,
+        std::fs::Permissions::from_mode(metadata.permissions().mode() | 0o700),
+    )?;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            unlock_temporary_directories(&entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 impl Drop for TemporaryDirectory {
