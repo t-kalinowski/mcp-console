@@ -53,13 +53,16 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
         UV_NO_CONFIG="1",
         UV_PYTHON_PREFERENCE="only-managed",
     )
-    # The fixture owns its package sources and managed-Python selection.
+    # The fixture owns its package inputs and managed-Python selection.
     for name in (
         "UV_INDEX",
         "UV_DEFAULT_INDEX",
         "UV_EXTRA_INDEX_URL",
         "UV_FIND_LINKS",
         "UV_NO_INDEX",
+        "UV_CONSTRAINT",
+        "UV_BUILD_CONSTRAINT",
+        "UV_OVERRIDE",
         "UV_CONFIG_FILE",
         "UV_MANAGED_PYTHON",
         "UV_NO_MANAGED_PYTHON",
@@ -84,6 +87,9 @@ def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
             UV_PYTHON_DOWNLOADS_JSON_URL=str(
                 Path(directory) / "missing-python-downloads.json"
             ),
+            UV_CONSTRAINT=str(Path(directory) / "missing-constraints.txt"),
+            UV_BUILD_CONSTRAINT=str(Path(directory) / "missing-build-constraints.txt"),
+            UV_OVERRIDE=str(Path(directory) / "missing-overrides.txt"),
         ),
     ):
         root = Path(directory).resolve()
