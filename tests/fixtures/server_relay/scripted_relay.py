@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from generation_retirement import failed_during_resolver_callback
+
 SCENARIO_ENV = "MCP_CONSOLE_TEST_RELAY_SCENARIO"
 CAPTURE_NAME = "mcp-console-server-relay-wire.jsonl"
 DONE_NAME = "mcp-console-scripted-relay-done"
@@ -1492,6 +1494,7 @@ def main() -> None:
             run_cancelled_interrupt_during_live_r_preparation
         ),
         "serialized_cross_source_order": run_serialized_cross_source_order,
+        "failed_during_resolver_callback": failed_during_resolver_callback,
         "shutdown": run_shutdown,
         "shutdown_nonzero": run_shutdown_nonzero,
         "shutdown_status_137": run_shutdown_status_137,

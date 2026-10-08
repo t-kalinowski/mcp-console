@@ -6,7 +6,7 @@ use std::io::BufReader;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt as _;
 use std::process::{Child, Command, ExitStatus};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -32,8 +32,8 @@ const LAUNCHER_KILL_GRACE: Duration = Duration::from_secs(1);
 const CHILD_EXIT_FALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum RelayRetirementAllowance {
-    TimelyAcceptance,
+enum RelayRetirementAllowance {
+    TimelyLocalObservation,
     Always,
 }
 
@@ -44,7 +44,7 @@ pub(super) struct Worker {
     stdin: StdinSender,
     operation: WorkerOperationState,
     interrupts: InterruptRequests,
-    shutdown_started: ShutdownAcceptance,
+    shutdown_started: LocalShutdownObservation,
     ready_commit: ReadyCommit,
     relay: RelayConnection,
 }
@@ -56,15 +56,17 @@ pub(super) struct WorkerShutdownHandle {
     commands: RelayCommandSender,
     operation: WorkerOperationState,
     interrupts: InterruptRequests,
-    shutdown_started: ShutdownAcceptance,
+    shutdown_started: LocalShutdownObservation,
     ready_commit: ReadyCommit,
     child: Arc<Mutex<RelayProcess>>,
+    retirement: Arc<GenerationRetirement>,
+    output_stop: RelayOutputStop,
 }
 
 struct RelayConnection {
     child: Arc<Mutex<RelayProcess>>,
     commands: RelayCommandSender,
-    tasks: Option<Box<RelayTasks>>,
+    retirement: Arc<GenerationRetirement>,
     output_stop: RelayOutputStop,
 }
 
@@ -80,6 +82,8 @@ struct RelayProcess {
     ready_committed: bool,
     relay_exit_recovery_expected: bool,
     retirement_requested: bool,
+    retirement_deadline: Option<Instant>,
+    kill_deadline: Option<Instant>,
     retirement: Option<Result<(), String>>,
 }
 
@@ -88,6 +92,51 @@ struct RelayTasks {
     command_writer: RelayCommandThread,
     event_reader: thread::JoinHandle<()>,
     diagnostic_reader: Option<thread::JoinHandle<()>>,
+}
+
+/// One operation for this launch, shared by lifecycle, startup and failure
+/// consumers. Reserving it never blocks on a callback, child or task join.
+struct GenerationRetirement {
+    state: Mutex<RetirementState>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct RetirementState {
+    budgets: Option<(Instant, Instant)>,
+    requesting: bool,
+    requested: Option<(RelayRetirementAllowance, Result<(), String>)>,
+    finishing: bool,
+    tasks: Option<Box<RelayTasks>>,
+    result: Option<RetirementResult>,
+}
+
+#[derive(Clone)]
+struct RetirementResult {
+    // A failed normal barrier is safely superseded only after physical cleanup
+    // and the dispatcher join settle it. Retain it separately from cleanup.
+    normal: Result<(), String>,
+    cleanup: Result<(), String>,
+    io: Result<Option<WorkerProcessOutcome>, String>,
+    launcher_reaped: bool,
+    // Replacement evidence is separate from native launcher status policy.
+    resources_confirmed: bool,
+}
+
+impl RetirementResult {
+    fn process_result(&self) -> Result<(), String> {
+        // Both consumers observe this same completed operation. The process
+        // observer reports cleanup; Worker reports the retained I/O outcome.
+        // Combining I/O here would report its failure again when Worker stops.
+        // Reaping and successful I/O settlement also supersede the normal
+        // barrier when launcher status or temporary-storage cleanup fails.
+        // Those independent cleanup failures still retain their own evidence.
+        if self.cleanup.is_ok() || self.launcher_reaped && self.io.is_ok() {
+            self.cleanup.clone()
+        } else {
+            combine_shutdown_results(self.normal.clone(), self.cleanup.clone())
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -125,7 +174,9 @@ enum RelayWriterMessage {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct ShutdownAcceptance(Arc<Mutex<Option<ShutdownRequest>>>);
+/// Times local dispatcher processing of ShutdownStarted. This is the existing
+/// relay-drain allowance policy, not the relay's remote acceptance timestamp.
+pub(super) struct LocalShutdownObservation(Arc<Mutex<Option<ShutdownRequest>>>);
 
 struct ShutdownRequest {
     deadline: Instant,
@@ -292,7 +343,7 @@ impl WorkerRuntime {
         let (startup_sender, startup_receiver) = mpsc::sync_channel(1);
         let (ready_commit_sender, ready_commit_receiver) = mpsc::channel();
         let ready_commit = ReadyCommit(Arc::new(Mutex::new(Some(ready_commit_sender))));
-        let shutdown_started = ShutdownAcceptance::default();
+        let shutdown_started = LocalShutdownObservation::default();
 
         let (commands, command_writer) =
             start_relay_command_writer(transport.input, abort_writer, worker_events.clone());
@@ -312,12 +363,18 @@ impl WorkerRuntime {
         let relay = RelayConnection {
             child,
             commands: commands.clone(),
-            tasks: Some(Box::new(RelayTasks {
-                dispatcher,
-                command_writer,
-                event_reader,
-                diagnostic_reader: transport.diagnostic_reader,
-            })),
+            retirement: Arc::new(GenerationRetirement {
+                state: Mutex::new(RetirementState {
+                    tasks: Some(Box::new(RelayTasks {
+                        dispatcher,
+                        command_writer,
+                        event_reader,
+                        diagnostic_reader: transport.diagnostic_reader,
+                    })),
+                    ..Default::default()
+                }),
+                changed: Condvar::new(),
+            }),
             output_stop,
         };
         let mut worker = Worker {
@@ -406,6 +463,8 @@ impl RelayProcess {
             ready_committed: false,
             relay_exit_recovery_expected: false,
             retirement_requested: false,
+            retirement_deadline: None,
+            kill_deadline: None,
             retirement: None,
         })
     }
@@ -419,6 +478,10 @@ impl RelayProcess {
     }
 
     fn request_retirement(&mut self) -> Result<(), String> {
+        if self.retirement_deadline.is_some() {
+            return Ok(());
+        }
+        self.retirement_deadline = Some(Instant::now() + self.retirement_grace);
         let mut errors = Vec::new();
         match self.has_exited() {
             Ok(true) => return Ok(()),
@@ -446,13 +509,23 @@ impl RelayProcess {
         collected_errors(errors)
     }
 
-    fn retire_launcher(&mut self) -> Result<(), String> {
+    fn retire_launcher(
+        &mut self,
+        before_reap: impl FnOnce(&mut Self) -> Result<(), String>,
+    ) -> Result<(), String> {
         if self.reaped {
             return self.retirement.clone().unwrap_or(Ok(()));
         }
-        // Startup cancellation can reach the I/O join before the shutdown thread.
         let requested = self.request_retirement();
-        let cleanup = match self.wait_timeout_without_reaping(self.retirement_grace) {
+        let observed = self.wait_timeout_without_reaping(
+            self.retirement_deadline
+                .expect("launcher retirement deadline")
+                .saturating_duration_since(Instant::now()),
+        );
+        // Capture generation evidence at the original boundary: after launcher
+        // grace and before reaping or final force-stop classification.
+        let prepared = before_reap(self);
+        let cleanup = match observed {
             Ok(true) => self.reap(),
             outcome => {
                 let error = match outcome {
@@ -466,7 +539,8 @@ impl RelayProcess {
                 combine_shutdown_results(Err(error), self.force_stop_inner())
             }
         };
-        let cleanup = combine_shutdown_results(requested, cleanup);
+        let cleanup =
+            combine_shutdown_results(combine_shutdown_results(requested, prepared), cleanup);
         let prior = self.retirement.take();
         let result = match (prior, cleanup) {
             (None | Some(Ok(())), cleanup) => cleanup,
@@ -491,11 +565,14 @@ impl RelayProcess {
             errors.push(format!("failed to stop the worker launcher: {error}"));
             return collected_errors(errors);
         }
-        let kill_deadline = Instant::now()
-            .checked_add(LAUNCHER_KILL_GRACE)
-            .unwrap_or_else(Instant::now);
+        let kill_deadline = *self
+            .kill_deadline
+            .get_or_insert_with(|| Instant::now() + LAUNCHER_KILL_GRACE);
         let mut recovered_status = None;
-        let exited = match self.exit.wait(LAUNCHER_KILL_GRACE) {
+        let exited = match self
+            .exit
+            .wait(kill_deadline.saturating_duration_since(Instant::now()))
+        {
             Ok(true) => {
                 self.exited = true;
                 true
@@ -603,15 +680,7 @@ impl Drop for RelayProcess {
         if self.reaped {
             return;
         }
-        let _ = self.request_retirement();
-        if !self
-            .wait_timeout_without_reaping(self.retirement_grace)
-            .unwrap_or(false)
-        {
-            let _ = self.force_stop_inner();
-        } else {
-            let _ = self.reap();
-        }
+        let _ = self.retire_launcher(|_| Ok(()));
     }
 }
 
@@ -819,15 +888,10 @@ impl Worker {
         let deadline = Instant::now();
         let retirement_deadline = relay_retirement_deadline(deadline);
         let shutdown = self.shutdown_handle();
-        let (_, requested) = shutdown.request_shutdown(deadline, retirement_deadline);
-        let process = combine_shutdown_results(
-            requested,
-            shutdown.finish_shutdown(deadline, RelayRetirementAllowance::Always),
-        );
-        let retirement = self.finish_retirement();
-        let can_replace =
-            retirement.is_ok() && self.relay.child.lock().is_ok_and(|child| child.is_reaped());
-        let result = match (process, retirement) {
+        shutdown.request_shutdown(deadline, retirement_deadline);
+        let retirement = shutdown.retire();
+        let can_replace = retirement.io.is_ok() && retirement.resources_confirmed;
+        let result = match (retirement.process_result(), retirement.io) {
             (Ok(()), Ok(outcome)) => Ok(outcome),
             (Err(error), Ok(outcome)) => Err(super::WorkerRetirementFailure::new(error, outcome)),
             (Ok(()), Err(error)) => Err(super::WorkerRetirementFailure::new(error, None)),
@@ -843,7 +907,10 @@ impl Worker {
     }
 
     pub(super) fn finish_retirement(&mut self) -> Result<Option<WorkerProcessOutcome>, String> {
-        self.relay.finish_tasks()
+        let shutdown = self.shutdown_handle();
+        let deadline = Instant::now();
+        shutdown.request_shutdown(deadline, deadline);
+        shutdown.finish_retirement()
     }
 
     pub(super) fn shutdown_handle(&self) -> WorkerShutdownHandle {
@@ -855,34 +922,15 @@ impl Worker {
             shutdown_started: self.shutdown_started.clone(),
             ready_commit: self.ready_commit.clone(),
             child: self.relay.child.clone(),
+            retirement: self.relay.retirement.clone(),
+            output_stop: self.relay.output_stop.clone(),
         }
     }
 
     fn startup_failure(&mut self, message: String) -> SendFailure {
-        let retirement = if self
-            .ready_commit
-            .finish(ReadyCommitOutcome::Failed(message.clone()))
-        {
-            self.shutdown_after_failure()
-        } else {
-            // Connection cancellation already owns shutdown. Its readiness
-            // wakeup precedes relay retirement; do not kill that relay while
-            // it is still responsible for stopping and reaping the worker.
-            let process = self.shutdown_started.deadline().and_then(|deadline| {
-                self.shutdown_handle()
-                    .finish_shutdown(deadline, RelayRetirementAllowance::Always)
-            });
-            match (process, self.finish_retirement()) {
-                (Ok(()), retirement) => retirement.map_err(Into::into),
-                (Err(error), Ok(outcome)) => {
-                    Err(super::WorkerRetirementFailure::new(error, outcome))
-                }
-                (Err(error), Err(retirement)) => Err(super::WorkerRetirementFailure::new(
-                    format!("{error}; additionally failed to retire worker I/O: {retirement}"),
-                    None,
-                )),
-            }
-        };
+        self.ready_commit
+            .finish(ReadyCommitOutcome::Failed(message.clone()));
+        let retirement = self.shutdown_after_failure();
         match retirement {
             Ok(outcome) => SendFailure::from(message).worker_outcome(outcome),
             Err(error) => error.attach_to(SendFailure::from(message)),
@@ -1167,7 +1215,7 @@ impl InterruptRequests {
     }
 }
 
-impl ShutdownAcceptance {
+impl LocalShutdownObservation {
     fn request(&self, deadline: Instant) -> Result<(), String> {
         let mut request = self
             .0
@@ -1197,15 +1245,6 @@ impl ShutdownAcceptance {
         Ok(())
     }
 
-    fn deadline(&self) -> Result<Instant, String> {
-        self.0
-            .lock()
-            .map_err(|_| "worker relay shutdown state lock poisoned".to_string())?
-            .as_ref()
-            .map(|request| request.deadline)
-            .ok_or_else(|| "worker relay shutdown was not requested".to_string())
-    }
-
     fn observed_by_deadline(&self) -> Result<bool, String> {
         let request = self
             .0
@@ -1221,6 +1260,9 @@ impl ShutdownAcceptance {
 }
 
 impl WorkerShutdownHandle {
+    pub(super) fn reserve_failed_shutdown(&self, deadline: Instant) {
+        self.reserve_shutdown(deadline, relay_retirement_deadline(deadline));
+    }
     pub(super) fn write_startup_stdin(&self, data: String) -> Result<(), String> {
         self.stdin.send(data)
     }
@@ -1232,51 +1274,151 @@ impl WorkerShutdownHandle {
 
     /// Requests relay-owned worker shutdown and enforces bounded relay retirement.
     ///
-    /// The owning `Worker` separately joins all relay transport tasks.
+    /// The shared generation operation joins all relay transport tasks once.
     pub(super) fn shutdown(&self, deadline: Instant) -> Result<(), String> {
-        let (allowance, requested) = self.request_shutdown(deadline, deadline);
-        combine_shutdown_results(requested, self.finish_shutdown(deadline, allowance))
+        self.request_shutdown(deadline, deadline);
+        self.finish_shutdown()
     }
 
-    pub(super) fn request_shutdown(
-        &self,
-        worker_deadline: Instant,
-        completion_deadline: Instant,
-    ) -> (RelayRetirementAllowance, Result<(), String>) {
-        let requested = self.shutdown_started.request(worker_deadline);
+    pub(super) fn reserve_shutdown(&self, worker_deadline: Instant, completion_deadline: Instant) {
+        self.retirement
+            .state
+            .lock()
+            .expect("generation retirement lock")
+            .budgets
+            .get_or_insert((worker_deadline, completion_deadline));
+    }
+
+    pub(super) fn request_shutdown(&self, worker_deadline: Instant, completion_deadline: Instant) {
+        self.reserve_shutdown(worker_deadline, completion_deadline);
+        let mut state = self
+            .retirement
+            .state
+            .lock()
+            .expect("generation retirement lock");
+        while state.requesting {
+            state = self
+                .retirement
+                .changed
+                .wait(state)
+                .expect("generation retirement lock");
+        }
+        if state.requested.is_some() {
+            return;
+        }
+        state.requesting = true;
+        let (worker_deadline, completion_deadline) = state.budgets.expect("reserved retirement");
+        drop(state);
+        let reserved = self.shutdown_started.request(worker_deadline);
         self.ready_commit.finish(ReadyCommitOutcome::Retiring);
-        let allowance = if self
-            .commands
-            .shutdown(worker_deadline, completion_deadline)
-            .is_ok()
-        {
-            RelayRetirementAllowance::TimelyAcceptance
+        let requested = combine_shutdown_results(
+            reserved,
+            self.commands.shutdown(worker_deadline, completion_deadline),
+        );
+        let allowance = if requested.is_ok() && completion_deadline == worker_deadline {
+            RelayRetirementAllowance::TimelyLocalObservation
         } else {
             RelayRetirementAllowance::Always
         };
-        (allowance, requested)
+        let mut state = self
+            .retirement
+            .state
+            .lock()
+            .expect("generation retirement lock");
+        state.requested = Some((allowance, requested));
+        state.requesting = false;
+        self.retirement.changed.notify_all();
+        // Transport failure is retained in the operation and dispatched to the
+        // evaluation. finish_shutdown decides whether force retirement settled it.
     }
 
-    pub(super) fn finish_shutdown(
-        &self,
-        deadline: Instant,
-        allowance: RelayRetirementAllowance,
-    ) -> Result<(), String> {
+    pub(super) fn finish_shutdown(&self) -> Result<(), String> {
+        self.retire().process_result()
+    }
+
+    pub(super) fn finish_retirement(&self) -> Result<Option<WorkerProcessOutcome>, String> {
+        self.retire().io
+    }
+
+    fn retire(&self) -> RetirementResult {
+        let mut state = self
+            .retirement
+            .state
+            .lock()
+            .expect("generation retirement lock");
+        while state.requesting || state.finishing {
+            state = self
+                .retirement
+                .changed
+                .wait(state)
+                .expect("generation retirement lock");
+        }
+        if let Some(result) = &state.result {
+            return result.clone();
+        }
+        let (deadline, _) = state.budgets.expect("reserved retirement");
+        let (allowance, requested) = state.requested.clone().expect("requested retirement");
+        let tasks = state.tasks.take().expect("owned generation tasks");
+        state.finishing = true;
+        drop(state);
         let retirement_deadline = relay_retirement_deadline(deadline);
         let barrier_deadline = if allowance == RelayRetirementAllowance::Always {
             retirement_deadline
         } else {
             deadline
         };
-        let _ = self.retire_operation(
-            barrier_deadline,
-            "worker stopped before operation completed".to_string(),
+        let normal = combine_shutdown_results(
+            requested,
+            self.commands.retire_operation(
+                barrier_deadline,
+                "worker stopped before operation completed".to_string(),
+            ),
         );
-        self.stop_relay(deadline, retirement_deadline, allowance)
-    }
-
-    fn retire_operation(&self, deadline: Instant, error: String) -> Result<(), String> {
-        self.commands.retire_operation(deadline, error)
+        let cleanup = self.stop_relay(deadline, retirement_deadline, allowance);
+        let (launcher_reaped, resources_confirmed) = self
+            .child
+            .lock()
+            .map(|child| {
+                (
+                    child.is_reaped(),
+                    child.is_reaped() && child.temporary_retirement.is_ok(),
+                )
+            })
+            .unwrap_or((false, false));
+        // Failed process cleanup must still drain available output and join all
+        // owned I/O. Neither a normal-barrier timeout nor an I/O join confirms
+        // native cleanup; the retained process result remains authoritative.
+        self.output_stop.stop();
+        let command_writer =
+            join_worker_thread(tasks.command_writer.stop(), "relay command writer");
+        let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
+        let diagnostics = join_diagnostic_reader(tasks.diagnostic_reader);
+        let outcome = tasks.dispatcher.join();
+        let joined = combine_shutdown_results(
+            combine_shutdown_results(command_writer, event_reader),
+            diagnostics,
+        );
+        let io = match (joined, outcome) {
+            (Ok(()), outcome) => outcome,
+            (Err(error), Ok(_)) => Err(error),
+            (Err(error), Err(outcome)) => Err(format!("{error}; additionally {outcome}")),
+        };
+        let result = RetirementResult {
+            normal,
+            cleanup,
+            io,
+            launcher_reaped,
+            resources_confirmed,
+        };
+        let mut state = self
+            .retirement
+            .state
+            .lock()
+            .expect("generation retirement lock");
+        state.result = Some(result.clone());
+        state.finishing = false;
+        self.retirement.changed.notify_all();
+        result
     }
 
     fn stop_relay(
@@ -1315,35 +1457,23 @@ impl WorkerShutdownHandle {
                 Err(error) => errors.push(error),
             }
         }
-        if !exited {
+        let cleanup = if exited {
+            match self.operation.relay_exit_caused_failure() {
+                Ok(expected) => child.relay_exit_recovery_expected = expected,
+                Err(error) => errors.push(error),
+            }
+            child.reap()
+        } else {
             self.commands.report_command_transport_failure(
                 "worker relay command transport retired".to_string(),
             );
-            if let Err(error) = child.request_retirement() {
-                errors.push(error);
-            }
-            let grace = child.retirement_grace;
-            match child.wait_timeout_without_reaping(grace) {
-                Ok(observed) => exited = observed,
-                Err(error) => errors.push(error),
-            }
-        }
-        match self.operation.relay_exit_caused_failure() {
-            Ok(expected) => child.relay_exit_recovery_expected = expected,
-            Err(error) => errors.push(error),
-        }
-        if exited {
-            if let Err(error) = child.reap() {
-                errors.push(error);
-            }
-        } else {
-            errors.push(format!(
-                "worker launcher did not retire within {} ms",
-                child.retirement_grace.as_millis()
-            ));
-            if let Err(error) = child.force_stop_inner() {
-                errors.push(error);
-            }
+            child.retire_launcher(|child| {
+                child.relay_exit_recovery_expected = self.operation.relay_exit_caused_failure()?;
+                Ok(())
+            })
+        };
+        if let Err(error) = cleanup {
+            errors.push(error);
         }
         let result = if errors.is_empty() {
             Ok(())
@@ -1398,44 +1528,6 @@ impl RelayConnection {
 
     fn commands(&self) -> RelayCommandSender {
         self.commands.clone()
-    }
-
-    fn finish_tasks(&mut self) -> Result<Option<WorkerProcessOutcome>, String> {
-        let cleanup = {
-            let mut child = self
-                .child
-                .lock()
-                .map_err(|_| "worker child lock poisoned".to_string())?;
-            if child.is_reaped() {
-                child.temporary_retirement.clone()
-            } else {
-                child.retire_launcher()
-            }
-        };
-        // Even failed launcher cleanup must retire owned I/O. Wake the readers'
-        // bounded available-output drain; the cleanup error still blocks replacement.
-        self.output_stop.stop();
-        let tasks = match self.tasks.take() {
-            Some(tasks) => {
-                let command_writer =
-                    join_worker_thread(tasks.command_writer.stop(), "relay command writer");
-                let event_reader = join_worker_thread(tasks.event_reader, "relay event reader");
-                let diagnostics = join_diagnostic_reader(tasks.diagnostic_reader);
-                let outcome = tasks.dispatcher.join();
-                command_writer
-                    .and(event_reader)
-                    .and(diagnostics)
-                    .and(outcome)
-            }
-            None => Ok(None),
-        };
-        match (tasks, cleanup) {
-            (Ok(outcome), Ok(())) => Ok(outcome),
-            (Err(error), Ok(())) | (Ok(_), Err(error)) => Err(error),
-            (Err(error), Err(cleanup_error)) => Err(format!(
-                "{error}; additionally failed to retire sandbox lifetime: {cleanup_error}"
-            )),
-        }
     }
 }
 

@@ -6,6 +6,7 @@ import re
 import signal
 import subprocess
 import sys
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -14,10 +15,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from support.records import Transcript
 from support.capture import read_lines
 from support.checkpoints import FifoCheckpoint
+from support.client import TextReader
 from support.events import Events
 from support.native import LOADER_VARIABLE, build_interposer
-from support.processes import stop_process_group
-from support.requirements import NATIVE_FIXTURES, POSIX, requires
+from support.normalization import code
+from support.processes import (
+    ProcessIdentity,
+    capture_process_identity,
+    current_process_identity,
+    kill_processes,
+    stop_process_group,
+)
+from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
 from support.suites import run_this_suite
 
 
@@ -210,6 +219,144 @@ esac
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=10)
+
+
+@requires(POSIX, NATIVE_FIXTURES, PROCESS_EVENTS)
+def test_later_stage_failure_does_not_inherit_earlier_control(
+    binary: Path,
+) -> Transcript:
+    with (
+        TemporaryDirectory() as temporary,
+        closing(FifoCheckpoint.create(Path(temporary) / "started")) as started,
+    ):
+        root = Path(temporary)
+        r_home = root / "r"
+        (r_home / "bin").mkdir(parents=True)
+        ir = root / "ir"
+        ir.write_text("#!/bin/sh\nprintf 'ir 0.4.0\\n'\n")
+        ir.chmod(0o755)
+        uv = root / "resolved-uv"
+        uv.write_text(
+            "#!/bin/sh\nprintf 'independent inventory failure\\n' >&2\nexit 23\n"
+        )
+        uv.chmod(0o755)
+        rscript = r_home / "bin/Rscript"
+        rscript.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import os
+                import signal
+
+                signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+                with open(os.environ["MCP_CONSOLE_TEST_STAGE_PID"], "w") as identity:
+                    identity.write(str(os.getpid()))
+                with open(os.environ["MCP_CONSOLE_TEST_STAGE_STARTED"], "w") as checkpoint:
+                    checkpoint.write("1")
+                assert signal.sigwait({signal.SIGINT}) == signal.SIGINT
+                print(os.environ["MCP_CONSOLE_TEST_STAGE_UV"])
+                """),
+        )
+        rscript.chmod(0o755)
+        environment = {
+            **os.environ,
+            "PATH": str(root),
+            "R_HOME": str(r_home),
+            "MCP_CONSOLE_HOME": str(root / "console"),
+            "RETICULATE_PYTHON": "managed",
+            "MCP_CONSOLE_TEST_STAGE_STARTED": str(started.path),
+            "MCP_CONSOLE_TEST_STAGE_UV": str(uv),
+            "MCP_CONSOLE_TEST_STAGE_PID": str(root / "stage-pid"),
+            LOADER_VARIABLE: str(build_interposer(root, "preparation_stage_control")),
+        }
+        environment.pop("RETICULATE_UV", None)
+        process = subprocess.Popen(
+            [binary, "resolve"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+            cwd=root,
+            start_new_session=True,
+        )
+        assert process.stdin is not None and process.stdout is not None
+        reader = TextReader(process.stdout)
+        messages: list[object] = []
+        identities: list[ProcessIdentity] = []
+
+        def send(message: object) -> None:
+            process.stdin.write(json.dumps(message) + "\n")
+            process.stdin.flush()
+
+        def receive() -> object:
+            message = json.loads(reader.readline(timeout=10))
+            messages.append(message)
+            return message
+
+        try:
+            send({"Open": {"mode": "R"}})
+            assert receive() == "Hello"
+            discovery = receive()["Completed"]
+            assert discovery["confirmed"] and "Ok" in discovery["result"], discovery
+            send({"Run": {"id": 1, "operation": "Bootstrap"}})
+            assert receive()["Completed"]["result"] == {"Ok": None}
+            send(
+                {
+                    "Run": {
+                        "id": 2,
+                        "operation": {
+                            "PythonVersion": {
+                                "constraints": [],
+                                "r": {
+                                    "library": str(root),
+                                    "r_libs": {"Unix": list(os.fsencode(root))},
+                                    "requirements": [],
+                                },
+                            }
+                        },
+                    }
+                }
+            )
+            started.wait("uv bootstrap is ready to consume interrupt")
+            identities.append(
+                capture_process_identity(int((root / "stage-pid").read_text()))
+            )
+            send({"Control": {"id": 2, "control": "Interrupted"}})
+            assert receive() == {"Controlled": {"id": 2, "result": {"Ok": True}}}
+            completed = receive()["Completed"]
+            assert completed == {
+                "id": 2,
+                "result": {
+                    "Err": "managed Python version resolution failed with exit status: 23: independent inventory failure"
+                },
+                "control": None,
+                "confirmed": True,
+            }, completed
+            send("Close")
+            assert receive() == "Closed"
+            process.stdin.close()
+            assert process.wait(timeout=10) == 0
+            assert process.stderr.read() == ""
+            discovery["result"]["Ok"]["selections"]["r_home"] = "<fixture R home>"
+            discovery["result"]["Ok"]["local_r_home_bytes"] = "<fixture R home bytes>"
+            return [{"messages": messages, "stderr": "", "exit": 0}]
+        finally:
+            # A failed checkpoint can leave the first resolver waiting for its
+            # signal before the normal identity capture above.
+            if not identities and (root / "stage-pid").exists():
+                identity = current_process_identity(
+                    int((root / "stage-pid").read_text())
+                )
+                if identity is not None:
+                    identities.append(identity)
+            kill_processes(identities)
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=10)
+            reader.close()
+            for stream in (process.stdin, process.stdout, process.stderr):
+                stream.close()
 
 
 @requires(NATIVE_FIXTURES)
