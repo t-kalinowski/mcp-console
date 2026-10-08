@@ -109,6 +109,7 @@ impl ConsoleServer {
                     configuration.dynamic_resolution(),
                     configuration.python_preparation(),
                     !configuration.python_only(),
+                    configuration.startup_declaration(),
                 );
                 Ok(startup::PreparedRuntime {
                     configuration,
