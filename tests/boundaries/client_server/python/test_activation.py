@@ -591,8 +591,15 @@ def cancelled_candidate_probe(
         environment["TMPDIR"] = str(root)
         checkpoints = []
         try:
-            with McpClient(binary, execution.serve(), environment, root) as client:
-                initialize_managed_client(client)
+            # Declare the empty baseline before prewarming; replacing a
+            # default worker can otherwise retire R during native startup.
+            with McpClient(
+                binary,
+                execution.serve("-c", "python.managed.packages=[]"),
+                environment,
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
                 client.send(
                     # fmt: r
                     r=code(r"""
