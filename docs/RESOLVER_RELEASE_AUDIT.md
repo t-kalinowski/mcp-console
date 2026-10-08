@@ -63,15 +63,25 @@ Console's [PR CI run](https://github.com/t-kalinowski/mcp-console/actions/runs/3
 The overall jobs failed in existing cases: Windows lost the interruption cause after terminating a resolver Job; Linux encountered a retiring-thread `/proc` read and two preparation-result mismatches; macOS received HTTP 502 responses while downloading a DuckDB extension.
 The [subsequent main run](https://github.com/t-kalinowski/mcp-console/actions/runs/37718879271) passed Linux and macOS and reproduced both Windows interruption failures.
 
-Review repairs declare uv as a fixture capability, clear inherited competing package-source selectors, and require managed-proxy evidence for the download denial.
+Review repairs declare uv as a fixture capability, clear inherited competing package-source selectors and proxy evidence, and require managed-proxy evidence for the download denial.
+Native constructor cases use a fixture-owned Console home while preserving the caller's `HOME`.
 The Windows repair preserves interruption as the cause when terminating a live resolver Job, while retaining confirmed retirement and independently completed setup failures.
 The Linux observation fixture skips task entries that disappear while enumerating a live parent's children; process identity and descendant-retirement assertions remain intact.
-The other Linux mismatches and macOS download failures did not reproduce locally; they require confirmation in the revised PR's CI.
+The [revised PR run](https://github.com/t-kalinowski/mcp-console/actions/runs/37725473130) at `b9d702e4` passed the Linux and macOS jobs and Windows core/native acceptance, confirming the interruption and Linux observation repairs.
+Windows then failed eight existing shared transcript cases on loader inspection, executable naming, recorded path presentation, and dependency startup diagnostics.
 
 All five trust cases pass locally with competing uv source variables set, and skip when uv is unavailable.
 The five existing Unix cases that failed in CI pass locally in both execution modes, and focused resolver-I/O and retirement coverage passes after the repairs.
 Ordinary `scripts/check` passes at repair commit `398f9f5a`.
-Records `20261007-234817-kfxyoq_j`, `20261007-235120-bazltxes`, `20261007-235419-nn276af9`, and `20261007-235557-lo2s95uu` retain this macOS evidence; native Windows and Linux verification of the repairs remains a hosted CI gate.
+Records `20261007-234817-kfxyoq_j`, `20261007-235120-bazltxes`, `20261007-235419-nn276af9`, and `20261007-235557-lo2s95uu` retain this macOS evidence.
+
+The follow-up shared fixtures inspect the loaded Windows R module without initializing it, remove the actual exposed uv executable, and verify recorded directory identity before normalizing its JSON/YAML presentation.
+SQL fixtures initialize their Arrow preview dependency explicitly and supply its optional timezone data where required.
+The offline raghilda cases use scalar local embeddings and never run ONNX inference; normalization removes only the known Server 2025 OS-name warning from their unused document converter, preserving unexpected warnings and errors.
+All eight repaired cases pass in 16 macOS executions, and all nine audit cases pass with inherited proxy selectors and the marker set.
+The default constructor case also passes with the invalid caller home configuration that caused it to fail before isolation.
+Ordinary `scripts/check` passes with these fixture repairs; records `20261008-075503-41g8aew3`, `20261008-075805-k41ilplf`, and `20261008-080023-hd66h64u` retain the evidence.
+These follow-up fixtures still require Windows CI verification at the revised head.
 
 At the pinned companion's [CI run](https://github.com/t-kalinowski/cobox/actions/runs/37522396814), Linux executable contracts, native sandbox tests, and release-artifact contracts passed.
 The subsequent native lint step failed on an unfulfilled `clippy::zombie_processes` expectation.
