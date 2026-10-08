@@ -176,8 +176,14 @@ pak::pak(c("pkgdown", "local::r"))
 ```
 
 ```sh
+uv venv .venv
+uv pip install --python .venv/bin/python -r docs/requirements.txt
+source .venv/bin/activate
 quarto preview docs
 ```
+
+On Windows, activate `.venv\Scripts\Activate.ps1` and use `.venv\Scripts\python.exe` for installation.
+Keep this environment active when rendering or checking the website.
 
 For a complete build and link check:
 
@@ -186,12 +192,15 @@ quarto render docs
 python3 tests/website.py
 ```
 
-The check renders a fresh copy in a temporary directory and verifies page titles, navigation, search coverage, and local links and section anchors, including the R package pages.
-Quarto's post-render script builds the `mcp.console` pkgdown site from `r/` into `docs/_site/r/`, alongside the guides in the same Pages artifact.
+The check renders a fresh copy in a temporary directory and verifies page titles, navigation, search coverage, and local links and section anchors, including both package sites.
+Quarto's post-render scripts build the `mcp.console` pkgdown site from `r/` into `docs/_site/r/` and the Python Great Docs site into `docs/_site/python/`, alongside the guides in the same Pages artifact.
 The package site links back to the Quarto home page; its configuration lives in `r/_pkgdown.yml`.
 In local previews, pkgdown search results link to the configured GitHub Pages URL; direct page links stay local.
-Code examples are displayed without execution; building the website does not require Python packages, API credentials, or a Console executable.
-Generated files in `docs/_site/` and `docs/.quarto/` are ignored.
+The Python site's configuration lives in `great-docs.yml`; `docs/python/index.qmd` supplies its home page.
+Great Docs generates the Python reference through static source analysis (`dynamic: false`), so framework dependencies and a native build are unnecessary.
+Its shared navigation links back to the guides and R site in both local previews and Pages deployment.
+Code examples are displayed without execution; building the website does not require API credentials or a Console executable.
+Generated files in `great-docs/`, `docs/_site/`, and `docs/.quarto/` are ignored.
 Add new guides to the sidebar in `docs/_quarto.yml`; the render list includes top-level Markdown guides and benchmark pages, excluding task templates.
 
 The Documentation workflow checks pull requests and deploys changes on `main` to GitHub Pages.

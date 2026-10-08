@@ -11,6 +11,13 @@ end
 
 -- Link the package README to pkgdown; other files outside the site stay on GitHub.
 function Link(link)
+  if link.target == "https://t-kalinowski.github.io/mcp-console/python/reference/index.html" then
+    link.target = pandoc.path.make_relative(
+      pandoc.path.join({quarto.project.directory, "python/reference/index.html"}),
+      pandoc.path.directory(quarto.doc.input_file)
+    )
+    return link
+  end
   local path, suffix = link.target:match("^([^#?]+)(.*)$")
   if path and not path:match("^[/#]") and not path:match("^%a[%w+.-]*:") then
     local input_dir = pandoc.path.directory(quarto.doc.input_file)

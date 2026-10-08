@@ -1,0 +1,26 @@
+---
+title: MCP Console Python
+description: >-
+  Python clients and framework adapters for persistent R, Python, and SQL
+  sessions.
+---
+
+The `mcp_console` package connects Python applications to a persistent Console session.
+Use `MCPConsole` for synchronous code or `AsyncMCPConsole` for async code.
+The application owns its model clients, agents, chats, and tool loops.
+
+```python
+from mcp_console import MCPConsole
+
+with MCPConsole() as console:
+    print(console.send(python="answer = 42; answer"))
+    print(console.send(sql="SELECT 6 * 7 AS answer"))
+```
+
+Install the extra for your integration: `client`, `chatlas`, `openai`, `openai-agents`, `anthropic`, or `codex`.
+See the [Python integration guide](https://t-kalinowski.github.io/mcp-console/PYTHON.html) for installation and complete examples.
+
+The [API reference](reference/index.qmd) covers connection lifecycle, calls, dependency declarations, and framework adapters.
+Both clients accept the same call arguments; `AsyncMCPConsole.send` documents those arguments.
+Clients and adapters use the connected server's `send` schema.
+Reconnect starts a new session; recreate adapters after reconnecting.

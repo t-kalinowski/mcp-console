@@ -9,3 +9,5 @@ __pycache__/
 .claude
 .positai
 /.dev-workflow/
+/.venv/
+/great-docs/
