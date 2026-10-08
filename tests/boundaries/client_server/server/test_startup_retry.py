@@ -469,6 +469,7 @@ def test_restart_repairs_failed_r_discovery(binary: Path) -> Transcript:
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_restart_refreshes_failed_inspection_evidence(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -489,7 +490,14 @@ def test_restart_refreshes_failed_inspection_evidence(
 
         break_inspection("initial setup is broken")
         with McpClient(
-            binary, execution.serve("-c", "cache=host"), environment, root
+            binary,
+            execution.serve(
+                "-c",
+                "cache=host",
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+            ),
+            environment,
+            root,
         ) as client:
             client.initialize_and_list_tools()
             failure = client.send(python="raise AssertionError('must not run')")
@@ -586,7 +594,14 @@ def retry_inspection(
             closing(FifoCheckpoint.create(root / "reached")) as reached,
             closing(FifoCheckpoint.create(root / "release")) as release,
             McpClient(
-                binary, execution.serve("-c", "cache=host"), environment, root
+                binary,
+                execution.serve(
+                    "-c",
+                    "cache=host",
+                    *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+                ),
+                environment,
+                root,
             ) as client,
         ):
             client.initialize_and_list_tools()
@@ -621,6 +636,7 @@ def retry_inspection(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_retry_stdin_reaches_early_input_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -718,6 +734,7 @@ def test_requirements_retry_stdin_reaches_early_input_cell(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_cancelled_restart_shares_retry_and_preserves_next_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -988,6 +1005,7 @@ def cancelled_retry_preparation(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+@execution_snapshots
 def test_interrupted_retry_can_be_restarted(
     binary: Path, execution: Execution
 ) -> Transcript:
