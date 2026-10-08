@@ -547,6 +547,8 @@ def test_evaluates_with_default_managed_r(
             managed_index <- if (Sys.getenv("MCP_CONSOLE_SANDBOX") == "1") 2L else 1L
             managed_packages <- c(
               "tidyverse",
+              "dplyr",
+              "dbplyr",
               "reticulate",
               "DBI",
               "duckdb",
@@ -589,6 +591,8 @@ def test_evaluates_with_default_managed_r(
         assert len(runs) == 1, runs
         assert set(ir_requirements(runs[0])) == {
             "tidyverse",
+            "dplyr",
+            "dbplyr",
             "reticulate",
             "DBI",
             "duckdb",

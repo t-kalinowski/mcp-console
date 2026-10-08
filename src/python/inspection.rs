@@ -77,8 +77,8 @@ pub(crate) fn inspect_native(
     let resolver = ResolverProcess::new();
     let mut command = resolver_command(executable);
     command
-        // Inspect the selected installation without executing workspace,
-        // PYTHONPATH, or user-site code with the host resolver's permissions.
+        // Exclude workspace, PYTHONPATH, and user-site imports. Environment
+        // startup hooks still execute; explicit selections use worker permissions.
         .arg("-I")
         .arg("-c")
         .arg(INSPECTION_SOURCE)

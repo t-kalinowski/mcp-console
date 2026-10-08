@@ -59,7 +59,6 @@ It can affect executable selection, child environments, and requested sandbox pe
 Trusting code to run inside a sandbox is not equivalent to trusting it to define the sandbox.
 Global configuration supplies defaults, not a mandatory security ceiling: project settings may override global settings under the ordinary merge rules.
 Integrations opening unfamiliar projects should use `--no-project-config` until they authorize project configuration.
-Discovery opt-outs are not a general safe mode: they do not disable native runtime startup files, clear inherited environment variables, or make selected executables trustworthy.
 
 Paths keep their existing launch-relative meaning, including paths supplied by global configuration.
 They are not rebased onto the configuration file's directory.
@@ -138,14 +137,19 @@ It does not restrict what SQL can do or change the sandbox and dependency trust 
 
 ## Python environment selection
 
-Select an existing interpreter with:
+Select an existing interpreter or standard virtual environment with:
 
 ```yaml
-python: .venv/bin/python
+python: .venv
 ```
 
 This overrides inherited `RETICULATE_PYTHON`, is retained across restarts, and is unavailable with custom workers.
 Paths, including bare filenames, are relative to the launch directory.
+The equivalent mapping is `python: {existing: .venv}`.
+Directories require `pyvenv.cfg` and `bin/python` on Unix or `Scripts/python.exe` on Windows.
+Executable paths retain their spelling and symlinks so a selected venv keeps its package environment.
+Recognized Conda installations are unsupported; unrelated Conda environment variables do not exclude ordinary venvs.
+Interpreter symlink targets are checked for Conda installations without changing the selected executable path.
 
 A leading `~` expands using the server's absolute `HOME`, including in a quoted override such as `-c 'python=~/.venv/bin/python'`.
 Missing, empty, or relative `HOME` is an error when expansion is requested; `~user` and environment-variable references are not expanded.
@@ -153,7 +157,31 @@ Missing, empty, or relative `HOME` is an error when expansion is requested; `~us
 Explicit selection uses preinstalled Python packages and bypasses managed Python preparation.
 Without R or an explicit selection, Console uses uv on the local host.
 A broken selected interpreter is an error, not a reason to fall back.
+Existing interpreter inspection, including any environment startup hooks, uses the worker's captured permissions.
 See [runtime selection](BUILTIN_RUNTIME.md).
+
+Choose the first available Python candidate with:
+
+```yaml
+python:
+  first_available:
+    - existing: .venv
+    - active_venv
+    - managed: {}
+```
+
+Only an absent existing path advances the list.
+A present broken environment, dangling interpreter symlink, or invalid activation path fails selection.
+`active_venv` reads the incoming `VIRTUAL_ENV`; unset or empty means absent.
+Launchers must preserve this variable, or select an explicit path.
+The selected interpreter is captured once, including across worker restarts; later candidates are never inspected or prepared.
+
+The list is flat and nonempty, with at most one `active_venv` and one optional managed candidate last.
+Exhausting the list fails startup.
+`managed: {}` uses the existing managed Python defaults and also works at the top level to override an inherited `RETICULATE_PYTHON`.
+Managed selection currently accepts an empty options mapping.
+An explicit managed choice requires available managed preparation; it does not select a PATH interpreter when preparation is unavailable.
+When `python` is omitted, Console retains the launch-time `RETICULATE_PYTHON` compatibility behavior.
 
 ## R executable selection
 

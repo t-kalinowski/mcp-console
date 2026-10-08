@@ -14,11 +14,17 @@ stderr: |
     help           Print this message or the help of the given subcommand(s)
 
   Options:
-        --no-project-config   Skip trusted launch-directory project configuration; still load global configuration and apply -c overrides
-        --no-global-config    Skip global configuration; still load project configuration and apply -c overrides
-        --no-config           Skip global and project configuration; apply only -c overrides (not a general safe mode)
-        --config-file <PATH>  Use only this YAML or JSON configuration file, then apply -c overrides
-    -c, --config <KEY=VALUE>  Override layered global and project configuration; repeat for ordered dotted KEY=VALUE assignments
+        --no-project-config   Skip trusted launch-directory project configuration;
+                              still load global configuration and apply -c
+                              overrides
+        --no-global-config    Skip global configuration; still load project
+                              configuration and apply -c overrides
+        --no-config           Skip global and project configuration; apply only -c
+                              overrides
+        --config-file <PATH>  Use only this YAML or JSON configuration file, then
+                              apply -c overrides
+    -c, --config <KEY=VALUE>  Override layered global and project configuration;
+                              repeat for ordered dotted KEY=VALUE assignments
     -h, --help                Print help (see more with '--help')
     -V, --version             Print version
 
@@ -40,22 +46,29 @@ stdout: |
 
   Options:
         --no-project-config
-            Skip launch-directory project configuration; still load global configuration and apply -c overrides.
-            Automatic project configuration is trusted launcher input: it can select executables, child environments, and sandbox permissions. Trusting sandboxed code is not equivalent to trusting it to define the sandbox.
-            Global settings supply defaults, not a mandatory security ceiling; projects may override them. Integrations opening unfamiliar projects should use this flag until they authorize project configuration.
-            Discovery flags are not a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy.
+            Skip launch-directory project configuration; still load global
+            configuration and apply -c overrides.
+            Automatic project configuration is trusted launcher input: it can
+            select executables, child environments, and sandbox permissions.
+            Trusting sandboxed code is not equivalent to trusting it to define the
+            sandbox.
+            Global settings supply defaults, not a mandatory security ceiling;
+            projects may override them. Integrations opening unfamiliar projects
+            should use this flag until they authorize project configuration.
 
         --no-global-config
-            Skip global configuration; still load project configuration and apply -c overrides
+            Skip global configuration; still load project configuration and apply
+            -c overrides
 
         --no-config
-            Skip global and project configuration; apply only -c overrides (not a general safe mode)
+            Skip global and project configuration; apply only -c overrides
 
         --config-file <PATH>
             Use only this YAML or JSON configuration file, then apply -c overrides
 
     -c, --config <KEY=VALUE>
-            Override layered global and project configuration; repeat for ordered dotted KEY=VALUE assignments
+            Override layered global and project configuration; repeat for ordered
+            dotted KEY=VALUE assignments
 
     -h, --help
             Print help (see a summary with '-h')
@@ -75,22 +88,29 @@ stdout: |
 
   Options:
         --no-project-config
-            Skip launch-directory project configuration; still load global configuration and apply -c overrides.
-            Automatic project configuration is trusted launcher input: it can select executables, child environments, and sandbox permissions. Trusting sandboxed code is not equivalent to trusting it to define the sandbox.
-            Global settings supply defaults, not a mandatory security ceiling; projects may override them. Integrations opening unfamiliar projects should use this flag until they authorize project configuration.
-            Discovery flags are not a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy.
+            Skip launch-directory project configuration; still load global
+            configuration and apply -c overrides.
+            Automatic project configuration is trusted launcher input: it can
+            select executables, child environments, and sandbox permissions.
+            Trusting sandboxed code is not equivalent to trusting it to define the
+            sandbox.
+            Global settings supply defaults, not a mandatory security ceiling;
+            projects may override them. Integrations opening unfamiliar projects
+            should use this flag until they authorize project configuration.
 
         --no-global-config
-            Skip global configuration; still load project configuration and apply -c overrides
+            Skip global configuration; still load project configuration and apply
+            -c overrides
 
         --no-config
-            Skip global and project configuration; apply only -c overrides (not a general safe mode)
+            Skip global and project configuration; apply only -c overrides
 
         --config-file <PATH>
             Use only this YAML or JSON configuration file, then apply -c overrides
 
     -c, --config <KEY=VALUE>
-            Override layered global and project configuration; repeat for ordered dotted KEY=VALUE assignments
+            Override layered global and project configuration; repeat for ordered
+            dotted KEY=VALUE assignments
 
         --no-sandbox
             Run evaluated code and dependency resolution with host permissions
@@ -133,25 +153,33 @@ stdout: |
 
   Options:
         --no-project-config
-            Skip launch-directory project configuration; still load global configuration and apply -c overrides.
-            Automatic project configuration is trusted launcher input: it can select executables, child environments, and sandbox permissions. Trusting sandboxed code is not equivalent to trusting it to define the sandbox.
-            Global settings supply defaults, not a mandatory security ceiling; projects may override them. Integrations opening unfamiliar projects should use this flag until they authorize project configuration.
-            Discovery flags are not a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy.
+            Skip launch-directory project configuration; still load global
+            configuration and apply -c overrides.
+            Automatic project configuration is trusted launcher input: it can
+            select executables, child environments, and sandbox permissions.
+            Trusting sandboxed code is not equivalent to trusting it to define the
+            sandbox.
+            Global settings supply defaults, not a mandatory security ceiling;
+            projects may override them. Integrations opening unfamiliar projects
+            should use this flag until they authorize project configuration.
 
         --no-global-config
-            Skip global configuration; still load project configuration and apply -c overrides
+            Skip global configuration; still load project configuration and apply
+            -c overrides
 
         --no-config
-            Skip global and project configuration; apply only -c overrides (not a general safe mode)
+            Skip global and project configuration; apply only -c overrides
 
         --config-file <PATH>
             Use only this YAML or JSON configuration file, then apply -c overrides
 
     -c, --config <KEY=VALUE>
-            Override layered global and project configuration; repeat for ordered dotted KEY=VALUE assignments
+            Override layered global and project configuration; repeat for ordered
+            dotted KEY=VALUE assignments
 
         --config-env <NAME>
-            Read the runner configuration as JSON from this launch environment variable
+            Read the runner configuration as JSON from this launch environment
+            variable
 
         --writable-root <PATH>
             Allow writes to an additional path (temporary launch option)
