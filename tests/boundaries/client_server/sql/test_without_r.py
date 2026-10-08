@@ -24,10 +24,20 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript, TranscriptWithCompanions
 
+UV_NAME = "uv.exe" if os.name == "nt" else "uv"
+
 
 def environment(path: Path) -> dict[str, str]:
     retain_system_bwrap(path)
-    env = dict(os.environ, PATH=str(path))
+    search_path = [str(path)]
+    if os.name == "nt":
+        search_path.extend(
+            [
+                str(Path(sys.executable).parent),
+                str(Path(os.environ["SystemRoot"]) / "System32"),
+            ]
+        )
+    env = dict(os.environ, PATH=os.pathsep.join(search_path))
     for name in (
         "R_HOME",
         "R_LIBS",
@@ -62,10 +72,10 @@ def sql_client(
 
 def managed_environment(root: Path) -> dict[str, str]:
     (root / "home").mkdir()
-    (root / "uv").symlink_to(shutil.which("uv"))
+    (root / UV_NAME).symlink_to(shutil.which("uv"))
     return dict(
         environment(root),
-        HOME=str(root / "home"),
+        MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY=str(root / "home/.duckdb/extensions"),
         XDG_CACHE_HOME=str(root / "cache-base"),
     )
 
@@ -85,7 +95,7 @@ def test_prepares_builtin_extensions_without_downloads(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        (root / UV_NAME).symlink_to(shutil.which("uv"))
         env = dict(
             environment(root),
             MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY=str(root / "extensions"),
@@ -125,14 +135,14 @@ def test_prepares_builtin_extensions_without_downloads(
             return client.finish()[3:]
 
 
-@requires(SQL)
+@requires(POSIX, SQL)
 @executions(DIRECT)
 def test_managed_python_requires_home_for_default_extensions(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        (root / UV_NAME).symlink_to(shutil.which("uv"))
         env = dict(environment(root), UV_CACHE_DIR=str(root / "uv-cache"))
         env.pop("HOME", None)
         env.pop("XDG_CACHE_HOME", None)
@@ -179,7 +189,7 @@ def test_default_extension_failure_preserves_close_failure(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        (root / UV_NAME).symlink_to(shutil.which("uv"))
         marker = root / "closing"
         env = dict(
             environment(root),
@@ -311,7 +321,7 @@ def test_prepares_extension_before_first_worker_and_loads_from_cache(
             assert "true" in last_tool_text(client).lower()
             client.send(python="import os; print(os.environ['TMPDIR'])")
             first_temporary = Path(last_tool_text(client).strip())
-            (root / "uv").unlink()
+            (root / UV_NAME).unlink()
             client.send(
                 control="restart",
                 sql="SET autoinstall_known_extensions = false; LOAD fts",
@@ -766,7 +776,7 @@ def test_live_extension_additions_require_an_idle_worker(
             return client.finish()[3:]
 
 
-@requires(SQL)
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_extension_preparation_before_worker_retirement(
     binary: Path, execution: Execution
@@ -862,7 +872,7 @@ def test_interrupts_extension_preparation_before_worker_retirement(
 def test_sql_is_the_first_cell(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        (root / UV_NAME).symlink_to(shutil.which("uv"))
         with sql_client(binary, execution, environment(root)) as client:
             result = client.send(sql="SELECT 42 AS answer")
             assert not result.get("isError"), result
@@ -946,7 +956,7 @@ def test_catalog_and_private_storage_follow_worker_lifetime(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        (root / UV_NAME).symlink_to(shutil.which("uv"))
         with sql_client(binary, execution, environment(root)) as client:
             client.send(
                 # fmt: python
@@ -1164,7 +1174,7 @@ def test_selected_environment_uses_custom_connection_without_duckdb(
             return client.finish()[3:]
 
 
-@requires(SQL)
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_bootstrap_ignores_workspace_duckdb_shadows(
     binary: Path, execution: Execution
@@ -1360,7 +1370,7 @@ def test_language_restriction_still_disables_sql(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        (root / UV_NAME).symlink_to(shutil.which("uv"))
         env = dict(environment(root), MCP_CONSOLE_LANGUAGES="python")
         with sql_client(binary, execution, env) as client:
             schema = client.transcript[-1]["result"]["tools"][0]["inputSchema"]
@@ -1383,7 +1393,7 @@ def test_interrupt_preserves_sql_and_python_state(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        (root / "uv").symlink_to(shutil.which("uv"))
+        (root / UV_NAME).symlink_to(shutil.which("uv"))
         env = environment(root)
         env["MCP_CONSOLE_SQL_INTERRUPT_LIBRARY"] = str(
             build_interposer(root, "python_probe_checkpoint")

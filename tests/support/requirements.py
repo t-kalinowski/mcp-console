@@ -107,9 +107,7 @@ NO_SANDBOX = Requirement(
     "the sandbox is available on this platform",
 )
 
-SQL = Requirement(
-    "SQL", sys.platform in {"darwin", "linux"}, "Windows SQL runtime is deferred"
-)
+SQL = Requirement("SQL", WORKER.available, "requires a supported built-in SQL worker")
 R_EVENT_LOOP = Requirement(
     "R event loop",
     WORKER.available,

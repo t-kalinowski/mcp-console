@@ -994,7 +994,15 @@ class WindowsConsole(unittest.TestCase):
         )
         for custom in (False, True):
             baseline = None
-            for languages in ("r,python", "r", "python"):
+            for languages in (
+                "r,python,sql",
+                "r,python",
+                "r",
+                "python",
+                "sql",
+                "r,sql",
+                "python,sql",
+            ):
                 with self.subTest(custom=custom, languages=languages):
                     environment = dict(
                         os.environ,
@@ -1037,7 +1045,8 @@ class WindowsConsole(unittest.TestCase):
                                 for field, schema in baseline["inputSchema"][
                                     "properties"
                                 ].items()
-                                if field not in {"r", "python"} or field in fields
+                                if field not in {"r", "python", "sql"}
+                                or field in fields
                             }
                             self.assertEqual(properties, expected)
                         if custom:
@@ -1050,19 +1059,21 @@ class WindowsConsole(unittest.TestCase):
                                 len(fields) > 1,
                             )
                         else:
-                            expected_description = baseline["description"]
-                            if "r" not in fields:
-                                expected_description = expected_description.replace(
-                                    " " + script_guidance, ""
-                                )
-                            self.assertEqual(tool["description"], expected_description)
                             self.assertIn(
-                                "SQL is not yet supported.", tool["description"]
+                                "Persistent R, Python, and SQL workbench",
+                                tool["description"],
+                            )
+                            self.assertEqual(
+                                "consider DuckDB SQL first" in tool["description"],
+                                "sql" in fields,
+                            )
+                            self.assertEqual(
+                                "Switch languages when useful" in tool["description"],
+                                len(fields) > 1,
                             )
                             for field in fields:
                                 text = properties[field]["description"].lower()
-                                self.assertNotIn("sql", text)
-                                self.assertNotIn("duckdb", text)
+                                self.assertIn("sql", text)
                         self.assertEqual(
                             session.request("tools/list", {})["tools"], [tool]
                         )
@@ -1082,7 +1093,7 @@ class WindowsConsole(unittest.TestCase):
         schema = session.request("tools/list", {})
         tool = schema["tools"][0]
         properties = tool["inputSchema"]["properties"]
-        self.assertNotIn("sql", properties)
+        self.assertIn("sql", properties)
         self.assertIn(
             "Requires host preparation support",
             properties["requirements"]["description"],
@@ -1091,8 +1102,7 @@ class WindowsConsole(unittest.TestCase):
         for language in ("r", "python"):
             with self.subTest(language=language):
                 description = properties[language]["description"].lower()
-                self.assertNotIn("sql", description)
-                self.assertNotIn("duckdb", description)
+                self.assertIn("sql", description)
                 self.assertIn("managed sessions prepare missing", description)
         self.assertEqual(
             schema["tools"][0]["inputSchema"]["properties"]["requirements"][
@@ -1112,6 +1122,67 @@ class WindowsConsole(unittest.TestCase):
         self.assertTrue(result.get("isError"), result)
         self.assertIn("unavailable", json.dumps(result))
         self.assertIn("42", json.dumps(session.send(python="42")))
+
+    def test_sql_without_r(self):
+        uv = shutil.which("uv")
+        self.assertIsNotNone(uv, "Windows SQL acceptance requires uv")
+        directory = tempfile.TemporaryDirectory(prefix="console SQL 日本語 ")
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        shutil.copyfile(uv, root / "uv.exe")
+        environment = dict(
+            os.environ,
+            PATH=os.pathsep.join(
+                [
+                    str(root),
+                    str(Path(sys.executable).parent),
+                    str(Path(os.environ["SystemRoot"]) / "System32"),
+                ]
+            ),
+            RETICULATE_PYTHON="managed",
+            UV_PYTHON_PREFERENCE="system",
+            UV_PYTHON_DOWNLOADS="never",
+        )
+        environment.pop("R_HOME", None)
+        session = Session(environment, overrides=('languages=["python","sql"]',))
+        self.addCleanup(session.close)
+        session.initialize()
+        properties = session.request("tools/list", {})["tools"][0]["inputSchema"][
+            "properties"
+        ]
+        self.assertIn("sql", properties)
+        self.assertNotIn("r", properties)
+        session.expect("1234567", sql="SELECT 1234567 AS answer")
+        inspection = session.send(requirements={"action": "get"})
+        self.assertEqual(
+            inspection["structuredContent"]["requirements"]["duckdb"],
+            ["icu", "json", "sqlite"],
+        )
+        session.expect("Count", sql="CREATE TABLE retained AS SELECT 1234567 AS answer")
+        session.expect("1234567", sql="SELECT * FROM retained")
+        session.expect(
+            "selected sqlite",
+            # fmt: python
+            python=code("""
+                import sqlite3
+
+                selected = sqlite3.connect(":memory:")
+                selected.execute("CREATE TABLE selected(answer INTEGER)")
+                selected.execute("INSERT INTO selected VALUES (7654321)")
+                console_sql_connection(selected)
+                print("selected sqlite")
+                """),
+        )
+        session.expect("7654321", sql="SELECT * FROM selected")
+        session.expect("[done]", python="console_sql_connection(None)")
+        session.expect("1234567", sql="SELECT * FROM retained")
+        session.expect("worker stopped", control="restart")
+        result = session.send(
+            sql="SELECT count(*) FROM duckdb_tables() WHERE table_name = 'retained'"
+        )
+        self.assertFalse(result.get("isError"), result)
+        self.assertTrue(result["content"][0]["text"].endswith("0\n"), result)
+        session.expect("1234567", sql="SELECT 1234567 AS answer")
 
     def test_managed_python_requirements_without_r(self):
         uv = shutil.which("uv")

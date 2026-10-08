@@ -15,7 +15,7 @@ from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import R, SQL, requires
-from boundaries.client_server.sql.test_without_r import environment, sql_client
+from boundaries.client_server.sql.test_without_r import UV_NAME, environment, sql_client
 
 
 def assert_semantic_defaults(
@@ -91,7 +91,7 @@ def test_managed_r_defaults(binary: Path, execution: Execution) -> Transcript:
 def test_managed_python_defaults(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
-        (workspace / "uv").symlink_to(shutil.which("uv"))
+        (workspace / UV_NAME).symlink_to(shutil.which("uv"))
         extensions = workspace / "extensions"
         env = dict(
             environment(workspace),
