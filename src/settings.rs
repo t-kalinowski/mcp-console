@@ -6,9 +6,11 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+mod python;
 mod runtime;
 mod sandbox;
-pub(crate) use runtime::{Candidate, ManagedPython, Python, R, Resolution};
+pub(crate) use python::PythonChoice;
+pub(crate) use runtime::{ManagedPython, R, Resolution};
 pub(crate) mod startup;
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
@@ -92,7 +94,7 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 struct Project {
     startup: Option<startup::Startup>,
     cache: Option<Cache>,
-    python: Option<Python>,
+    python: Option<python::Python>,
     #[serde(deserialize_with = "runtime::r")]
     r: Option<R>,
     languages: Option<Vec<crate::cell::Language>>,
@@ -141,7 +143,7 @@ fn environment<'de, D: serde::Deserializer<'de>>(
 pub(crate) struct Captured {
     pub startup: Option<startup::Startup>,
     pub cache: Option<Cache>,
-    pub python: Option<Python>,
+    pub python: Option<PythonChoice>,
     pub r: Option<R>,
     pub languages: Option<crate::cell::Languages>,
     pub source: Option<String>,
@@ -151,38 +153,46 @@ pub(crate) struct Captured {
     pub resolver_sandbox_requested: bool,
 }
 
-pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Captured, String> {
-    let project = Path::new(".agents/console/config.yaml");
-    let use_project = if no_project_config {
-        false
-    } else {
-        match std::fs::symlink_metadata(project) {
-            Ok(_) => true,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                ) =>
-            {
-                false
-            }
-            Err(error) => return Err(format!("cannot inspect '{}': {error}", project.display())),
+pub fn discover(
+    directory: &Path,
+    overrides: &crate::cli::ConfigOverrides,
+) -> Result<Captured, String> {
+    let mut paths = Vec::new();
+    // Select sources before resolving or inspecting them. Explicit selection and
+    // global exclusions must not resolve Console home for configuration discovery.
+    if let Some(path) = &overrides.config_file {
+        if overrides.no_config || overrides.no_global_config || overrides.no_project_config {
+            return Err("--config-file cannot be combined with --no-config, --no-global-config, or --no-project-config".into());
         }
-    };
-    let path = if use_project {
-        Some(PathBuf::from(project))
-    } else {
-        crate::console_paths::home_console_directory()?
-            .map(|directory| directory.join("config.yaml"))
-    };
-    let value = crate::config::load(path.as_deref(), overrides)?;
+        paths.push(path.clone());
+    } else if !overrides.no_config {
+        if !overrides.no_global_config
+            && let Some(home) = crate::console_paths::home_console_directory()?
+        {
+            paths.push(home.join("config.yaml"));
+        }
+        if !overrides.no_project_config {
+            paths.push(PathBuf::from(".agents/console/config.yaml"));
+        }
+    }
+    let crate::config::Loaded { value, paths } = crate::config::load(
+        directory,
+        &paths,
+        &overrides.values,
+        overrides.config_file.is_some(),
+    )?;
     let configured = value.is_some();
-    let name = if overrides.is_empty() && configured {
-        path.expect("configuration came from a file")
-            .to_string_lossy()
-            .into_owned()
-    } else {
-        "configuration with CLI overrides".into()
+    let files = paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let name = match (paths.len(), overrides.values.is_empty()) {
+        (0, true) => "configuration".into(),
+        (0, false) => "configuration with CLI overrides".into(),
+        (1, true) => files,
+        (_, true) => format!("configuration from {files}"),
+        (_, false) => format!("configuration from {files} with CLI overrides"),
     };
     let mut project: Project = serde_path_to_error::deserialize(
         value.unwrap_or_else(|| serde_json::json!({})),
@@ -214,9 +224,6 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
         .transpose()?;
     if let Some(r) = &mut project.r {
         r.capture()?;
-    }
-    if let Some(python) = &mut project.python {
-        python.capture()?;
     }
     let sandbox_requested = project.sandbox.is_some();
     let resolver_sandbox_requested = project.resolver.sandbox.is_some();
@@ -268,7 +275,7 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
         startup: project.startup,
         cache: project.cache,
         languages,
-        python: project.python,
+        python: project.python.map(python::Python::capture).transpose()?,
         source: configured.then_some(name),
         policy,
         resolver,

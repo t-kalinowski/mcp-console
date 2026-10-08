@@ -32,7 +32,7 @@ struct TranscriptState {
     dynamic_resolution: bool,
     python_preparation: bool,
     r_available: bool,
-    startup: crate::worker_client::Declaration,
+    startup_requirements: crate::worker_client::Declaration,
     active: Option<ActiveTranscript>,
     failure: Option<String>,
     pending_calls: Option<Vec<PendingCall>>,
@@ -87,7 +87,7 @@ impl Transcript {
             dynamic_resolution,
             false,
             true,
-            Default::default(),
+            crate::worker_client::Declaration::default(),
         )
     }
 
@@ -96,7 +96,7 @@ impl Transcript {
         dynamic_resolution: bool,
         python_preparation: bool,
         r_available: bool,
-        startup: crate::worker_client::Declaration,
+        startup_requirements: crate::worker_client::Declaration,
     ) -> Self {
         Self(Arc::new(Mutex::new(TranscriptState {
             started_at: Utc::now(),
@@ -105,7 +105,7 @@ impl Transcript {
             dynamic_resolution,
             python_preparation,
             r_available,
-            startup,
+            startup_requirements,
             active: None,
             failure: None,
             pending_calls: None,
@@ -115,8 +115,13 @@ impl Transcript {
 
     /// Retain early tool records until discovery supplies the recording metadata.
     pub(crate) fn pending(working_directory: std::io::Result<PathBuf>) -> Self {
-        let transcript =
-            Self::configured(working_directory, false, false, false, Default::default());
+        let transcript = Self::configured(
+            working_directory,
+            false,
+            false,
+            false,
+            crate::worker_client::Declaration::default(),
+        );
         transcript.0.lock().expect("transcript lock").pending_calls = Some(Vec::new());
         transcript
     }
@@ -127,7 +132,7 @@ impl Transcript {
             state.dynamic_resolution = configuration.dynamic_resolution;
             state.python_preparation = configuration.python_preparation;
             state.r_available = configuration.r_available;
-            state.startup = configuration.startup.clone();
+            state.startup_requirements = configuration.startup_requirements.clone();
             let materialized_before_discovery = state.active.is_some();
             if let Some(projections) = state
                 .active
@@ -137,7 +142,7 @@ impl Transcript {
                 projections.configure(
                     configuration.dynamic_resolution,
                     configuration.r_available,
-                    &configuration.startup,
+                    &configuration.startup_requirements,
                 );
             }
             state.replay_pending()?;
@@ -147,7 +152,7 @@ impl Transcript {
                         dynamic_resolution: configuration.dynamic_resolution,
                         python_preparation: configuration.python_preparation,
                         r_available: configuration.r_available,
-                        startup_requirements: &configuration.startup,
+                        startup_requirements: &configuration.startup_requirements,
                     },
                     Utc::now(),
                 )?;
@@ -406,8 +411,8 @@ impl TranscriptState {
                 self.dynamic_resolution,
                 self.python_preparation,
                 self.r_available,
+                &self.startup_requirements,
                 self.pending_calls.is_none(),
-                &self.startup,
             )?);
         }
         self.active()
@@ -437,8 +442,8 @@ impl ActiveTranscript {
         dynamic_resolution: bool,
         python_preparation: bool,
         r_available: bool,
+        startup_requirements: &crate::worker_client::Declaration,
         metadata_known: bool,
-        startup: &crate::worker_client::Declaration,
     ) -> Result<Self, String> {
         let working_directory_text = working_directory.to_string_lossy();
         // Keep incidental process-ID widths from shifting bounded output previews.
@@ -522,7 +527,7 @@ impl ActiveTranscript {
                 working_directory,
                 dynamic_resolution,
                 r_available,
-                startup,
+                startup_requirements,
             ))
         })();
         let (projections, pending_projection_failure) = match projections {
@@ -547,7 +552,7 @@ impl ActiveTranscript {
                 working_directory: &working_directory_text,
                 dynamic_resolution: metadata_known.then_some(dynamic_resolution),
                 python_preparation: metadata_known.then_some(python_preparation),
-                startup_requirements: metadata_known.then_some(startup),
+                startup_requirements: metadata_known.then_some(startup_requirements),
             },
             started_at,
         )?;

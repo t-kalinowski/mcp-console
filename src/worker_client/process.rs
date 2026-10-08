@@ -281,6 +281,7 @@ impl WorkerRuntime {
         if let Some(runtime) = local_runtime {
             runtime.configure(&mut command)?;
         }
+        command.env_remove("MCP_CONSOLE_R_LIBRARY");
         if let Some(managed_r) = managed_r {
             managed_r.configure_worker(&mut command)?;
         }

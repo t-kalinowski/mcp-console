@@ -69,7 +69,7 @@ pub(super) const PYTHON_SQL_CONNECTION: &str = r#" `_console.sql_connection()` r
 
 pub(super) const PYTHON_SQL_CONNECTION_SELECTED: &str = r#" `_console.sql_connection()` returns the active native Python connection, or errors if another runtime owns SQL; on Python-owned DuckDB, register frames with `_console.sql_connection().register(name, frame)` (globals are not scanned)."#;
 
-pub(super) const PYTHON_PLOTS: &str = r#" At cell end, even after errors, open `matplotlib.pyplot` figures return once as PNGs and close; `show()` is optional. Closing a figure suppresses capture."#;
+pub(super) const PYTHON_PLOTS: &str = r#" `matplotlib.pyplot.show()` returns open figures as PNGs immediately and closes them. At cell end, even after errors, remaining open figures return as PNGs and close; `show()` is optional. Closing an unshown figure suppresses capture."#;
 
 pub(super) const PYTHON_R_PLOTS: &str = " R plots through `r` follow the R plot rules.";
 

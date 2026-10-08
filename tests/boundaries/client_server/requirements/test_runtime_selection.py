@@ -1,4 +1,4 @@
-"""Runtime path expansion, input layering, and bounded fallback contracts."""
+"""Installed R selection, path expansion, and input layering contracts."""
 
 import json
 import os
@@ -10,14 +10,10 @@ from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from boundaries.client_server.requirements.test_configuration import (
-    configure,
-    without_r,
-)
+from boundaries.client_server.requirements.test_configuration import configure
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
-from support.python import virtualenv_python
 from support.r import r_test_environment, isolated_r_home
 from support.records import Transcript
 from support.requirements import POSIX, R, command, requires
@@ -184,92 +180,6 @@ def test_native_r_executable_uses_matching_installation(
             client.send(control="restart")
             client.expect("native R selected\n", r=program)
             return client.finish()
-
-
-@requires(POSIX)
-@executions(DIRECT, SANDBOXED)
-@execution_snapshots
-def test_python_venv_paths_and_present_fallback_failures(
-    binary: Path, execution: Execution
-) -> Transcript:
-    records = []
-    with TemporaryDirectory() as temporary:
-        root = Path(temporary).resolve()
-        venv = root / "ordinary venv"
-        subprocess.run(
-            [sys.executable, "-m", "venv", "--without-pip", venv],
-            capture_output=True,
-            check=True,
-        )
-        tools = root / "tools"
-        tools.mkdir()
-        env = {
-            **without_r(tools),
-            "CONDA_PREFIX": "unrelated",
-            "CONDA_DEFAULT_ENV": "unrelated",
-            "HOME": str(root),
-        }
-        for python in (
-            "./ordinary venv",
-            {"existing": str(virtualenv_python(venv))},
-            "~/ordinary venv",
-        ):
-            configure(root, {"python": python, "languages": ["python"]})
-            with McpClient(
-                binary, execution.serve("-c", "cache=host"), env, root
-            ) as client:
-                client.initialize_and_list_tools()
-                client.expect(
-                    "venv retained\n",
-                    python="import sys; from pathlib import Path; assert Path(sys.prefix) == Path.cwd() / 'ordinary venv'; assert sys.prefix != sys.base_prefix; print('venv retained')",
-                )
-                selected = client.send(requirements={"action": "get"})[
-                    "structuredContent"
-                ]["selection"]
-                assert selected["python"] == str(virtualenv_python(venv)), selected
-                records.extend(client.finish())
-        (root / "dangling").symlink_to(root / "absent-interpreter")
-        (root / "broken-directory").mkdir()
-        conda = root / "conda"
-        conda.mkdir()
-        (conda / "conda-meta").mkdir()
-        failures = [
-            ("absent", "cannot use existing Python"),
-            (
-                {"first_available": [{"existing": "dangling"}, {"managed": {}}]},
-                "cannot use existing Python",
-            ),
-            (
-                {
-                    "first_available": [
-                        {"existing": "broken-directory"},
-                        {"managed": {}},
-                    ]
-                },
-                "standard venv",
-            ),
-            (
-                {"first_available": [{"existing": "conda"}, {"managed": {}}]},
-                "Conda environments are unsupported",
-            ),
-        ]
-        for python, expected in failures:
-            configure(root, {"python": python, "languages": ["python"]})
-            with McpClient(
-                binary, execution.serve("-c", "cache=host"), env, root
-            ) as client:
-                client.initialize_and_list_tools()
-                result = client.send(python="print('must not run')")
-                assert (
-                    result.get("isError") and expected in result["content"][0]["text"]
-                ), result
-                transcript, stderr = client.finish_with_standard_error(
-                    expected_exit_status=1
-                )
-                assert expected in stderr, stderr
-                records.extend(transcript)
-                records.append({"stderr": stderr})
-        return json.loads(json.dumps(records).replace(str(root), "<fixture>"))
 
 
 if __name__ == "__main__":

@@ -69,14 +69,6 @@ pub(super) fn r<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Opt
         .map_err(D::Error::custom)
 }
 
-fn managed<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<ManagedPython, D::Error> {
-    let value = Value::deserialize(deserializer)?;
-    if !value.is_object() {
-        return Err(D::Error::custom("expected managed options as a mapping"));
-    }
-    serde_path_to_error::deserialize(value).map_err(D::Error::custom)
-}
-
 impl R {
     pub(super) fn capture(&mut self) -> Result<(), String> {
         if let Some(path) = &mut self.executable {
@@ -104,7 +96,7 @@ pub(crate) struct ManagedPython {
 }
 
 impl ManagedPython {
-    fn capture(&self) -> Result<(), String> {
+    pub(super) fn capture(&self) -> Result<(), String> {
         if let Some(version) = &self.version {
             crate::python_requirement::validate_version_constraint(version)
                 .map_err(|error| format!("managed.version: {error}"))?;
@@ -134,111 +126,6 @@ impl ManagedPython {
             manifest.python_version = vec![version.clone()];
         }
         manifest.normalized()
-    }
-}
-
-#[derive(Clone)]
-pub(crate) enum Python {
-    Existing(PathBuf),
-    Managed(ManagedPython),
-    FirstAvailable(Vec<Candidate>),
-}
-
-#[derive(Clone)]
-pub(crate) enum Candidate {
-    Existing(PathBuf),
-    ActiveVenv(Option<PathBuf>),
-    Managed(ManagedPython),
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum PythonMapping {
-    Existing(PathBuf),
-    Managed(#[serde(deserialize_with = "managed")] ManagedPython),
-    FirstAvailable(Vec<Value>),
-}
-
-impl<'de> Deserialize<'de> for Python {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = Value::deserialize(deserializer)?;
-        if let Some(path) = value.as_str() {
-            return Ok(Self::Existing(path.into()));
-        }
-        if !value.is_object() || value.as_object().is_some_and(|mapping| mapping.len() != 1) {
-            return Err(D::Error::custom(
-                "expected a path or exactly one of managed, existing, first_available; clear python with null before changing variants",
-            ));
-        }
-        match serde_path_to_error::deserialize(value).map_err(D::Error::custom)? {
-            PythonMapping::Existing(path) => Ok(Self::Existing(path)),
-            PythonMapping::Managed(options) => Ok(Self::Managed(options)),
-            PythonMapping::FirstAvailable(values) => {
-                if values.is_empty() {
-                    return Err(D::Error::custom("first_available must not be empty"));
-                }
-                let mut active = false;
-                let count = values.len();
-                let mut candidates = Vec::new();
-                for (index, value) in values.into_iter().enumerate() {
-                    let candidate = if value == "active_venv" {
-                        if active {
-                            return Err(D::Error::custom(
-                                "first_available permits only one active_venv",
-                            ));
-                        }
-                        active = true;
-                        Candidate::ActiveVenv(None)
-                    } else {
-                        match serde_json::from_value::<PythonMapping>(value)
-                            .map_err(D::Error::custom)?
-                        {
-                            PythonMapping::Existing(path) => Candidate::Existing(path),
-                            PythonMapping::Managed(options) if index + 1 == count => {
-                                Candidate::Managed(options)
-                            }
-                            _ => {
-                                return Err(D::Error::custom(
-                                    "first_available permits existing paths, active_venv, and at most one managed candidate last; nested chains are unsupported",
-                                ));
-                            }
-                        }
-                    };
-                    candidates.push(candidate);
-                }
-                Ok(Self::FirstAvailable(candidates))
-            }
-        }
-    }
-}
-
-impl Python {
-    pub(super) fn capture(&mut self) -> Result<(), String> {
-        match self {
-            Self::Existing(path) => *path = capture_path(path, "python.existing")?,
-            Self::Managed(options) => options
-                .capture()
-                .map_err(|error| format!("python.{error}"))?,
-            Self::FirstAvailable(candidates) => {
-                for (index, candidate) in candidates.iter_mut().enumerate() {
-                    let context = format!("python.first_available[{index}]");
-                    match candidate {
-                        Candidate::Existing(path) => *path = capture_path(path, &context)?,
-                        Candidate::ActiveVenv(path) => {
-                            *path = std::env::var_os("VIRTUAL_ENV")
-                                .filter(|value| !value.is_empty())
-                                .map(PathBuf::from)
-                                .map(|path| capture_path(&path, &context))
-                                .transpose()?;
-                        }
-                        Candidate::Managed(options) => options
-                            .capture()
-                            .map_err(|error| format!("{context}.{error}"))?,
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 }
 

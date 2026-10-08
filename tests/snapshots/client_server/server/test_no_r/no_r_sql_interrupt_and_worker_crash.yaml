@@ -72,7 +72,7 @@ result:
           <mcp-console:python:e1>(2): sql_gate
           <string>(236): _evaluate
           <string>(268): _dispatch
-          <string>(721): _mcp_console_without_automatic_resolution
+          <string>(751): _mcp_console_without_automatic_resolution
           <string>(277): dispatch
 
   isError: false

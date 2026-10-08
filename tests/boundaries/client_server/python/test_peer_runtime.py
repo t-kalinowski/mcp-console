@@ -151,7 +151,17 @@ def exercise_late_r(client: McpClient, trigger: str = "python-access") -> None:
 
         def r_initialized():
             try:
-                return bool(ctypes.c_void_p.in_dll(ctypes.CDLL(None), "R_GlobalEnv").value)
+                if os.name == "nt":
+                    kernel = ctypes.WinDLL("kernel32")
+                    kernel.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+                    kernel.GetModuleHandleW.restype = ctypes.c_void_p
+                    handle = kernel.GetModuleHandleW("R.dll")
+                    if not handle:
+                        return False
+                    library = ctypes.CDLL(None, handle=handle)
+                else:
+                    library = ctypes.CDLL(None)
+                return bool(ctypes.c_void_p.in_dll(library, "R_GlobalEnv").value)
             except ValueError:
                 return False
 

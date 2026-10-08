@@ -453,16 +453,6 @@ if _mcp_console_import_finder is None:
     _sys.meta_path.append(_mcp_console_import_finder)
 
 
-def _mcp_console_disable_matplotlib_show(
-    _setattr=_builtins.setattr,
-    _sys=_sys,
-):
-    pyplot = _sys.modules.get("matplotlib.pyplot")
-    if pyplot is not None:
-        _setattr(pyplot, "show", lambda *args, **kwargs: None)
-    return None
-
-
 def _mcp_console_print_exception(
     error,
     source_error=False,
@@ -512,7 +502,11 @@ def _mcp_console_print_exception(
 
 
 def _mcp_console_collect_plots(
+    close=True,
+    propagate_interrupt=False,
     _BaseException=_builtins.BaseException,
+    _KeyboardInterrupt=_builtins.KeyboardInterrupt,
+    _isinstance=_builtins.isinstance,
     _base64=_base64,
     _io=_io,
     _print_exception=_mcp_console_print_exception,
@@ -524,6 +518,7 @@ def _mcp_console_collect_plots(
         return ()
 
     images = []
+    active_number = pyplot.gcf().number if not close and pyplot.get_fignums() else None
     try:
         for number in _sorted(pyplot.get_fignums()):
             if number not in pyplot.get_fignums():
@@ -534,26 +529,61 @@ def _mcp_console_collect_plots(
                 figure.savefig(output, format="png")
                 images.append(_base64.b64encode(output.getvalue()).decode("ascii"))
             except _BaseException as error:
+                if propagate_interrupt and _isinstance(error, _KeyboardInterrupt):
+                    raise
                 _print_exception(error)
     finally:
-        try:
-            pyplot.close("all")
-        except _BaseException as error:
-            _print_exception(error)
+        if close:
+            try:
+                pyplot.close("all")
+            except _BaseException as error:
+                if propagate_interrupt and _isinstance(error, _KeyboardInterrupt):
+                    raise
+                _print_exception(error)
+        elif active_number in pyplot.get_fignums():
+            pyplot.figure(active_number)
     return tuple(images)
 
 
 def _mcp_console_finalize_plots(
+    close=True,
+    propagate_interrupt=False,
     _collect_plots=_mcp_console_collect_plots,
     _publish_plot=_services.publish_plot,
     _BaseException=_builtins.BaseException,
+    _KeyboardInterrupt=_builtins.KeyboardInterrupt,
+    _isinstance=_builtins.isinstance,
     _print_exception=_mcp_console_print_exception,
 ):
     try:
-        for image in _collect_plots():
+        for image in _collect_plots(close, propagate_interrupt):
             _publish_plot(image)
     except _BaseException as error:
+        if propagate_interrupt and _isinstance(error, _KeyboardInterrupt):
+            raise
         _print_exception(error)
+    return None
+
+
+def _mcp_console_install_matplotlib_show(
+    _finalize_plots=_mcp_console_finalize_plots,
+    _setattr=_builtins.setattr,
+    _getattr=_builtins.getattr,
+    _sys=_sys,
+):
+    pyplot = _sys.modules.get("matplotlib.pyplot")
+    if pyplot is not None:
+        pause_code = _getattr(_getattr(pyplot, "pause", None), "__code__", None)
+
+        def show(*args, **kwargs):
+            # pause() uses show(block=False) before running its canvas event loop.
+            # Keep that manager alive; ordinary show closes to avoid duplicates.
+            return _finalize_plots(
+                close=_sys._getframe(1).f_code is not pause_code,
+                propagate_interrupt=True,
+            )
+
+        _setattr(pyplot, "show", show)
     return None
 
 
@@ -724,7 +754,7 @@ def _mcp_console_without_automatic_resolution(
 
 
 _mcp_console.activate_process_environment = _mcp_console_activate_process_environment
-_mcp_console.disable_matplotlib_show = _mcp_console_disable_matplotlib_show
+_mcp_console.install_matplotlib_show = _mcp_console_install_matplotlib_show
 _mcp_console.configure_import_resolution = _mcp_console_import_finder.configure
 _mcp_console.without_automatic_resolution = _mcp_console_without_automatic_resolution
 _mcp_console.eval_cell = _mcp_console_eval_cell
@@ -859,13 +889,13 @@ class _McpConsoleModuleDefaults:
         threading,
         finder,
         loader,
-        disable_show,
+        install_show,
     ) -> None:
         self._sys = sys
         self._state = threading.local()
         self._finder = finder
         self._loader = loader
-        self._disable_show = disable_show
+        self._install_show = install_show
         self._pending = {"numpy", "pandas", "matplotlib.pyplot"}
 
     def apply(self, name: str) -> None:
@@ -880,7 +910,7 @@ class _McpConsoleModuleDefaults:
             if module.get_option("display.width") == 80:
                 module.set_option("display.width", 200)
         elif getattr(module.show, "__module__", None) == "matplotlib.pyplot":
-            self._disable_show()
+            self._install_show()
         self._pending.remove(name)
 
     def find_spec(self, fullname: str, path=None, target=None):
@@ -907,7 +937,7 @@ _mcp_console_module_defaults = _McpConsoleModuleDefaults(
     _threading,
     _mcp_console_import_finder,
     _McpConsoleModuleLoader,
-    _mcp_console_disable_matplotlib_show,
+    _mcp_console_install_matplotlib_show,
 )
 _sys.meta_path.insert(0, _mcp_console_module_defaults)
 

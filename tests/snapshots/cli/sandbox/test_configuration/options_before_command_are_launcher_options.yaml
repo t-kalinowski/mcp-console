@@ -10,14 +10,13 @@ stderr: |
 
   For more information, try '--help'.
 ---
-option: --config-file
+option: --unsupported-launch-option
 exit_code: 2
 stderr: |
-  error: unexpected argument '--config-file' found
+  error: unexpected argument '--unsupported-launch-option' found
 
-    tip: a similar argument exists: '--config'
-    tip: to pass '--config-file' as a value, use '-- --config-file'
+    tip: to pass '--unsupported-launch-option' as a value, use '-- --unsupported-launch-option'
 
-  Usage: mcp-console sandbox --config-env <NAME> --config <KEY=VALUE> <COMMAND>...
+  Usage: mcp-console sandbox --config-env <NAME> <COMMAND>...
 
   For more information, try '--help'.

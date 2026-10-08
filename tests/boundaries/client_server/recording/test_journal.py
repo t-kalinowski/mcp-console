@@ -1055,6 +1055,8 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
             (discovered,) = [
                 event for event in events if event["event"] == "environment_discovered"
             ]
+            assert events[0]["startup_requirements"] is None, events[0]
+            assert discovered["startup_requirements"]["python"] == [], discovered
             assert "schema_version" not in discovered, discovered
             assert [event["event"] for event in early] == [
                 "tool_call",
@@ -1111,6 +1113,8 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
                 sessions = root / ".agents/console/sessions"
                 assert not list(sessions.glob("*/artifacts/*"))
                 release.release()
+                ready = client.send(requirements={"action": "get"})
+                assert not ready.get("isError"), ready
                 image = wait_for_checkpoint(
                     lambda: next(sessions.glob("*/artifacts/*.png"), None),
                     "startup image retained after discovery",
@@ -1203,6 +1207,7 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
             assert session_output["discarded_bytes"] == 0, session_output
             assert events[0]["dynamic_resolution"] is None, events[0]
             assert events[0]["python_preparation"] is None, events[0]
+            assert events[0]["startup_requirements"] is None, events[0]
             quarto = (session / "transcript.qmd").read_text()
             header = quarto.split("---\n", 2)[1]
             assert "execute:\n  eval: false\n" in header, quarto

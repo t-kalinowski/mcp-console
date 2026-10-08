@@ -366,7 +366,10 @@ def test_interrupted_replacement_preserves_worker(
             client.receive(interrupt)
             assert pending["result"].get("isError"), pending
             error = pending["result"]["content"][0]["text"]
-            assert "managed Python resolution interrupted" in error, pending
+            assert "managed Python resolution failed" in error, pending
+            pending["result"]["content"][0]["text"] = normalize_python_resolution_error(
+                error
+            )
             assert inspect(client) == old
             client.send(python="marker, os.getpid() == pid")
             assert last_tool_text(client) == "(42, True)\n"

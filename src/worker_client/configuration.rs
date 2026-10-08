@@ -93,7 +93,7 @@ impl ClientConfiguration {
     pub(crate) fn builtin(
         no_sandbox: bool,
         sandbox_settings: crate::settings::SandboxSettings,
-        python: Option<crate::settings::Python>,
+        python: Option<crate::settings::PythonChoice>,
         r_settings: crate::settings::R,
         resolver_settings: crate::settings::SandboxSettings,
         diagnostics: crate::process_output::Diagnostics,
@@ -104,11 +104,17 @@ impl ClientConfiguration {
         let duckdb_extension_directory =
             crate::resolver::cache::duckdb_extension_directory(&resolver_settings)?;
         let languages = crate::cell::Languages::from_environment()?;
-        let choice = crate::local_runtime::PythonChoice::capture(python)?;
+        let choice = match python {
+            Some(choice) => choice,
+            None => crate::settings::PythonChoice::ambient()?,
+        };
+        #[cfg(windows)]
+        let mut choice = choice;
         choice.validate_environment(&resolver_settings)?;
         let configured_python = choice
-            .explicit
+            .executable
             .clone()
+            .map(PathBuf::into_os_string)
             .or_else(|| Some(OsString::from("managed")));
         let program = std::env::current_exe().map_err(|error| error.to_string())?;
         let installation = r_settings
@@ -150,7 +156,7 @@ impl ClientConfiguration {
             }
         }
         let inspected_python = choice
-            .explicit
+            .executable
             .as_ref()
             .map(|explicit| {
                 crate::resolver::preparation::Preparation::inspect(
@@ -260,16 +266,18 @@ impl ClientConfiguration {
                 startup.python_version = manifest.python_version.clone();
                 startup.exclude_newer = manifest.exclude_newer.clone();
             }
-            if let Some(explicit) = &choice.explicit {
+            if let Some(explicit) = &choice.executable {
                 let selected =
                     inspected_python.expect("explicit Python was inspected before discovery");
                 runtime.python = Some(crate::local_runtime::Python {
                     selected: Box::new(selected),
-                    explicit: Some(explicit.clone()),
+                    explicit: Some(explicit.clone().into_os_string()),
                     managed: false,
                     duckdb_extension_directory: None,
                 });
-                python = Some(PythonEnvironment::bare(Some(explicit.clone())));
+                python = Some(PythonEnvironment::bare(Some(
+                    explicit.clone().into_os_string(),
+                )));
             } else if resolver.has_uv() {
                 let managed = crate::resolver::execution::resolve_python_manifest(
                     manifest.clone().expect("managed choice"),
@@ -312,7 +320,36 @@ impl ClientConfiguration {
             } else if !matches!(r_resolver, RResolver::Pending(_))
                 && (without_r || choice.source != "default managed")
             {
+                if !without_r {
+                    return Err(crate::local_runtime::RESOLUTION_UNAVAILABLE.into());
+                }
                 return Err("python.managed: managed Python sessions require `uv` on PATH; install uv or select an existing environment".into());
+            }
+            #[cfg(windows)]
+            if runtime.python.is_none()
+                && matches!(r_resolver, RResolver::Disabled)
+                && choice.source == "default managed"
+                && let Some(executable) = crate::resolver::find_path_entry("python")
+            {
+                let selected = crate::resolver::preparation::Preparation::inspect(
+                    crate::resolver::preparation::Operation::InspectPython {
+                        executable: executable.clone(),
+                    },
+                    sandbox_settings.clone(),
+                    no_sandbox,
+                    diagnostics.clone(),
+                    on_started,
+                )?;
+                runtime.python = Some(crate::local_runtime::Python {
+                    selected: Box::new(selected),
+                    explicit: Some(executable.clone().into_os_string()),
+                    managed: false,
+                    duckdb_extension_directory: None,
+                });
+                runtime.python_resolution = crate::settings::Resolution::Disabled;
+                python = Some(PythonEnvironment::bare(Some(executable.into_os_string())));
+                startup.python.clear();
+                choice.source = "PATH".into();
             }
             Ok(Environment {
                 startup: Some(startup.normalized()),

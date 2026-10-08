@@ -254,6 +254,8 @@ def test_first_cell_prepares_defaults_after_running_response(
         r = code(r"""
             defaults <- c(
               "tidyverse",
+              "dplyr",
+              "dbplyr",
               "reticulate",
               "DBI",
               "duckdb",
@@ -290,6 +292,8 @@ def test_first_cell_prepares_defaults_after_running_response(
             if argument == "--with"
         } == {
             "tidyverse",
+            "dplyr",
+            "dbplyr",
             "reticulate",
             "DBI",
             "duckdb",

@@ -82,10 +82,11 @@ result:
               Import packages normally; managed sessions prepare missing PyPI
               distributions on first import. Use `requirements.python` when import and
               distribution names differ or to prepare before execution. Access R
-              globals and call functions through `r.name`. At cell end, even after
-              errors, open `matplotlib.pyplot` figures return once as PNGs and close;
-              `show()` is optional. Closing a figure suppresses capture. R plots
-              through `r` follow the R plot rules.
+              globals and call functions through `r.name`. `matplotlib.pyplot.show()`
+              returns open figures as PNGs immediately and closes them. At cell end,
+              even after errors, remaining open figures return as PNGs and close;
+              `show()` is optional. Closing an unshown figure suppresses capture. R
+              plots through `r` follow the R plot rules.
             type:
               - string
               - "null"

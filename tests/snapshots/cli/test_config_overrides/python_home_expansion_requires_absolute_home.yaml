@@ -1,12 +1,12 @@
 ---
 HOME: ~
 stderr: |
-  python.existing: home expansion requires an absolute HOME
+  configured Python home expansion requires an absolute HOME
 ---
 HOME: ""
 stderr: |
-  python.existing: home expansion requires an absolute HOME
+  configured Python home expansion requires an absolute HOME
 ---
 HOME: relative/home
 stderr: |
-  python.existing: home expansion requires an absolute HOME
+  configured Python home expansion requires an absolute HOME

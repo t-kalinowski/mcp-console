@@ -8,9 +8,10 @@ send:
 
     temporary = Path(os.environ["TMPDIR"])
     Path("worker-temporary").write_text(str(temporary))
-    # Owned children are removable after retirement. Deny
-    # removal of the worker directory through its parent.
-    temporary.parent.chmod(0o555)
+    restricted = temporary / "restricted"
+    restricted.mkdir()
+    (restricted / "retained.txt").write_text("private contents")
+    restricted.chmod(0)
 result:
   content:
     - type: text

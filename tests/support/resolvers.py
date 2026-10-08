@@ -15,6 +15,7 @@ from support.normalization import code
 from support.processes import ProcessIdentity, child_process_identities
 from support.r import r_test_environment
 from support.requirements import R
+from support.python import virtualenv_python
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 PYTHON_DOWNLOAD_URL = "https://example.invalid/python.tar.zst"
@@ -33,6 +34,76 @@ def expose_uv(directory: Path) -> Path:
     else:
         target.symlink_to(executable)
     return target
+
+
+def preseeded_duckdb_python(directory: Path) -> Path:
+    """Prepare the real extension provider before testing resolver permissions."""
+    venv = directory / "provider"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", venv],
+        check=True,
+        capture_output=True,
+    )
+    python = virtualenv_python(venv)
+    subprocess.run(
+        [shutil.which("uv"), "pip", "install", "--python", python, "duckdb"],
+        check=True,
+        capture_output=True,
+    )
+    # The no-HOME cache case supplies absolute XDG storage. Give its real
+    # DuckDB fixture an explicit home instead of requiring ambient HOME.
+    site = (
+        venv / "Lib/site-packages"
+        if os.name == "nt"
+        else next(venv.glob("lib/python*/site-packages"))
+    )
+    (site / "sitecustomize.py").write_text(
+        # fmt: python
+        code(f"""
+            import os
+
+            if "HOME" not in os.environ:
+                import duckdb
+
+                connect = duckdb.connect
+                duckdb.connect = lambda *args, config=None, **kwargs: connect(
+                    *args, config={{"home_directory": {str(directory)!r}, **(config or {{}})}}, **kwargs
+                )
+            """)
+    )
+    return python
+
+
+def probing_uv(directory: Path, python: Path, probe: str) -> None:
+    """Run a cache/environment probe in trusted preparation, then use seeded Python."""
+    source = directory / "preparation-probe.py"
+    source.write_text(probe)
+    executable = directory / "bin/uv"
+    executable.unlink(missing_ok=True)
+    executable.write_text(
+        # fmt: python
+        code(f"""
+            #!{sys.executable} -S
+            import json
+            import os
+            import runpy
+            import sys
+
+            arguments = sys.argv[1:]
+            if arguments[0] == "--no-config":
+                os.execv({shutil.which("uv")!r}, [{shutil.which("uv")!r}, *arguments])
+            if arguments[:2] == ["python", "list"]:
+                major, minor, patch = sys.version_info[:3]
+                print(json.dumps([{{"version": f"{{major}}.{{minor}}.{{patch}}", "version_parts": {{"major": major, "minor": minor, "patch": patch}}, "variant": "default", "implementation": "cpython"}}]))
+            else:
+                assert arguments[:2] == ["tool", "run"] and "--isolated" in arguments, arguments
+                runpy.run_path({str(source)!r})
+                command = arguments[arguments.index("--") + 1:]
+                assert command[0] == "python", command
+                os.execv({str(python)!r}, [{str(python)!r}, *command[1:]])
+            """)
+    )
+    executable.chmod(0o755)
 
 
 def local_resolver_owner(server: ProcessIdentity, binary: Path) -> ProcessIdentity:

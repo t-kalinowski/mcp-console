@@ -78,8 +78,8 @@ pub(crate) fn inspect_native(
     let resolver = ResolverProcess::new();
     let mut command = resolver_command(executable);
     command
-        // Inspect the selected installation without executing workspace,
-        // PYTHONPATH, or user-site code with the host resolver's permissions.
+        // Exclude workspace, PYTHONPATH, and user-site imports. Environment
+        // startup hooks still execute; explicit selections use worker permissions.
         .arg("-I")
         .arg("-c")
         .arg(INSPECTION_SOURCE)
@@ -91,14 +91,17 @@ pub(crate) fn inspect_native(
         format!("failed to inspect selected Python executable `{selected}`: {error}")
     })?;
     let output = resolver.collect(invocation, executable, "Python inspection", on_started)?;
-    output.write_result.map_err(|error| error.to_string())?;
+    output
+        .write_result
+        .as_ref()
+        .map_err(|error| error.to_string())?;
     if !output.status.success() {
         let diagnostic = String::from_utf8_lossy(&output.stderr);
         let ordinary = String::from_utf8_lossy(&output.stdout);
-        return Err(format!(
+        return Err(output.failure(format!(
             "selected Python inspection failed ({}): {}{}",
             output.status, ordinary, diagnostic
-        ));
+        )));
     }
     let description: Description = serde_json::from_slice(&result.read(64 * 1024)?)
         .map_err(|error| format!("invalid selected Python configuration: {error}"))?;

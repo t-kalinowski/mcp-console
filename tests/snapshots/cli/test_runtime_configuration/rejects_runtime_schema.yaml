@@ -35,22 +35,18 @@ stderr: >
 ---
 path: python
 value: {}
-stderr: >
-  configuration with CLI overrides: python: expected a path or exactly one
-  of managed, existing, first_available; clear python with null before
-  changing variants; see docs/CONFIGURATION.md for the public format
+stderr: |
+  python: expected exactly one of existing, managed, first_available
 ---
 path: python.managed
 value: []
-stderr: >
-  configuration with CLI overrides: python: managed: expected managed
-  options as a mapping; see docs/CONFIGURATION.md for the public format
+stderr: |
+  python: managed: expected managed options as a mapping
 ---
 path: python.managed
 value: ~
-stderr: >
-  configuration with CLI overrides: python: managed: expected managed
-  options as a mapping; see docs/CONFIGURATION.md for the public format
+stderr: |
+  python: managed: expected managed options as a mapping
 ---
 path: r.packages
 value: ~
@@ -62,17 +58,14 @@ path: python
 value:
   managed: {}
   existing: .venv
-stderr: >
-  configuration with CLI overrides: python: expected a path or exactly one
-  of managed, existing, first_available; clear python with null before
-  changing variants; see docs/CONFIGURATION.md for the public format
+stderr: |
+  python: expected exactly one of existing, managed, first_available
 ---
 path: python.managed.version
 value: 3.13
 stderr: >
-  configuration with CLI overrides: python: managed: version: invalid
-  type: floating point `3.13`, expected a string; see
-  docs/CONFIGURATION.md for the public format
+  python: managed: version: invalid type: floating point `3.13`, expected
+  a string
 ---
 path: python.managed.version
 value: python3
@@ -107,41 +100,33 @@ value:
   existing: .venv
   packages:
     - numpy
-stderr: >
-  configuration with CLI overrides: python: expected a path or exactly one
-  of managed, existing, first_available; clear python with null before
-  changing variants; see docs/CONFIGURATION.md for the public format
+stderr: |
+  python: expected exactly one of existing, managed, first_available
 ---
 path: python.first_available
 value: []
-stderr: >
-  configuration with CLI overrides: python: first_available must not be
-  empty; see docs/CONFIGURATION.md for the public format
+stderr: |
+  python.first_available must not be empty
 ---
 path: python.first_available
 value:
   - active_venv
   - active_venv
-stderr: >
-  configuration with CLI overrides: python: first_available permits only
-  one active_venv; see docs/CONFIGURATION.md for the public format
+stderr: |
+  python: expected exactly one of existing, managed, first_available
 ---
 path: python.first_available
 value:
   - managed: {}
   - existing: .venv
 stderr: >
-  configuration with CLI overrides: python: first_available permits
-  existing paths, active_venv, and at most one managed candidate last;
-  nested chains are unsupported; see docs/CONFIGURATION.md for the public
-  format
+  python.first_available permits existing paths, one active_venv, and one
+  optional managed candidate last; nested chains are unsupported
 ---
 path: python.first_available
 value:
   - first_available:
     - active_venv
 stderr: >
-  configuration with CLI overrides: python: first_available permits
-  existing paths, active_venv, and at most one managed candidate last;
-  nested chains are unsupported; see docs/CONFIGURATION.md for the public
-  format
+  python.first_available permits existing paths, one active_venv, and one
+  optional managed candidate last; nested chains are unsupported

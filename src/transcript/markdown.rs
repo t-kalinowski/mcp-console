@@ -53,7 +53,7 @@ impl Writers {
         working_directory: &str,
         dynamic_resolution: bool,
         r_available: bool,
-        startup: &crate::worker_client::Declaration,
+        startup_requirements: &crate::worker_client::Declaration,
     ) -> Self {
         Self {
             markdown: ProjectionWriter::new(markdown, "Markdown transcript"),
@@ -62,7 +62,7 @@ impl Writers {
                 working_directory,
                 dynamic_resolution,
                 r_available,
-                startup,
+                startup_requirements,
             ),
         }
     }
@@ -78,10 +78,10 @@ impl Writers {
         &mut self,
         dynamic_resolution: bool,
         r_available: bool,
-        startup: &crate::worker_client::Declaration,
+        startup_requirements: &crate::worker_client::Declaration,
     ) {
         self.quarto
-            .configure(dynamic_resolution, r_available, startup);
+            .configure(dynamic_resolution, r_available, startup_requirements);
     }
 }
 
@@ -91,13 +91,13 @@ impl QuartoWriter {
         working_directory: &str,
         dynamic_resolution: bool,
         r_available: bool,
-        startup: &crate::worker_client::Declaration,
+        startup_requirements: &crate::worker_client::Declaration,
     ) -> Self {
         Self {
             path,
             working_directory: working_directory.to_string(),
-            r_requirements: startup.r.clone(),
-            python_requirements: startup.python.clone(),
+            r_requirements: startup_requirements.r.clone(),
+            python_requirements: startup_requirements.python.clone(),
             dynamic_resolution,
             r_available,
             metadata_known: false,
@@ -110,13 +110,13 @@ impl QuartoWriter {
         &mut self,
         dynamic_resolution: bool,
         r_available: bool,
-        startup: &crate::worker_client::Declaration,
+        startup_requirements: &crate::worker_client::Declaration,
     ) {
         self.dynamic_resolution = dynamic_resolution;
         self.r_available = r_available;
         self.metadata_known = true;
-        self.r_requirements = startup.r.clone();
-        self.python_requirements = startup.python.clone();
+        self.r_requirements = startup_requirements.r.clone();
+        self.python_requirements = startup_requirements.python.clone();
     }
 
     fn append(&mut self, event: &Event<'_>) -> Result<(), String> {

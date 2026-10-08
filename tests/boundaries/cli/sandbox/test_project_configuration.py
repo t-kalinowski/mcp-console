@@ -128,9 +128,6 @@ def test_rejects_invalid_project_configuration(binary: Path) -> Transcript:
     return transcript
 
 
-@platform_snapshots(
-    "win32", reason="Reading a directory reports the native OS filesystem error"
-)
 def test_discovers_only_launch_directory_configuration(binary: Path) -> Transcript:
     transcript = []
     with TemporaryDirectory() as directory:
@@ -180,7 +177,9 @@ def test_discovers_only_launch_directory_configuration(binary: Path) -> Transcri
         config.unlink()
         config.mkdir()
         result = invoke(binary, host)
-        assert result.returncode == 1 and "cannot read" in result.stderr, result
+        assert result.returncode == 1 and "must be a regular file" in result.stderr, (
+            result
+        )
         transcript.append(
             {
                 "case": "unreadable existing path",

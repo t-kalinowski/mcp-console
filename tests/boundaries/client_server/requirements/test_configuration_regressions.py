@@ -41,7 +41,9 @@ def test_bare_r_preserves_implicit_python_absence(
             client.initialize_and_list_tools()
             result = client.send(r='cat("must not run\\n")')
             assert (
-                result.get("isError") and "require `uv`" in result["content"][0]["text"]
+                result.get("isError")
+                and result["content"][0]["text"]
+                == "dynamic environment resolution is unavailable; install `ir` or `uv` and restart MCP Console"
             ), result
             client.finish_with_standard_error(expected_exit_status=1)
     return [{"bare_r": "implicit Python absent; explicit managed Python requires uv"}]

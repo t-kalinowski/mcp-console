@@ -1268,10 +1268,8 @@ def test_retries_matplotlib_setup_after_interrupt(
     binary: Path, execution: Execution
 ) -> Transcript:
     configuration_line = runtime_source_line("_defaults.apply(name)")
-    apply_line = runtime_source_line("self._disable_show()")
-    show_line = runtime_source_line(
-        '_setattr(pyplot, "show", lambda *args, **kwargs: None)'
-    )
+    apply_line = runtime_source_line("self._install_show()")
+    show_line = runtime_source_line('_setattr(pyplot, "show", show)')
     # A module attribute setter blocks first-cell setup on managed input.
     # Its public input request is the checkpoint for a real interrupt.
     source = code("""
@@ -1316,7 +1314,7 @@ def test_retries_matplotlib_setup_after_interrupt(
             "Traceback (most recent call last):\n"
             f'  File "<string>", line {configuration_line}, in _mcp_console_configure_module_defaults\n'
             f'  File "<string>", line {apply_line}, in apply\n'
-            f'  File "<string>", line {show_line}, in _mcp_console_disable_matplotlib_show\n'
+            f'  File "<string>", line {show_line}, in _mcp_console_install_matplotlib_show\n'
             '  File "<setup checkpoint>", line 13, in __setattr__\n'
             '  File "<string>", line 50, in _console_input\n'
             "KeyboardInterrupt\n",

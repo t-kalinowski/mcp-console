@@ -10,12 +10,24 @@ pub(crate) fn home_console_directory() -> Result<Option<PathBuf>, String> {
         }
         return Ok(Some(directory));
     }
-    let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) else {
-        return Ok(None);
+    let (home, name) = match std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+        Some(home) => (PathBuf::from(home), "HOME"),
+        None => {
+            #[cfg(windows)]
+            {
+                // Rust's native discovery uses USERPROFILE, then the Windows
+                // user-profile API. Explicit HOME always takes precedence.
+                let Some(home) = std::env::home_dir() else {
+                    return Ok(None);
+                };
+                (home, "Windows user home")
+            }
+            #[cfg(not(windows))]
+            return Ok(None);
+        }
     };
-    let home = PathBuf::from(home);
     if !home.is_absolute() {
-        return Err("HOME must be an absolute path".into());
+        return Err(format!("{name} must be an absolute path"));
     }
-    Ok(Some(home.join(".agents/console")))
+    Ok(Some(home.join(".agents").join("console")))
 }

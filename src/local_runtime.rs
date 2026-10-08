@@ -4,8 +4,6 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 mod r_selection;
-mod selection;
-pub(crate) use selection::PythonChoice;
 
 #[cfg(any(unix, windows))]
 use crate::resolver::{ManagedPython, ResolverStopHandle};
@@ -278,12 +276,18 @@ impl TemporaryDirectory {
             // for its base-package view. Only unlock owned temporary
             // directories after retirement; package symlinks stay untouched.
             #[cfg(unix)]
-            unlock_temporary_directories(&path)?;
+            temporary_directories::unlock(&path)?;
             std::fs::remove_dir_all(&path)
         };
         match remove() {
             Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && matches!(std::fs::symlink_metadata(&path), Err(root_error)
+                        if root_error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                Ok(())
+            }
             Err(error) => Err(format!(
                 "cannot remove worker temporary directory {}: {error}",
                 path.display()
@@ -293,24 +297,7 @@ impl TemporaryDirectory {
 }
 
 #[cfg(unix)]
-fn unlock_temporary_directories(path: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let metadata = std::fs::symlink_metadata(path)?;
-    if !metadata.is_dir() {
-        return Ok(());
-    }
-    std::fs::set_permissions(
-        path,
-        std::fs::Permissions::from_mode(metadata.permissions().mode() | 0o700),
-    )?;
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            unlock_temporary_directories(&entry.path())?;
-        }
-    }
-    Ok(())
-}
+mod temporary_directories;
 
 impl Drop for TemporaryDirectory {
     fn drop(&mut self) {

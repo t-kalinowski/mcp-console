@@ -25,8 +25,8 @@ fn main() {
         );
     } else {
         if std::env::var_os("TEST_RESOLVER_CACHE_PROBE").is_some() {
-            let cache = std::path::PathBuf::from(std::env::var_os("UV_CACHE_DIR").unwrap());
             let root = std::path::PathBuf::from(std::env::var_os("CACHE_TEST_ROOT").unwrap());
+            let cache = std::path::PathBuf::from(std::env::var_os("UV_CACHE_DIR").unwrap());
             assert!(cache.starts_with(root));
             std::fs::create_dir_all(&cache).unwrap();
             std::fs::write(cache.join("resolver-probe"), "prepared").unwrap();
@@ -46,7 +46,10 @@ fn main() {
         }
         if std::env::var("TEST_RESOLVER_MODE").as_deref() == Ok("failed") {
             eprintln!("fixture resolver failure");
-            std::process::exit(23);
+            let code = std::env::var("TEST_RESOLVER_EXIT_CODE")
+                .map(|code| code.parse().unwrap())
+                .unwrap_or(23);
+            std::process::exit(code);
         }
         if program.file_stem().unwrap() == "ir" || args.iter().any(|arg| arg == "ir") {
             print!("{}", std::env::var("TEST_RESOLVER_LIBRARY").unwrap());

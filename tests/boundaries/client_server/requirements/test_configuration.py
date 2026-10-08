@@ -422,11 +422,6 @@ def test_selection_rejects_invalid_reached_candidates(
     records = []
     cases = [
         (
-            {"first_available": ["active_venv", {"managed": {}}]},
-            {"VIRTUAL_ENV": sys.executable},
-            "standard venv",
-        ),
-        (
             {"managed": {"packages": []}},
             {"UV_PYTHON_PREFERENCE": "system"},
             "configuration",
@@ -445,12 +440,7 @@ def test_selection_rejects_invalid_reached_candidates(
             expose_uv(tools)
             config = {"languages": ["python"], "python": python}
             env = without_r(tools)
-            if "VIRTUAL_ENV" in variables:
-                activated = root / "activated-file"
-                activated.symlink_to(sys.executable)
-                env["VIRTUAL_ENV"] = str(activated)
-            else:
-                config["resolver"] = {"environment": variables}
+            config["resolver"] = {"environment": variables}
             configure(root, config)
             with McpClient(binary, execution.serve(), env, root) as client:
                 client.initialize_and_list_tools()

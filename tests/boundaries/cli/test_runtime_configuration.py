@@ -41,6 +41,11 @@ def test_accepts_runtime_schema(binary: Path) -> Transcript:
     ]
     with TemporaryDirectory() as temporary:
         root = Path(temporary)
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", root / ".venv"],
+            check=True,
+            capture_output=True,
+        )
         config = root / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
         for document in configurations:
