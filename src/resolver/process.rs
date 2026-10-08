@@ -111,25 +111,6 @@ pub(crate) struct ResolverOutput {
     pub(crate) write_result: io::Result<()>,
     pub(crate) stdout: Vec<u8>,
     pub(crate) stderr: Vec<u8>,
-    interrupted: bool,
-    terminal: Arc<Mutex<Option<super::ResolverTerminalReport>>>,
-}
-
-impl ResolverOutput {
-    pub(crate) fn failure(&self, message: String) -> String {
-        // The materializer formats nonzero exit status after collection. Keep
-        // its complete error with the interrupt delivered to that subprocess;
-        // an acknowledgment after exit must not relabel an independent error.
-        if self.interrupted {
-            self.terminal
-                .lock()
-                .expect("resolver terminal report lock")
-                .as_mut()
-                .expect("collected resolver terminal report")
-                .result = Err(message.clone());
-        }
-        message
-    }
 }
 
 pub(crate) struct ResolverProcess {
@@ -262,11 +243,11 @@ impl ResolverProcess {
         kind: &str,
         on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<ResolverOutput, String> {
-        let outcome = on_started(self.stop_handle())
-            .and_then(|()| wait_for_resolver_exit(&mut invocation.child, self, program, kind));
-        let interrupted = matches!(outcome, Ok(true));
+        let primary = on_started(self.stop_handle())
+            .and_then(|()| wait_for_resolver_exit(&mut invocation.child, self, program, kind))
+            .err();
         let mut failure = ResolverFailure {
-            primary: outcome.err(),
+            primary,
             cleanup: Vec::new(),
         };
         let retirement = invocation.retire(program, kind);
@@ -316,8 +297,6 @@ impl ResolverProcess {
                 write_result,
                 stdout,
                 stderr,
-                interrupted,
-                terminal: self.terminal.clone(),
             })
         };
         *self.terminal.lock().expect("resolver terminal report lock") =
@@ -533,11 +512,7 @@ fn wait_for_resolver_exit(
     resolver: &ResolverProcess,
     program: &Path,
     kind: &str,
-) -> Result<bool, String> {
-    #[cfg(unix)]
-    let mut interrupted = false;
-    #[cfg(windows)]
-    let interrupted = false;
+) -> Result<(), String> {
     loop {
         match resolver.event_receiver.recv() {
             Ok(ResolverEvent::Cancel) => return Err(format!("{kind} resolution cancelled")),
@@ -552,10 +527,6 @@ fn wait_for_resolver_exit(
                     // an adapter turns the forced exit status into another error.
                     #[cfg(windows)]
                     return Err(format!("{kind} resolution interrupted"));
-                    #[cfg(unix)]
-                    {
-                        interrupted = true;
-                    }
                 }
                 Ok(ResolverInterrupt::AlreadyExited) => {
                     let _ = reply.send(Ok(()));
@@ -573,7 +544,7 @@ fn wait_for_resolver_exit(
                 }
             },
             Ok(ResolverEvent::Exited(result)) => {
-                return result.map(|()| interrupted).map_err(|error| {
+                return result.map_err(|error| {
                     format!(
                         "failed to wait for {kind} resolver `{}`: {error}",
                         program.display()

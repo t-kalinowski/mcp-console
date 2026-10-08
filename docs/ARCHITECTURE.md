@@ -208,8 +208,6 @@ Connection closure that refuses the next preparation stage is separate from cont
 It permits a quiet exit only after the refused stage's cleanup is confirmed.
 Preparation retains the operation's terminal result, control cause and cleanup confirmation.
 The subprocess owner captures its cause when collection finishes; a later control acknowledgment cannot replace an independent setup failure.
-When an interrupted subprocess exits unsuccessfully, its formatted materializer error retains that captured cause and its complete diagnostic.
-Unix interruption confirms the leader is stopped or exited before delivering SIGINT, then resumes a stopped leader; a successful signal call alone cannot distinguish a live process from an unreaped zombie.
 Preparation that consumes control after successful collection retains that cause before publishing its terminal result.
 For multistage preparation, only a subprocess report matching the operation's final result supplies its control cause; cleanup confirmation still includes every stage.
 Errors closing the preparation connection remain visible.

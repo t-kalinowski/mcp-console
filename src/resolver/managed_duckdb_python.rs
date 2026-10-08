@@ -48,10 +48,10 @@ pub(crate) fn resolve_python_duckdb_extensions(
         } else {
             stderr.trim()
         };
-        return Err(output.failure(format!(
+        return Err(format!(
             "DuckDB extension resolution failed with {}: {detail}",
             output.status
-        )));
+        ));
     }
     output
         .write_result

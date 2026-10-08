@@ -95,13 +95,13 @@ pub(crate) fn resolve_python_manifest_for_host(
             exclude_newer: requirements.exclude_newer.as_deref(),
         })
         .expect("resolver input strings should serialize as JSON");
-        return Err(output.failure(format!(
+        return Err(format!(
             "managed Python resolution failed:
 resolver input:
 {input}
 uv output:
 {error}"
-        )));
+        ));
     }
     resolver.check_control("managed Python resolution")?;
     let output = String::from_utf8(output_path.read(4096)?)
@@ -242,11 +242,11 @@ where
         "managed Python version",
     )?;
     if !output.status.success() {
-        return Err(output.failure(format!(
+        return Err(format!(
             "managed Python version resolution failed with {}: {}",
             output.status,
             resolver_error(&output)
-        )));
+        ));
     }
     resolver.check_control("managed Python version resolution")?;
     super::python_version::PythonVersions::parse(&output.stdout, managed).map_err(|error| {

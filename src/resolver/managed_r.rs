@@ -272,11 +272,11 @@ fn discover_rscript(
         collect_resolver_output(resolver, invocation, on_started, program, "worker R home")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(output.failure(format!(
+        return Err(format!(
             "worker R home discovery failed with {}: {}",
             output.status,
             stderr.trim()
-        )));
+        ));
     }
     let r_home = String::from_utf8(output.stdout)
         .map_err(|error| format!("worker R returned a non-UTF-8 home path: {error}"))?;
@@ -324,7 +324,7 @@ fn probe_ambient_uv(
     } else if matches!(output.status.code(), Some(42 | 43)) {
         Ok(false)
     } else {
-        Err(output.failure(uv_resolution_error(&output)))
+        Err(uv_resolution_error(&output))
     }
 }
 
@@ -388,7 +388,7 @@ fn finish_uv_resolution(
         {
             return Ok(None);
         }
-        return Err(output.failure(uv_resolution_error(&output)));
+        return Err(uv_resolution_error(&output));
     }
     let output = String::from_utf8(output.stdout)
         .map_err(|_| "reticulate `uv` resolver returned a non-UTF-8 path".to_string())?;
@@ -469,10 +469,10 @@ fn resolve_r_with_process(
         } else {
             stderr.trim()
         };
-        return Err(output.failure(format!(
+        return Err(format!(
             "R package resolution failed with {}: {detail}",
             output.status
-        )));
+        ));
     }
 
     let output = String::from_utf8(output.stdout)
@@ -531,10 +531,10 @@ fn validate_ir_version(
         } else {
             stderr.trim()
         };
-        return Err(output.failure(format!(
+        return Err(format!(
             "failed to check R package resolver version with {}: {detail}",
             output.status
-        )));
+        ));
     }
 
     let output = String::from_utf8(output.stdout)

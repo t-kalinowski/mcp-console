@@ -21,12 +21,7 @@ from boundaries.client_server.server.test_startup import (
     wait_for_send_admission,
 )
 from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
-from support.assertions import (
-    last_result_text,
-    last_tool_text,
-    wait_for_evaluation_output,
-    wait_for_idle_output,
-)
+from support.assertions import last_result_text, last_tool_text, wait_for_idle_output
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.native import LOADER_VARIABLE, build_interposer
@@ -531,13 +526,7 @@ def test_retry_discards_failed_cell_requirements(
             assert "fixture R discovery failed" in str(failure), failure
             # Inspection observes readiness without collecting the accepted
             # cell's failure. Consume it before observing a code-free retry.
-            wait_for_evaluation_output(
-                client,
-                failure["content"][0]["text"],
-                "accepted cell reports the discovery failure",
-                expected_error=True,
-                completion_timeout_seconds=client.response_timeout,
-            )
+            assert client.send() == failure
             (root / "R").unlink()
             client.expect("\n[idle]", control="restart")
             inspection = client.send(requirements={"action": "get"})
