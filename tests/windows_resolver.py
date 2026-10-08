@@ -184,6 +184,7 @@ class WindowsResolver(unittest.TestCase):
         self, mode: str = "blocked", *, release: bool = True
     ) -> tuple[Resolver, dict[int, int]]:
         gate = Gate()
+        self.resolver_gate = gate
         self.addCleanup(gate.close)
         self.environment["TEST_RESOLVER_GATE"] = gate.name
         self.environment["TEST_RESOLVER_MODE"] = mode
@@ -280,7 +281,7 @@ class WindowsResolver(unittest.TestCase):
                     self.assertIn("Err", completed["result"])
                 self.assert_retired(processes)
 
-    def test_delayed_exit_reports_unconfirmed_retirement(self) -> None:
+    def debugger(self):
         # A held EXIT_PROCESS_DEBUG_EVENT delays kernel shutdown and process
         # handle signaling, without depending on a slow or faulty I/O driver.
         # https://learn.microsoft.com/en-us/windows/win32/debug/debugging-events
@@ -300,7 +301,11 @@ class WindowsResolver(unittest.TestCase):
         class DebugInfo(ctypes.Union):
             # The exception member determines the union's native size/alignment.
             # CREATE_PROCESS and LOAD_DLL both begin with an owned file handle.
-            _fields_ = [("exception", ExceptionInfo), ("file", ctypes.c_void_p)]
+            _fields_ = [
+                ("exception", ExceptionInfo),
+                ("file", ctypes.c_void_p),
+                ("exit_code", ctypes.c_uint32),
+            ]
 
         class DebugEvent(ctypes.Structure):
             _fields_ = [
@@ -335,6 +340,64 @@ class WindowsResolver(unittest.TestCase):
         def resume(event: DebugEvent) -> None:
             checked(kernel.ContinueDebugEvent(event.pid, event.tid, 0x00010002))
 
+        return kernel, checked, next_event, resume
+
+    def test_interrupt_preserves_failure_during_kernel_exit(self) -> None:
+        resolver, processes = self.blocked_resolver("failed", release=False)
+        pid, handle = next(iter(processes.items()))
+        kernel, checked, next_event, resume = self.debugger()
+        checked(kernel.DebugActiveProcess(pid))
+        held = None
+        try:
+            while True:
+                event = next_event()
+                resume(event)
+                if event.code == 1:
+                    break
+            self.resolver_gate.sendall(b"\x01")
+            while True:
+                event = next_event()
+                if event.code == 5:
+                    held = event
+                    break
+                resume(event)
+            # Natural exit has fixed its status, but the process handle is
+            # still unsignaled. try_wait therefore reports a live resolver.
+            self.assertEqual(event.info.exit_code, 23)
+            self.assertEqual(kernel.WaitForSingleObject(handle, 0), 258)
+            resolver.send({"Control": {"id": 1, "control": "Interrupted"}})
+            self.assertEqual(
+                resolver.receive(), {"Controlled": {"id": 1, "result": {"Ok": True}}}
+            )
+            resume(held)
+            held = None
+            completed = resolver.receive()["Completed"]
+            self.assertTrue(completed["confirmed"], completed)
+            self.assertIsNone(completed["control"], completed)
+            self.assertEqual(
+                completed["result"],
+                {
+                    "Err": "managed Python resolution failed:\nresolver input:\n"
+                    + json.dumps(
+                        {"python": "3.12.7 (reticulate default)", "packages": ["six"]},
+                        indent=2,
+                    )
+                    + "\nuv output:\nfixture resolver failure"
+                },
+            )
+            self.assert_retired(processes)
+            self.assertEqual(
+                resolver.run(2, {"PythonVersion": {"constraints": []}})["result"],
+                {"Ok": "3.12.7"},
+            )
+        finally:
+            if held is not None:
+                resume(held)
+            elif kernel.WaitForSingleObject(handle, 0) == 258:
+                checked(kernel.DebugActiveProcessStop(pid))
+
+    def test_delayed_exit_reports_unconfirmed_retirement(self) -> None:
+        kernel, checked, next_event, resume = self.debugger()
         for action in ("Cancelled", "Close"):
             with self.subTest(action=action):
                 resolver, processes = self.blocked_resolver()
