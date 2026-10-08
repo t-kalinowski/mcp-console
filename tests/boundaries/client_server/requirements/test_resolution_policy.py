@@ -21,13 +21,11 @@ from support.resolvers import (
     recording_uv_environment,
     uv_tool_run_requirements,
 )
-from support.snapshots import execution_snapshots
 from support.suites import run_this_suite
 
 
 @requires(POSIX, R, command("ir"))
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_r_policy_for_missing_and_explicit_packages(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -82,13 +80,19 @@ def test_r_policy_for_missing_and_explicit_packages(
                     ), changed
                     assert len(ir_run_records(record)) == baseline
                 client.expect("42\n", r='cat(retained, "\\n", sep = "")')
-                records.extend(client.finish())
+                records.append(
+                    {
+                        "policy": policy,
+                        "change": changed,
+                        "preparations": len(ir_run_records(record)) - baseline,
+                    }
+                )
+                client.finish()
     return records
 
 
 @requires(POSIX, R, command("ir"))
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_explicit_python_policy_rejects_reticulate_callbacks(
     binary: Path, execution: Execution
 ) -> Transcript:

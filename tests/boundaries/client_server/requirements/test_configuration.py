@@ -26,7 +26,6 @@ from support.normalization import code
 from support.requirements import POSIX, R, SANDBOX, requires, command
 from support.r import r_test_environment
 from support.suites import run_this_suite
-from support.snapshots import execution_snapshots
 
 
 def configure(root: Path, document: dict) -> None:
@@ -45,7 +44,6 @@ def without_r(tools: Path) -> dict[str, str]:
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_early_locked_request_preserves_startup_baseline(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -94,9 +92,7 @@ def test_early_locked_request_preserves_startup_baseline(
                 inspected = client.send(requirements={"action": "get"})[
                     "structuredContent"
                 ]
-                assert inspected["requirements"] == inspected[
-                    "startup_requirements"
-                ] and inspected["requirements"]["python"] == ["six"], inspected
+                assert inspected["requirements"]["python"] == ["six"], inspected
                 return client.finish()
         finally:
             started.close()
@@ -105,7 +101,6 @@ def test_early_locked_request_preserves_startup_baseline(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_configured_r_packages_require_available_r(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -136,7 +131,6 @@ def test_configured_r_packages_require_available_r(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_configured_python_defaults_and_policy(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -204,14 +198,22 @@ def test_configured_python_defaults_and_policy(
                 assert not reset.get("isError"), reset
                 after = client.send(requirements={"action": "get"})
                 assert after["structuredContent"]["requirements"] == initial, after
-                records.append({"policy": policy})
-                records.extend(client.finish())
+                records.append(
+                    {
+                        "policy": policy,
+                        "initial": initial,
+                        "after_import": retained,
+                        "extension": extension,
+                        "change": changed,
+                        "reset": after["structuredContent"]["requirements"],
+                    }
+                )
+                client.finish()
     return records
 
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_existing_fallback_captured_across_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -267,7 +269,6 @@ def test_existing_fallback_captured_across_restart(
 
 @requires(POSIX, R)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_selected_r_disabled_without_path_discovery(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -315,7 +316,6 @@ def test_selected_r_disabled_without_path_discovery(
 
 @requires(POSIX, R)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_locked_r_rejects_mixed_changes_before_restart(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -337,6 +337,7 @@ def test_locked_r_rejects_mixed_changes_before_restart(
                 "requirements"
             ]
             assert initial["r"] == ["dplyr"] and initial["python"] == ["six"], initial
+            rejected = []
             for requested in (
                 {"action": "set", "python": ["six", "packaging"]},
                 {"r": ["ggplot2"], "python": ["packaging"]},
@@ -351,6 +352,7 @@ def test_locked_r_rejects_mixed_changes_before_restart(
                     result.get("isError")
                     and "configuration" in result["content"][0]["text"]
                 ), result
+                rejected.append({"requirements": requested, "result": result})
                 client.expect("42\n", r="cat(retained, '\\n', sep = '')")
                 assert (
                     client.send(requirements={"action": "get"})["structuredContent"][
@@ -367,7 +369,8 @@ def test_locked_r_rejects_mixed_changes_before_restart(
                 ]
                 == initial
             )
-            return client.finish()
+            client.finish()
+            return [{"baseline": initial, "rejected": rejected, "reset": initial}]
 
 
 @requires(POSIX, SANDBOX)
@@ -388,7 +391,7 @@ def test_existing_venv_inspection_uses_worker_permissions(binary: Path) -> Trans
             "from pathlib import Path\n"
             + "try:\n"
             + f"    Path({str(marker)!r}).write_text('inspection escaped')\n"
-            + "except PermissionError:\n    pass\n"
+            + "except OSError as error:\n    assert error.errno in (1, 13, 30), error\n"
         )
         tools = root / "tools"
         tools.mkdir()
@@ -415,7 +418,6 @@ def test_existing_venv_inspection_uses_worker_permissions(binary: Path) -> Trans
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_selection_rejects_invalid_reached_candidates(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -464,7 +466,6 @@ def test_selection_rejects_invalid_reached_candidates(
 
 @requires(POSIX, R, command("ir"))
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_disabled_r_coexists_with_managed_python(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -540,7 +541,6 @@ def test_explicit_r_probe_uses_worker_permissions(binary: Path) -> Transcript:
 
 @requires(POSIX, R)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_explicit_r_retry_and_installation_identity(
     binary: Path, execution: Execution
 ) -> Transcript:

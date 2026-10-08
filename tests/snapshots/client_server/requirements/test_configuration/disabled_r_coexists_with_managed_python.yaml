@@ -39,12 +39,9 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
-          "startup_requirements": {
+          "runtime_requirements": {
             "r": [],
-            "python": [],
-            "duckdb": [],
-            "python_version": [],
-            "exclude_newer": null
+            "python": []
           },
           "resolution": {
             "r": "disabled",
@@ -55,11 +52,7 @@ result:
             "python": "<selected Python>",
             "python_source": "python.managed"
           },
-          "prepared": true,
-          "runtime_requirements": {
-            "r": [],
-            "python": []
-          }
+          "prepared": true
         }
   structuredContent:
     requirements:
@@ -69,12 +62,9 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
-    startup_requirements:
+    runtime_requirements:
       r: []
       python: []
-      duckdb: []
-      python_version: []
-      exclude_newer: ~
     resolution:
       r: disabled
       python: explicit
@@ -83,7 +73,4 @@ result:
       python: <selected Python>
       python_source: python.managed
     prepared: true
-    runtime_requirements:
-      r: []
-      python: []
   isError: false
