@@ -24,7 +24,9 @@ def test_records_real_mixed_language_session(
     binary: Path,
     execution: Execution,
 ) -> TranscriptWithCompanions:
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory(
+        prefix="console-recording-é-"
+    ) as temporary_directory:
         workspace = Path(temporary_directory)
         environment, rscript = r_test_environment()
         environment.pop("RETICULATE_PYTHON", None)
@@ -114,7 +116,7 @@ def test_records_real_mixed_language_session(
         assert Path(session_event["working_directory"]).samefile(workspace)
         markdown = markdown.replace(session_event["run_id"], "<run ID>")
         markdown = markdown.replace(
-            json.dumps(session_event["working_directory"])[1:-1],
+            json.dumps(session_event["working_directory"], ensure_ascii=False)[1:-1],
             "<workspace>",
         )
         quarto = quarto.replace(
