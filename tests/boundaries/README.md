@@ -140,7 +140,10 @@ Narrow exceptions require stronger evidence, not weaker assertions:
   Keep complete inventories in requirements/defaults cases, and never project an error this way.
 - Native-runtime fidelity cases may compare complete output and conditions with a live reference, then record the verified comparison.
   Remove only explicitly irrelevant frontend differences, such as Rscript's `Execution halted` footer.
-- Synthetic stress output may use `support.evidence.compact_text()` after full assertions.
+- Bounded MCP overflow previews remain literal strings in the output-limit and preview cases.
+  Assert the actual response's UTF-8 byte budget and exact emitted head/tail and omission accounting before normalizing fixture-owned paths.
+  Keep full raw-stream byte assertions separate, including Unicode and newline bytes; a response preview is not a raw recording.
+- Other synthetic stress output may use `support.evidence.compact_text()` after full assertions.
   Its literal text and repeat/count entries are lossless; retain diagnostics, boundaries, omissions, paths, images, and final states.
 
 `transcript_normalization` is harness metadata, never a wire field.
