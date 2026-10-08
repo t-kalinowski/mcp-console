@@ -245,6 +245,7 @@ result:
               "six"
             ],
             "duckdb": [
+              "icu",
               "json",
               "sqlite"
             ],
@@ -269,6 +270,7 @@ result:
         - py-yaml12
         - six
       duckdb:
+        - icu
         - json
         - sqlite
       python_version: []

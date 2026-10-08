@@ -24,7 +24,7 @@ send:
     python:
       - py-yaml12
     duckdb:
-      - json
+      - parquet
   sql: select value from chosen
 result:
   content:
@@ -93,7 +93,9 @@ result:
               "py-yaml12"
             ],
             "duckdb": [
+              "icu",
               "json",
+              "parquet",
               "sqlite"
             ],
             "python_version": [],
@@ -116,7 +118,9 @@ result:
         - duckdb
         - py-yaml12
       duckdb:
+        - icu
         - json
+        - parquet
         - sqlite
       python_version: []
       exclude_newer: ~

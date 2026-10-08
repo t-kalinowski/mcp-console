@@ -106,6 +106,12 @@ class WindowsRelay(unittest.TestCase):
             [str(BINARY), "worker-relay", str(self.worker)],
             env=dict(
                 os.environ,
+                # Built-in worker scenarios must exclude host R startup files.
+                R_ENVIRON=os.devnull,
+                R_ENVIRON_USER=os.devnull,
+                R_PROFILE=os.devnull,
+                R_PROFILE_USER=os.devnull,
+                R_DEFAULT_PACKAGES="NULL",
                 TEST_WORKER_SCENARIO=scenario,
                 TEST_WORKER_READY=ready.name,
                 TEST_DISPATCHED=str(marker),
@@ -354,6 +360,13 @@ class WindowsRelay(unittest.TestCase):
             b'{"kind":"evaluate","language":"r","source":"retained <- 0L"}\n'
         )
         process.stdin.flush()
+        self.assertEqual(
+            [events.get(timeout=15) for _ in range(2)],
+            [
+                {"kind": "r_initialization", "complete": False},
+                {"kind": "r_initialization", "complete": True},
+            ],
+        )
         self.assertEqual(events.get(timeout=15), {"kind": "completed"})
         command = {
             "kind": "evaluate",
@@ -427,6 +440,13 @@ class WindowsRelay(unittest.TestCase):
             + b"\n"
         )
         process.stdin.flush()
+        self.assertEqual(
+            [events.get(timeout=15) for _ in range(2)],
+            [
+                {"kind": "r_initialization", "complete": False},
+                {"kind": "r_initialization", "complete": True},
+            ],
+        )
         self.assertEqual(events.get(timeout=15), {"kind": "completed"})
         command = {
             "kind": "evaluate",

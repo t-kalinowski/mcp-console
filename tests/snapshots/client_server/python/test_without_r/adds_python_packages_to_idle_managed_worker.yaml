@@ -127,6 +127,8 @@ result:
               "six"
             ],
             "duckdb": [
+              "icu",
+              "json",
               "sqlite"
             ],
             "python_version": [],
@@ -151,6 +153,8 @@ result:
         - py-yaml12
         - six
       duckdb:
+        - icu
+        - json
         - sqlite
       python_version: []
       exclude_newer: ~
