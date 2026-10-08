@@ -34,6 +34,8 @@ def test_prepares_builtin_extensions_without_downloads(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         environment, _ = r_test_environment()
+        # This R-only offline fixture needs no managed Python environment.
+        environment["RETICULATE_PYTHON"] = sys.executable
         environment["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"] = str(root / "extensions")
         arguments = execution.serve("-c", "cache=host")
         with McpClient(binary, arguments, environment, root) as client:
