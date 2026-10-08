@@ -236,6 +236,7 @@ impl Preparation {
             Arc::default(),
             Input::Open {
                 mode: Mode::PythonOnly,
+                installation: None,
             },
             diagnostics,
             on_started,
@@ -266,6 +267,7 @@ impl Preparation {
         mut settings: crate::settings::SandboxSettings,
         no_sandbox: bool,
         python: Option<&std::ffi::OsStr>,
+        installation: Option<crate::local_runtime::RInstallation>,
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
@@ -302,7 +304,7 @@ impl Preparation {
             command.env_remove("RETICULATE_PYTHON");
         }
         command.arg("resolve");
-        let open = Input::Open { mode };
+        let open = Input::Open { mode, installation };
         Self::open_with(command, Arc::default(), open, diagnostics, on_started)
     }
 

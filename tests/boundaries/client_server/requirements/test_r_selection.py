@@ -1,6 +1,8 @@
 """Installed R selection survives configuration layering and worker replacement."""
 
 import json
+import os
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -13,8 +15,12 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import isolated_r_home, r_test_environment
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import POSIX, R, command, requires
-from support.resolvers import recording_ir_environment, ir_run_records
+from support.requirements import NON_UTF8_FILENAMES, POSIX, R, command, requires
+from support.resolvers import (
+    bare_runtime_environment,
+    recording_ir_environment,
+    ir_run_records,
+)
 from support.suites import run_this_suite
 
 
@@ -114,6 +120,37 @@ def test_installed_r_selection_and_layering(
 
 @requires(POSIX, R)
 @executions(DIRECT, SANDBOXED)
+def test_r_shorthand_merges_across_file_layers(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment, rscript = r_test_environment()
+        (root / "chosen R").symlink_to(rscript.with_name("R"))
+        console_home = root / "console-home"
+        console_home.mkdir()
+        (console_home / "config.yaml").write_text(json.dumps({"r": "./chosen R"}))
+        project = root / ".agents/console/config.yaml"
+        project.parent.mkdir(parents=True)
+        project.write_text(json.dumps({"r": {"vanilla": True}}))
+        environment["MCP_CONSOLE_HOME"] = str(console_home)
+        with McpClient(
+            binary,
+            execution.serve("-c", "cache=host"),
+            environment,
+            root,
+            use_home_configuration=True,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                "42\n",
+                r='stopifnot("--vanilla" %in% commandArgs()); cat(42, "\\n", sep="")',
+            )
+            return client.finish()
+
+
+@requires(POSIX, R)
+@executions(DIRECT, SANDBOXED)
 def test_missing_selected_r_can_be_repaired(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -163,7 +200,12 @@ def test_changed_selected_launcher_is_rejected(
         ) as client:
             client.initialize_and_list_tools()
             client.expect("42\n", r="cat(42, '\\n', sep='')")
-            selected.write_text(selected.read_text() + "# changed identity\n")
+            before = selected.stat()
+            source = selected.read_bytes()
+            selected.write_bytes(source.replace(b"exec ", b"exec\t", 1))
+            os.utime(selected, ns=(before.st_atime_ns, before.st_mtime_ns))
+            assert selected.stat().st_size == before.st_size
+            assert selected.stat().st_mtime_ns == before.st_mtime_ns
             failed = client.send(control="restart", r='cat("must not run\\n")')
             assert failed.get("isError") and "selected R installation changed" in str(
                 failed
@@ -266,6 +308,189 @@ def test_r_inspection_uses_worker_temporary_storage(
             client.expect("42\n", r="cat(42, '\\n', sep='')")
             client.finish()
             return [{"R_inspection_uses_worker_temporary_storage": True}]
+
+
+@requires(POSIX, R, command("ir"))
+@executions(DIRECT, SANDBOXED)
+def test_changed_rscript_is_rejected_before_preparation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment, _ = recording_ir_environment(root)
+        installed = isolated_r_home(root, environment)
+        rscript = installed / "bin/Rscript"
+        original = rscript.resolve()
+        rscript.unlink()
+        rscript.write_text("#!/bin/sh\nexec " + shlex.quote(str(original)) + ' "$@"\n')
+        rscript.chmod(0o755)
+        marker = root / "changed-rscript-executed"
+        with McpClient(
+            binary,
+            execution.serve("-c", "cache=host", "-c", "r.executable=./R/bin/R"),
+            environment,
+            root,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("42\n", r="cat(42, '\\n', sep='')")
+            rscript.write_text(
+                "#!/bin/sh\nprintf executed > "
+                + shlex.quote(str(marker))
+                + "\nexec "
+                + shlex.quote(str(original))
+                + ' "$@"\n'
+            )
+            failed = client.send(requirements={"r": ["jsonlite", "digest"]})
+            assert not marker.exists(), "changed Rscript executed during preparation"
+            assert failed.get("isError") and "selected R installation changed" in str(
+                failed
+            ), failed
+            return json.loads(
+                json.dumps(client.finish()).replace(str(root), "<workspace>")
+            )
+
+
+@requires(POSIX, R)
+@executions(DIRECT, SANDBOXED)
+def test_resource_directory_replacement_is_rejected(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment, _ = r_test_environment()
+        installed = isolated_r_home(root, environment)
+        resource = installed / "doc"
+        original = resource.resolve()
+        resource.unlink()
+        resource.mkdir()
+        for entry in original.iterdir():
+            (resource / entry.name).symlink_to(entry)
+        launcher = installed / "bin/R"
+        source, count = re.subn(
+            r"(?m)^R_DOC_DIR=.*$",
+            "R_DOC_DIR=" + shlex.quote(str(resource)),
+            launcher.read_text(),
+            count=1,
+        )
+        assert count == 1, "R launcher must declare R_DOC_DIR"
+        launcher.write_text(source)
+        with McpClient(
+            binary,
+            execution.serve("-c", "cache=host", "-c", "r.executable=./R/bin/R"),
+            environment,
+            root,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("42\n", r="cat(42, '\\n', sep='')")
+            # Ordinary directory contents can change without changing selection.
+            (resource / "unrelated").write_text("allowed")
+            client.send(control="restart")
+            client.expect("42\n", r="cat(42, '\\n', sep='')")
+            resource.rename(installed / "retained-doc")
+            resource.write_text("a file cannot replace the directory")
+            failed = client.send(control="restart", r='cat("must not run\\n")')
+            assert failed.get(
+                "isError"
+            ) and "selected R resource directory changed" in str(failed), failed
+            return json.loads(
+                json.dumps(client.finish()).replace(str(root), "<workspace>")
+            )
+
+
+@requires(POSIX, R)
+@executions(DIRECT, SANDBOXED)
+def test_selected_launcher_in_native_directory(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve() / "workspace-\u00e9"
+        root.mkdir()
+        environment, rscript = r_test_environment()
+        (root / "chosen R").symlink_to(rscript.with_name("R"))
+        with McpClient(
+            binary,
+            execution.serve("-c", "cache=host", "-c", "r.executable=./chosen R"),
+            environment,
+            root,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("42\n", r="cat(42, '\\n', sep='')")
+            client.send(control="restart")
+            client.expect("42\n", r="cat(42, '\\n', sep='')")
+            return json.loads(
+                json.dumps(client.finish()).replace(str(root), "<workspace>")
+            )
+
+
+@requires(NON_UTF8_FILENAMES, R)
+@executions(DIRECT)
+def test_selected_launcher_in_non_utf8_directory(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve() / os.fsdecode(b"workspace-\xff")
+        root.mkdir()
+        environment, rscript = r_test_environment()
+        library = Path(temporary).resolve() / "library"
+        library.mkdir()
+        environment = bare_runtime_environment(environment, library)
+        (root / "chosen R").symlink_to(rscript.with_name("R"))
+        with McpClient(
+            binary,
+            execution.serve("-c", "cache=host", "-c", "r.executable=./chosen R"),
+            environment,
+            root,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("42\n", r="cat(42, '\\n', sep='')")
+            client.send(control="restart")
+            client.expect("42\n", r="cat(42, '\\n', sep='')")
+            transcript, stderr = client.finish_with_standard_error()
+            # R selection preserves native filenames; Quarto's existing
+            # UTF-8 execution-root requirement still disables projections.
+            assert stderr == (
+                "mcp-console: transcript projections disabled: "
+                "Quarto execution root requires a UTF-8 working directory\n"
+            ), stderr
+            return [*transcript, {"stderr": stderr}]
+
+
+@requires(POSIX, R)
+@executions(DIRECT, SANDBOXED)
+def test_selected_r_home_preserves_trailing_whitespace(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment, _ = r_test_environment()
+        previous = isolated_r_home(root, environment)
+        installed = root / "R home \t\r"
+        previous.rename(installed)
+        launcher = installed / "bin/R"
+        launcher.write_text(
+            launcher.read_text().replace(
+                shlex.quote(str(previous)), shlex.quote(str(installed))
+            )
+        )
+        environment.update(R_HOME=str(installed), RHOME=str(installed))
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c", "cache=host", "-c", "r.executable=" + json.dumps(str(launcher))
+            ),
+            environment,
+            root,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                "selected home\n",
+                r="stopifnot(identical(R.home(), "
+                + json.dumps(str(installed))
+                + ')); cat("selected home\\n")',
+            )
+            return json.loads(
+                json.dumps(client.finish()).replace(str(root), "<workspace>")
+            )
 
 
 if __name__ == "__main__":

@@ -124,27 +124,6 @@ impl ClientConfiguration {
                 )
             })
             .transpose()?;
-        let mut resolver_settings = resolver_settings;
-        if let Some(installation) = &installation {
-            let mut command = std::process::Command::new(&program);
-            installation.configure(&mut command)?;
-            let values = resolver_settings
-                .entry("environment")
-                .or_insert_with(|| serde_json::json!({}))
-                .as_object_mut()
-                .expect("captured resolver environment");
-            for (key, value) in command.get_envs() {
-                values.insert(
-                    key.to_str()
-                        .ok_or("R environment name is not UTF-8")?
-                        .into(),
-                    value
-                        .and_then(|value| value.to_str())
-                        .ok_or("R environment path is not UTF-8")?
-                        .into(),
-                );
-            }
-        }
         let local_runtime;
         #[cfg(any(unix, windows))]
         let resolver_preparation;
@@ -154,6 +133,7 @@ impl ClientConfiguration {
             resolver_settings.clone(),
             no_sandbox,
             configured_python.as_deref(),
+            installation.clone(),
             diagnostics.clone(),
             on_started,
         )?;

@@ -330,6 +330,7 @@ impl Client {
                         self.0.resolver_settings.clone(),
                         self.0.no_sandbox,
                         std::env::var_os("RETICULATE_PYTHON").as_deref(),
+                        None,
                         self.0.output.diagnostics(),
                         &|handle| self.register_resolver_stop_handle(generation, handle),
                     );

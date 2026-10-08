@@ -5,6 +5,26 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 mod r_selection;
 
+// Internal handoffs retain native filenames instead of requiring UTF-8.
+pub(crate) mod native_path {
+    use serde::{Deserialize as _, Serialize as _};
+    use std::ffi::OsString;
+    use std::path::{Path, PathBuf};
+
+    pub(crate) fn serialize<S: serde::Serializer>(
+        path: &Path,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        path.as_os_str().serialize(serializer)
+    }
+
+    pub(crate) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<PathBuf, D::Error> {
+        OsString::deserialize(deserializer).map(PathBuf::from)
+    }
+}
+
 #[cfg(any(unix, windows))]
 use crate::resolver::{ManagedPython, ResolverStopHandle};
 
@@ -223,12 +243,13 @@ impl Selection {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RInstallation {
+    #[serde(with = "native_path")]
     pub(crate) home: PathBuf,
     resources: [OsString; 3],
     #[serde(default)]
     identity: Vec<r_selection::FileIdentity>,
     #[serde(default)]
-    resource_targets: Vec<PathBuf>,
+    resource_targets: Vec<OsString>,
 }
 
 impl RInstallation {

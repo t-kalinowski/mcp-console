@@ -2,13 +2,18 @@
 use super::RInstallation;
 use crate::resolver::ResolverStopHandle;
 use crate::resolver::process::{ResolverProcess, resolver_command};
+use sha2::{Digest as _, Sha256};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 #[derive(Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct FileIdentity {
+    #[serde(with = "super::native_path")]
     path: PathBuf,
+    #[serde(with = "super::native_path")]
     target: PathBuf,
+    digest: [u8; 32],
     length: u64,
     modified: std::time::SystemTime,
     #[cfg(unix)]
@@ -20,17 +25,41 @@ pub(super) struct FileIdentity {
 }
 impl FileIdentity {
     fn capture(path: &Path) -> Result<Self, String> {
-        let metadata = std::fs::metadata(path).map_err(|error| {
+        let mut options = std::fs::File::options();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.custom_flags(libc::O_NONBLOCK);
+        }
+        let mut file = options.open(path).map_err(|error| {
             format!(
                 "R installation resource {} is unusable: {error}",
                 path.display()
             )
         })?;
+        let metadata = file.metadata().map_err(|error| error.to_string())?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "R installation resource {} is not a file",
+                path.display()
+            ));
+        }
+        let mut digest = Sha256::new();
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+            if count == 0 {
+                break;
+            }
+            digest.update(&buffer[..count]);
+        }
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         Ok(Self {
             path: path.to_path_buf(),
             target: std::fs::canonicalize(path).map_err(|error| error.to_string())?,
+            digest: digest.finalize().into(),
             length: metadata.len(),
             modified: metadata.modified().map_err(|error| error.to_string())?,
             #[cfg(unix)]
@@ -80,11 +109,17 @@ impl RInstallation {
             let probe_launcher: Option<PathBuf> = None;
             let probe_executable = probe_launcher.as_deref().unwrap_or(executable);
             let home = probe(probe_executable, &["RHOME"], on_started)?;
-            let home = PathBuf::from(
-                String::from_utf8(home)
-                    .map_err(|error| error.to_string())?
-                    .trim(),
-            );
+            let home = home.strip_suffix(b"\n").unwrap_or(&home);
+            #[cfg(windows)]
+            let home = home.strip_suffix(b"\r").unwrap_or(home);
+            #[cfg(unix)]
+            let home = {
+                use std::os::unix::ffi::OsStringExt as _;
+                PathBuf::from(std::ffi::OsString::from_vec(home.to_vec()))
+            };
+            #[cfg(windows)]
+            let home =
+                PathBuf::from(String::from_utf8(home.to_vec()).map_err(|error| error.to_string())?);
             if !home.is_absolute() || !home.is_dir() {
                 return Err("R launcher returned an invalid R home directory".into());
             }
@@ -172,7 +207,11 @@ impl RInstallation {
         self.resource_targets = self
             .resources
             .iter()
-            .map(|path| std::fs::canonicalize(Path::new(path)).map_err(|error| error.to_string()))
+            .map(|path| {
+                std::fs::canonicalize(Path::new(path))
+                    .map(PathBuf::into_os_string)
+                    .map_err(|error| error.to_string())
+            })
             .collect::<Result<_, _>>()?;
         Ok(self)
     }
@@ -186,7 +225,12 @@ impl RInstallation {
             }
         }
         for (path, target) in self.resources.iter().zip(&self.resource_targets) {
-            if std::fs::canonicalize(path).map_err(|error| error.to_string())? != *target {
+            if !Path::new(path).is_dir()
+                || std::fs::canonicalize(path)
+                    .map_err(|error| error.to_string())?
+                    .as_os_str()
+                    != target
+            {
                 return Err(format!(
                     "r.executable: selected R resource directory changed: {}",
                     Path::new(path).display()
