@@ -12,7 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.client import McpClient
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import POSIX, SANDBOX, requires
+from support.r import r_test_environment
+from support.resolvers import ir_cache_directory
+from support.requirements import POSIX, R, SANDBOX, command, requires
 from boundaries.client_server.python.test_without_r import environment
 
 
@@ -40,7 +42,7 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
         XDG_CACHE_HOME=str(root / "cache"),
         MCP_CONSOLE_TEST_PROTECTED=str(protected),
         MCP_CONSOLE_TEST_ALIAS=str(working / "escape"),
-        MCP_CONSOLE_TEST_UV=uv,
+        MCP_CONSOLE_TEST_RESOLVER=uv,
         UV_HTTP_TIMEOUT="37",
         UV_INDEX_URL="https://pypi.org/simple",
         UV_NO_CONFIG="1",
@@ -211,6 +213,140 @@ def test_worker_poisons_explicitly_writable_python_cache(binary: Path) -> Transc
         {
             "explicit_worker_cache_write_grant": True,
             "poisoned_python_startup": True,
+            **EVIDENCE,
+        }
+    ]
+
+
+@requires(POSIX, SANDBOX)
+def test_worker_supplies_package_build_backend(binary: Path) -> Transcript:
+    with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
+        root = Path(directory).resolve()
+        working, env = workspace(root)
+        for name in ("trust_probe.py", "build_backend.py"):
+            (working / name).write_text(PROBE.with_name(name).read_text())
+        config = working / "uv.toml"
+        config.write_text("")
+        env.pop("UV_NO_CONFIG")
+        env.pop("UV_FIND_LINKS", None)
+        env["UV_CONFIG_FILE"] = str(config)
+        with McpClient(
+            binary, ("serve", "--writable-root", str(working)), env, working
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                "worker supplied build backend\n",
+                # fmt: python
+                python=code("""
+                    import io
+                    import json
+                    import os
+                    from pathlib import Path
+                    import tarfile
+
+                    Path("escape").symlink_to(os.environ["MCP_CONSOLE_TEST_PROTECTED"])
+                    sources = Path("sources")
+                    sources.mkdir()
+                    entries = {
+                        "pyproject.toml": '[build-system]\\nrequires = []\\nbuild-backend = "build_backend"\\nbackend-path = ["."]\\n',
+                        "trust_probe.py": Path("trust_probe.py").read_text(),
+                        "build_backend.py": Path("build_backend.py").read_text(),
+                        "PKG-INFO": "Metadata-Version: 2.3\\nName: mcp-console-build-probe\\nVersion: 1.0.0\\n",
+                    }
+                    with tarfile.open(sources / "mcp_console_build_probe-1.0.0.tar.gz", "w:gz") as archive:
+                        for name, contents in entries.items():
+                            payload = contents.encode()
+                            member = tarfile.TarInfo("mcp_console_build_probe-1.0.0/" + name)
+                            member.size = len(payload)
+                            archive.addfile(member, io.BytesIO(payload))
+                    Path("uv.toml").write_text(
+                        "find-links = [" + json.dumps(str(sources.resolve())) + "]\\n"
+                    )
+                    print("worker supplied build backend")
+                    """),
+            )
+            prepared = client.send(
+                control="restart",
+                requirements={"python": ["mcp-console-build-probe==1.0.0"]},
+            )
+            assert not prepared.get("isError"), prepared
+            client.expect(
+                "42\n",
+                python="import mcp_console_build_probe; print(mcp_console_build_probe.answer)",
+            )
+            client.finish()
+        assert (
+            json.loads(next((root / "cache").rglob("trust-probe.json")).read_text())
+            == EVIDENCE
+        )
+        assert not (root / "protected/escaped").exists()
+    return [{"real_package_build_backend": True, **EVIDENCE}]
+
+
+@requires(POSIX, SANDBOX, R, command("ir"))
+def test_worker_replaces_selected_r_resolver(binary: Path) -> Transcript:
+    with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
+        root = Path(directory).resolve()
+        working, env = workspace(root)
+        r_env, _ = r_test_environment()
+        tools = working / "bin"
+        ir = shutil.which("ir")
+        assert ir is not None
+        (tools / "ir").symlink_to(ir)
+        env.update(
+            R_HOME=r_env["R_HOME"],
+            PATH=os.pathsep.join((str(tools), r_env["PATH"])),
+            IR_CACHE_DIR=ir_cache_directory(r_env),
+            UV_CACHE_DIR=str(root / "cache/uv"),
+            RETICULATE_PYTHON=sys.executable,
+            RETICULATE_UV=shutil.which("uv"),
+            MCP_CONSOLE_TEST_RESOLVER=ir,
+        )
+        env.update(
+            {
+                name: r_env[name]
+                for name in (
+                    "R_ENVIRON",
+                    "R_ENVIRON_USER",
+                    "R_PROFILE",
+                    "R_PROFILE_USER",
+                )
+            }
+        )
+        replacement = working / "replacement-ir"
+        replacement.write_text(f"#!{sys.executable}\n" + PROBE.read_text())
+        replacement.chmod(0o755)
+        with McpClient(
+            binary,
+            ("serve", "-c", "cache=host", "--writable-root", str(working)),
+            env,
+            working,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                "worker replaced selected ir\n",
+                # fmt: r
+                r=code(r"""
+                    stopifnot(file.symlink(Sys.getenv("MCP_CONSOLE_TEST_PROTECTED"), "escape"))
+                    unlink("bin/ir")
+                    stopifnot(file.symlink(normalizePath("replacement-ir"), "bin/ir"))
+                    writeLines("stop('worker profile reached resolver')", ".Rprofile")
+                    Sys.setenv(UV_HTTP_TIMEOUT = "1")
+                    cat("worker replaced selected ir\n")
+                    """),
+            )
+            prepared = client.send(control="restart", requirements={"r": ["utf8"]})
+            assert not prepared.get("isError"), prepared
+            client.expect(
+                "TRUE\n", r='cat(utf8::utf8_valid("prepared"), "\\n", sep = "")'
+            )
+            client.finish()
+        assert json.loads((root / "cache/uv/trust-probe.json").read_text()) == EVIDENCE
+        assert not (root / "protected/escaped").exists()
+    return [
+        {
+            "worker_replaced_selected_r_resolver": True,
+            "worker_r_profile_excluded": True,
             **EVIDENCE,
         }
     ]

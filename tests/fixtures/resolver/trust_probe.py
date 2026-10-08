@@ -45,4 +45,5 @@ if "MCP_CONSOLE_LOCAL_RUNTIME" not in os.environ:
 if __name__ == "__main__":
     assert os.environ["UV_HTTP_TIMEOUT"] == "37"
     assert "UV_OFFLINE" not in os.environ
-    os.execv(os.environ["MCP_CONSOLE_TEST_UV"], ["uv", *sys.argv[1:]])
+    executable = os.environ["MCP_CONSOLE_TEST_RESOLVER"]
+    os.execv(executable, [executable, *sys.argv[1:]])
