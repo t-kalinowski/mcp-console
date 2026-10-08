@@ -9,7 +9,7 @@ use crate::resolver::{ManagedPython, ResolverStopHandle};
 
 pub(crate) const ENVIRONMENT: &str = "MCP_CONSOLE_LOCAL_RUNTIME";
 pub(crate) const DUCKDB_EXTENSION_DIRECTORY: &str = "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY";
-#[cfg(unix)]
+#[cfg(not(windows))]
 pub(crate) const DEFAULT_DUCKDB_EXTENSIONS: &[&str] = &["icu", "json", "sqlite"];
 // SQL is not exposed on Windows, so startup does not load its native adapter.
 #[cfg(windows)]
