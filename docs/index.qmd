@@ -67,4 +67,3 @@ Console runs processes on the host where it is launched.
 Evaluated code has shell-class capability.
 The default [native sandbox](SANDBOX.md) restricts writes and direct networking, but permits host-file reads, including readable secrets.
 [Dependency preparation](REQUIREMENTS.md#host-resolution-and-trust) is a separate trusted host operation.
-

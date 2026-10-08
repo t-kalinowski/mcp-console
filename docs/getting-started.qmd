@@ -82,4 +82,3 @@ For a Python-only session, ask Console to generate and analyze a small simulated
 - Use [requirements](REQUIREMENTS.md) to select packages and interpreters.
 - Inspect [recordings](RECORDING.md) and prepare a Quarto report from a session.
 - Review the [sandbox limits](SANDBOX.md#supported-hosts-and-lifetime-limits) before choosing a policy.
-
