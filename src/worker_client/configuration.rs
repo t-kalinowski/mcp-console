@@ -104,13 +104,16 @@ impl ClientConfiguration {
         let duckdb_extension_directory =
             crate::resolver::cache::duckdb_extension_directory(&resolver_settings)?;
         let languages = crate::cell::Languages::from_environment()?;
+        let explicit_python_configuration = python.is_some();
         let choice = match python {
             Some(choice) => choice,
             None => crate::settings::PythonChoice::ambient()?,
         };
         #[cfg(windows)]
         let mut choice = choice;
-        choice.validate_environment(&resolver_settings)?;
+        if explicit_python_configuration {
+            choice.validate_environment(&resolver_settings)?;
+        }
         let configured_python = choice
             .executable
             .clone()
@@ -126,21 +129,6 @@ impl ClientConfiguration {
                 >(
                     crate::resolver::preparation::Operation::InspectR {
                         executable: executable.clone(),
-                    },
-                    sandbox_settings.clone(),
-                    no_sandbox,
-                    diagnostics.clone(),
-                    on_started,
-                )
-            })
-            .transpose()?;
-        let inspected_python = choice
-            .executable
-            .as_ref()
-            .map(|explicit| {
-                crate::resolver::preparation::Preparation::inspect(
-                    crate::resolver::preparation::Operation::InspectPython {
-                        executable: explicit.into(),
                     },
                     sandbox_settings.clone(),
                     no_sandbox,
@@ -201,6 +189,22 @@ impl ClientConfiguration {
                     .ok_or("local discovery has no uv result")?,
             };
             let without_r = home.is_none();
+            let inspected_python = choice
+                .executable
+                .as_ref()
+                .filter(|_| cfg!(windows) || without_r || choice.source != "RETICULATE_PYTHON")
+                .map(|explicit| {
+                    crate::resolver::preparation::Preparation::inspect(
+                        crate::resolver::preparation::Operation::InspectPython {
+                            executable: explicit.into(),
+                        },
+                        sandbox_settings.clone(),
+                        no_sandbox,
+                        diagnostics.clone(),
+                        on_started,
+                    )
+                })
+                .transpose()?;
             let mut runtime = crate::local_runtime::Selection {
                 r_home: home,
                 installation,
@@ -251,9 +255,12 @@ impl ClientConfiguration {
                 startup.python_version = manifest.python_version.clone();
                 startup.exclude_newer = manifest.exclude_newer.clone();
             }
-            if let Some(explicit) = &choice.executable {
-                let selected =
-                    inspected_python.expect("explicit Python was inspected before discovery");
+            if !without_r && cfg!(unix) && choice.source == "RETICULATE_PYTHON" {
+                // Preserve reticulate's ambient selection and partial R startup.
+                // Typed configuration still captures an inspected interpreter.
+                python = Some(PythonEnvironment::bare(configured_python.clone()));
+            } else if let Some(explicit) = &choice.executable {
+                let selected = inspected_python.expect("explicit Python was inspected");
                 runtime.python = Some(crate::local_runtime::Python {
                     selected: Box::new(selected),
                     explicit: Some(explicit.clone().into_os_string()),
@@ -263,7 +270,9 @@ impl ClientConfiguration {
                 python = Some(PythonEnvironment::bare(Some(
                     explicit.clone().into_os_string(),
                 )));
-            } else if resolver.has_uv() {
+            } else if resolver.has_uv()
+                && (without_r || !matches!(r_resolver, RResolver::Pending(_)))
+            {
                 let managed = crate::resolver::execution::resolve_python_manifest(
                     manifest.clone().expect("managed choice"),
                     &resolver,
@@ -308,7 +317,7 @@ impl ClientConfiguration {
                 if !without_r {
                     return Err(crate::local_runtime::RESOLUTION_UNAVAILABLE.into());
                 }
-                return Err("python.managed: managed Python sessions require `uv` on PATH; install uv or select an existing environment".into());
+                return Err("Python sessions without R require `uv` on PATH; set python in .agents/console/config.yaml to use an existing environment".into());
             }
             #[cfg(windows)]
             if runtime.python.is_none()

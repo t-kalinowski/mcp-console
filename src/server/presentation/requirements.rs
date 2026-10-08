@@ -6,7 +6,7 @@ use crate::cell::Languages;
 pub(super) fn configure(properties: &mut Map<String, Value>, languages: Languages, builtin: bool) {
     let description = String::from(
         "Inspect declarations or prepare dependencies on the execution host without importing, \
-attaching, or loading them. Configured resolution policies apply before controls, input, or code. Requires host preparation support; bare runtimes use installed packages. Alone, performs standalone preparation. With a cell, preparation \
+attaching, or loading them. Configured resolution policies govern preparation. Requires host preparation support; bare runtimes use installed packages. Alone, performs standalone preparation. With a cell, preparation \
 precedes code; without control it also precedes bundled stdin. Failure or a required restart \
 withholds the cell. \
 Compatible additions preserve live state on an idle worker; other changes need restart. \

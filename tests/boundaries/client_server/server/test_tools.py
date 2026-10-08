@@ -740,6 +740,13 @@ def test_bounds_argument_decoding_errors(
             ]
             assert all(length <= 8192 for length in lengths), lengths
             assert all("omitted" in result["content"][0]["text"] for result in results)
+            # An idle receipt settles configuration and flushes early records
+            # without launching the custom worker.
+            idle = client.send()
+            assert idle == {
+                "content": [{"type": "text", "text": "\n[idle]"}],
+                "isError": False,
+            }, idle
             assert not started.exists(), "invalid arguments started the worker"
             session = next((workspace / ".agents/console/sessions").iterdir())
             recorded = [
@@ -747,7 +754,7 @@ def test_bounds_argument_decoding_errors(
                 for line in (session / "internal/events.jsonl").read_text().splitlines()
                 if (event := json.loads(line))["event"] == "tool_result"
             ]
-            assert recorded == results
+            assert recorded == [*results, idle]
             result = client.send(r="echo ready")
             assert result["content"] == [{"type": "text", "text": "zod: ready\n"}], (
                 result

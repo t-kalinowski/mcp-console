@@ -63,9 +63,7 @@ def test_bare_r_reset_keeps_empty_startup_declaration(
                 "python_version": [],
                 "exclude_newer": None,
             }
-            assert (
-                inspected["requirements"] == inspected["startup_requirements"] == empty
-            ), inspected
+            assert inspected["requirements"] == empty, inspected
             reset = client.send(requirements={"action": "reset"})
             assert not reset.get("isError"), reset
             client.expect("bare reset retained\n", r='cat("bare reset retained\\n")')
@@ -141,6 +139,41 @@ def test_bare_worker_discards_inherited_managed_r_library(
     return [{"bare_worker": "inherited managed R library removed across generations"}]
 
 
+@requires(POSIX, R)
+@executions(DIRECT, SANDBOXED)
+def test_bare_r_discards_inherited_managed_python_state(
+    binary: Path, execution: Execution
+) -> Transcript:
+    for manifest in (
+        "invalid stale manifest",
+        json.dumps(
+            {
+                "packages": [],
+                "python_version": [],
+                "exclude_newer": None,
+            }
+        ),
+    ):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            environment, _ = r_test_environment()
+            environment = bare_runtime_environment(environment, root / "r-library")
+            environment.update(
+                RETICULATE_PYTHON="managed",
+                MCP_CONSOLE_MANAGED_PYTHON=manifest,
+            )
+            with McpClient(binary, execution.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                source = code(
+                    'stopifnot(Sys.getenv("MCP_CONSOLE_MANAGED_PYTHON") == "", Sys.getenv("RETICULATE_PYTHON") == ""); cat("bare Python state cleared\\n")'
+                )
+                client.expect("bare Python state cleared\n", r=source)
+                client.send(control="restart", requirements={"action": "reset"})
+                client.expect("bare Python state cleared\n", r=source)
+                client.finish()
+    return [{"bare_r": "stale managed Python state cleared across generations"}]
+
+
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_conditional_duckdb_does_not_enable_inapplicable_defaults(
@@ -178,7 +211,7 @@ def test_conditional_duckdb_does_not_enable_inapplicable_defaults(
                         "structuredContent"
                     ]
                     assert inspected["requirements"]["duckdb"] == [], inspected
-                    assert inspected["startup_requirements"]["duckdb"] == [], inspected
+                    assert "startup_requirements" not in inspected, inspected
                     assert inspected["requirements"]["python"] == [requirement], (
                         inspected
                     )

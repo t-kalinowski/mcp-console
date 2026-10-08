@@ -193,15 +193,15 @@ impl Client {
         if environment.custom_worker {
             return Err("Python requirements are unavailable with a custom worker".to_string());
         }
-        if !environment.python_policy().automatic() {
-            return Err(environment.python_policy().reject("runtime Python version"));
-        }
         environment.validate_r_selection()?;
         let (_, resolver) = environment
             .python
             .as_ref()
             .ok_or_else(|| "managed Python environment is unavailable".to_string())?
             .managed_parts()?;
+        if !environment.python_policy().automatic() {
+            return Err(environment.python_policy().reject("runtime Python version"));
+        }
         let result = crate::resolver::execution::resolve_python_version(
             request.constraints,
             resolver,

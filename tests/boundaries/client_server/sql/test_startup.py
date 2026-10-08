@@ -941,25 +941,19 @@ def test_missing_selected_python_has_no_sql_fallback(
         settings["python"] = "/mcp-console-startup-missing-python"
         config.write_text(json.dumps(settings))
         configuration = captured_configuration(config)
-        with McpClient(binary, execution.serve(), os.environ, workspace) as client:
-            client.initialize_and_list_tools()
-            wait_for_idle_output(
-                client,
-                "Error: selected Python executable is not an absolute file: "
-                "/mcp-console-startup-missing-python\n"
-                "Error: Python initialization is incomplete; SQL withheld; "
-                "explicit restart required\n\n[idle]",
-                "missing selected Python startup diagnostics",
-                completion_timeout_seconds=client.response_timeout,
-            )
-            client.send(sql="SELECT 42 AS answer")
-            output = client.transcript[-1]["result"]["content"][0]["text"]
-            assert output == (
-                "Error: SQL unavailable: Python initialization is incomplete; "
-                "explicit restart required\n"
-            ), output
-            transcript = client.finish()
-    return [configuration, *transcript, {"missing_selected_python": output}]
+        result = subprocess.run(
+            [binary, *execution.serve()],
+            cwd=workspace,
+            env=os.environ,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1 and result.stdout == "", result
+        assert result.stderr == (
+            "cannot use existing Python /mcp-console-startup-missing-python: "
+            "No such file or directory (os error 2)\n"
+        ), result.stderr
+    return [configuration, {"exit_status": result.returncode, "stderr": result.stderr}]
 
 
 @requires(POSIX, R, SQL)

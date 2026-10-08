@@ -1278,7 +1278,7 @@ def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript
 
 
 @executions(DIRECT, SANDBOXED)
-def test_requires_restart_after_python_bridge_failure(
+def test_restarts_after_python_bridge_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
     with deferred_selection_client(binary, execution.serve()) as client:
@@ -1310,7 +1310,8 @@ def test_requires_restart_after_python_bridge_failure(
             "[worker sideband read failed: worker sideband closed]\n"
             "[worker exited with status 1]\n"
             "[worker stopped: in-memory state lost]\n"
-            "[startup may have executed; explicit restart required]"
+            "[starting new worker]\n"
+            "[idle]"
         )
         output = result["content"][0]["text"]
         assert output.endswith(worker_failure), output
@@ -1320,10 +1321,6 @@ def test_requires_restart_after_python_bridge_failure(
             python_failure,
         )
         result["content"][0]["text"] = bridge_failure + python_failure + worker_failure
-        # The R-first fixture uses configured startup, so replacement requires
-        # explicit authorization before that startup can run again.
-        restarted = client.send(control="restart")
-        assert not restarted.get("isError"), restarted
         client.send(r='exists("python_worker_marker", inherits = FALSE)')
         assert last_result_text(client) == "[1] FALSE\n"
         client.send(python="6 * 7")

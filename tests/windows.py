@@ -1264,9 +1264,7 @@ class WindowsConsole(unittest.TestCase):
         self.assertNotIn("SIGINT", control)
         result = session.send(requirements={"action": "add", "python": ["six"]})
         self.assertTrue(result.get("isError"), result)
-        self.assertIn(
-            "Python resolution is disabled by configuration", json.dumps(result)
-        )
+        self.assertIn("Python requirements are unavailable", json.dumps(result))
         self.assertIn("42", json.dumps(session.send(python="42")))
 
     def test_sql_without_r(self):

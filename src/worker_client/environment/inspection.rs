@@ -105,7 +105,7 @@ impl Environment {
             "startup_requirements": self.startup_declaration(),
             "resolution": {"r": self.r_policy(), "python": self.python_policy()},
             "selection": {
-                "r": self.local_runtime.as_ref().and_then(|runtime| runtime.r_home.as_ref()),
+                "r": self.local_runtime.as_ref().and_then(|runtime| runtime.r_home.as_ref()).map(|home| home.to_string_lossy()),
                 "python": self.local_runtime.as_ref().and_then(|runtime| runtime.python.as_ref()).map(|python| &python.selected.embedding.python),
                 "python_source": self.python_source,
             },
@@ -117,6 +117,15 @@ impl Environment {
 
 impl Client {
     pub(crate) fn inspect_requirements(&self) -> serde_json::Value {
+        let mut snapshot = self.requirements_snapshot();
+        snapshot
+            .as_object_mut()
+            .expect("requirements inspection object")
+            .remove("startup_requirements");
+        snapshot
+    }
+
+    pub(in crate::worker_client) fn requirements_snapshot(&self) -> serde_json::Value {
         self.0
             .requirements_snapshot
             .lock()

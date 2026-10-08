@@ -60,7 +60,8 @@ A configured nonempty R list without an available R is an error.
 An omitted list uses bundled optional defaults, a supplied list replaces them, and an empty list stays empty.
 The server captures the startup declaration before preparation; early calls and restarts cannot replace a locked baseline.
 
-The server checks actual changes per language before preparation, control, or bundled cell effects.
+The server checks actual changes per language before preparation or bundled cell effects.
+With interrupt, delivery and queued input precede validation of the follow-up cell's requirements.
 A mixed request changing a locked language fails before preparing its permitted portion.
 Set replaces the whole declaration, so omitting a locked language cannot clear it.
 Unchanged declarations may succeed in every mode, including set and reset.
@@ -94,7 +95,7 @@ Interpreter initialization alone does not require explicit restart for the first
 Failed candidate preparation resumes the existing bootstrap; successful replacement retires it before its successor's hooks run.
 Removing declarations does not uninstall or prohibit later runtime use, and automatic resolution may acquire packages again.
 
-Inspection returns `requirements`, `startup_requirements`, `prepared`, and `runtime_requirements` in structured content.
+Inspection returns `requirements`, `prepared`, and `runtime_requirements` in structured content.
 `resolution` reports each configured policy; `selection` reports captured R/Python paths and Python branch provenance.
 It is a declaration, not an installed-package inventory.
 While resolution is pending, it shows only the last commit.

@@ -93,6 +93,7 @@ def deferred_selection_client(
             environment,
             # fmt: r
             code(f"""
+                Sys.setenv(RETICULATE_PYTHON = {json.dumps(sys.executable)})
                 if (!file.exists({json.dumps(str(directory / "interrupted"))})) {{
                   options(reticulate.python.beforeInitialized = function() {{
                     options(reticulate.python.beforeInitialized = NULL)
@@ -106,18 +107,15 @@ def deferred_selection_client(
                 """),
         )
         environment = bare_runtime_environment(environment, library)
-        # Captured Python can initialize before R. Select the public R-first
-        # startup path so the reticulate selection hook owns this checkpoint.
-        serve = (
-            *serve,
-            "-c",
-            "startup.language=r",
-            "-c",
-            "startup.code="
-            + json.dumps(
-                ".console$sql_connection(DBI::dbConnect(duckdb::duckdb(), ':memory:'))"
-            ),
-        )
+        environment.pop("RETICULATE_PYTHON", None)
+        if os.name == "nt":
+            # Windows eagerly inspects a PATH Python in bare R sessions. This
+            # fixture specifically arranges unresolved R-side selection.
+            environment["PATH"] = os.pathsep.join(
+                entry
+                for entry in environment["PATH"].split(os.pathsep)
+                if not (Path(entry) / "python.exe").exists()
+            )
         with McpClient(binary, serve, environment, directory) as client:
             client.initialize_and_list_tools()
             initialized = client.transcript.copy()

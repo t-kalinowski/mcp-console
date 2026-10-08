@@ -89,6 +89,52 @@ def test_interrupt_with_requirements_in_mixed_managed_session(
         return client.finish()
 
 
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_interrupt_precedes_follow_up_requirement_policy(
+    binary: Path, execution: Execution
+) -> Transcript:
+    records = []
+    for policy in ("startup_only", "disabled"):
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c",
+                "r.packages=[]",
+                "-c",
+                f"r.resolution={policy}",
+                "-c",
+                "python.managed.packages=[]",
+            ),
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("ready\n", r='cat("ready\\n")')
+            wait_for_evaluation_output(
+                client,
+                '[input requested: "old> "]\n[waiting for stdin]',
+                "interruptible R input",
+                r=code(
+                    'tryCatch(readline("old> "), interrupt = function(e) cat("interrupted\\n"))'
+                ),
+            )
+            result = client.send(
+                control="interrupt",
+                requirements={"r": ["DBI"]},
+                r="follow_up_ran <- TRUE",
+            )
+            assert result.get("isError"), result
+            output = result["content"][0]["text"]
+            assert output.startswith("interrupted\n"), result
+            assert f"({policy})" in output, result
+            client.expect(
+                "worker retained\n",
+                r='stopifnot(!exists("follow_up_ran")); cat("worker retained\\n")',
+            )
+            records.append({"policy": policy, "interrupt": result})
+            client.finish()
+    return records
+
+
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_running_worker_with_sigint(

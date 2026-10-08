@@ -179,8 +179,7 @@ def test_records_configured_startup_requirements(
             if event.get("startup_requirements") is not None
         ]
         assert recorded and all(
-            declaration == inspection["startup_requirements"]
-            for declaration in recorded
+            declaration == inspection["requirements"] for declaration in recorded
         ), recorded
         quarto = (session / "transcript.qmd").read_text()
         assert "  packages: []\n  python-packages:\n    - six\n---\n" in quarto, quarto

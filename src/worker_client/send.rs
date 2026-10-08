@@ -149,7 +149,9 @@ impl Client {
                 }
             }
         }
-        if let Some(requirements) = &request.requirements {
+        if (!matches!(request.control, Some(SendControl::Interrupt)) || self.0.python_only)
+            && let Some(requirements) = &request.requirements
+        {
             self.validate_requirements(requirements)?;
         }
         if let Some(cell) = &request.cell {
@@ -540,7 +542,21 @@ impl Client {
     }
 
     pub(super) fn validate_requirements(&self, requirements: &Requirements) -> Result<(), String> {
-        let snapshot = self.inspect_requirements();
+        let snapshot = self.requirements_snapshot();
+        if !self.0.python_preparation
+            && snapshot["selection"]["python_source"]
+                .as_str()
+                .is_some_and(|source| source != "default managed")
+            && (!requirements.python.is_empty()
+                || !requirements.python_version.is_empty()
+                || requirements.exclude_newer.is_some())
+        {
+            return Err(if self.0.python_only {
+                crate::local_runtime::PREPARATION_DISABLED.into()
+            } else {
+                "managed Python requirements are disabled because the session uses a user-selected Python environment".into()
+            });
+        }
         let current = serde_json::from_value(snapshot["requirements"].clone())
             .expect("captured requirement declaration");
         let startup = serde_json::from_value(snapshot["startup_requirements"].clone())

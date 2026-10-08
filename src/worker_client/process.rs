@@ -277,6 +277,9 @@ impl WorkerRuntime {
         command.env_remove(crate::local_runtime::ENVIRONMENT);
         if let Some(python) = python {
             python.configure_worker(&mut command);
+        } else if builtin {
+            command.env_remove("MCP_CONSOLE_MANAGED_PYTHON");
+            command.env_remove("RETICULATE_PYTHON");
         }
         if let Some(runtime) = local_runtime {
             runtime.configure(&mut command)?;

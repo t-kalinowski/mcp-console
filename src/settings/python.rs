@@ -226,7 +226,11 @@ impl PythonChoice {
             .filter(|value| !value.is_empty() && value != "managed")
         {
             Some(value) => Ok(Self {
-                executable: Some(crate::python::explicit_executable(&value)?),
+                executable: Some(if cfg!(windows) {
+                    crate::python::explicit_executable(&value)?
+                } else {
+                    PathBuf::from(value)
+                }),
                 managed: None,
                 source: "RETICULATE_PYTHON".into(),
             }),

@@ -2504,10 +2504,7 @@ def test_preserves_explicit_python_selection(
             for control in ({}, {"control": "restart"}):
                 result = client.send(**control, requirements={"python": ["py-yaml12"]})
                 assert result["isError"], result
-                assert (
-                    "Python resolution is disabled by configuration"
-                    in last_result_text(client)
-                )
+                assert "non-managed Python session" in last_result_text(client)
                 client.expect("42\n", python="assert id(identity) == identity_id; 42")
             return client.finish()
 
