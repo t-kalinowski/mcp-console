@@ -36,6 +36,7 @@ pub(crate) struct NativePython {
     pub(crate) base_prefix: String,
     pub(crate) base_exec_prefix: String,
     pub(crate) metadata: ConversionMetadata,
+    pub(crate) duckdb: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -129,6 +130,7 @@ pub(crate) fn inspect_native(
         base_prefix: description.base_prefix,
         base_exec_prefix: description.base_exec_prefix,
         metadata: description.metadata,
+        duckdb: description.duckdb,
     })
 }
 
@@ -142,6 +144,7 @@ struct Description {
     base_prefix: String,
     base_exec_prefix: String,
     metadata: ConversionMetadata,
+    duckdb: bool,
 }
 
 impl Description {

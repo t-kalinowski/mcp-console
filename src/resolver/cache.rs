@@ -24,12 +24,10 @@ pub(crate) fn configure(
     if no_sandbox {
         return Err("cache: console requires sandboxing; use cache: host with --no-sandbox".into());
     }
-    let explicit_python = match python {
-        Some(crate::settings::Python::Managed(_)) => false,
-        Some(_) => true,
-        None => std::env::var_os("RETICULATE_PYTHON")
-            .is_some_and(|python| !python.is_empty() && python != "managed"),
-    };
+    // Classify the reached branch, including managed fallback candidates.
+    // Startup reports selection errors through its owned MCP preparation task.
+    let explicit_python = crate::local_runtime::PythonChoice::capture(python.cloned())
+        .is_ok_and(|choice| choice.explicit.is_some());
     // Host-side companion staging uses the sibling mcp-console/sandbox cache.
     // Grant only dependency storage, never the shared Console cache parent.
     let root = console_root(resolver)?.join("dependencies");

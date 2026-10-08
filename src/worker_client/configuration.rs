@@ -238,12 +238,6 @@ impl ClientConfiguration {
                 .managed
                 .as_ref()
                 .map(|options| options.manifest(without_r));
-            let has_duckdb = manifest.as_ref().is_some_and(|manifest| {
-                manifest.packages.iter().any(|package| {
-                    crate::python_requirement::distribution_name(package)
-                        .is_ok_and(|name| name == "duckdb")
-                })
-            });
             // Capture the immutable configured baseline before eager preparation.
             let mut startup = super::environment::Declaration::default();
             if !without_r
@@ -260,18 +254,12 @@ impl ClientConfiguration {
                     .iter()
                     .map(|name| (*name).into())
                     .collect();
-            } else if without_r && has_duckdb {
-                startup.duckdb = crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS
-                    .iter()
-                    .map(|name| (*name).into())
-                    .collect();
             }
             if let Some(manifest) = &manifest {
                 startup.python = manifest.packages.clone();
                 startup.python_version = manifest.python_version.clone();
                 startup.exclude_newer = manifest.exclude_newer.clone();
             }
-            let startup = startup.normalized();
             if let Some(explicit) = &choice.explicit {
                 let selected =
                     inspected_python.expect("explicit Python was inspected before discovery");
@@ -295,6 +283,9 @@ impl ClientConfiguration {
                     managed.python(),
                     on_started,
                 )?;
+                // uv evaluates markers for the selected interpreter. Installed
+                // metadata determines whether its implicit SQL defaults apply.
+                let has_duckdb = selected.duckdb;
                 runtime.python = Some(crate::local_runtime::Python {
                     selected: Box::new(selected),
                     explicit: None,
@@ -304,6 +295,10 @@ impl ClientConfiguration {
                         .flatten(),
                 });
                 if without_r && has_duckdb {
+                    startup.duckdb = crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS
+                        .iter()
+                        .map(|name| (*name).into())
+                        .collect();
                     extensions = runtime.prepare_default_duckdb_extensions(
                         Some(&managed),
                         &resolver,
@@ -314,11 +309,13 @@ impl ClientConfiguration {
                     selected: managed,
                     resolver,
                 });
-            } else if !matches!(r_resolver, RResolver::Pending(_)) {
+            } else if !matches!(r_resolver, RResolver::Pending(_))
+                && (without_r || choice.source != "default managed")
+            {
                 return Err("python.managed: managed Python sessions require `uv` on PATH; install uv or select an existing environment".into());
             }
             Ok(Environment {
-                startup: Some(startup),
+                startup: Some(startup.normalized()),
                 python_source: Some(choice.source),
                 local_runtime: Some(runtime),
                 custom_worker: false,

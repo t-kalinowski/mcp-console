@@ -195,6 +195,9 @@ Each enabled language uses bundled optional packages when `packages` is omitted.
 A supplied list replaces those defaults; `packages: []` requests none.
 Preparation makes packages available without attaching R packages or importing Python modules.
 Runtime infrastructure remains separate from optional declarations.
+Python requirement markers are evaluated for the selected interpreter.
+Python-only sessions prepare default DuckDB extensions only when the prepared environment contains DuckDB.
+When R is available but Python preparation is unavailable, omitting Python configuration preserves bare R startup; explicitly requested managed Python still requires preparation support.
 
 R accepts `automatic`, `explicit`, `startup_only`, and `disabled`; managed Python accepts the first three.
 Both default to `automatic`.

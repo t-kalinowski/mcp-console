@@ -123,6 +123,10 @@ def describe() -> dict[str, object]:
         pass
 
     return {
+        "duckdb": any(
+            distribution.metadata["Name"].lower() == "duckdb"
+            for distribution in importlib.metadata.distributions()
+        ),
         "metadata": {
             "base_executable": sys._base_executable,
             "pythonpath": os.pathsep.join(sys.path),

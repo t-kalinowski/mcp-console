@@ -38,6 +38,7 @@ WORKER_COMMANDS = [
                 "exec_prefix": "/native/exec-prefix",
                 "base_prefix": "/native/base-prefix",
                 "base_exec_prefix": "/native/base-exec-prefix",
+                "duckdb": False,
                 "metadata": {
                     "base_executable": "/native/base/bin/python",
                     "pythonpath": "/native/extra 🦀",

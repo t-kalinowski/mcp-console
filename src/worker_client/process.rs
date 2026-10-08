@@ -265,6 +265,7 @@ impl WorkerRuntime {
             None
         };
         command.env_remove("MCP_CONSOLE_MATPLOTLIB_CACHE");
+        command.env_remove("MCP_CONSOLE_R_LIBRARY");
         if !no_sandbox
             && cfg!(unix)
             && python.is_none_or(|python| python.managed().is_some())
