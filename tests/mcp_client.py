@@ -489,6 +489,21 @@ class ScriptedClient:
 
 
 class EvaluationCollectorTests(unittest.TestCase):
+    def test_idle_output_collects_split_startup_diagnostics(self) -> None:
+        first = "Error: selected Python executable is missing\n"
+        second = "Error: Python initialization is incomplete; SQL withheld\n"
+        expected = first + second + "\n[idle]"
+        client = ScriptedClient(
+            [
+                {"content": [{"type": "text", "text": output}], "isError": False}
+                for output in (first + "\n[idle]", "\n[idle]", second + "\n[idle]")
+            ]
+        )
+        wait_for_idle_output(client, expected, "split startup diagnostics")
+        self.assertEqual(client.calls, [{}, {}, {}])
+        self.assertEqual(len(client.transcript), 1)
+        self.assertEqual(client.transcript[0]["result"]["content"][0]["text"], expected)
+
     def test_idle_output_waits_for_startup_input(self) -> None:
         expected = '[input requested: "startup> "]\n[waiting for stdin]'
         client = ScriptedClient(

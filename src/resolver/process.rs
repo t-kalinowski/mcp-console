@@ -520,7 +520,15 @@ fn wait_for_resolver_exit(
                 reply,
                 clear_marker,
             }) => match interrupt_resolver(child) {
-                Ok(ResolverInterrupt::Signaled | ResolverInterrupt::AlreadyExited) => {
+                Ok(ResolverInterrupt::Signaled) => {
+                    let _ = reply.send(Ok(()));
+                    // Windows interrupts terminate the Job rather than deliver
+                    // a recoverable signal. Attribute that failure here, before
+                    // an adapter turns the forced exit status into another error.
+                    #[cfg(windows)]
+                    return Err(format!("{kind} resolution interrupted"));
+                }
+                Ok(ResolverInterrupt::AlreadyExited) => {
                     let _ = reply.send(Ok(()));
                 }
                 Err(error) => {
