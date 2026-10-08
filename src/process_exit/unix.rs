@@ -205,6 +205,12 @@ fn observe_direct_child(process_id: libc::pid_t, blocking: bool) -> io::Result<b
         match information.si_code {
             CHILD_EXITED | CHILD_KILLED | CHILD_DUMPED => return Ok(true),
             CHILD_STOPPED | CHILD_CONTINUED => {
+                // A nonblocking exit probe must leave stop/continue status
+                // with its owner. Resolver interruption waits for the stop
+                // before signaling; consuming it here would strand that wait.
+                if !blocking {
+                    return Ok(false);
+                }
                 // Darwin can report these even for WEXITED. Consume only the
                 // nonterminal notification and retry interrupted consumption.
                 match consume_non_exit_notification(wait_id, process_id) {

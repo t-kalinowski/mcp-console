@@ -168,8 +168,8 @@ fn resume_initial_thread(pid: u32) -> io::Result<()> {
 }
 
 impl Child {
-    fn terminate(&self) -> io::Result<()> {
-        if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
+    fn terminate(&self, exit_code: u32) -> io::Result<()> {
+        if unsafe { TerminateJobObject(self.job.as_raw_handle(), exit_code) } == 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
@@ -179,7 +179,7 @@ impl Child {
         &mut self,
         settle_observation: impl FnOnce(Duration) -> io::Result<()>,
     ) -> io::Result<ExitStatus> {
-        self.terminate()?;
+        self.terminate(1)?;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             // The accounting query is authoritative, including when all exits
@@ -235,8 +235,15 @@ pub(super) fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterr
     if child.try_wait()?.is_some() {
         return Ok(ResolverInterrupt::AlreadyExited);
     }
-    child.terminate()?;
+    child.terminate(STATUS_CONTROL_C_EXIT as u32)?;
     Ok(ResolverInterrupt::Signaled)
+}
+
+pub(super) fn interrupted_exit(status: &ExitStatus) -> bool {
+    // Successful Job termination can include an already-exiting leader. Its
+    // independently assigned exit code survives; only the forced status is
+    // evidence that this interruption supplied the leader's failure.
+    status.code() == Some(STATUS_CONTROL_C_EXIT)
 }
 
 pub(super) fn stop_resolver(
