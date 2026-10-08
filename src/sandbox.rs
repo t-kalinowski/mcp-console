@@ -15,25 +15,25 @@ const MARKER: &str = "MCP_CONSOLE_SANDBOX";
 
 pub fn capture_settings(
     roots: Vec<PathBuf>,
-    overrides: &[String],
-    no_project_config: bool,
+    overrides: &crate::cli::ConfigOverrides,
 ) -> Result<crate::settings::SandboxSettings, String> {
+    let workspace = std::env::current_dir()
+        .map_err(|error| format!("cannot find launch workspace: {error}"))?;
     let crate::settings::Captured {
         source,
         policy: settings,
         ..
-    } = crate::settings::discover(overrides, no_project_config)?;
-    capture_policy(source.as_deref(), settings, roots)
+    } = crate::settings::discover(&workspace, overrides)?;
+    capture_policy(source.as_deref(), settings, roots, &workspace)
 }
 
 fn capture_policy(
     source: Option<&str>,
     settings: crate::settings::SandboxSettings,
     roots: Vec<PathBuf>,
+    workspace: &std::path::Path,
 ) -> Result<crate::settings::SandboxSettings, String> {
-    let workspace = std::env::current_dir()
-        .map_err(|error| format!("cannot find launch workspace: {error}"))?;
-    let settings = materialize_settings(settings, roots, &workspace)?;
+    let settings = materialize_settings(settings, roots, workspace)?;
     if let Some(source) = source {
         preflight(&settings).map_err(|error| format!("{source}: {error}"))?;
     }
@@ -153,15 +153,21 @@ pub fn run(
     config_env: Option<&str>,
     settings_env: Option<&str>,
     writable_roots: Vec<PathBuf>,
-    overrides: &[String],
-    no_project_config: bool,
+    overrides: &crate::cli::ConfigOverrides,
 ) -> Result<ExitCode, String> {
-    if no_project_config && (config_env.is_some() || settings_env.is_some()) {
-        return Err(
-            "--no-project-config cannot be combined with --config-env or --settings-env".into(),
-        );
+    if (overrides.no_config || overrides.no_project_config)
+        && (config_env.is_some() || settings_env.is_some())
+    {
+        let flag = if overrides.no_config {
+            "--no-config"
+        } else {
+            "--no-project-config"
+        };
+        return Err(format!(
+            "{flag} cannot be combined with --config-env or --settings-env"
+        ));
     }
-    if !overrides.is_empty() && (config_env.is_some() || settings_env.is_some()) {
+    if !overrides.values.is_empty() && (config_env.is_some() || settings_env.is_some()) {
         return Err(
             "configuration overrides cannot be combined with --config-env or --settings-env".into(),
         );
@@ -171,7 +177,7 @@ pub fn run(
     } else if let Some(name) = settings_env {
         crate::settings::from_environment(name)?
     } else {
-        capture_settings(writable_roots, overrides, no_project_config)?
+        capture_settings(writable_roots, overrides)?
     };
     #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     {

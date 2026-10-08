@@ -364,6 +364,15 @@ impl ClientConfiguration {
         self.python_preparation
     }
 
+    pub(crate) fn startup_declaration(&self) -> super::Declaration {
+        self.environment
+            .as_ref()
+            .expect("captured environment")
+            .lock()
+            .expect("environment lock")
+            .startup_declaration()
+    }
+
     pub(crate) fn dynamic_resolution(&self) -> bool {
         self.dynamic_resolution
     }

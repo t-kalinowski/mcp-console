@@ -38,4 +38,4 @@ initialized: true
 ---
 case: unreadable existing path
 stderr: |
-  cannot read '.agents/console/config.yaml': Is a directory (os error 21)
+  configuration '.agents/console/config.yaml' must be a regular file

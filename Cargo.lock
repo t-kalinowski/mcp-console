@@ -809,6 +809,7 @@ dependencies = [
  "clap",
  "ctor",
  "embed-resource",
+ "errno",
  "harp",
  "libc",
  "libloading",

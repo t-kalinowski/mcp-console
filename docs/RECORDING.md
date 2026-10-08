@@ -25,6 +25,7 @@ When a preview's location exceeds 512 UTF-8 bytes, it instead gives the exact `s
 Retrieving omitted text requires filesystem access there; Console has no log read/search tool.
 
 The journal schema is unversioned, with nullable runtime metadata before discovery.
+`startup_requirements` records the captured startup declaration once discovery supplies it.
 `artifact_created.call_id` is `null` for session-owned images and an integer for cell-owned images.
 
 The journal is flushed before derived projections.
@@ -74,7 +75,8 @@ Rendering requires R on the render host even when the original Console session h
 SQL chunks need a user-supplied DBI connection.
 
 Front matter supplies dependency declarations, not a lockfile.
-R-present sessions combine built-in defaults and recorded declarations, which need not match every successfully accepted or automatically inferred package.
+Sessions combine the captured startup declaration and recorded additions, which need not match every successfully accepted or automatically inferred package.
+An existing Python environment starts with an empty managed Python declaration, including in an R session.
 Managed Python-only sessions also track accepted Python environments and omit rejected candidates; neither mode pins the complete environment or Python version.
 Bare sessions omit managed defaults.
 
