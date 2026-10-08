@@ -747,8 +747,15 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
         environment = managed_environments(root)
         # R-only bootstrap leaves Python selection lazy for R interoperability.
         environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
-        with McpClient(binary, execution.serve(), environment, root) as client:
-            initialize_managed_client(client)
+        # The fixture environments omit the default NumPy/pandas seed. Declare
+        # that baseline before startup instead of replacing a prewarmed worker.
+        with McpClient(
+            binary,
+            execution.serve("-c", "python.managed.packages=[]"),
+            environment,
+            root,
+        ) as client:
+            client.initialize_and_list_tools()
             client.send(requirements={"python": ["console-initial-fixture"]})
             assert last_result_text(client) == "[prepared]", last_result_text(client)
             client.send(
