@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import last_tool_text
+from support.assertions import last_tool_text, wait_for_worker_ready
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
@@ -21,7 +21,9 @@ from boundaries.client_server.sql.test_without_r import environment, sql_client
 def assert_semantic_defaults(
     client: McpClient, workspace: Path, *, r_backed: bool
 ) -> None:
-    inspected = client.send(requirements={"action": "get"})
+    wait_for_worker_ready(client, "managed DuckDB defaults")
+    inspected = client.send(requirements={"action": "get"}, timeout_ms=0)
+    assert "structuredContent" in inspected, inspected
     assert inspected["structuredContent"]["requirements"]["duckdb"] == [
         "icu",
         "json",
