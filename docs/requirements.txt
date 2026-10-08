@@ -1,1 +1,1 @@
-great-docs==0.17.0
+great-docs

@@ -6,6 +6,7 @@ on:
       - docs/**
       - r/**
       - python/**
+      - LICENSE
       - pyproject.toml
       - great-docs.yml
       - tests/website.py
@@ -16,6 +17,7 @@ on:
       - docs/**
       - r/**
       - python/**
+      - LICENSE
       - pyproject.toml
       - great-docs.yml
       - tests/website.py
