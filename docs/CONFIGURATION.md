@@ -33,25 +33,33 @@ If both locations resolve to the same file, Console reads it once, after excludi
 Application settings are validated and defaults supplied only after all layers and overrides have been merged.
 Overrides may appear before or after the subcommand and do not edit files.
 
-Use either discovery flag before or after `serve` or ordinary `sandbox`:
+Use discovery flags before or after `serve` or ordinary `sandbox`:
 
 | Invocation            | Configuration inputs                |
 | --------------------- | ----------------------------------- |
 | Normal launch         | Global, project, then CLI overrides |
 | `--no-project-config` | Global, then CLI overrides          |
+| `--no-global-config`  | Project, then CLI overrides         |
 | `--no-config`         | CLI overrides only                  |
 
-Supplying both flags behaves like `--no-config`.
+Combining `--no-global-config` and `--no-project-config` behaves like `--no-config`.
 Excluded files are not inspected or read, including invalid or unreadable files.
-`--no-config` does not resolve the global Console directory for configuration discovery; recording and other storage operations may still require it.
-Neither flag changes recording-location selection.
+`--no-global-config` and `--no-config` do not resolve the global Console directory for configuration discovery; recording and other storage operations may still require it.
+These flags do not change recording-location selection.
+
+Use `--config-file PATH` to select one YAML or JSON mapping as the sole file source.
+It skips both automatic locations, including global path resolution, and applies any `-c` overrides afterward.
+The selected file must exist and be readable; a missing file is an error.
+An empty mapping (`{}`) uses built-in defaults.
+The option works before or after `serve` or ordinary `sandbox`, may be supplied only once, and cannot be combined with discovery exclusions.
+Relative paths are resolved from the launch directory; `~` and environment-variable references are not expanded.
 
 Automatic project loading treats project configuration as trusted launcher input.
 It can affect executable selection, child environments, and requested sandbox permissions.
 Trusting code to run inside a sandbox is not equivalent to trusting it to define the sandbox.
 Global configuration supplies defaults, not a mandatory security ceiling: project settings may override global settings under the ordinary merge rules.
 Integrations opening unfamiliar projects should use `--no-project-config` until they authorize project configuration.
-Neither discovery opt-out is a general safe mode: they do not disable native runtime startup files, clear inherited environment variables, or make selected executables trustworthy.
+Discovery opt-outs are not a general safe mode: they do not disable native runtime startup files, clear inherited environment variables, or make selected executables trustworthy.
 
 Paths keep their existing launch-relative meaning, including paths supplied by global configuration.
 They are not rebased onto the configuration file's directory.
@@ -61,10 +69,17 @@ Restart Console after editing `config.yaml`; restarting a worker does not reload
 ```sh
 mcp-console serve -c 'sandbox.filesystem.read_write=[.]'
 mcp-console serve --no-project-config -c 'sandbox.filesystem.read_write=[.]'
+mcp-console serve --no-global-config
 mcp-console serve --no-config -c 'sandbox.filesystem.read_write=[.]'
+mcp-console serve --config-file ./session.yaml
 mcp-console -c 'sandbox.filesystem.read_write=[.]' serve -c sandbox.network=enabled
 mcp-console sandbox -c 'environment={LABEL: analysis}' -- Rscript analysis.R
 ```
+
+`-c/--config` accepts dotted `KEY=VALUE` assignments, including structured inline values; it does not accept a file path or a complete root mapping.
+Console has no application-config blob or config-file environment variable.
+`MCP_CONSOLE_HOME` selects the global directory, and ordinary `sandbox --config-env NAME` accepts the separate native runner's JSON policy rather than application configuration.
+Application discovery flags, `--config-file`, and `-c` overrides cannot be combined with `--config-env` or internal `--settings-env`.
 
 See [resolver settings](RESOLVER.md) and [sandbox settings](SANDBOX_CONFIGURATION.md) for available keys.
 
