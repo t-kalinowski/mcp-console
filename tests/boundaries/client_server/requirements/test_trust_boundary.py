@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import sys
 from tempfile import TemporaryDirectory
@@ -79,6 +80,18 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
     return working, env
 
 
+def replacement_resolver(working: Path, name: str) -> None:
+    python = working / "python with spaces"
+    python.symlink_to(sys.executable)
+    program = working / f"{name}.py"
+    program.write_text(PROBE.read_text())
+    replacement = working / name
+    replacement.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(str(python))} {shlex.quote(str(program))} "$@"\n'
+    )
+    replacement.chmod(0o755)
+
+
 @requires(POSIX, SANDBOX, command("uv"))
 def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
     # A home-relative fixture stays outside macOS's writable user temp directory.
@@ -110,9 +123,7 @@ def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
         caller_config.parent.mkdir()
         caller_config.write_text("{")
         working, env = workspace(root)
-        replacement = working / "replacement-uv"
-        replacement.write_text(f"#!{sys.executable}\n" + PROBE.read_text())
-        replacement.chmod(0o755)
+        replacement_resolver(working, "replacement-uv")
         with McpClient(
             binary, ("serve", "--writable-root", str(working)), env, working
         ) as client:
@@ -372,9 +383,7 @@ def test_worker_replaces_selected_r_resolver(binary: Path) -> Transcript:
                 )
             }
         )
-        replacement = working / "replacement-ir"
-        replacement.write_text(f"#!{sys.executable}\n" + PROBE.read_text())
-        replacement.chmod(0o755)
+        replacement_resolver(working, "replacement-ir")
         with McpClient(
             binary,
             ("serve", "-c", "cache=host", "--writable-root", str(working)),
