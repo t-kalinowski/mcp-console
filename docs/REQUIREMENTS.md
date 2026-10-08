@@ -281,6 +281,10 @@ Local sandboxed sessions redirect preparation and worker cache paths to Console-
 With `cache: host`, shared cache writes can also affect other users of those artifacts.
 Cache separation does not protect cache contents from processes explicitly granted writes.
 
+Explicit R selection hashes selected files and checks resource directory targets to detect changes between operations.
+Validation and execution open paths separately, and the captured files do not cover every loader or launcher dependency.
+R installations and all code loaded during preparation remain trusted inputs; granting a worker write access to them can influence later preparation, including through concurrent file replacement.
+
 ### Host resolver uv configuration
 
 The preparation owner captures startup `UV_*` values except `UV_OFFLINE`, restores that snapshot for later calls, and uses its captured uv selection.

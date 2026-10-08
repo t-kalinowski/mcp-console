@@ -11,6 +11,7 @@ use crate::resolver::{self, ResolverControlOutcome, ResolverStopHandle};
 
 struct Context {
     mode: Mode,
+    installation: Option<crate::local_runtime::RInstallation>,
     bootstrap: Option<resolver::ManagedRBootstrap>,
     r: Option<resolver::ManagedRResolverConfiguration>,
     python: resolver::ManagedPythonResolverConfiguration,
@@ -21,8 +22,16 @@ struct Context {
 impl Context {
     fn discover(
         mode: Mode,
+        installation: Option<crate::local_runtime::RInstallation>,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
+        if let Some(installation) = &installation {
+            installation.validate()?;
+            // Apply accepted native paths after the preparation launcher's
+            // configured environment, before discovery captures any R choices.
+            installation.configure_environment();
+            unsafe { std::env::set_var("RHOME", &installation.home) };
+        }
         let mode = if matches!(mode, Mode::Auto) {
             if crate::local_runtime::Selection::r_is_present() {
                 Mode::R
@@ -44,6 +53,7 @@ impl Context {
             return Ok((
                 Self {
                     mode,
+                    installation,
                     bootstrap: None,
                     r: None,
                     python,
@@ -91,6 +101,7 @@ impl Context {
         Ok((
             Self {
                 mode,
+                installation,
                 bootstrap,
                 r: None,
                 python,
@@ -106,7 +117,14 @@ impl Context {
         operation: Operation,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<serde_json::Value, String> {
+        if let Some(installation) = &self.installation {
+            installation.validate()?;
+        }
         match operation {
+            Operation::InspectR { executable } => serde_json::to_value(
+                crate::local_runtime::RInstallation::inspect(&executable, on_started)?,
+            )
+            .map_err(|error| error.to_string()),
             Operation::Bootstrap => {
                 let bootstrap = self
                     .bootstrap
@@ -272,7 +290,7 @@ pub(super) fn run() -> Result<(), String> {
     #[cfg(windows)]
     let mut input = BufReader::new(io::stdin());
     let first: Input = super::read_jsonl(&mut input)?;
-    let Input::Open { mode } = first else {
+    let Input::Open { mode, installation } = first else {
         return Err("expected resolver open".into());
     };
     let (events, received) = mpsc::channel();
@@ -323,7 +341,7 @@ pub(super) fn run() -> Result<(), String> {
         let mut context = perform(
             0,
             &job_events,
-            |started| Context::discover(mode, started),
+            |started| Context::discover(mode, installation, started),
             |(_, discovery)| serde_json::to_value(discovery).expect("discovery serializes"),
         )?
         .0;

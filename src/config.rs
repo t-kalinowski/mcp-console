@@ -56,8 +56,9 @@ pub fn load(
                 }
                 let source = std::fs::read_to_string(&absolute)
                     .map_err(|error| format!("cannot read '{}': {error}", path.display()))?;
-                let overlay =
+                let mut overlay =
                     yaml::load(&source).map_err(|error| format!("{}: {error}", path.display()))?;
+                expand_r_shorthand(&mut overlay);
                 merge(
                     value.get_or_insert_with(|| Value::Object(Map::new())),
                     overlay,
@@ -80,6 +81,7 @@ pub fn load(
         for key in keys.into_iter().rev() {
             overlay = Value::Object(Map::from_iter([(key.to_string(), overlay)]));
         }
+        expand_r_shorthand(&mut overlay);
         merge(
             value.get_or_insert_with(|| Value::Object(Map::new())),
             overlay,
@@ -89,6 +91,15 @@ pub fn load(
         value,
         paths: sources,
     })
+}
+
+// Expand the R path at each input boundary so later options merge with it.
+fn expand_r_shorthand(value: &mut Value) {
+    if let Some(r) = value.get_mut("r")
+        && r.is_string()
+    {
+        *r = serde_json::json!({"executable": r.take()});
+    }
 }
 
 /// Objects merge recursively; arrays, scalars, and null replace the old value.

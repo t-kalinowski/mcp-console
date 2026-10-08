@@ -42,6 +42,10 @@ pub(crate) struct Discovery {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) enum Operation {
+    InspectR {
+        #[serde(with = "crate::local_runtime::native_path")]
+        executable: std::path::PathBuf,
+    },
     Bootstrap,
     ResolveRStandalone {
         requirements: Vec<String>,
@@ -98,6 +102,8 @@ enum Input {
     Open {
         #[serde(default, skip_serializing_if = "Mode::is_r")]
         mode: Mode,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        installation: Option<crate::local_runtime::RInstallation>,
     },
     Run {
         id: u64,

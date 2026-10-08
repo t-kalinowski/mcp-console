@@ -117,6 +117,23 @@ impl ClientConfiguration {
             .or_else(|| std::env::var_os("RETICULATE_PYTHON"));
         let program = std::env::current_exe()
             .map_err(|error| format!("failed to locate the R worker executable: {error}"))?;
+        let installation = r_settings
+            .executable
+            .as_ref()
+            .map(|executable| {
+                crate::resolver::preparation::Preparation::inspect::<
+                    crate::local_runtime::RInstallation,
+                >(
+                    crate::resolver::preparation::Operation::InspectR {
+                        executable: executable.clone(),
+                    },
+                    sandbox_settings.clone(),
+                    no_sandbox,
+                    diagnostics.clone(),
+                    on_started,
+                )
+            })
+            .transpose()?;
         let local_runtime;
         #[cfg(any(unix, windows))]
         let resolver_preparation;
@@ -126,6 +143,7 @@ impl ClientConfiguration {
             resolver_settings.clone(),
             no_sandbox,
             configured_python.as_deref(),
+            installation.clone(),
             diagnostics.clone(),
             on_started,
         )?;
@@ -205,6 +223,7 @@ impl ClientConfiguration {
             );
             local_runtime = Some(crate::local_runtime::Selection {
                 r_home: Some(home),
+                installation,
                 r_settings,
                 python: None,
             });

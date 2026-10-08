@@ -93,7 +93,7 @@ struct Project {
     startup: Option<startup::Startup>,
     cache: Option<Cache>,
     python: Option<python::Python>,
-    #[serde(deserialize_with = "sandbox::supplied_mapping")]
+    #[serde(deserialize_with = "r_settings")]
     r: Option<R>,
     languages: Option<Vec<crate::cell::Language>>,
     #[serde(default = "inherit_by_default")]
@@ -106,10 +106,23 @@ struct Project {
     resolver: Resolver,
 }
 
-#[derive(Clone, Copy, Default, serde::Serialize, Deserialize)]
+#[derive(Clone, Default, serde::Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct R {
+    // Workers receive the accepted installation; only the controller selects a launcher.
+    #[serde(deserialize_with = "sandbox::supplied", skip_serializing)]
+    pub executable: Option<PathBuf>,
     pub vanilla: bool,
+}
+
+fn r_settings<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<R>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    sandbox::mapping(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 fn inherit_by_default() -> bool {
@@ -198,10 +211,28 @@ pub fn discover(
         (_, true) => format!("configuration from {files}"),
         (_, false) => format!("configuration from {files} with CLI overrides"),
     };
-    let project: Project = serde_path_to_error::deserialize(
+    let mut project: Project = serde_path_to_error::deserialize(
         value.unwrap_or_else(|| serde_json::json!({})),
     )
     .map_err(|error| format!("{name}: {error}; see docs/CONFIGURATION.md for the public format"))?;
+    if let Some(r) = &mut project.r
+        && let Some(path) = &mut r.executable
+    {
+        if path.as_os_str().is_empty() {
+            return Err(format!(
+                "{name}: r.executable must name an R executable or launcher"
+            ));
+        }
+        if let Ok(relative) = path.strip_prefix("~") {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|home| home.is_absolute())
+                .ok_or("r.executable home expansion requires an absolute HOME")?;
+            *path = home.join(relative);
+        }
+        *path = std::path::absolute(&*path)
+            .map_err(|error| format!("{name}: cannot locate r.executable: {error}"))?;
+    }
     if let Some(startup) = &project.startup {
         startup
             .validate()

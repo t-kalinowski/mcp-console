@@ -183,6 +183,40 @@ Managed selection currently accepts an empty options mapping.
 An explicit managed choice requires available managed preparation; it does not select a PATH interpreter when preparation is unavailable.
 When `python` is omitted, Console retains the launch-time `RETICULATE_PYTHON` compatibility behavior.
 
+## R executable selection
+
+Select an installed R executable or its ordinary launcher:
+
+```yaml
+r: /opt/R/4.6.1/bin/R
+```
+
+The scalar expands to `r: {executable: PATH}` before configuration layers merge.
+A mapping can combine selection with the existing startup setting:
+
+```yaml
+r:
+  executable: /opt/R/4.6.1/bin/R
+  vanilla: true
+```
+
+Paths, including bare filenames, are relative to the captured launch directory.
+A leading `~` uses the server's absolute `HOME`; `~user` and variable references are not expanded.
+On Windows, select an installed launcher such as `r: 'C:\Program Files\R\R-4.6.1\bin\R.exe'`.
+Directories, Rscript selectors, commands with arguments, and incompatible installations are errors.
+An explicit selection overrides inherited R installation hints and PATH discovery.
+Omitting `executable` preserves ordinary discovery; `r: null` clears the R settings before subsequent overrides.
+
+Console captures the installation's matching Rscript, runtime library, and resource directories for workers and preparation across restarts.
+It checks selected installation file contents and resource directory targets before each worker launch and preparation operation; detected changes require a new server connection.
+Ordinary changes within resource directories remain allowed.
+Failed initial discovery can be retried with explicit restart after repairing the captured path.
+Inspection uses worker permissions and suppresses startup files; native R startup retains the behavior below.
+
+The installation and all code it loads remain [trusted preparation inputs](REQUIREMENTS.md#host-resolution-and-trust).
+These checks do not protect against concurrent file replacement or changes to uncaptured dependencies.
+Keep those inputs outside worker-writable paths when relying on worker isolation.
+
 ## Native R startup
 
 The built-in R interpreter uses R's normal startup by default:
