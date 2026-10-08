@@ -13,3 +13,13 @@ candidate: conda
 stderr: >
   existing Python <fixture>/conda is a Conda environment; Conda
   environments are unsupported; use a standard venv or managed Python
+---
+candidate: conda-alias
+stderr: >
+  existing Python <fixture>/conda is a Conda environment; Conda
+  environments are unsupported; use a standard venv or managed Python
+---
+candidate: ordinary venv
+stderr: >
+  existing Python <fixture>/conda is a Conda environment; Conda
+  environments are unsupported; use a standard venv or managed Python

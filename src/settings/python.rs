@@ -144,13 +144,6 @@ fn existing(path: &Path) -> Result<PythonChoice, String> {
             "bin/python"
         })
     } else if metadata.is_file() {
-        for prefix in path
-            .parent()
-            .into_iter()
-            .chain(path.parent().and_then(Path::parent))
-        {
-            reject_conda(prefix)?;
-        }
         path.to_path_buf()
     } else {
         return Err(format!(
@@ -171,6 +164,22 @@ fn existing(path: &Path) -> Result<PythonChoice, String> {
             "existing Python executable {} is not a file",
             executable.display()
         ));
+    }
+    let resolved = executable.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve existing Python executable {}: {error}",
+            executable.display()
+        )
+    })?;
+    // Inspect the target's installation without changing venv activation paths.
+    for path in [&executable, &resolved] {
+        for prefix in path
+            .parent()
+            .into_iter()
+            .chain(path.parent().and_then(Path::parent))
+        {
+            reject_conda(prefix)?;
+        }
     }
     Ok(PythonChoice {
         executable: Some(executable),

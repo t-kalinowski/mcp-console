@@ -44,29 +44,29 @@ CACHE_VARIABLES = (
 )
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_default_caches_are_console_owned(binary: Path) -> Transcript:
     return cache_locations(
         binary, host=False, sources=("default", "platform", "isolated")
     )
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_absolute_xdg_cache_starts_without_home(binary: Path) -> Transcript:
     return cache_locations(binary, host=False, sources=("xdg_without_home",))
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_console_root_is_created_with_explicit_entries(binary: Path) -> Transcript:
     return cache_locations(binary, host=False, sources=("explicit_entries",))
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_host_cache_opt_out(binary: Path) -> Transcript:
     return cache_locations(binary, host=True, sources=("direct", "config", "cli"))
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_host_matplotlib_cache_uses_platform_default(binary: Path) -> Transcript:
     return cache_locations(binary, host=True, sources=("platform",))
 
@@ -150,7 +150,7 @@ def test_selected_python_preserves_user_site_packages(binary: Path) -> Transcrip
     ]
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_resolver_cannot_write_companion_build_cache(binary: Path) -> Transcript:
     cache_locations(binary, host=False, sources=("default", "platform"))
     cache_locations(binary, host=True, sources=("cli",))
@@ -280,14 +280,14 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
     ]
 
 
-@requires(SANDBOX)
+@requires(SANDBOX, command("uv"))
 def test_resolver_cache_roots_keep_metadata_read_only(binary: Path) -> Transcript:
     for host, source in ((False, "environment"), (True, "config")):
         cache_locations(binary, host=host, sources=(source,), metadata=True)
     return [{"resolver_cache_root_metadata_read_only": True}]
 
 
-@requires(SANDBOX, command("git"))
+@requires(SANDBOX, command("git"), command("uv"))
 def test_uv_git_cache_works_without_root_metadata_grants(binary: Path) -> Transcript:
     with TemporaryDirectory(prefix="console-git-cache-", dir=Path.home()) as temporary:
         root = Path(temporary).resolve()

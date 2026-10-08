@@ -158,9 +158,11 @@ class WindowsSandbox(unittest.TestCase):
             finally:
                 session.close()
 
+    @unittest.skipUnless(shutil.which("uv"), "requires uv")
     def test_console_cache_paths_reach_resolver_and_worker(self):
         self.console_cache_paths(profile_fallback=False)
 
+    @unittest.skipUnless(shutil.which("uv"), "requires uv")
     def test_console_cache_falls_back_to_userprofile_after_relative_home(self):
         self.console_cache_paths(profile_fallback=True)
 

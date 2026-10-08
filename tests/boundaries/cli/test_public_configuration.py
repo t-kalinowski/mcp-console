@@ -20,6 +20,7 @@ from support.requirements import (
     NATIVE_FIXTURES,
     POSIX,
     SANDBOX,
+    command,
     requires,
 )
 from support.suites import run_this_suite
@@ -449,7 +450,7 @@ def test_native_domain_literals(binary: Path) -> Transcript:
 
 
 @executions(DIRECT, SANDBOXED)
-@requires(POSIX)
+@requires(POSIX, command("uv"))
 def test_shared_environment_survives_restart(
     binary: Path, execution: Execution
 ) -> Transcript:

@@ -1,6 +1,7 @@
 """Existing Python paths and bounded fallback capture through public launch/MCP."""
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -154,6 +155,43 @@ def test_existing_venv_with_r_retains_selection(
             return [{"r_and_selected_venv": True, "restart": True}]
 
 
+@requires(R)
+@executions(DIRECT)
+def test_managed_selection_requires_preparation(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        programs = root / "tools"
+        programs.mkdir()
+        library = root / "r-library"
+        library.mkdir()
+        env, _ = r_test_environment()
+        # Expose Python on PATH without either preparation tool.
+        env.update(
+            PATH=os.pathsep.join(
+                (str(programs), str(Path(sys.executable).parent), os.defpath)
+            ),
+            R_LIBS=str(library),
+            R_LIBS_SITE=str(library),
+            R_LIBS_USER=str(library),
+        )
+        env.pop("RETICULATE_UV", None)
+        audit = []
+        for choice in ({"managed": {}}, {"first_available": [{"managed": {}}]}):
+            configure(root, choice, cache="host")
+            with McpClient(binary, execution.serve(), env, root) as client:
+                client.initialize_and_list_tools()
+                result = client.send(python="raise AssertionError('must not run')")
+                assert result.get("isError"), result
+                assert "dynamic environment resolution is unavailable" in str(result), (
+                    result
+                )
+                client.finish_with_standard_error(expected_exit_status=1)
+                audit.append({"choice": choice, "managed_preparation_required": True})
+        return audit
+
+
 def test_rejects_invalid_selection_chains(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -280,10 +318,19 @@ def test_present_broken_candidates_do_not_fall_back(binary: Path) -> Transcript:
         (root / "dangling").symlink_to(root / "absent")
         (root / "broken").mkdir()
         (root / "conda/conda-meta").mkdir(parents=True)
+        conda_python = root / "conda/bin/python"
+        conda_python.parent.mkdir()
+        conda_python.write_text("unsupported interpreter")
+        (root / "conda-alias").symlink_to(conda_python)
+        selected_python = virtualenv_python(selected)
+        selected_python.unlink()
+        selected_python.symlink_to(conda_python)
         failures = {
             "dangling": "cannot use existing Python",
             "broken": "standard venv",
             "conda": "Conda environments are unsupported",
+            "conda-alias": "Conda environments are unsupported",
+            "ordinary venv": "Conda environments are unsupported",
         }
         audit = []
         for name, expected in failures.items():
@@ -332,11 +379,17 @@ def test_existing_inspection_uses_worker_permissions(
         target.mkdir()
         site = next(selected.glob("lib/python*/site-packages"))
         (site / "sitecustomize.py").write_text(
-            "from pathlib import Path\n"
-            "try:\n"
-            f"    Path({str(target / 'escaped')!r}).write_text('escaped')\n"
-            "except PermissionError:\n"
-            f"    Path({str(root / 'denied')!r}).write_text('denied')\n"
+            # fmt: python
+            code(f"""
+                import errno
+                from pathlib import Path
+
+                try:
+                    Path({str(target / "escaped")!r}).write_text("escaped")
+                except OSError as error:
+                    assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
+                    Path({str(root / "denied")!r}).write_text("denied")
+                """)
         )
         configure(
             root,

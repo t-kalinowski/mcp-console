@@ -102,6 +102,10 @@ impl ClientConfiguration {
         let duckdb_extension_directory =
             crate::resolver::cache::duckdb_extension_directory(&resolver_settings)?;
         let languages = crate::cell::Languages::from_environment()?;
+        let legacy_python = python.is_none();
+        let explicit_managed = python
+            .as_ref()
+            .is_some_and(|python| python.executable.is_none());
         let inspect_explicit = python.is_some() || cfg!(windows);
         let configured_python = python
             .map(|python| {
@@ -176,6 +180,13 @@ impl ClientConfiguration {
             });
             (None, extensions, python, RResolver::Disabled)
         } else {
+            if explicit_managed && !discovery.managed {
+                let error = crate::local_runtime::RESOLUTION_UNAVAILABLE;
+                preparation
+                    .close()
+                    .map_err(|cleanup| format!("{error}; {cleanup}"))?;
+                return Err(error.into());
+            }
             #[cfg(unix)]
             use std::os::unix::ffi::OsStringExt;
             #[cfg(unix)]
@@ -233,7 +244,7 @@ impl ClientConfiguration {
             let explicit = configured_python
                 .filter(|value| !value.is_empty() && value != "managed")
                 .or_else(|| {
-                    (cfg!(windows) && matches!(r_resolver, RResolver::Disabled))
+                    (legacy_python && cfg!(windows) && matches!(r_resolver, RResolver::Disabled))
                         .then(|| {
                             crate::resolver::find_path_entry("python").map(PathBuf::into_os_string)
                         })

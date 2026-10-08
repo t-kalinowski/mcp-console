@@ -135,6 +135,7 @@ The equivalent mapping is `python: {existing: .venv}`.
 Directories require `pyvenv.cfg` and `bin/python` on Unix or `Scripts/python.exe` on Windows.
 Executable paths retain their spelling and symlinks so a selected venv keeps its package environment.
 Recognized Conda installations are unsupported; unrelated Conda environment variables do not exclude ordinary venvs.
+Interpreter symlink targets are checked for Conda installations without changing the selected executable path.
 
 A leading `~` expands using the server's absolute `HOME`, including in a quoted override such as `-c 'python=~/.venv/bin/python'`.
 Missing, empty, or relative `HOME` is an error when expansion is requested; `~user` and environment-variable references are not expanded.
@@ -165,6 +166,7 @@ The list is flat and nonempty, with at most one `active_venv` and one optional m
 Exhausting the list fails startup.
 `managed: {}` uses the existing managed Python defaults and also works at the top level to override an inherited `RETICULATE_PYTHON`.
 Managed selection currently accepts an empty options mapping.
+An explicit managed choice requires available managed preparation; it does not select a PATH interpreter when preparation is unavailable.
 When `python` is omitted, Console retains the launch-time `RETICULATE_PYTHON` compatibility behavior.
 
 ## Native R startup
