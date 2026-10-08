@@ -24,6 +24,13 @@ fn main() {
             r#"[{{"version":"3.12.7","version_parts":{{"major":3,"minor":12,"patch":7}},"symlink":null,"variant":"default","implementation":"cpython"}}]"#
         );
     } else {
+        if std::env::var_os("TEST_RESOLVER_CACHE_PROBE").is_some() {
+            let root = std::path::PathBuf::from(std::env::var_os("CACHE_TEST_ROOT").unwrap());
+            let cache = std::path::PathBuf::from(std::env::var_os("UV_CACHE_DIR").unwrap());
+            assert!(cache.starts_with(root));
+            std::fs::create_dir_all(&cache).unwrap();
+            std::fs::write(cache.join("resolver-probe"), "prepared").unwrap();
+        }
         if let Ok(gate) = std::env::var("TEST_RESOLVER_GATE") {
             let child = Command::new(&program).arg("--descendant").spawn().unwrap();
             let mut gate = Gate::connect(gate).unwrap();

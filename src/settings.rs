@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+mod python;
 mod sandbox;
+pub(crate) use python::PythonChoice;
 pub(crate) mod startup;
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
@@ -90,7 +92,7 @@ pub fn native_variant_name(value: &Value) -> Option<&str> {
 struct Project {
     startup: Option<startup::Startup>,
     cache: Option<Cache>,
-    python: Option<std::path::PathBuf>,
+    python: Option<python::Python>,
     #[serde(deserialize_with = "sandbox::supplied_mapping")]
     r: Option<R>,
     languages: Option<Vec<crate::cell::Language>>,
@@ -145,7 +147,7 @@ fn environment<'de, D: serde::Deserializer<'de>>(
 pub(crate) struct Captured {
     pub startup: Option<startup::Startup>,
     pub cache: Option<Cache>,
-    pub python: Option<std::path::PathBuf>,
+    pub python: Option<PythonChoice>,
     pub r: Option<R>,
     pub languages: Option<crate::cell::Languages>,
     pub source: Option<String>,
@@ -274,26 +276,7 @@ pub fn discover(
         startup: project.startup,
         cache: project.cache,
         languages,
-        python: project
-            .python
-            .map(|path| {
-                if path.as_os_str().is_empty() {
-                    return Err("python must name an executable; omit it to use uv".into());
-                }
-                let path = if let Ok(relative) = path.strip_prefix("~") {
-                    let home = std::env::var_os("HOME")
-                        .map(PathBuf::from)
-                        .filter(|home| home.is_absolute())
-                        .ok_or("configured Python home expansion requires an absolute HOME")?;
-                    home.join(relative)
-                } else {
-                    path
-                };
-                std::path::absolute(directory.join(path))
-                    .map_err(|error| format!("cannot locate configured Python: {error}"))
-            })
-            .transpose()
-            .map_err(|error: String| format!("{name}: {error}"))?,
+        python: project.python.map(python::Python::capture).transpose()?,
         source: configured.then_some(name),
         policy,
         resolver,
