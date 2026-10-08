@@ -9,10 +9,10 @@
 static atomic_int interrupts;
 
 static int after_stage_exit(pid_t group, int signal) {
-    if (signal == SIGINT && atomic_fetch_add(&interrupts, 1) == 1) {
+    if (signal == SIGSTOP && atomic_fetch_add(&interrupts, 1) == 1) {
         // The first stage consumes an interrupt and returns a valid uv path.
         // Its pending control also targets the next stage. Observe that child's
-        // independent exit before forwarding control, preserving real status,
+        // independent exit before suspension, preserving real status,
         // the owner's non-reaping observer and all process/I/O retirement.
         siginfo_t status;
         int result;
@@ -23,9 +23,9 @@ static int after_stage_exit(pid_t group, int signal) {
             _exit(125);
     }
 #ifdef __APPLE__
-    return killpg(group, signal);
+    return kill(group, signal);
 #else
-    return ((int (*)(pid_t, int))dlsym(RTLD_NEXT, "killpg"))(group, signal);
+    return ((int (*)(pid_t, int))dlsym(RTLD_NEXT, "kill"))(group, signal);
 #endif
 }
 
@@ -33,9 +33,9 @@ static int after_stage_exit(pid_t group, int signal) {
 __attribute__((used)) static struct {
     const void *replacement;
     const void *original;
-} killpg_interposer __attribute__((section("__DATA,__interpose"))) = {
-    (const void *)after_stage_exit, (const void *)killpg,
+} kill_interposer __attribute__((section("__DATA,__interpose"))) = {
+    (const void *)after_stage_exit, (const void *)kill,
 };
 #else
-int killpg(pid_t group, int signal) { return after_stage_exit(group, signal); }
+int kill(pid_t group, int signal) { return after_stage_exit(group, signal); }
 #endif

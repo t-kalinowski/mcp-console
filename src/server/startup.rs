@@ -40,7 +40,7 @@ struct Cancellation {
     closed: bool,
     admission_cancelled: bool,
     registration_closed: bool,
-    resolver: Option<crate::resolver::ResolverStopHandle>,
+    resolvers: Vec<crate::resolver::ResolverStopHandle>,
     retrying: bool,
 }
 
@@ -98,9 +98,9 @@ impl Startup {
                     let prepared = initialize(
                         &|resolver| {
                             let mut control = control.lock().expect("startup cancellation lock");
-                            // A refused stage still owns its retirement. Keep its handle
-                            // rather than the completed stage's cleanup evidence.
-                            control.resolver = Some(resolver.clone());
+                            // Inspection can finish while retained preparation still
+                            // owns cleanup. Preserve every stage, including refusals.
+                            control.resolvers.push(resolver.clone());
                             if control.closed {
                                 control.registration_closed = true;
                                 return Err(REGISTRATION_CLOSED.into());
@@ -148,15 +148,17 @@ impl Startup {
         if self.runtime.worker.is_configured() || !self.runtime.worker.startup_finished() {
             return Ok(false);
         }
-        if control.resolver.as_ref().is_some_and(|resolver| {
-            !resolver.cleanup_confirmed() || !resolver.retirement_confirmed()
-        }) {
+        if control
+            .resolvers
+            .iter()
+            .any(|resolver| !resolver.cleanup_confirmed() || !resolver.retirement_confirmed())
+        {
             return Err("runtime discovery retry requires confirmed preparation cleanup".into());
         }
         if !self.runtime.worker.retry_failed_startup() {
             return Ok(false);
         }
-        control.resolver = None;
+        control.resolvers.clear();
         control.admission_cancelled = false;
         control.registration_closed = false;
         control.retrying = true;
@@ -191,8 +193,10 @@ impl Startup {
         let control = self.cancellation.lock().expect("startup cancellation lock");
         if control.closed
             && ((control.admission_cancelled && error == REGISTRATION_CLOSED)
-                || control.resolver.as_ref().is_some_and(|resolver| {
-                    resolver.retirement_confirmed()
+                || control.resolvers.last().is_some_and(|resolver| {
+                    control.resolvers.iter().all(|resolver| {
+                        resolver.cleanup_confirmed() && resolver.retirement_confirmed()
+                    })
                     // A close/retirement failure appended by the initializer is
                     // independent of the registration refusal and must survive.
                     && if control.registration_closed {

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.client import McpClient
 from support.normalization import code
+from support.python import virtualenv_python
 from support.records import Transcript
 from support.requirements import R, SANDBOX, UNPRIVILEGED, requires
 from support.snapshots import platform_snapshots
@@ -545,7 +546,12 @@ def test_no_config_excludes_sources_before_home_resolution(binary: Path) -> Tran
                 ("--no-config", "-c", "languages=[python]"),
                 {"python"},
             )
-            records.append({"home": home.replace(str(root), "<root>"), "skipped": True})
+            records.append(
+                {
+                    "home": home.replace(str(root), "<root>").replace("\\", "/"),
+                    "skipped": True,
+                }
+            )
     return records
 
 
@@ -566,7 +572,10 @@ def test_no_global_config_excludes_source_before_home_resolution(
                 binary, root, environment, ("--no-global-config",), {"python"}
             )
             records.append(
-                {"home": home.replace(str(root), "<root>"), "project_loaded": True}
+                {
+                    "home": home.replace(str(root), "<root>").replace("\\", "/"),
+                    "project_loaded": True,
+                }
             )
         global_config.unlink()
         global_config.mkdir()
@@ -888,7 +897,14 @@ def test_global_python_path_is_launch_relative(binary: Path) -> Transcript:
         workspace = root / "workspace"
         workspace.mkdir()
         global_config = root / "global/config.yaml"
-        relative_python = os.path.relpath(sys.executable, workspace)
+        # The test runner and temporary workspace can be on different Windows drives.
+        python_home = root / "python"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", str(python_home)],
+            check=True,
+        )
+        python = virtualenv_python(python_home)
+        relative_python = os.path.relpath(python, workspace)
         write_config(global_config, {"cache": "host", "python": relative_python})
         with McpClient(
             binary,
@@ -896,7 +912,7 @@ def test_global_python_path_is_launch_relative(binary: Path) -> Transcript:
             environment=os.environ
             | {
                 "MCP_CONSOLE_HOME": str(global_config.parent),
-                "MCP_CONSOLE_TEST_EXPECTED_PYTHON": sys.executable,
+                "MCP_CONSOLE_TEST_EXPECTED_PYTHON": str(python),
             },
             current_directory=workspace,
             use_home_configuration=True,

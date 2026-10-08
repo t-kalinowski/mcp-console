@@ -340,6 +340,7 @@ def test_interrupts_explicit_matplotlib_show(
             client,
             '[input requested: "render> "]\n[waiting for stdin]',
             "explicit show render checkpoint",
+            completion_timeout_seconds=client.response_timeout,
             # fmt: python
             python=code("""
                 import matplotlib.pyplot as plt

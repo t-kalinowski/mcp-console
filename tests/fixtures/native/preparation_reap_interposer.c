@@ -42,7 +42,10 @@ static ssize_t native_write(int fd, const void *bytes, size_t count) {
 }
 
 static ssize_t observe_write(int fd, const void *bytes, size_t count) {
-    if (count == 8 && memcmp(bytes, "\"Closed\"", 8) == 0) {
+    // Worker-permission inspection uses a separate short-lived resolve peer
+    // without RETICULATE_PYTHON; fault only the retained preparation peer.
+    if (getenv("RETICULATE_PYTHON") != NULL &&
+        count == 8 && memcmp(bytes, "\"Closed\"", 8) == 0) {
         int marker = open(getenv("MCP_CONSOLE_TEST_REAP_PID"), O_WRONLY | O_CREAT | O_TRUNC, 0600);
         char pid[32];
         int length = snprintf(pid, sizeof(pid), "%ld", (long)getpid());
@@ -50,6 +53,9 @@ static ssize_t observe_write(int fd, const void *bytes, size_t count) {
         close(marker);
         const char *blocked = getenv("MCP_CONSOLE_TEST_REAP_BLOCK_CLOSE");
         if (blocked != NULL) {
+            // Keep the faulted peer alive through graceful shutdown as well as
+            // the injected SIGKILL failure, so later cleanup cannot confirm it.
+            if (signal(SIGTERM, SIG_IGN) == SIG_ERR) _exit(126);
             int checkpoint = open(blocked, O_WRONLY);
             if (checkpoint < 0 || native_write(checkpoint, "1", 1) != 1) _exit(123);
             close(checkpoint);

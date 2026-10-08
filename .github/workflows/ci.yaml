@@ -567,6 +567,8 @@ jobs:
           prewarm_r -e 'cat("MCP_CONSOLE_TEST_SSH_R_LIBS=", paste(.libPaths(), collapse = .Platform$path.sep), "\n", sep = "", file = Sys.getenv("GITHUB_ENV"), append = TRUE)'
           prewarm_r --with praise
           prewarm_r --with praise --with zeallot
+          # Build optional Ragnar dependencies before the bounded sandbox case.
+          prewarm_r --with ragnar
 
       - name: Run transcripts
         id: transcripts

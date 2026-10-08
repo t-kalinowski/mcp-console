@@ -472,6 +472,7 @@ result:
 ---
 send:
   sql: SELECT 42 AS answer
+  timeout_ms: 600000
 result:
   content:
     - type: text

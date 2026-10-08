@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.requirements import POSIX, SQL, UNPRIVILEGED, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, SQL, UNPRIVILEGED, requires
 from support.assertions import (
     assert_exact_interleaving,
     assert_result_content,
@@ -33,7 +33,7 @@ from support.snapshots import execution_snapshots
 from support.python import virtualenv_python
 from support.resolvers import expose_uv
 from support.normalization import code, normalize_python_resolution_error
-from support.native import build_interposer
+from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
 from support.python import runtime_source_line, write_test_wheel
 
@@ -3095,7 +3095,7 @@ def test_records_managed_python_defaults(
         )
 
 
-@requires(UNPRIVILEGED)
+@requires(NATIVE_FIXTURES, UNPRIVILEGED)
 @executions(DIRECT)
 def test_reports_direct_storage_retirement_failure(
     binary: Path, execution: Execution
@@ -3150,10 +3150,14 @@ def test_reports_direct_storage_retirement_failure(
                     """)
                 (site / "sitecustomize.py").write_text(hook)
             try:
+                environment = selected_environment(virtualenv_python(venv).parent)
+                environment[LOADER_VARIABLE] = str(
+                    build_interposer(workspace, "temporary_directory_failure")
+                )
                 with McpClient(
                     binary,
                     execution.serve(),
-                    selected_environment(virtualenv_python(venv).parent),
+                    environment,
                     workspace,
                 ) as client:
                     client.initialize_and_list_tools()
