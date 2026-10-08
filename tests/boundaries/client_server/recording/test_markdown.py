@@ -18,6 +18,49 @@ from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
 
 
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_records_existing_python_startup_declaration(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        workspace = Path(temporary_directory)
+        environment, _ = r_test_environment()
+        environment["RETICULATE_PYTHON"] = sys.executable
+        client = McpClient(
+            binary,
+            execution.serve(),
+            environment,
+            current_directory=workspace,
+        )
+        client.initialize_and_list_tools()
+        inspection = client.send(requirements={"action": "get"})["structuredContent"]
+        assert inspection["requirements"]["python"] == [], inspection
+        client.expect("42\n", r="cat('42\\n')", requirements={"r": ["jsonlite"]})
+        accepted = client.send(requirements={"action": "get"})["structuredContent"]
+        assert "jsonlite" in accepted["requirements"]["r"], accepted
+        client.expect("42\n", python="print(42)")
+        client.finish()
+
+        (session,) = (workspace / ".agents/console/sessions").iterdir()
+        quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
+        assert "  python-packages: []\n" in quarto, quarto
+        assert "    - jsonlite\n" in quarto, quarto
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl").read_text().splitlines()
+        ]
+        (startup,) = [
+            event["startup_requirements"]
+            for event in events
+            if event["event"] in ("session_started", "environment_discovered")
+            and event["startup_requirements"] is not None
+        ]
+        assert startup["python"] == [], startup
+        assert startup["r"] == inspection["requirements"]["r"], startup
+        return [{"recorded_startup_requirements": startup}]
+
+
 @requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_records_real_mixed_language_session(
@@ -113,16 +156,15 @@ def test_records_real_mixed_language_session(
         assert quarto.endswith("\n")
 
         session_event = events[0]
-        assert Path(session_event["working_directory"]).samefile(workspace)
+        recorded_workspace = session_event["working_directory"]
+        assert Path(recorded_workspace).samefile(workspace)
         markdown = markdown.replace(session_event["run_id"], "<run ID>")
-        markdown = markdown.replace(
-            json.dumps(session_event["working_directory"], ensure_ascii=False)[1:-1],
-            "<workspace>",
-        )
-        quarto = quarto.replace(
-            session_event["working_directory"],
-            "<workspace>",
-        )
+        for representation in (
+            json.dumps(recorded_workspace, ensure_ascii=False)[1:-1],
+            recorded_workspace,
+        ):
+            markdown = markdown.replace(representation, "<workspace>")
+            quarto = quarto.replace(representation, "<workspace>")
         for event in events:
             markdown = markdown.replace(event["at"], "<UTC timestamp>")
 
