@@ -40,7 +40,7 @@ Classification is not proof setup can succeed: protected metadata mount targets 
 The mount backend cannot fully reopen a narrower read beneath a broader denial; an ancestor mask may hide it and a deeper denial may fail setup.
 Existing file write roots also have a native limitation; missing write roots are skipped until a later launch.
 Console does not grant parents, create permanent placeholders, or switch backends to work around these outcomes.
-See [writable paths](SANDBOX_CONFIGURATION.md#additional-writable-paths).
+See [writable paths](SANDBOX_CONFIGURATION.md#filesystem).
 
 Full-write modes can influence shared files and unsandboxed processes.
 Restricted- policy security results must not be attributed to those modes.

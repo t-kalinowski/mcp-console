@@ -1,0 +1,106 @@
+project:
+  type: website
+  render:
+    - index.qmd
+    - getting-started.qmd
+    - README.md
+    - "*.md"
+    - benchmarks/*.md
+    - "!templates/"
+
+website:
+  title: MCP Console
+  description: Persistent R, Python, and SQL sessions for MCP clients.
+  site-url: https://t-kalinowski.github.io/mcp-console/
+  repo-url: https://github.com/t-kalinowski/mcp-console
+  repo-subdir: docs
+  repo-actions: [edit, issue]
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+      - href: getting-started.qmd
+        text: Get started
+      - href: README.md
+        text: Documentation
+    right:
+      - icon: github
+        href: https://github.com/t-kalinowski/mcp-console
+        aria-label: GitHub repository
+  sidebar:
+    style: docked
+    collapse-level: 1
+    contents:
+      - href: getting-started.qmd
+        text: Get started
+      - href: README.md
+        text: Documentation index
+      - section: Using Console
+        contents:
+        - href: BUILTIN_RUNTIME.md
+          text: R, Python, and SQL
+        - href: CONFIGURATION.md
+          text: Configuration
+        - href: REQUIREMENTS.md
+          text: Dependencies
+        - href: SEND_OPERATIONS.md
+          text: Calls, input, and control
+        - href: RECORDING.md
+          text: Recordings and reports
+        - href: PYTHON.md
+          text: Python clients
+        - text: R and ellmer
+          href: https://github.com/t-kalinowski/mcp-console/blob/main/r/README.md
+        - href: ENVIRONMENT.md
+          text: Environment variables
+        - href: GLOSSARY.md
+          text: Glossary
+      - section: Sandboxing and platforms
+        contents:
+        - href: SANDBOX.md
+          text: Sandbox
+        - href: SANDBOX_CONFIGURATION.md
+          text: Sandbox configuration
+        - href: RESOLVER.md
+          text: Dependency resolver
+        - href: LINUX_COMPATIBILITY.md
+          text: Linux compatibility
+        - href: WINDOWS.md
+          text: Windows
+      - section: Contributing
+        contents:
+        - href: DEVELOPMENT.md
+          text: Development
+        - href: ARCHITECTURE.md
+          text: Architecture
+        - href: RELAY_PROTOCOL.md
+          text: Relay protocol
+        - href: WORKER_PROTOCOL.md
+          text: Worker protocol
+        - href: TOOL_DESCRIPTIONS.md
+          text: Tool descriptions
+        - href: benchmarks/transcript-concurrency.md
+          text: Transcript concurrency
+        - text: Release guide
+          href: https://github.com/t-kalinowski/mcp-console/blob/main/RELEASE.md
+  page-footer:
+    left: MCP Console · MIT license
+    right:
+      - text: Source
+        href: https://github.com/t-kalinowski/mcp-console
+
+filters:
+  - _filters/website.lua
+
+execute:
+  enabled: false
+
+format:
+  html:
+    theme:
+      light: [cosmo, theme.scss]
+      dark: [cosmo, theme.scss, dark.scss]
+    css: styles.css
+    toc: true
+    code-copy: true
+    code-overflow: wrap
