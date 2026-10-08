@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import sys
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -52,7 +53,7 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
         UV_NO_CONFIG="1",
         UV_PYTHON_PREFERENCE="only-managed",
     )
-    # The fixture owns its package sources, including cases that supply a config.
+    # The fixture owns its package sources and managed-Python selection.
     for name in (
         "UV_INDEX",
         "UV_DEFAULT_INDEX",
@@ -60,6 +61,9 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
         "UV_FIND_LINKS",
         "UV_NO_INDEX",
         "UV_CONFIG_FILE",
+        "UV_MANAGED_PYTHON",
+        "UV_NO_MANAGED_PYTHON",
+        "UV_PYTHON_DOWNLOADS",
     ):
         env.pop(name, None)
     return working, env
@@ -68,8 +72,20 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
 @requires(POSIX, SANDBOX, command("uv"))
 def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
     # A home-relative fixture stays outside macOS's writable user temp directory.
-    with TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory:
+    with (
+        TemporaryDirectory(prefix="resolver-trust-", dir=Path.home()) as directory,
+        patch.dict(
+            os.environ,
+            MCP_CONSOLE_HOME=str(Path(directory) / "caller-console"),
+            UV_MANAGED_PYTHON="1",
+            UV_NO_MANAGED_PYTHON="1",
+            UV_PYTHON_DOWNLOADS="never",
+        ),
+    ):
         root = Path(directory).resolve()
+        caller_config = root / "caller-console/config.yaml"
+        caller_config.parent.mkdir()
+        caller_config.write_text("{")
         working, env = workspace(root)
         replacement = working / "replacement-uv"
         replacement.write_text(f"#!{sys.executable}\n" + PROBE.read_text())
