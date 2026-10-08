@@ -259,7 +259,7 @@ def test_cancelled_send_does_not_cancel_shared_discovery(binary: Path) -> Transc
 
 def wait_for_send_admission(client: McpClient) -> None:
     # Writing a request does not mean its handler has reserved the cell yet.
-    # Discovery is gated, so an empty observation can only report startup or
+    # Startup is gated, so an empty observation can only report startup or
     # the pending send's exclusive wait claim. Never submit a competing cell
     # until that public receipt proves admission.
     deadline = time.monotonic() + 30
@@ -277,9 +277,16 @@ def wait_for_send_admission(client: McpClient) -> None:
                 "isError": True,
             }, result
             break
-        assert result["content"] == [
-            {"type": "text", "text": "\n[phase: startup]\n[worker starting]"}
-        ], result
+        assert result["content"] in (
+            [{"type": "text", "text": "[worker starting]"}],
+            [{"type": "text", "text": "\n[phase: startup]\n[worker starting]"}],
+            [
+                {
+                    "type": "text",
+                    "text": "\n[phase: dependency preparation]\n[worker starting]",
+                }
+            ],
+        ), result
         assert time.monotonic() < deadline, "pending send did not claim its evaluation"
     # Only the scheduling-dependent startup observations are incidental.
     client.transcript[first_poll:] = [client.transcript[-1]]

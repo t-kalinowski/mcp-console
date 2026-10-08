@@ -155,38 +155,35 @@ pub(crate) struct Captured {
     pub resolver_sandbox_requested: bool,
 }
 
-pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Captured, String> {
-    let project = Path::new(".agents/console/config.yaml");
-    let use_project = if no_project_config {
-        false
-    } else {
-        match std::fs::symlink_metadata(project) {
-            Ok(_) => true,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                ) =>
-            {
-                false
-            }
-            Err(error) => return Err(format!("cannot inspect '{}': {error}", project.display())),
+pub fn discover(
+    directory: &Path,
+    overrides: &crate::cli::ConfigOverrides,
+) -> Result<Captured, String> {
+    let mut paths = Vec::new();
+    // Exclude scopes before resolving or inspecting their sources. In particular,
+    // --no-config must not resolve Console home just to discover configuration.
+    if !overrides.no_config {
+        if let Some(home) = crate::console_paths::home_console_directory()? {
+            paths.push(home.join("config.yaml"));
         }
-    };
-    let path = if use_project {
-        Some(PathBuf::from(project))
-    } else {
-        crate::console_paths::home_console_directory()?
-            .map(|directory| directory.join("config.yaml"))
-    };
-    let value = crate::config::load(path.as_deref(), overrides)?;
+        if !overrides.no_project_config {
+            paths.push(PathBuf::from(".agents/console/config.yaml"));
+        }
+    }
+    let crate::config::Loaded { value, paths } =
+        crate::config::load(directory, &paths, &overrides.values)?;
     let configured = value.is_some();
-    let name = if overrides.is_empty() && configured {
-        path.expect("configuration came from a file")
-            .to_string_lossy()
-            .into_owned()
-    } else {
-        "configuration with CLI overrides".into()
+    let files = paths
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let name = match (paths.len(), overrides.values.is_empty()) {
+        (0, true) => "configuration".into(),
+        (0, false) => "configuration with CLI overrides".into(),
+        (1, true) => files,
+        (_, true) => format!("configuration from {files}"),
+        (_, false) => format!("configuration from {files} with CLI overrides"),
     };
     let project: Project = serde_path_to_error::deserialize(
         value.unwrap_or_else(|| serde_json::json!({})),
@@ -281,10 +278,11 @@ pub fn discover(overrides: &[String], no_project_config: bool) -> Result<Capture
                 } else {
                     path
                 };
-                std::path::absolute(path)
+                std::path::absolute(directory.join(path))
                     .map_err(|error| format!("cannot locate configured Python: {error}"))
             })
-            .transpose()?,
+            .transpose()
+            .map_err(|error: String| format!("{name}: {error}"))?,
         source: configured.then_some(name),
         policy,
         resolver,

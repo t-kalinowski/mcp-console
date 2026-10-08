@@ -52,8 +52,8 @@ impl Writers {
         quarto: PathBuf,
         working_directory: &str,
         dynamic_resolution: bool,
-        python_preparation: bool,
         r_available: bool,
+        startup_requirements: &crate::worker_client::Declaration,
     ) -> Self {
         Self {
             markdown: ProjectionWriter::new(markdown, "Markdown transcript"),
@@ -61,8 +61,8 @@ impl Writers {
                 quarto,
                 working_directory,
                 dynamic_resolution,
-                python_preparation,
                 r_available,
+                startup_requirements,
             ),
         }
     }
@@ -77,11 +77,11 @@ impl Writers {
     pub(super) fn configure(
         &mut self,
         dynamic_resolution: bool,
-        python_preparation: bool,
         r_available: bool,
+        startup_requirements: &crate::worker_client::Declaration,
     ) {
         self.quarto
-            .configure(dynamic_resolution, python_preparation, r_available);
+            .configure(dynamic_resolution, r_available, startup_requirements);
     }
 }
 
@@ -90,65 +90,33 @@ impl QuartoWriter {
         path: PathBuf,
         working_directory: &str,
         dynamic_resolution: bool,
-        python_preparation: bool,
         r_available: bool,
+        startup_requirements: &crate::worker_client::Declaration,
     ) -> Self {
-        let mut writer = Self {
+        Self {
             path,
             working_directory: working_directory.to_string(),
-            r_requirements: Vec::new(),
-            python_requirements: Vec::new(),
+            r_requirements: startup_requirements.r.clone(),
+            python_requirements: startup_requirements.python.clone(),
             dynamic_resolution,
             r_available,
             metadata_known: false,
             sources: Vec::new(),
             environment_boundaries: false,
-        };
-        if dynamic_resolution && r_available {
-            writer.r_requirements.extend(
-                crate::worker_client::DEFAULT_R_REQUIREMENTS
-                    .iter()
-                    .map(|requirement| (*requirement).to_string()),
-            );
         }
-        if python_preparation {
-            writer.python_requirements.extend(
-                crate::worker_protocol::DEFAULT_NATIVE_PYTHON_PACKAGES
-                    .iter()
-                    .map(|requirement| (*requirement).to_string()),
-            );
-        } else if dynamic_resolution {
-            writer.python_requirements.extend(
-                crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
-                    .iter()
-                    .map(|requirement| (*requirement).to_string()),
-            );
-        }
-        writer
     }
 
-    fn configure(&mut self, dynamic_resolution: bool, python_preparation: bool, r_available: bool) {
+    fn configure(
+        &mut self,
+        dynamic_resolution: bool,
+        r_available: bool,
+        startup_requirements: &crate::worker_client::Declaration,
+    ) {
         self.dynamic_resolution = dynamic_resolution;
         self.r_available = r_available;
         self.metadata_known = true;
-        self.r_requirements = if dynamic_resolution && r_available {
-            crate::worker_client::DEFAULT_R_REQUIREMENTS
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect()
-        } else {
-            Vec::new()
-        };
-        self.python_requirements = if python_preparation {
-            crate::worker_protocol::DEFAULT_NATIVE_PYTHON_PACKAGES
-        } else if dynamic_resolution {
-            crate::worker_protocol::DEFAULT_PYTHON_PACKAGES
-        } else {
-            &[]
-        }
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
+        self.r_requirements = startup_requirements.r.clone();
+        self.python_requirements = startup_requirements.python.clone();
     }
 
     fn append(&mut self, event: &Event<'_>) -> Result<(), String> {
@@ -429,11 +397,12 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             dynamic_resolution,
             python_preparation,
             r_available,
+            startup_requirements,
         } => {
             document.push_str("## Runtime discovery\n\n");
             push_json(
                 document,
-                &json!({ "dynamic_resolution": dynamic_resolution, "python_preparation": python_preparation, "r_available": r_available }),
+                &json!({ "dynamic_resolution": dynamic_resolution, "python_preparation": python_preparation, "r_available": r_available, "startup_requirements": startup_requirements }),
             )
         }
         Event::PythonEnvironmentAccepted { packages } => {

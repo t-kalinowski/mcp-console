@@ -1,12 +1,15 @@
 ---
 HOME: ~
-stderr: |
-  configured Python home expansion requires an absolute HOME
+stderr: >
+  .agents/console/config.yaml: configured Python home expansion requires
+  an absolute HOME
 ---
 HOME: ""
-stderr: |
-  configured Python home expansion requires an absolute HOME
+stderr: >
+  .agents/console/config.yaml: configured Python home expansion requires
+  an absolute HOME
 ---
 HOME: relative/home
-stderr: |
-  configured Python home expansion requires an absolute HOME
+stderr: >
+  .agents/console/config.yaml: configured Python home expansion requires
+  an absolute HOME

@@ -168,7 +168,10 @@ impl Integration {
     ) -> Result<crate::r_environment::PreparationOutcome, String> {
         if !initialized() {
             // Library preparation must not initialize an unused interpreter.
-            unsafe { std::env::set_var("R_LIBS", library) };
+            unsafe {
+                std::env::set_var("R_LIBS", library);
+                std::env::set_var("MCP_CONSOLE_R_LIBRARY", library);
+            }
             return Ok(crate::r_environment::PreparationOutcome::Prepared {
                 library: library.into(),
             });

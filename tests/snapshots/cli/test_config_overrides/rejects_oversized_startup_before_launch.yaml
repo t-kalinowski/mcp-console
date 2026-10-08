@@ -7,8 +7,8 @@ error: >
 source: |-
   '\n'
 error: >
-  configuration with CLI overrides: startup encoded source is 32769 bytes;
-  maximum is 32768 bytes
+  configuration from .agents/console/config.yaml with CLI overrides:
+  startup encoded source is 32769 bytes; maximum is 32768 bytes
 ---
 source: |-
   '\x01'

@@ -1,0 +1,82 @@
+---
+command: serve
+flag: default
+selected: project|home|project
+---
+command: serve
+flag: ordered overrides
+selected: last|home|project
+---
+command: serve
+flag: before
+selected: home|home|unset
+---
+command: serve
+flag: after
+selected: home|home|unset
+---
+command: serve
+flag: no config before
+selected: unset|unset|unset
+---
+command: serve
+flag: no config after
+selected: unset|unset|unset
+---
+command: serve
+flag: both
+selected: unset|unset|cli
+---
+command: serve
+arguments:
+  - serve
+project: absent
+selected: home
+---
+command: serve
+arguments:
+  - serve
+  - --no-project-config
+project: absent
+selected: home
+---
+command: sandbox
+flag: default
+selected: project|home|project
+---
+command: sandbox
+flag: ordered overrides
+selected: last|home|project
+---
+command: sandbox
+flag: before
+selected: home|home|unset
+---
+command: sandbox
+flag: after
+selected: home|home|unset
+---
+command: sandbox
+flag: no config before
+selected: unset|unset|unset
+---
+command: sandbox
+flag: no config after
+selected: unset|unset|unset
+---
+command: sandbox
+flag: both
+selected: unset|unset|cli
+---
+command: sandbox
+arguments:
+  - sandbox
+project: absent
+selected: home
+---
+command: sandbox
+arguments:
+  - sandbox
+  - --no-project-config
+project: absent
+selected: home

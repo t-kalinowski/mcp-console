@@ -179,6 +179,11 @@ Launcher reaping and successful I/O settlement also supersede that barrier when 
 Process and worker consumers read separate cleanup and I/O views of that retained result, avoiding duplicate diagnostics within one shutdown response.
 Restart and EOF check the retiring launch's retained I/O result even when an initial launch failed before readiness, a failed evaluation has already stopped the logical worker or physical cleanup fails.
 Failed-worker replacement also requires launcher reaping and confirmed retirement of its owned temporary storage.
+On Unix, retiring direct-worker temporary storage restores owner access to its private directories through directory-relative, no-follow operations; linked project libraries retain their permissions even if a child is replaced by a symlink during traversal.
+Traversal retains directory descriptors so deep trees do not require full child paths.
+The temporary parent needs search access, not read access.
+Readable private directories restore permissions through their opened descriptors without requiring `fchmodat2` or procfs; unreadable directories require the platform's no-follow chmod support.
+A vanished child does not confirm root retirement; cleanup must remove the owned root or confirm that the root itself is absent.
 Available output is drained even when cleanup fails.
 The existing worker, relay, launcher and force-stop allowances are captured once.
 Relay drain eligibility uses when the local dispatcher processes ShutdownStarted.
@@ -208,6 +213,10 @@ Connection closure that refuses the next preparation stage is separate from cont
 It permits a quiet exit only after the refused stage's cleanup is confirmed.
 Preparation retains the operation's terminal result, control cause and cleanup confirmation.
 The subprocess owner captures its cause when collection finishes; a later control acknowledgment cannot replace an independent setup failure.
+When an interrupted subprocess exits unsuccessfully, its formatted materializer error retains that captured cause and its complete diagnostic.
+Unix interruption confirms the leader is stopped or exited before delivering SIGINT, then resumes a stopped leader; a successful signal call alone cannot distinguish a live process from an unreaped zombie.
+Nonblocking exit probes leave stop notifications intact for that suspension wait.
+Windows interruption records whether native root termination began, then terminates the Job with the control-C exit status and confirms retirement before attributing the failure; a natural exit retains its own diagnostic and cause even when its exit code matches that status.
 Preparation that consumes control after successful collection retains that cause before publishing its terminal result.
 For multistage preparation, only a subprocess report matching the operation's final result supplies its control cause; cleanup confirmation still includes every stage.
 Errors closing the preparation connection remain visible.
