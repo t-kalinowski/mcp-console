@@ -24,11 +24,20 @@ send:
   python: |
     import matplotlib.pyplot as plt
 
+    figure = plt.figure()
+    plt.close(figure)
+
 
     def blocked_savefig(*args, **kwargs):
         input("render> ")
-
-
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: |
     figure = plt.figure()
     figure.savefig = blocked_savefig
     continued_after_show = False
@@ -50,8 +59,8 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<mcp-console:python:e1>", line 11, in <module>
-          File "<mcp-console:python:e1>", line 5, in blocked_savefig
+          File "<mcp-console:python:e2>", line 4, in <module>
+          File "<mcp-console:python:e1>", line 8, in blocked_savefig
         KeyboardInterrupt
   isError: false
 ---

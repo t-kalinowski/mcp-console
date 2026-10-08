@@ -336,19 +336,26 @@ def test_interrupts_explicit_matplotlib_show(
     binary: Path, execution: Execution
 ) -> Transcript:
     with no_r_matplotlib_client(binary, execution) as (client, _temporary):
+        # Complete cold imports and figure setup before the render checkpoint.
+        client.expect(
+            # fmt: python
+            python=code("""
+                import matplotlib.pyplot as plt
+
+                figure = plt.figure()
+                plt.close(figure)
+
+
+                def blocked_savefig(*args, **kwargs):
+                    input("render> ")
+                """),
+        )
         wait_for_evaluation_output(
             client,
             '[input requested: "render> "]\n[waiting for stdin]',
             "explicit show render checkpoint",
             # fmt: python
             python=code("""
-                import matplotlib.pyplot as plt
-
-
-                def blocked_savefig(*args, **kwargs):
-                    input("render> ")
-
-
                 figure = plt.figure()
                 figure.savefig = blocked_savefig
                 continued_after_show = False

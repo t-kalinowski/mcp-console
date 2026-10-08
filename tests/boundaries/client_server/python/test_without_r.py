@@ -3095,7 +3095,7 @@ def test_records_managed_python_defaults(
         )
 
 
-@requires(UNPRIVILEGED)
+@requires(POSIX, UNPRIVILEGED)
 @executions(DIRECT)
 def test_reports_direct_storage_retirement_failure(
     binary: Path, execution: Execution
@@ -3104,6 +3104,8 @@ def test_reports_direct_storage_retirement_failure(
     for stage in ("restart", "shutdown", "startup failure"):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
+            temporary_parent = workspace / "temporary-parent"
+            temporary_parent.mkdir()
             venv = workspace / "environment"
             subprocess.run(
                 [sys.executable, "-m", "venv", "--without-pip", venv],
@@ -3146,6 +3148,7 @@ def test_reports_direct_storage_retirement_failure(
                         restricted.mkdir()
                         (restricted / "retained.txt").write_text("private contents")
                         restricted.chmod(0)
+                        temporary.parent.chmod(0o500)
                         os._exit(47)
                     """)
                 (site / "sitecustomize.py").write_text(hook)
@@ -3153,11 +3156,17 @@ def test_reports_direct_storage_retirement_failure(
                 with McpClient(
                     binary,
                     execution.serve(),
-                    selected_environment(virtualenv_python(venv).parent),
+                    dict(
+                        selected_environment(virtualenv_python(venv).parent),
+                        TMPDIR=str(temporary_parent),
+                    ),
                     workspace,
                 ) as client:
                     client.initialize_and_list_tools()
                     client.send(python=restrict if stage != "startup failure" else "42")
+                    # Retirement restores owned directory permissions, but may
+                    # not grant write access to the fixture-owned parent.
+                    temporary_parent.chmod(0o500)
                     if stage == "restart":
                         client.send(python="temporary.chmod(0)")
                         client.send(
@@ -3180,7 +3189,9 @@ def test_reports_direct_storage_retirement_failure(
                     assert client.process.returncode != 0, (stage, stderr)
                     assert "cannot remove worker temporary directory" in stderr, stderr
                     temporary = Path((workspace / "worker-temporary").read_text())
+                    assert temporary.parent == temporary_parent
                     assert temporary.exists()
+                    assert temporary_parent.stat().st_mode & 0o777 == 0o500
                     assert (virtualenv_python(venv)).exists()
                     records.append({"stage": stage})
                     records.extend(client.transcript)
@@ -3197,11 +3208,14 @@ def test_reports_direct_storage_retirement_failure(
                                 str(temporary), "<worker temporary>"
                             )
             finally:
+                temporary_parent.chmod(0o700)
                 marker = workspace / "worker-temporary"
                 if marker.exists():
                     temporary = Path(marker.read_text())
                     if temporary.exists():
                         temporary.chmod(0o700)
-                        (temporary / "restricted").chmod(0o700)
+                        restricted = temporary / "restricted"
+                        if restricted.exists():
+                            restricted.chmod(0o700)
                         shutil.rmtree(temporary)
     return records
