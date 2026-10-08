@@ -64,6 +64,7 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
         "UV_MANAGED_PYTHON",
         "UV_NO_MANAGED_PYTHON",
         "UV_PYTHON_DOWNLOADS",
+        "UV_PYTHON_DOWNLOADS_JSON_URL",
     ):
         env.pop(name, None)
     return working, env
@@ -80,6 +81,9 @@ def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
             UV_MANAGED_PYTHON="1",
             UV_NO_MANAGED_PYTHON="1",
             UV_PYTHON_DOWNLOADS="never",
+            UV_PYTHON_DOWNLOADS_JSON_URL=str(
+                Path(directory) / "missing-python-downloads.json"
+            ),
         ),
     ):
         root = Path(directory).resolve()
