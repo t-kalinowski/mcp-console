@@ -14,7 +14,6 @@ from support.client import McpClient
 from support.execution import DIRECT
 from support.records import Transcript
 from support.requirements import SQL
-from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 
 
@@ -30,10 +29,6 @@ R_SCRIPT_GUIDANCE = (
 )
 
 
-@platform_snapshots(
-    "win32",
-    reason="Windows built-in tool presentation exposes its deferred SQL contract",
-)
 def test_builtin_configured_language_matrix(binary: Path) -> Transcript:
     return _configured_language_matrix(binary)
 
@@ -60,17 +55,15 @@ def _configured_language_matrix(binary: Path) -> Transcript:
                 assert (R_SCRIPT_GUIDANCE in description) == ("r" in fields)
                 if os.name == "nt":
                     assert "local execution on Windows" in description, description
-                    assert "SQL is not yet supported" in description, description
-                else:
-                    assert ("Switch languages when useful" in description) == (
-                        len(fields) > 1
-                    )
-                    for field, guidance in (
-                        ("r", "Use R for vectorized data"),
-                        ("python", "Use Python when its libraries"),
-                        ("sql", "consider DuckDB SQL first"),
-                    ):
-                        assert (guidance in description) == (field in fields)
+                assert ("Switch languages when useful" in description) == (
+                    len(fields) > 1
+                )
+                for field, guidance in (
+                    ("r", "Use R for vectorized data"),
+                    ("python", "Use Python when its libraries"),
+                    ("sql", "consider DuckDB SQL first"),
+                ):
+                    assert (guidance in description) == (field in fields)
                 if enabled == languages[0]:
                     baseline = tool
                 else:
@@ -97,23 +90,14 @@ def _configured_language_matrix(binary: Path) -> Transcript:
                     )
                 # Pin the varying paragraph; compare every shared paragraph and
                 # field schema in full so the matrix does not repeat them.
-                if os.name == "nt":
-                    expected_description = baseline["description"]
-                    if "r" not in fields:
-                        expected_description = expected_description.replace(
-                            " " + R_SCRIPT_GUIDANCE, ""
-                        )
-                    assert description == expected_description
-                    guidance = description
+                paragraphs = description.split("\n\n")
+                baseline_paragraphs = baseline["description"].split("\n\n")
+                assert paragraphs[0] == baseline_paragraphs[0]
+                if "sql" in fields:
+                    assert paragraphs[2:] == baseline_paragraphs[2:]
                 else:
-                    paragraphs = description.split("\n\n")
-                    baseline_paragraphs = baseline["description"].split("\n\n")
-                    assert paragraphs[0] == baseline_paragraphs[0]
-                    if "sql" in fields:
-                        assert paragraphs[2:] == baseline_paragraphs[2:]
-                    else:
-                        assert paragraphs[2:] == baseline_paragraphs[3:]
-                    guidance = paragraphs[1]
+                    assert paragraphs[2:] == baseline_paragraphs[3:]
+                guidance = paragraphs[1]
                 records.append({"languages": enabled, "language_guidance": guidance})
                 # Observe completed preparation before closing. Discovery stays
                 # responsive even when eager startup cannot prepare a runtime.

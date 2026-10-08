@@ -1247,6 +1247,12 @@ class WindowsConsole(unittest.TestCase):
         self.assertFalse(result.get("isError"), result)
         self.assertTrue(result["content"][0]["text"].endswith("0\n"), result)
         session.expect("1234567", sql="SELECT 1234567 AS answer")
+        result = session.send(
+            sql="SELECT sum(i::DOUBLE) FROM range(1000000000000) AS values(i)",
+            timeout_ms=1000,
+        )
+        self.assertIn("running;", json.dumps(result))
+        session.expect("1234567", control="restart", sql="SELECT 1234567 AS answer")
 
     def test_sql_with_r(self):
         session = self.session()
