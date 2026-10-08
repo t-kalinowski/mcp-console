@@ -32,7 +32,7 @@ Configuration capture preserves values and policy, not file contents.
 | Default and custom caches, R/Python/DuckDB                | Cache selection remains captured; companion staging and cache-root metadata remain protected. | Existing resolver-cache and cache-location cases, including real extension installation/loading, cold R preparation, companion-cache denial, and metadata denial.                                                                                                        |
 
 The probes use owned temporary files outside macOS's writable user-temporary directory.
-They require actual filesystem denial and proxy rejection, successful permitted preparation, and a receipt written by resolver-side code.
+They require actual filesystem denial and a 403 rejection with Console's managed proxy active, successful permitted preparation, and a receipt written by resolver-side code.
 A marker in the environment alone is not evidence of containment.
 The poisoned-cache case grants worker writes explicitly; the default worker policy does not grant writes to Console caches.
 
@@ -57,12 +57,26 @@ The focused run passed 31 cases in 35 executions, covering eight new cases and e
 The ninth case separately confirms rejection of the native external-mode selector.
 The ordinary `scripts/check` gate also passed: source and architecture checks, Rust formatting, Clippy, Rust tests, and smoke acceptance.
 Development records `20261007-221107-e0bzh02q` and `20261007-221431-ms2h_s31` retain the focused and ordinary gate evidence.
-These local results do not establish Linux or Windows acceptance or CI success on the final PR head.
+These local results do not establish CI success on the final PR head.
+
+Console's [PR CI run](https://github.com/t-kalinowski/mcp-console/actions/runs/37717478807) at `1bde04ee` recorded all nine new cases passing on both Linux and macOS in its transcript-metrics artifacts.
+The overall jobs failed in existing cases: Windows lost the interruption cause after terminating a resolver Job; Linux encountered a retiring-thread `/proc` read and two preparation-result mismatches; macOS received HTTP 502 responses while downloading a DuckDB extension.
+The [subsequent main run](https://github.com/t-kalinowski/mcp-console/actions/runs/37718879271) passed Linux and macOS and reproduced both Windows interruption failures.
+
+Review repairs declare uv as a fixture capability, clear inherited competing package-source selectors, and require managed-proxy evidence for the download denial.
+The Windows repair preserves interruption as the cause when terminating a live resolver Job, while retaining confirmed retirement and independently completed setup failures.
+The Linux observation fixture skips task entries that disappear while enumerating a live parent's children; process identity and descendant-retirement assertions remain intact.
+The other Linux mismatches and macOS download failures did not reproduce locally; they require confirmation in the revised PR's CI.
+
+All five trust cases pass locally with competing uv source variables set, and skip when uv is unavailable.
+The five existing Unix cases that failed in CI pass locally in both execution modes, and focused resolver-I/O and retirement coverage passes after the repairs.
+Ordinary `scripts/check` passes at repair commit `398f9f5a`.
+Records `20261007-234817-kfxyoq_j`, `20261007-235120-bazltxes`, `20261007-235419-nn276af9`, and `20261007-235557-lo2s95uu` retain this macOS evidence; native Windows and Linux verification of the repairs remains a hosted CI gate.
 
 At the pinned companion's [CI run](https://github.com/t-kalinowski/cobox/actions/runs/37522396814), Linux executable contracts, native sandbox tests, and release-artifact contracts passed.
 The subsequent native lint step failed on an unfulfilled `clippy::zombie_processes` expectation.
 That lint failure is not an observed containment failure, and the job as a whole did not pass.
 
-**Release decision: NO-GO pending passing Linux integration acceptance and the final release candidate's CI.** The local audit identifies no demonstrated breach requiring a production change or restoration of the historical companion dependency.
+**Release decision: NO-GO pending passing applicable CI for the revised PR and the final release candidate.** The audit identifies no demonstrated permission-boundary breach requiring restoration of the historical companion dependency.
 The decision can become GO for this bounded trust contract once the new and reused cases pass on the supported sandbox platforms at the final candidate and its verified companion pin.
 This audit does not approve publication, bypass other release gates, or establish guarantees excluded above.
