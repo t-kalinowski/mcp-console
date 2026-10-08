@@ -62,6 +62,7 @@ impl ManagedR {
             ));
         }
         command.env("R_LIBS", &self.r_libs);
+        command.env("MCP_CONSOLE_R_LIBRARY", &self.library);
         Ok(())
     }
 

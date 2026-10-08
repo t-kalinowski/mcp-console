@@ -20,21 +20,48 @@ The same short example is available as [config.yaml](../examples/config.yaml).
 
 `serve` and ordinary `sandbox` launches load configuration in this order:
 
-1. `.agents/console/config.yaml` in the launch directory, or the home Console `config.yaml` **only if the project file is absent**.
-2. Each `-c KEY=VALUE` / `--config KEY=VALUE`, in command-line order.
+1. Global `config.yaml` in `$MCP_CONSOLE_HOME`, when set, otherwise `~/.agents/console/config.yaml`.
+2. Project `.agents/console/config.yaml` in the captured launch directory.
+3. Each `-c KEY=VALUE` / `--config KEY=VALUE`, in command-line order.
 
 No ancestor directories are searched.
-An unreadable or invalid project file fails launch rather than falling back.
-With neither file, configuration starts empty.
+Missing files are normal; with neither file, Console uses its built-in defaults.
+Each selected file must be a supported YAML mapping.
+Unreadable or malformed files fail launch, even if a later override could replace their contents.
+Symlinks to regular files are allowed; dangling links and non-regular targets are errors.
+If both locations resolve to the same file, Console reads it once, after excluding disabled sources.
+Application settings are validated and defaults supplied only after all layers and overrides have been merged.
 Overrides may appear before or after the subcommand and do not edit files.
 
-Use `--no-project-config` before or after `serve` or `sandbox` to skip the launch-directory project file, including an unreadable or invalid one.
-Home configuration is still discovered, and `-c` overrides still apply in order.
-The flag does not change recording location.
+Use either discovery flag before or after `serve` or ordinary `sandbox`:
+
+| Invocation            | Configuration inputs                |
+| --------------------- | ----------------------------------- |
+| Normal launch         | Global, project, then CLI overrides |
+| `--no-project-config` | Global, then CLI overrides          |
+| `--no-config`         | CLI overrides only                  |
+
+Supplying both flags behaves like `--no-config`.
+Excluded files are not inspected or read, including invalid or unreadable files.
+`--no-config` does not resolve the global Console directory for configuration discovery; recording and other storage operations may still require it.
+Neither flag changes recording-location selection.
+
+Automatic project loading treats project configuration as trusted launcher input.
+It can affect executable selection, child environments, and requested sandbox permissions.
+Trusting code to run inside a sandbox is not equivalent to trusting it to define the sandbox.
+Global configuration supplies defaults, not a mandatory security ceiling: project settings may override global settings under the ordinary merge rules.
+Integrations opening unfamiliar projects should use `--no-project-config` until they authorize project configuration.
+Neither discovery opt-out is a general safe mode: they do not disable native runtime startup files, clear inherited environment variables, or make selected executables trustworthy.
+
+Paths keep their existing launch-relative meaning, including paths supplied by global configuration.
+They are not rebased onto the configuration file's directory.
+Console captures effective settings once before runtime preparation and reuses them across worker restarts and resolver operations.
+Restart Console after editing `config.yaml`; restarting a worker does not reload it.
 
 ```sh
 mcp-console serve -c 'sandbox.filesystem.read_write=[.]'
 mcp-console serve --no-project-config -c 'sandbox.filesystem.read_write=[.]'
+mcp-console serve --no-config -c 'sandbox.filesystem.read_write=[.]'
 mcp-console -c 'sandbox.filesystem.read_write=[.]' serve -c sandbox.network=enabled
 mcp-console sandbox -c 'environment={LABEL: analysis}' -- Rscript analysis.R
 ```
@@ -52,10 +79,14 @@ See [cache locations](RESOLVER.md#cache-locations) for platform paths.
 ## Console home
 
 The home Console directory is `~/.agents/console`.
-Set `MCP_CONSOLE_HOME` to an absolute directory to relocate fallback `config.yaml` and `sessions/` without changing `HOME` or R, Python, or uv storage.
-Empty or relative values are errors when fallback is needed; `~` is not expanded.
+Set `MCP_CONSOLE_HOME` to an absolute directory to relocate global `config.yaml` and `sessions/` without changing `HOME` or R, Python, or uv storage.
+It selects the global location rather than adding a layer.
+Empty or relative values are errors when that directory is needed; `~` is not expanded.
+Without `MCP_CONSOLE_HOME`, Console uses an absolute, nonempty `HOME`.
+On Windows, an absent or empty `HOME` uses native user-home discovery (`USERPROFILE`, then the Windows user-profile API).
+A supplied relative home path remains an error.
 
-Project configuration and project recordings take precedence independently: configuration requires the project file, while recordings require only an existing project `.agents/console` directory.
+Configuration layering and recording-location selection are independent; project recordings require only an existing project `.agents/console` directory.
 See [recording](RECORDING.md).
 
 ## Model-visible languages
@@ -266,6 +297,8 @@ Quote the whole assignment for the shell when it contains spaces or punctuation.
 Mappings merge recursively.
 Lists, scalars, and explicit `null` replace the previous value.
 A mapping replaces a non-mapping, but an empty mapping does **not** clear an existing mapping.
+An empty project file mapping (`{}`) preserves all global settings; an empty list replaces an existing list with an empty list.
+For example, global `environment: {KEEP: global, CHANGE: global}` and project `environment: {CHANGE: project}` produce `environment: {KEEP: global, CHANGE: project}`.
 To clear and rebuild one, assign `null`, then the new mapping in a later override.
 Only the final result is validated.
 
@@ -275,7 +308,7 @@ The final document is validated before selecting variants, supplying defaults, a
 
 Settings are captured once and reused across worker generations.
 Worker and resolver launches consume that captured input without rediscovering YAML.
-Explicit native `--config-env` and internal `--settings-env` inputs are already complete and reject `-c` overrides and `--no-project-config`.
+Explicit native `--config-env` and internal `--settings-env` inputs are already complete and reject `-c` overrides, `--no-project-config`, and `--no-config`.
 
 The layering code is in [`src/config.rs`](../src/config.rs) and `src/config/`; application decoding belongs to [`src/settings.rs`](../src/settings.rs).
 
@@ -300,6 +333,7 @@ False excludes inherited launch variables and retains explicit configuration val
 An isolated environment must explicitly supply any workload variables it needs, including paths used for cache selection.
 These controls apply to workloads, including `serve --no-sandbox`, without changing the supervisor's own loader/helper environment.
 Settings are captured once; worker environment mutations and restarts do not reconfigure preparation.
+See [environment variables](ENVIRONMENT.md) for launch settings, runtime selection, cache locations, and Console-owned assignments.
 
 ## Expanded example
 
@@ -344,6 +378,10 @@ Host paths and process IDs are normalized; other policy values are retained.
 They record normalization and native launches on the exercised platform; capability limits remain described in [sandbox configuration](SANDBOX_CONFIGURATION.md#native-capabilities).
 
 ## Migration
+
+Global configuration previously served only as a fallback when the project file was absent.
+It now supplies the first layer even when a project file exists, so unrelated global settings survive sparse project configuration.
+Use `--no-config` with CLI overrides when neither automatic file should contribute settings.
 
 The public format deliberately replaces the previous native-shaped YAML.
 Unknown fields, old shapes, camelCase aliases, null permission selectors, and incompatible explicit settings fail with a configuration path.

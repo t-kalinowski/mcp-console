@@ -4,7 +4,7 @@ use crate::worker_protocol::PythonRequirementManifest;
 
 /// The declaration is derived from retained resolver results, never a candidate.
 #[derive(Clone, Default, PartialEq, Eq, serde::Serialize)]
-pub(in crate::worker_client) struct Declaration {
+pub(crate) struct Declaration {
     pub r: Vec<String>,
     pub python: Vec<String>,
     pub duckdb: Vec<String>,

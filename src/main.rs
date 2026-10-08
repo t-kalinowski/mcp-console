@@ -52,8 +52,7 @@ mod worker_relay;
 
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
-    let mut overrides = cli.overrides.values;
-    let no_project_config = cli.overrides.no_project_config;
+    let mut overrides = cli.overrides;
     match cli.command {
         #[cfg(windows)]
         cli::Command::SandboxSetup { status, state_dir } => {
@@ -77,15 +76,8 @@ fn main() -> ExitCode {
             writable_root,
             overrides: command_overrides,
         } => {
-            overrides.extend(command_overrides.values);
-            match run_server(
-                worker,
-                relay,
-                no_sandbox,
-                writable_root,
-                &overrides,
-                no_project_config || command_overrides.no_project_config,
-            ) {
+            overrides.extend(command_overrides);
+            match run_server(worker, relay, no_sandbox, writable_root, &overrides) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => exit_with_error(error),
             }
@@ -110,7 +102,7 @@ fn main() -> ExitCode {
             writable_root,
             overrides: command_overrides,
         } => {
-            overrides.extend(command_overrides.values);
+            overrides.extend(command_overrides);
             match sandbox::run(
                 &command,
                 exit_with_parent,
@@ -118,7 +110,6 @@ fn main() -> ExitCode {
                 settings_env.as_deref(),
                 writable_root,
                 &overrides,
-                no_project_config || command_overrides.no_project_config,
             ) {
                 Ok(exit_code) => exit_code,
                 Err(error) => exit_with_error(error),
@@ -132,9 +123,9 @@ fn run_server(
     relay: Option<std::path::PathBuf>,
     no_sandbox: bool,
     writable_roots: Vec<std::path::PathBuf>,
-    overrides: &[String],
-    no_project_config: bool,
+    overrides: &cli::ConfigOverrides,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = std::env::current_dir()?;
     let settings::Captured {
         startup,
         cache,
@@ -146,7 +137,7 @@ fn run_server(
         mut resolver,
         sandbox_requested,
         resolver_sandbox_requested,
-    } = settings::discover(overrides, no_project_config)?;
+    } = settings::discover(&directory, overrides)?;
     if no_sandbox && (sandbox_requested || resolver_sandbox_requested) {
         return Err("explicit sandbox or resolver.sandbox permissions require sandboxing; remove them when using --no-sandbox".into());
     }
@@ -171,7 +162,7 @@ fn run_server(
     } else {
         // Native validation belongs to the owned background launch. Running a
         // preflight child here would precede MCP serving and EOF ownership.
-        sandbox::materialize_settings(policy, writable_roots, &std::env::current_dir()?)?
+        sandbox::materialize_settings(policy, writable_roots, &directory)?
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

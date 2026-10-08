@@ -51,11 +51,50 @@ def workspace(parent: Path | None = None):
 
 @unittest.skipUnless(os.name == "nt", "native Windows sandbox")
 class WindowsSandbox(unittest.TestCase):
-    @unittest.skipUnless(
-        os.environ.get("R_HOME")
-        and os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "configured R and provisioned default Windows sandbox",
-    )
+    def sandbox_state_directory(self):
+        command = [str(BINARY), "sandbox-setup", "--status"]
+        if state := os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"):
+            command.extend(["--state-dir", state])
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        self.assertIn(result.returncode, (0, 1), (result.stdout, result.stderr))
+        status = json.loads(result.stdout)
+        self.assertTrue(
+            status["configured"],
+            f"Windows sandbox is not provisioned at {status['state_dir']}; "
+            f'run mcp-console sandbox-setup --state-dir "{status["state_dir"]}"',
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return status["state_dir"]
+
+    def test_unconfigured_acceptance_fails_without_provisioning_opt_in(self):
+        with workspace() as root:
+            environment = dict(
+                os.environ,
+                LOCALAPPDATA=str(root / "local"),
+                MCP_CONSOLE_HOME=str(root / "home"),
+                MCP_CONSOLE_TEST_BINARY=str(BINARY),
+            )
+            environment.pop("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR", None)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    ROOT / "tests/windows.py",
+                    "-v",
+                    "WindowsSandbox.test_current_setup_reports_resources_without_reprovisioning",
+                ],
+                cwd=ROOT,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("skipped", result.stderr)
+            self.assertIn("Windows sandbox is not provisioned", result.stderr)
+            self.assertIn("mcp-console sandbox-setup", result.stderr)
+            self.assertFalse((root / "local/mcp-console").exists())
+
+    @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
     def test_native_r_startup_is_contained_and_reread_on_restart(self):
         from windows import Session
 
@@ -119,17 +158,9 @@ class WindowsSandbox(unittest.TestCase):
             finally:
                 session.close()
 
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "provisioned default Windows sandbox",
-    )
     def test_console_cache_paths_reach_resolver_and_worker(self):
         self.console_cache_paths(profile_fallback=False)
 
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "provisioned default Windows sandbox",
-    )
     def test_console_cache_falls_back_to_userprofile_after_relative_home(self):
         self.console_cache_paths(profile_fallback=True)
 
@@ -229,10 +260,6 @@ class WindowsSandbox(unittest.TestCase):
             self.assertFalse((root / "host-ir").exists())
 
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "provisioned default Windows sandbox",
-    )
     def test_network_enabled_sql(self):
         from windows import Session, exercise_r_sql
 
@@ -243,10 +270,6 @@ class WindowsSandbox(unittest.TestCase):
         finally:
             session.close()
 
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "provisioned default Windows sandbox",
-    )
     def test_network_enabled_python_sql(self):
         from windows import Session, exercise_sql_interrupt
         from support.resolvers import expose_uv
@@ -287,10 +310,6 @@ class WindowsSandbox(unittest.TestCase):
                 session.close()
 
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "provisioned default Windows sandbox",
-    )
     def test_network_enabled_input_and_interrupt(self):
         from windows import Session, exercise_input_and_interrupt
 
@@ -308,10 +327,6 @@ class WindowsSandbox(unittest.TestCase):
                 session.close()
 
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "provisioned default Windows sandbox",
-    )
     def test_network_enabled_idle_later_callbacks(self):
         from windows import Session, exercise_later_callbacks
 
@@ -329,11 +344,8 @@ class WindowsSandbox(unittest.TestCase):
                 session.close()
 
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "explicitly provisioned elevated Windows sandbox",
-    )
     def test_provisioned_input_and_interrupt_with_private_installation(self):
+        state = self.sandbox_state_directory()
         # A private bundle outside the user's profile models hosted CI's
         # nonstandard installation paths, without relying on another drive.
         public = Path(os.environ["PUBLIC"]).resolve()
@@ -371,7 +383,7 @@ class WindowsSandbox(unittest.TestCase):
                     "--binary",
                     binary,
                     "--state-dir",
-                    os.environ["MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"],
+                    state,
                     "--github-env",
                     prefix / "github-env",
                     "--read-root",
@@ -401,10 +413,6 @@ class WindowsSandbox(unittest.TestCase):
             self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
 
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "explicitly provisioned elevated Windows sandbox",
-    )
     def test_provisioned_network_restricted_input_and_interrupt(self):
         from windows import Session, exercise_input_and_interrupt
 
@@ -420,10 +428,6 @@ class WindowsSandbox(unittest.TestCase):
         finally:
             session.close()
 
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "provisioned default Windows sandbox",
-    )
     def test_network_enabled_allows_loopback_exchange(self):
         from windows import Session
 
@@ -468,10 +472,6 @@ class WindowsSandbox(unittest.TestCase):
                 session.close()
 
     @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "provisioned default Windows sandbox",
-    )
     def test_r_uses_private_storage_and_preserves_state(self):
         from windows import Session
 
@@ -524,12 +524,8 @@ class WindowsSandbox(unittest.TestCase):
                 ):
                     self.assertIn(detail, result.stdout)
 
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "explicitly provisioned elevated Windows sandbox",
-    )
     def test_current_setup_reports_resources_without_reprovisioning(self):
-        state = os.environ["MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"]
+        state = self.sandbox_state_directory()
         command = [str(BINARY), "sandbox-setup", "--state-dir", state]
         before = subprocess.run(
             [*command, "--status"], capture_output=True, text=True, timeout=30
@@ -641,10 +637,6 @@ class WindowsSandbox(unittest.TestCase):
                 b"private artifact does not match this installation", result.stderr
             )
 
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "provisioned default Windows sandbox",
-    )
     def test_python_state_and_restart_with_private_temporary_storage(self):
         from windows import Session
 
@@ -718,10 +710,6 @@ class WindowsSandbox(unittest.TestCase):
             finally:
                 session.close()
 
-    @unittest.skipUnless(
-        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
-        "provisioned default Windows sandbox",
-    )
     def test_shared_public_policies(self):
         from support.public_configuration import CONFIGURATION_EXAMPLES
 
