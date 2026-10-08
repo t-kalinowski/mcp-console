@@ -66,59 +66,63 @@ result:
           r:
             description: >-
               Evaluate one complete R cell in persistent global state. Visible
-              top-level expressions autoprint; leave the primary result last. Load
-              CRAN packages normally through `library()`, `require()`,
+              top-level expressions autoprint; leave the primary result last.
+              Load CRAN packages normally through `library()`, `require()`,
               `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; managed
               sessions prepare missing packages on first use. Avoid availability
-              probes or `install.packages()`. Access Python globals through `py$name`.
-              `.console$sql_connection()` returns the active native DBI connection for
-              DBI/dplyr, or errors if another runtime owns SQL. Select a user-owned
-              DBI connection for SQL cells with `.console$sql_connection(connection)`;
-              restore managed DuckDB with `.console$sql_connection(NULL)`. Never
-              disconnect the managed connection; restore it before disconnecting a
-              selection. Default-device plots return as PNGs and finalize at cell end,
-              including after errors; draw each plot in one cell. Explicit devices are
-              not captured. Set persistent dimensions in inches and DPI with
-              `options(console.plot.width_in = ..., console.plot.height_in = ...,
-              console.plot.dpi = ...)`.
+              probes or `install.packages()`. Access Python globals through
+              `py$name`. `.console$sql_connection()` returns the active native
+              DBI connection for DBI/dplyr, or errors if another runtime owns
+              SQL. Select a user-owned DBI connection for SQL cells with
+              `.console$sql_connection(connection)`; restore managed DuckDB with
+              `.console$sql_connection(NULL)`. Never disconnect the managed
+              connection; restore it before disconnecting a selection.
+              Default-device plots return as PNGs and finalize at cell end,
+              including after errors; draw each plot in one cell. Explicit
+              devices are not captured. Set persistent dimensions in inches and
+              DPI with `options(console.plot.width_in = ...,
+              console.plot.height_in = ..., console.plot.dpi = ...)`.
             type:
               - string
               - "null"
           python:
             description: >-
-              Evaluate one complete Python cell in persistent `__main__` state. The
-              final visible expression autoprints; leave the primary result last.
-              Import packages normally; managed sessions prepare missing PyPI
-              distributions on first import. Use `requirements.python` when import and
-              distribution names differ or to prepare before execution. Access R
-              globals and call functions through `r.name`. Select a user-owned DB-API
-              connection for SQL cells with `_console.sql_connection(connection)`;
-              restore managed DuckDB with `_console.sql_connection(None)`. For R-owned
-              DuckDB, bind Python frames to an R name through `r` before querying.
-              `_console.sql_connection()` returns the active native Python connection,
-              or errors if SQL uses R; on Python-owned DuckDB, register frames with
-              `_console.sql_connection().register(name, frame)` (globals are not
-              scanned). `matplotlib.pyplot.show()` returns open figures as PNGs
-              immediately and closes them. At cell end, even after errors, remaining
-              open figures return as PNGs and close; `show()` is optional. Closing an
-              unshown figure suppresses capture. R plots through `r` follow the R plot
-              rules.
+              Evaluate one complete Python cell in persistent `__main__` state.
+              The final visible expression autoprints; leave the primary result
+              last. Import packages normally; managed sessions prepare missing
+              PyPI distributions on first import. Use `requirements.python` when
+              import and distribution names differ or to prepare before
+              execution. Access R globals and call functions through `r.name`.
+              Select a user-owned DB-API connection for SQL cells with
+              `_console.sql_connection(connection)`; restore managed DuckDB with
+              `_console.sql_connection(None)`. For R-owned DuckDB, bind Python
+              frames to an R name through `r` before querying.
+              `_console.sql_connection()` returns the active native Python
+              connection, or errors if SQL uses R; on Python-owned DuckDB,
+              register frames with `_console.sql_connection().register(name,
+              frame)` (globals are not scanned). `matplotlib.pyplot.show()`
+              returns open figures as PNGs immediately and closes them. At cell
+              end, even after errors, remaining open figures return as PNGs and
+              close; `show()` is optional. Closing an unshown figure suppresses
+              capture. R plots through `r` follow the R plot rules.
             type:
               - string
               - "null"
           sql:
             description: >-
-              Evaluate one complete SQL cell through the active connection. Managed
-              DuckDB keeps a persistent catalog. Results are bounded table previews
-              that abbreviate long text cells; query focused subsets or aggregates.
-              The selected driver supplies its own SQL dialect and types. With R-owned
-              managed DuckDB, query R data frames by name; DuckDB tables/views take
-              precedence. Use DBI from an R cell for commands requiring the statement
-              interface. Managed conveniences/extensions apply only to DuckDB. Read
-              SQLite with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. With a
-              sandbox, attach existing DuckDB databases outside writable paths using
-              `ATTACH 'path' AS name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`,
-              `SUMMARIZE`, or `EXPLAIN`; CLI dot commands are not supported.
+              Evaluate one complete SQL cell through the active connection.
+              Managed DuckDB keeps a persistent catalog. Results are bounded
+              table previews that abbreviate long text cells; query focused
+              subsets or aggregates. The selected driver supplies its own SQL
+              dialect and types. With R-owned managed DuckDB, query R data
+              frames by name; DuckDB tables/views take precedence. Use DBI from
+              an R cell for commands requiring the statement interface. Managed
+              conveniences/extensions apply only to DuckDB. Read SQLite with
+              `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. With a sandbox,
+              attach existing DuckDB databases outside writable paths using
+              `ATTACH 'path' AS name (READ_ONLY)`. Use `SHOW TABLES`,
+              `DESCRIBE`, `SUMMARIZE`, or `EXPLAIN`; CLI dot commands are not
+              supported.
             type:
               - string
               - "null"
@@ -136,38 +140,41 @@ result:
             description: >-
               Apply control before same-call stdin/code. `interrupt` requests a
               cooperative interrupt and cancellation of dependency preparation,
-              preserving live state. A following cell runs only if prior work stops.
-              `restart` discards live interpreter, database, debugger, and
-              unread-input state; same-call stdin/code go only to the replacement.
+              preserving live state. A following cell runs only if prior work
+              stops. `restart` discards live interpreter, database, debugger,
+              and unread-input state; same-call stdin/code go only to the
+              replacement.
             type: string
             enum:
               - interrupt
               - restart
           stdin:
             description: >-
-              Send stdin alone to answer an active read, prompt, or debugger. UTF-8
-              text is queued exactly; no newline is added, so line input normally
-              needs a trailing `\n`. Empty text queues nothing. With a cell, input
-              queues before code; an already waiting read may consume it first,
-              including while interrupted work unwinds. Unread input can satisfy later
-              reads; restart discards it.
+              Send stdin alone to answer an active read, prompt, or debugger.
+              UTF-8 text is queued exactly; no newline is added, so line input
+              normally needs a trailing `\n`. Empty text queues nothing. With a
+              cell, input queues before code; an already waiting read may
+              consume it first, including while interrupted work unwinds. Unread
+              input can satisfy later reads; restart discards it.
             type:
               - string
               - "null"
           requirements:
             description: >-
               Inspect declarations or prepare dependencies on the execution host
-              without importing, attaching, or loading them. Requires host preparation
+              without importing, attaching, or loading them. Configured
+              resolution policies govern preparation. Requires host preparation
               support; bare runtimes use installed packages. Alone, performs
-              standalone preparation. With a cell, preparation precedes code; without
-              control it also precedes bundled stdin. Failure or a required restart
-              withholds the cell. Compatible additions preserve live state on an idle
-              worker; other changes need restart. With restart, candidate resolution
-              precedes replacement; resolution failure preserves the current worker
-              and sends no stdin/code. Standalone preparation rejects nonempty stdin.
-              Only add can accompany interrupt, with a following cell; providers
-              without this preparation support reject the combination before signaling
-              or input. Otherwise interrupt and stdin precede deferred
+              standalone preparation. With a cell, preparation precedes code;
+              without control it also precedes bundled stdin. Failure or a
+              required restart withholds the cell. Compatible additions preserve
+              live state on an idle worker; other changes need restart. With
+              restart, candidate resolution precedes replacement; resolution
+              failure preserves the current worker and sends no stdin/code.
+              Standalone preparation rejects nonempty stdin. Only add can
+              accompany interrupt, with a following cell; providers without this
+              preparation support reject the combination before signaling or
+              input. Otherwise interrupt and stdin precede deferred
               validation/preparation and are not rolled back on failure.
             type:
               - object
@@ -180,7 +187,7 @@ result:
                   The complete declaration is in structuredContent.requirements.
                   add (default) accumulates up to 64 entries per language per call; bare {} is invalid.
                   set replaces the whole declaration without defaults; omitted lists/constraints are empty,
-                  even with only action supplied. reset restores startup defaults and rejects payload fields.
+                  even with only action supplied. reset restores configured startup defaults and rejects payload fields.
                   Changed set/reset with a live worker require control="restart"; unchanged declarations are
                   no-ops. set accepts the complete accumulated manifest without add's per-list limit.
                 type: string

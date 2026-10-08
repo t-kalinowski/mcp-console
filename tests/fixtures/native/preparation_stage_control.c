@@ -6,14 +6,23 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-static atomic_int interrupts;
+static atomic_int first_stage;
+static atomic_int observed_later_stage;
 
 static int after_stage_exit(pid_t group, int signal) {
-    if (signal == SIGINT && atomic_fetch_add(&interrupts, 1) == 1) {
+    if (signal == SIGINT) {
+        int unset = 0;
+        atomic_compare_exchange_strong(&first_stage, &unset, group);
+    }
+    if (signal == SIGINT && group != atomic_load(&first_stage) &&
+        atomic_exchange(&observed_later_stage, 1) == 0) {
         // The first stage consumes an interrupt and returns a valid uv path.
         // Its pending control also targets the next stage. Observe that child's
         // independent exit before forwarding control, preserving real status,
         // the owner's non-reaping observer and all process/I/O retirement.
+        // Release trusted launch suspension so this fixture exercises a stage
+        // failure before control rather than cancellation before execution.
+        killpg(group, SIGCONT);
         siginfo_t status;
         int result;
         do {

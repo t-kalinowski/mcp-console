@@ -67,6 +67,7 @@ def managed_python_environment(root: Path) -> dict[str, str]:
         capture_output=True,
     )
     return {
+        "RETICULATE_PYTHON": "managed",
         "UV_PYTHON_INSTALL_DIR": str(installations),
         "UV_PYTHON_DOWNLOADS": "never",
     }
