@@ -42,7 +42,10 @@ static ssize_t native_write(int fd, const void *bytes, size_t count) {
 }
 
 static ssize_t observe_write(int fd, const void *bytes, size_t count) {
-    if (count == 8 && memcmp(bytes, "\"Closed\"", 8) == 0) {
+    // Selected-Python inspection clears RETICULATE_PYTHON and owns a separate
+    // short-lived preparation peer. Fault only the retained dependency peer.
+    if (getenv("RETICULATE_PYTHON") != NULL &&
+        count == 8 && memcmp(bytes, "\"Closed\"", 8) == 0) {
         int marker = open(getenv("MCP_CONSOLE_TEST_REAP_PID"), O_WRONLY | O_CREAT | O_TRUNC, 0600);
         char pid[32];
         int length = snprintf(pid, sizeof(pid), "%ld", (long)getpid());

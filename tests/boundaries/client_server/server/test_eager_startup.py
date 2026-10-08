@@ -274,7 +274,14 @@ def test_invalid_early_cell_does_not_poison_default_startup(
         environment["PATH"] = str(root)
         environment["UV_TOOL_DIR"] = str(root)
         with McpClient(
-            binary, execution.serve("-c", "cache=host"), environment, root
+            binary,
+            execution.serve(
+                "-c",
+                "cache=host",
+                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
+            ),
+            environment,
+            root,
         ) as client:
             try:
                 reached.wait("selected Python inspection is blocked")
