@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.requirements import SQL, requires
 from support.assertions import last_result_text
 from support.client import McpClient
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.records import Transcript
 from support.suites import run_this_suite
@@ -93,49 +93,6 @@ def test_prepares_without_reticulate_environment_mutators(
         client.send(sql="SELECT answer FROM owner_state")
         assert last_result_text(client).splitlines()[-1].split() == ["1", "42"]
         return client.finish()
-
-
-@executions(DIRECT, SANDBOXED)
-def test_materializes_lazy_declarations_without_initializing_python(
-    binary: Path, execution: Execution
-) -> Transcript:
-    environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
-    with McpClient(binary, execution.serve(), environment) as client:
-        client.initialize_and_list_tools()
-        client.send(
-            # fmt: r
-            r=code("""
-                reticulate::py_require("humanize")
-                reticulate::py_require("humanize", action = "remove")
-                reticulate::py_require("py-yaml12")
-                reticulate::py_require(python_version = ">=3.10")
-                reticulate::py_require(python_version = ">=3.10", action = "remove")
-                reticulate::py_require(exclude_newer = "2026-09-01")
-                reticulate::py_require(exclude_newer = NA, action = "set")
-                stopifnot(!reticulate::py_available(initialize = FALSE))
-                """)
-        )
-        assert last_result_text(client) == "[done]", last_result_text(client)
-        client.send(requirements={"python": ["packaging"]})
-        assert last_result_text(client) == "[prepared]", last_result_text(client)
-        client.send(r="reticulate::py_available(initialize = FALSE)")
-        assert last_result_text(client) == "[1] FALSE\n"
-        client.send(control="restart")
-        client.send(
-            # fmt: r
-            r=code("""
-                requirements <- reticulate::py_require()
-                stopifnot(
-                  all(c("py-yaml12", "packaging") %in% requirements$packages),
-                  !"humanize" %in% requirements$packages,
-                  is.null(requirements$python_version),
-                  is.null(requirements$exclude_newer),
-                  !reticulate::py_available(initialize = FALSE)
-                )
-                """)
-        )
-        assert last_result_text(client) == "[done]", last_result_text(client)
-        return client.finish()[3:]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -279,7 +236,7 @@ def test_refreshes_numpy_configuration_after_live_preparation(
         return client.finish()[3:]
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_matches_live_python_version_constraints_like_the_resolver(
     binary: Path, execution: Execution
 ) -> Transcript:

@@ -122,7 +122,7 @@ def test_send_timeout_includes_blocked_requirements_resolver(
                 LOADER_VARIABLE: str(build_interposer(root, "relay_completed_output")),
                 "MCP_CONSOLE_TEST_CLOCK_AFTER_FRAME": '"result":{}',
                 "MCP_CONSOLE_TEST_OUTPUT_COMPLETE": str(root / "clock-advanced"),
-                "MCP_CONSOLE_TEST_CLOCK_SECONDS": "120",
+                "MCP_CONSOLE_TEST_CLOCK_SECONDS": "2",
             }
         )
         client = ServerRelayClient(
@@ -141,7 +141,9 @@ def test_send_timeout_includes_blocked_requirements_resolver(
             evaluation = client.client.start_send(
                 r="42",
                 requirements={"r": ["timeout-requirement"]},
-                timeout_ms=60_000,
+                # Keep the real timer wakeup short too: Linux epoll timers do
+                # not advance with the interposed observation clock.
+                timeout_ms=1_000,
             )
             resolver_started.wait()
             client.client.request("ping")

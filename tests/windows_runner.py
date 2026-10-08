@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
-if any("/" in argument for argument in sys.argv[1:]):
+if "--stress" in sys.argv[1:] or any("/" in argument for argument in sys.argv[1:]):
     raise SystemExit(
         subprocess.call(
             [

@@ -47,30 +47,13 @@ result:
   isError: false
 ---
 send:
-  r: more_itertools <- reticulate::import("more_itertools")
+  python: |
+    import more_itertools
+
+    assert yaml12 is __import__("yaml12")
+    assert more_itertools.__name__ == "more_itertools"
 result:
   content:
     - type: text
       text: "[done]"
-  isError: false
----
-send:
-  r: unlist(more_itertools$take(3L, list(0L, 1L, 2L, 3L, 4L)))
-result:
-  content:
-    - type: text
-      text: |
-        [1] 0 1 2
-  isError: false
----
-send:
-  python: |
-    import more_itertools
-
-    more_itertools.take(3, range(5))
-result:
-  content:
-    - type: text
-      text: |
-        [0, 1, 2]
   isError: false

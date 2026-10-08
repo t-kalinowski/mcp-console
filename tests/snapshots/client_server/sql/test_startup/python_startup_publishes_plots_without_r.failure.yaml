@@ -19,6 +19,7 @@ config:
 
       raise RuntimeError('startup failed after plotting')
   python: <configured Python>
+  cache: host
 ---
 failed_startup: true
 ---

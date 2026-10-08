@@ -31,8 +31,19 @@ from support.suites import run_this_suite
 
 
 @requires(NATIVE_FIXTURES)
+def test_cancelled_controls_recover_output(binary: Path) -> Transcript:
+    return cancelled_control_recovery(binary, count=4)
+
+
+@requires(NATIVE_FIXTURES)
 def test_cancelled_control_recovery_keeps_bounded_allocations(
     binary: Path,
+) -> Transcript:
+    return cancelled_control_recovery(binary, count=1024, allocation_limit=256 * 1024)
+
+
+def cancelled_control_recovery(
+    binary: Path, *, count: int, allocation_limit: int | None = None
 ) -> Transcript:
     worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
     with tempfile.TemporaryDirectory() as temporary:
@@ -58,7 +69,7 @@ def test_cancelled_control_recovery_keeps_bounded_allocations(
             profile.pause_results(True)
             cancellation_start = len(client.transcript)
             try:
-                for _ in range(1024):
+                for _ in range(count):
                     pending = client.start_send(control="interrupt")
                     reached.wait("controlled result owns delivery before journaling")
                     client.notify("notifications/cancelled", requestId=pending["id"])
@@ -69,17 +80,18 @@ def test_cancelled_control_recovery_keeps_bounded_allocations(
             finally:
                 profile.pause_results(False)
                 release.release()
-            compact_cancelled_exchanges(client, cancellation_start, count=1024)
+            compact_cancelled_exchanges(client, cancellation_start, count=count)
             result = client.send(control="interrupt")
             client.request("ping")
             _, largest = profile.stop()
             # Allow the retained control notices and temporary vector growth,
             # but not an additional history of invisible source receipts.
-            assert largest <= 256 * 1024, largest
+            if allocation_limit is not None:
+                assert largest <= allocation_limit, largest
             assert not result["isError"], result
             text = result["content"][0]["text"]
             assert len(text.encode()) <= 8192
-            assert text == "\n[idle]" * 1025
+            assert text == "\n[idle]" * (count + 1)
             client.send()
             assert last_tool_text(client) == "\n[idle]"
             compact_previews(
@@ -103,10 +115,19 @@ def test_recovered_recorded_cells_keep_bounded_source_markers(
 
 @requires(NATIVE_FIXTURES)
 def test_recovered_silent_cells_discard_file_receipts(binary: Path) -> Transcript:
-    return recovered_recorded_cells(binary, count=512, silent=True)
+    return recovered_recorded_cells(binary, count=4, silent=True)
 
 
-def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Transcript:
+@requires(NATIVE_FIXTURES)
+def test_recovered_silent_cells_keep_bounded_allocations(binary: Path) -> Transcript:
+    return recovered_recorded_cells(
+        binary, count=512, silent=True, allocation_limit=64 * 1024
+    )
+
+
+def recovered_recorded_cells(
+    binary: Path, *, count: int, silent: bool, allocation_limit: int | None = None
+) -> Transcript:
     worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -157,10 +178,10 @@ def recovered_recorded_cells(binary: Path, *, count: int, silent: bool) -> Trans
             result = client.send(control="interrupt")
             client.request("ping")
             _, largest = profile.stop()
-            if silent:
+            if allocation_limit is not None:
                 # Control history is already bounded independently of cell text. Repeated
                 # empty files must not add another unbounded receipt history.
-                assert largest <= 64 * 1024, largest
+                assert largest <= allocation_limit, largest
             assert not result["isError"], result
             text = result["content"][0]["text"]
             assert len(text.encode()) <= 8192
@@ -649,8 +670,18 @@ def test_long_recording_paths_keep_image_omissions_readable(binary: Path) -> Tra
 
 
 @requires(NATIVE_FIXTURES)
+def test_recovered_image_omissions_are_aggregated(binary: Path) -> Transcript:
+    return recovered_image_omissions(binary, count=4)
+
+
+@requires(NATIVE_FIXTURES)
 def test_recovered_image_omissions_keep_bounded_state(binary: Path) -> Transcript:
-    count = 1024
+    return recovered_image_omissions(binary, count=1024, allocation_limit=128 * 1024)
+
+
+def recovered_image_omissions(
+    binary: Path, *, count: int, allocation_limit: int | None = None
+) -> Transcript:
     with recovery_client(binary) as (client, profile, reached, release):
         # The first cell has no cancelled response to hand off.
         pending = client.start_send(r="preview rejected image")
@@ -668,7 +699,8 @@ def test_recovered_image_omissions_keep_bounded_state(binary: Path) -> Transcrip
         result = client.send(control="interrupt")
         client.request("ping")
         _, largest = profile.stop()
-        assert largest <= 128 * 1024, largest
+        if allocation_limit is not None:
+            assert largest <= allocation_limit, largest
         assert not result["isError"], result
         text = result["content"][0]["text"]
         assert text.count("[output omitted:") == 1

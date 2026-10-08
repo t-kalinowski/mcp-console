@@ -20,7 +20,7 @@ from support.assertions import (
 )
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
@@ -594,7 +594,7 @@ def inherits_matplotlib_config(
         return transcript
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_runs_async_python_explicitly(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
@@ -695,7 +695,7 @@ def test_runs_python_thread_while_idle(
                 release.touch(exist_ok=True)
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_recovers_from_python_errors(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
@@ -904,7 +904,7 @@ def test_routes_python_input(binary: Path, execution: Execution) -> Transcript:
     return client.finish()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_reads_unicode_nul_and_long_python_input(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1044,7 +1044,7 @@ def test_python_input_eof_retires_worker(
             gate.close()
 
 
-@executions(DIRECT, SANDBOXED)
+@executions(RUNTIME)
 def test_python_debugger_input(binary: Path, execution: Execution) -> Transcript:
     client = McpClient(binary, execution.serve())
     client.initialize_and_list_tools()
