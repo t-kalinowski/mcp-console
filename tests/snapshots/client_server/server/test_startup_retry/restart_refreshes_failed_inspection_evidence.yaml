@@ -39,7 +39,5 @@ result:
         incomplete
   isError: true
 ---
-stderr: |+
-  selected Python inspection failed (exit status: 17): repair is still incomplete
-
+stderr: "selected Python inspection failed (exit status: 17): repair is still incomplete\n\n"
 inspection_attempts: 2

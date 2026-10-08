@@ -98,8 +98,9 @@ impl Startup {
                     let prepared = initialize(
                         &|resolver| {
                             let mut control = control.lock().expect("startup cancellation lock");
-                            // Inspection can finish while retained preparation still
-                            // owns cleanup. Preserve every stage, including refusals.
+                            // Each preparation peer owns its retirement. A later
+                            // inspection must not replace an earlier peer's receipt.
+                            // Refused stages also retain their cleanup evidence.
                             control.resolvers.push(resolver.clone());
                             if control.closed {
                                 control.registration_closed = true;
@@ -193,22 +194,22 @@ impl Startup {
         let control = self.cancellation.lock().expect("startup cancellation lock");
         if control.closed
             && ((control.admission_cancelled && error == REGISTRATION_CLOSED)
-                || control.resolvers.last().is_some_and(|resolver| {
-                    control.resolvers.iter().all(|resolver| {
-                        resolver.cleanup_confirmed() && resolver.retirement_confirmed()
-                    })
+                || (control.resolvers.iter().all(|resolver| {
+                    resolver.cleanup_confirmed() && resolver.retirement_confirmed()
+                }) && control.resolvers.last().is_some_and(|resolver| {
                     // A close/retirement failure appended by the initializer is
                     // independent of the registration refusal and must survive.
-                    && if control.registration_closed {
+                    if control.registration_closed {
                         error == REGISTRATION_CLOSED
                     } else {
                         resolver.terminal_report().is_some_and(|report| {
                             report.confirmed
-                                && report.control == Some(crate::resolver::ResolverControlOutcome::Cancelled)
+                                && report.control
+                                    == Some(crate::resolver::ResolverControlOutcome::Cancelled)
                                 && report.result == Err(error.clone())
                         })
                     }
-                }))
+                })))
         {
             Ok(())
         } else {

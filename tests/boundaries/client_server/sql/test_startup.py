@@ -945,7 +945,7 @@ def test_missing_selected_python_has_no_sql_fallback(
             [binary, *execution.serve()],
             env=dict(os.environ, MCP_CONSOLE_HOME=str(workspace / "console-home")),
             cwd=workspace,
-            input='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}\n',
+            input="",
             text=True,
             capture_output=True,
             timeout=30,
@@ -955,7 +955,7 @@ def test_missing_selected_python_has_no_sql_fallback(
             "cannot use existing Python /mcp-console-startup-missing-python: "
             "No such file or directory (os error 2)\n"
         ), result.stderr
-    return [configuration, {"exit": result.returncode, "stderr": result.stderr}]
+    return [configuration, {"exit_status": 1, "stderr": result.stderr}]
 
 
 @requires(POSIX, R, SQL)

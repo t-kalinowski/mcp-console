@@ -10,6 +10,7 @@ __attribute__((constructor)) static void discovery_diagnostic(int argc, char **a
     argc = *_NSGetArgc();
     argv = *_NSGetArgv();
 #endif
+    // Worker-policy inspection clears this selection and is a separate peer.
     if (argc > 1 && strcmp(argv[1], "resolve") == 0 &&
         getenv("RETICULATE_PYTHON") != NULL) {
         const char message[] = "preparation detail\n";

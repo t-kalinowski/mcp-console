@@ -210,6 +210,7 @@ It retains the child and exit observer in a background reaping owner and retries
 
 The server integrates a local native launcher as an ordinary child; successful managed exit is the cleanup barrier.
 Unconfirmed retirement blocks replacement.
+Startup retains cleanup evidence for every preparation and inspection stage; a later retired inspection peer cannot authorize retry while an earlier preparation peer remains unretired.
 Worker, relay, and native retirement allowances have different owners; none is a universal end-to-end cleanup deadline.
 
 Connection closure that refuses the next preparation stage is separate from control of a completed operation.

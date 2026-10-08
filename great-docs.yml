@@ -1,0 +1,54 @@
+module: mcp_console
+display_name: MCP Console Python
+parser: google
+dynamic: false
+inline_methods: true
+site_url: https://t-kalinowski.github.io/mcp-console/python/
+github_style: icon
+pypi: false
+
+source:
+  branch: main
+
+homepage: user_guide
+user_guide: docs/python
+skill:
+  enabled: false
+pre_render:
+  - docs/python/_render.py
+seo:
+  canonical:
+    base_url: https://t-kalinowski.github.io/mcp-console/python/
+
+site:
+  theme: cosmo
+
+reference:
+  title: Python API reference
+  sections:
+    - title: Clients
+      contents:
+      - name: MCPConsole
+        members: [connect, close, send, send_tool, __enter__, __exit__]
+      - name: AsyncMCPConsole
+        members: [connect, close, send, send_tool, __aenter__, __aexit__]
+      - name: Requirements
+        members: false
+    - title: chatlas
+      contents:
+      - chatlas.tool
+      - chatlas.register
+    - title: OpenAI
+      contents:
+      - openai.responses_tool
+      - openai.ResponsesTool
+      - openai.AsyncResponsesTool
+      - openai.agents_tool
+      - openai.agents_server
+    - title: Anthropic
+      contents:
+      - anthropic.tool
+      - anthropic.tools
+    - title: Thread SDK
+      contents:
+      - codex.server
