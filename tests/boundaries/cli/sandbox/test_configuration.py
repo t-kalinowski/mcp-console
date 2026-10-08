@@ -378,7 +378,7 @@ def test_rejects_malformed_and_conflicting_configuration(binary: Path) -> Transc
 @requires(SANDBOX)
 def test_options_before_command_are_launcher_options(binary: Path) -> Transcript:
     transcript = []
-    for option in ("--bootstrap-fd", "--config-file"):
+    for option in ("--bootstrap-fd", "--unsupported-launch-option"):
         result = subprocess.run(
             [
                 binary,

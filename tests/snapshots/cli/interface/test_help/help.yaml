@@ -14,7 +14,9 @@ stderr: |
 
   Options:
         --no-project-config   Skip trusted launch-directory project configuration; still load global configuration and apply -c overrides
+        --no-global-config    Skip global configuration; still load project configuration and apply -c overrides
         --no-config           Skip global and project configuration; apply only -c overrides (not a general safe mode)
+        --config-file <PATH>  Use only this YAML or JSON configuration file, then apply -c overrides
     -c, --config <KEY=VALUE>  Override layered global and project configuration; repeat for ordered dotted KEY=VALUE assignments
     -h, --help                Print help (see more with '--help')
     -V, --version             Print version
@@ -39,10 +41,16 @@ stdout: |
             Skip launch-directory project configuration; still load global configuration and apply -c overrides.
             Automatic project configuration is trusted launcher input: it can select executables, child environments, and sandbox permissions. Trusting sandboxed code is not equivalent to trusting it to define the sandbox.
             Global settings supply defaults, not a mandatory security ceiling; projects may override them. Integrations opening unfamiliar projects should use this flag until they authorize project configuration.
-            Neither discovery flag is a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy.
+            Discovery flags are not a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy.
+
+        --no-global-config
+            Skip global configuration; still load project configuration and apply -c overrides
 
         --no-config
             Skip global and project configuration; apply only -c overrides (not a general safe mode)
+
+        --config-file <PATH>
+            Use only this YAML or JSON configuration file, then apply -c overrides
 
     -c, --config <KEY=VALUE>
             Override layered global and project configuration; repeat for ordered dotted KEY=VALUE assignments
@@ -68,10 +76,16 @@ stdout: |
             Skip launch-directory project configuration; still load global configuration and apply -c overrides.
             Automatic project configuration is trusted launcher input: it can select executables, child environments, and sandbox permissions. Trusting sandboxed code is not equivalent to trusting it to define the sandbox.
             Global settings supply defaults, not a mandatory security ceiling; projects may override them. Integrations opening unfamiliar projects should use this flag until they authorize project configuration.
-            Neither discovery flag is a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy.
+            Discovery flags are not a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy.
+
+        --no-global-config
+            Skip global configuration; still load project configuration and apply -c overrides
 
         --no-config
             Skip global and project configuration; apply only -c overrides (not a general safe mode)
+
+        --config-file <PATH>
+            Use only this YAML or JSON configuration file, then apply -c overrides
 
     -c, --config <KEY=VALUE>
             Override layered global and project configuration; repeat for ordered dotted KEY=VALUE assignments
@@ -120,10 +134,16 @@ stdout: |
             Skip launch-directory project configuration; still load global configuration and apply -c overrides.
             Automatic project configuration is trusted launcher input: it can select executables, child environments, and sandbox permissions. Trusting sandboxed code is not equivalent to trusting it to define the sandbox.
             Global settings supply defaults, not a mandatory security ceiling; projects may override them. Integrations opening unfamiliar projects should use this flag until they authorize project configuration.
-            Neither discovery flag is a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy.
+            Discovery flags are not a general safe mode: they do not disable native startup files, clear inherited environments, or make executables trustworthy.
+
+        --no-global-config
+            Skip global configuration; still load project configuration and apply -c overrides
 
         --no-config
             Skip global and project configuration; apply only -c overrides (not a general safe mode)
+
+        --config-file <PATH>
+            Use only this YAML or JSON configuration file, then apply -c overrides
 
     -c, --config <KEY=VALUE>
             Override layered global and project configuration; repeat for ordered dotted KEY=VALUE assignments
