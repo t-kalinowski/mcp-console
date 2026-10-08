@@ -167,18 +167,26 @@ def wait_for_idle_output(
     completion_timeout_seconds: float = 3,
     **send_arguments: Any,
 ) -> None:
-    """Poll the public idle snapshot until a worker event reaches the server."""
+    """Accumulate public idle output until all expected worker events arrive."""
     deadline = time.monotonic() + completion_timeout_seconds
     poll_start = len(client.transcript)
+    collected = ""
     while True:
         result = _send_before(client, deadline, description, **send_arguments)
         assert result.get("isError") is not True, result
         content = result["content"]
         assert len(content) == 1 and content[0]["type"] == "text", content
         output = content[0]["text"]
-        if output == expected:
+        if output.endswith("\n[idle]"):
+            collected += output.removesuffix("\n[idle]")
+            complete = collected + "\n[idle]"
+        else:
+            complete = collected + output
+        if complete == expected:
+            content[0]["text"] = expected
             break
-        assert output == "\n[idle]", output
+        assert output.endswith("\n[idle]"), output
+        assert expected.startswith(collected), repr(collected)
         if time.monotonic() >= deadline:
             raise AssertionError(f"{description} did not reach the server")
         time.sleep(0.01)

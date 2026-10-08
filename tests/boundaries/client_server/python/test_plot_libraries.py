@@ -179,7 +179,7 @@ def test_captures_only_pyplot_owned_plotnine_figures(
                     ggplot(data, aes("x", "y")) + geom_point() + theme(figure_size=(3, 2), dpi=100)
                 )
                 shown = shown_plot.draw(show=True)
-                assert plt.get_fignums() == [shown.number]
+                assert plt.get_fignums() == []
                 shown.savefig(references / "shown.png", format="png")
                 with Image.open(references / "shown.png") as image:
                     assert image.size == (300, 200)
@@ -191,8 +191,8 @@ def test_captures_only_pyplot_owned_plotnine_figures(
         assert_result_content(
             client,
             [
-                "<Figure size 300x200 with 1 Axes>\n",
                 wait_for_worker_file(temporary, "shown.png", client).read_bytes(),
+                "<Figure size 300x200 with 1 Axes>\n",
             ],
             image_reference="live shown plotnine savefig {page}",
         )

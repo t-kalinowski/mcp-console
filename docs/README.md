@@ -10,6 +10,7 @@ Source and public acceptance tests take precedence over prose; [`design-sketches
 | Question                                             | Guide                                                                   |
 | ---------------------------------------------------- | ----------------------------------------------------------------------- |
 | How do I configure a session?                        | [Configuration](CONFIGURATION.md)                                       |
+| Which environment variables affect Console?          | [Environment variables](ENVIRONMENT.md)                                 |
 | How do cells, input, plots, and languages work?      | [Built-in runtime](BUILTIN_RUNTIME.md)                                  |
 | What happens when a call combines actions?           | [`send` operations](SEND_OPERATIONS.md)                                 |
 | How are dependencies selected and changed?           | [Requirements](REQUIREMENTS.md), [resolver policy](RESOLVER.md)         |

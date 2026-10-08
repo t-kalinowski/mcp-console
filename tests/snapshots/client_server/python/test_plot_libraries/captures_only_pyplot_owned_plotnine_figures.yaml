@@ -70,7 +70,7 @@ send:
         ggplot(data, aes("x", "y")) + geom_point() + theme(figure_size=(3, 2), dpi=100)
     )
     shown = shown_plot.draw(show=True)
-    assert plt.get_fignums() == [shown.number]
+    assert plt.get_fignums() == []
     shown.savefig(references / "shown.png", format="png")
     with Image.open(references / "shown.png") as image:
         assert image.size == (300, 200)
@@ -79,12 +79,12 @@ send:
   timeout_ms: 600000
 result:
   content:
-    - type: text
-      text: |
-        <Figure size 300x200 with 1 Axes>
     - type: image
       data: <PNG byte-identical to live shown plotnine savefig 1>
       mimeType: image/png
+    - type: text
+      text: |
+        <Figure size 300x200 with 1 Axes>
   isError: false
 ---
 send:
