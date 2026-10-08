@@ -40,6 +40,7 @@ if resolver_record := os.environ.get("MCP_CONSOLE_TEST_UV_RESOLVER_RECORD"):
         "UV_CACHE_DIR": os.environ.get("UV_CACHE_DIR"),
         "UV_MANAGED_PYTHON": os.environ.get("UV_MANAGED_PYTHON"),
         "UV_NO_MANAGED_PYTHON": os.environ.get("UV_NO_MANAGED_PYTHON"),
+        "UV_PYTHON": os.environ.get("UV_PYTHON"),
         "UV_PYTHON_INSTALL_DIR": os.environ.get("UV_PYTHON_INSTALL_DIR"),
         "UV_PYTHON_PREFERENCE": os.environ.get("UV_PYTHON_PREFERENCE"),
         "UV_NO_CACHE": os.environ.get("UV_NO_CACHE"),

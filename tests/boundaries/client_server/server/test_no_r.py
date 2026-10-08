@@ -45,21 +45,56 @@ def no_r_client(binary: Path, execution: Execution):
             yield client
 
 
+def symlinked_system_python_environment(workspace: Path) -> dict[str, str]:
+    environment = no_r_environment(workspace)
+    (workspace / "commands/python3").symlink_to(Path(sys.executable).resolve())
+    environment.update(
+        UV_PYTHON_INSTALL_DIR=str(workspace / "empty-python-installations"),
+        UV_PYTHON_DOWNLOADS="never",
+        UV_PYTHON_PREFERENCE="only-system",
+    )
+    return environment
+
+
 @executions(DIRECT, SANDBOXED)
 @requires(POSIX)
-def test_prepares_with_only_a_symlinked_system_python(
+def test_rejects_managed_preparation_with_only_a_symlinked_system_python(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        environment = no_r_environment(workspace)
-        (workspace / "commands/python3").symlink_to(Path(sys.executable).resolve())
-        environment.update(
-            UV_PYTHON_INSTALL_DIR=str(workspace / "empty-python-installations"),
-            UV_PYTHON_DOWNLOADS="never",
-            UV_PYTHON_PREFERENCE="only-system",
-        )
-        with McpClient(binary, execution.serve(), environment, workspace) as client:
+        environment = symlinked_system_python_environment(workspace)
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment, workspace
+        ) as client:
+            client.initialize_and_list_tools()
+            result = client.send(python="6 * 7")
+            assert result.get("isError"), result
+            assert last_result_text(client) == (
+                "managed Python version resolution failed: "
+                "uv did not report a supported CPython interpreter"
+            ), result
+            transcript, stderr = client.finish_with_standard_error(
+                expected_exit_status=1
+            )
+            assert stderr == last_result_text(client) + "\n", stderr
+            return transcript + [{"exit_status": 1, "stderr": stderr}]
+
+
+@executions(DIRECT, SANDBOXED)
+@requires(POSIX)
+def test_explicitly_selects_a_symlinked_system_python(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        workspace = Path(temporary)
+        environment = symlinked_system_python_environment(workspace)
+        configuration = workspace / ".agents/console/config.yaml"
+        configuration.parent.mkdir(parents=True)
+        configuration.write_text("python: commands/python3\n")
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), environment, workspace
+        ) as client:
             client.initialize_and_list_tools()
             client.send(python="6 * 7")
             assert last_result_text(client) == "42\n", client.transcript[-1]

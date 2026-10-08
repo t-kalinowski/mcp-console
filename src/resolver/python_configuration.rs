@@ -84,8 +84,8 @@ impl ManagedPythonResolverConfiguration {
             .env("RETICULATE_UV", uv)
             .env_remove("UV_OFFLINE")
             .env_remove("UV_PYTHON")
-            .env_remove("UV_NO_MANAGED_PYTHON")
             .env_remove("UV_MANAGED_PYTHON")
+            .env_remove("UV_NO_MANAGED_PYTHON")
             .env("UV_PYTHON_PREFERENCE", "only-managed");
     }
 

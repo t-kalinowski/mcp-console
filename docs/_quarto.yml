@@ -1,5 +1,6 @@
 project:
   type: website
+  post-render: _pkgdown.R
   render:
     - index.qmd
     - getting-started.qmd
@@ -23,6 +24,8 @@ website:
         text: Get started
       - href: README.md
         text: Documentation
+      - href: r/index.html
+        text: R package
     right:
       - icon: github
         href: https://github.com/t-kalinowski/mcp-console
@@ -50,7 +53,7 @@ website:
         - href: PYTHON.md
           text: Python clients
         - text: R and ellmer
-          href: https://github.com/t-kalinowski/mcp-console/blob/main/r/README.md
+          href: r/index.html
         - href: ENVIRONMENT.md
           text: Environment variables
         - href: GLOSSARY.md

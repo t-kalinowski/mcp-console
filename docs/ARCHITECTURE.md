@@ -235,6 +235,7 @@ The original operation failure and cleanup failures remain separate until diagno
 Resolver cleanup confirmation combines the native process owner's result with settled observer/I/O tasks; it does not confirm preparation transport or worker retirement.
 Unix signals the owned process group and reaps its leader after observation settles; it does not provide a separate empty-group receipt, and escaped descendants remain outside that scope.
 Windows retains suspended creation and kill-on-close Job ownership, requires a confirmed empty Job, and shares its existing retirement allowance with exit observation.
+Interrupting a live Windows resolver terminates that Job and retains interruption as the operation's cause before materializer error formatting; an already completed setup failure keeps its own cause.
 On connection closure, the server closes admission, cancels preparation, retires owned execution resources, settles accepted responses, and bounds blocked MCP delivery.
 Native runner death has no independent recovery guarantee.
 

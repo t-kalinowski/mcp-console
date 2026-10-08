@@ -1408,8 +1408,10 @@ def test_records_managed_sql_cells(
             in quarto
         )
         assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
+        working_directory = events[0]["working_directory"]
+        assert Path(working_directory).samefile(workspace)
         return TranscriptWithCompanions(
-            records, {"qmd": quarto.replace(str(workspace.resolve()), "<workspace>")}
+            records, {"qmd": quarto.replace(working_directory, "<workspace>")}
         )
 
 

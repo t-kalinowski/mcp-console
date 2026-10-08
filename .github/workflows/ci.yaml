@@ -78,6 +78,9 @@ jobs:
         run: |
           uv python install 3.13
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $consolePython = Join-Path $env:LOCALAPPDATA "mcp-console/cache/dependencies/uv/python"
+          uv python install 3.13 --install-dir $consolePython
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $ciPython = (Get-Command python).Source
           uv pip install --python $ciPython packaging matplotlib
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
