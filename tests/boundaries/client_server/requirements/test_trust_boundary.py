@@ -60,6 +60,7 @@ def workspace(root: Path) -> tuple[Path, dict[str, str]]:
         "UV_EXTRA_INDEX_URL",
         "UV_FIND_LINKS",
         "UV_NO_INDEX",
+        "UV_EXCLUDE_NEWER",
         "UV_CONSTRAINT",
         "UV_BUILD_CONSTRAINT",
         "UV_OVERRIDE",
@@ -101,6 +102,7 @@ def test_worker_replaces_selected_uv_wrapper(binary: Path) -> Transcript:
             UV_NO_BINARY_PACKAGE="mcp-console-trust-probe",
             UV_ENV_FILE=str(Path(directory) / "missing.env"),
             UV_NO_ENV_FILE="0",
+            UV_EXCLUDE_NEWER="2000-01-01",
         ),
     ):
         root = Path(directory).resolve()
