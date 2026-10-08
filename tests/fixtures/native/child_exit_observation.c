@@ -17,6 +17,7 @@
 static atomic_int observed_pid;
 static atomic_bool settled;
 static atomic_bool interrupted;
+static atomic_bool signal_gated;
 static _Thread_local bool observer_thread;
 
 __attribute__((constructor)) static void initialize(void) {
@@ -101,13 +102,23 @@ static int observe_exit(idtype_t type, id_t id, siginfo_t *info, int options) {
         }
     }
 #endif
+    int native_options = options;
+    if (first && getenv("MCP_CONSOLE_TEST_STOP_OVERLAP") != NULL) {
+        // Darwin's WEXITED probe can return a pending stop. Use the real
+        // stopped child's status to reproduce that notification deterministically.
+        native_options |= WSTOPPED;
+    }
 #ifdef __APPLE__
-    int result = waitid(type, id, info, options);
+    int result = waitid(type, id, info, native_options);
 #else
     int result = ((int (*)(idtype_t, id_t, siginfo_t *, int))dlsym(RTLD_NEXT, "waitid"))(
-        type, id, info, options);
+        type, id, info, native_options);
 #endif
     int saved_errno = errno;
+    if (!(options & WNOWAIT) && (options & WSTOPPED) &&
+        getenv("MCP_CONSOLE_TEST_STOP_OVERLAP") != NULL) {
+        checkpoint("MCP_CONSOLE_TEST_STOP_PROCESSED", O_WRONLY);
+    }
     if (first && stale_probe) {
         // Retain the live-child probe result until the fixture has confirmed
         // exit and delivered an interrupt. Native event registration follows.
@@ -138,6 +149,15 @@ static pid_t observe_reap(pid_t pid, int *status, int options) {
 }
 
 static int observe_kill(pid_t pid, int signal) {
+    bool gate_signal = getenv("MCP_CONSOLE_TEST_INTERRUPT_RACE") != NULL &&
+        (signal == SIGINT || signal == SIGSTOP) &&
+        (pid == atomic_load(&observed_pid) || -pid == atomic_load(&observed_pid));
+    if (gate_signal && !atomic_exchange(&signal_gated, true)) {
+        // Hold the first control signal after any owner-side liveness probe.
+        // The test confirms the child's independent exit before releasing it.
+        checkpoint("MCP_CONSOLE_TEST_SIGNAL_ENTERED", O_WRONLY);
+        checkpoint("MCP_CONSOLE_TEST_SIGNAL_RELEASE", O_RDONLY);
+    }
     if (signal == SIGKILL && -pid == atomic_load(&observed_pid) &&
         getenv("MCP_CONSOLE_TEST_CLEANUP_FAIL") != NULL) {
         checkpoint("MCP_CONSOLE_TEST_CHILD_KILLED", O_WRONLY);
@@ -150,6 +170,23 @@ static int observe_kill(pid_t pid, int signal) {
     int result = ((int (*)(pid_t, int))dlsym(RTLD_NEXT, "kill"))(pid, signal);
 #endif
     int saved_errno = errno;
+    if (signal == SIGSTOP && getenv("MCP_CONSOLE_TEST_STOP_OVERLAP") != NULL) {
+        siginfo_t stopped = {0};
+#ifdef __APPLE__
+        int observed = waitid(P_PID, pid, &stopped, WSTOPPED | WNOWAIT);
+#else
+        int observed = ((int (*)(idtype_t, id_t, siginfo_t *, int))dlsym(RTLD_NEXT, "waitid"))(
+            P_PID, pid, &stopped, WSTOPPED | WNOWAIT);
+#endif
+        if (observed != 0 || stopped.si_code != CLD_STOPPED) _exit(126);
+        checkpoint("MCP_CONSOLE_TEST_SIGNAL_ENTERED", O_WRONLY);
+        checkpoint("MCP_CONSOLE_TEST_SIGNAL_RELEASE", O_RDONLY);
+    }
+    if (gate_signal && signal == SIGINT) {
+        // Linux accepts killpg for an unreaped zombie. Reproduce that return
+        // value on macOS too, without changing the real exit status.
+        result = 0;
+    }
     if (signal == SIGKILL && (pid == atomic_load(&observed_pid) ||
                              -pid == atomic_load(&observed_pid))) {
         checkpoint("MCP_CONSOLE_TEST_CHILD_KILLED", O_WRONLY);
@@ -167,6 +204,11 @@ static int observe_kevent(int queue, const struct kevent *changes, int change_co
                           struct kevent *events, int event_count,
                           const struct timespec *timeout) {
     int result = kevent(queue, changes, change_count, events, event_count, timeout);
+    if (result == 0 && observer_thread && change_count == 1 &&
+        changes[0].filter == EVFILT_PROC && (changes[0].fflags & NOTE_EXIT) &&
+        getenv("MCP_CONSOLE_TEST_STOP_OVERLAP") != NULL) {
+        checkpoint("MCP_CONSOLE_TEST_STOP_PROCESSED", O_WRONLY);
+    }
     if (result == 0 && observer_thread && change_count == 1 &&
         changes[0].filter == EVFILT_PROC && (changes[0].fflags & NOTE_EXIT) &&
         getenv("MCP_CONSOLE_TEST_OBSERVER_DELAY_STATUS") != NULL) {

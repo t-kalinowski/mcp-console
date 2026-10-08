@@ -171,8 +171,8 @@ fn resume_initial_thread(pid: u32) -> io::Result<()> {
 }
 
 impl Child {
-    fn terminate(&self) -> io::Result<()> {
-        if unsafe { TerminateJobObject(self.job.as_raw_handle(), 1) } == 0 {
+    fn terminate(&self, exit_code: u32) -> io::Result<()> {
+        if unsafe { TerminateJobObject(self.job.as_raw_handle(), exit_code) } == 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
@@ -186,7 +186,7 @@ impl Child {
         &mut self,
         settle_observation: impl FnOnce(Duration) -> io::Result<()>,
     ) -> io::Result<ExitStatus> {
-        self.terminate()?;
+        self.terminate(1)?;
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             // The accounting query is authoritative, including when all exits
@@ -258,7 +258,7 @@ pub(super) fn interrupt_resolver(child: &mut Child) -> io::Result<ResolverInterr
     }
     // Descendants still need Job-wide termination, including after a natural
     // root exit. Retirement confirms the whole Job and the exit observation.
-    child.terminate()?;
+    child.terminate(STATUS_CONTROL_C_EXIT as u32)?;
     Ok(ResolverInterrupt::Signaled)
 }
 
