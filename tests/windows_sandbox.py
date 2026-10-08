@@ -230,6 +230,21 @@ class WindowsSandbox(unittest.TestCase):
         os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
         "provisioned default Windows sandbox",
     )
+    def test_network_enabled_sql(self):
+        from windows import Session, exercise_r_sql
+
+        session = Session(sandbox=True, overrides=['sandbox.network="enabled"'])
+        try:
+            session.initialize()
+            exercise_r_sql(session)
+        finally:
+            session.close()
+
+    @unittest.skipUnless(os.environ.get("R_HOME"), "configured R runtime")
+    @unittest.skipUnless(
+        os.environ.get("MCP_CONSOLE_TEST_WINDOWS_STATE_DIR"),
+        "provisioned default Windows sandbox",
+    )
     def test_network_enabled_input_and_interrupt(self):
         from windows import Session, exercise_input_and_interrupt
 

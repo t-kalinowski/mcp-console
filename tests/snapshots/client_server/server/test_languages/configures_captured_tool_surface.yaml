@@ -2,4 +2,4 @@
 languages:
   - sql
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.custom-sql.direct.yaml
+!same-as custom-sql MCP initialization for this execution mode

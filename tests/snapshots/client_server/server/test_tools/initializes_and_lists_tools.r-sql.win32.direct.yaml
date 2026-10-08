@@ -24,16 +24,22 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent custom-worker workbench. Send one complete `r`, `python`, or
-        `sql` cell per call. Inspect its output and reuse persistent objects.
+        Persistent R, Python, and SQL workbench for local execution on Windows.
+        Send one complete `r`, `python`, or `sql` cell per call. Inspect its
+        output and reuse persistent objects. Results display automatically;
+        supported plots return as images.
 
 
-        Language fields describe the configured interface; evaluation, display,
-        SQL, and sharing depend on the worker. Console does not supply built-in
-        runtime packages, import hooks, or a default SQL connection. Managed
-        requirements need compatible worker callbacks; Python requirements are
-        unavailable. Switch languages when useful, using the worker's
-        capabilities.
+        For databases and structured files, consider DuckDB SQL first for
+        inspection, joins, and aggregation. Use R for vectorized data and string
+        operations, statistics, and plots. For a reusable R script, include
+        imports, data inputs, and `#| packages:`/`#| r-version:` metadata for
+        `ir run script.R`, which starts without live Console objects. Switch
+        languages when useful.
+
+
+        DuckDB can query CSV, Parquet, JSON, and JSONL directly, including
+        nested JSON.
 
 
         Run one cell at a time. Wait for its `send` to return before another
@@ -57,19 +63,38 @@ result:
         type: object
         properties:
           r:
-            description: Evaluate one complete R cell in the custom worker.
-            type:
-              - string
-              - "null"
-          python:
-            description: Evaluate one complete Python cell in the custom worker.
+            description: >-
+              Evaluate one complete R cell in persistent global state. Visible
+              top-level expressions autoprint; leave the primary result last. Load
+              CRAN packages normally through `library()`, `require()`,
+              `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; managed
+              sessions prepare missing packages on first use. Avoid availability
+              probes or `install.packages()`. Access Python globals through `py$name`.
+              `sql_connection()` returns the R-owned SQL connection for DBI/dplyr.
+              Select a user-owned DBI connection for SQL cells with
+              `console_sql_connection(connection)`; restore managed DuckDB with
+              `console_sql_connection(NULL)`. Never disconnect the managed connection;
+              restore it before disconnecting a selection. Default-device plots return
+              as PNGs and finalize at cell end, including after errors; draw each plot
+              in one cell. Explicit devices are not captured. Set persistent
+              dimensions in inches and DPI with `options(console.plot.width_in = ...,
+              console.plot.height_in = ..., console.plot.dpi = ...)`.
             type:
               - string
               - "null"
           sql:
             description: >-
-              Evaluate one complete SQL cell; the custom worker supplies the
-              connection, dialect, and display.
+              Evaluate one complete SQL cell through the active connection. Managed
+              DuckDB keeps a persistent catalog. Results are bounded table previews
+              that abbreviate long text cells; query focused subsets or aggregates.
+              The selected driver supplies its own SQL dialect and types. With R-owned
+              managed DuckDB, query R data frames by name; DuckDB tables/views take
+              precedence. Use DBI from an R cell for commands requiring the statement
+              interface. Managed conveniences/extensions apply only to DuckDB. Read
+              SQLite with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. With a
+              sandbox, attach existing DuckDB databases outside writable paths using
+              `ATTACH 'path' AS name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`,
+              `SUMMARIZE`, or `EXPLAIN`; CLI dot commands are not supported.
             type:
               - string
               - "null"
@@ -165,21 +190,20 @@ result:
                   minLength: 1
                   maxLength: 64
               r:
-                description: >-
-                  Single-line ir package references for dependency preparation, e.g. DBI
-                  or duckdb, including supported remote references; local sources and
-                  NUL/line breaks are rejected.
+                description: |-
+                  Single-line ir package references, e.g. data.table or sf, including supported remote
+                  references; local sources and NUL/line breaks are rejected. Automatic R loads accept plain
+                  package names only; use this field for explicit references or preparation before use.
                 type: array
                 items:
                   type: string
                   minLength: 1
               python:
-                description: >-
-                  Named PEP 508 registry requirements for dependency preparation, e.g.
-                  duckdb>=1, with versions, extras, or markers. Paths, URLs, editable
-                  requirements, direct references, and local sources are rejected. Bare or
-                  user-selected environments and custom workers disable managed registry
-                  requirements.
+                description: |-
+                  Named PEP 508 registry requirements with versions, extras, or markers, e.g. polars>=1 or
+                  requests[socks]. Paths, URLs, editable requirements, direct references, and local sources
+                  are rejected. Bare or explicitly selected Python environments and custom workers disable
+                  managed Python requirements.
                 type: array
                 items:
                   type: string

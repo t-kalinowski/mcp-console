@@ -94,7 +94,7 @@ Use `@execution_snapshots` from `support.snapshots` when captured launch policy 
 Unavailable modes report a skip, not validation.
 Test-host requirements such as Linux process-observation facilities do not imply the same runtime requirements.
 Windows full checks run shared direct cases in addition to native acceptance.
-Declare `SQL` and `POSIX` for Unix-only shell/FIFO fixtures explicitly; fixture exclusions are remaining parity debt, not evidence that the supported runtime behavior is unavailable.
+Declare `SQL` for SQL runtime cases and `POSIX` for Unix-only shell/FIFO fixtures explicitly; fixture exclusions are remaining parity debt, not evidence that the supported runtime behavior is unavailable.
 The shared sandbox mode uses Seatbelt/bubblewrap fixtures; Windows native sandbox acceptance owns Windows policy coverage.
 
 Each case uses a temporary workspace and private `MCP_CONSOLE_HOME`, preserving `HOME` and the caller's R/Python/uv environment.

@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.progress import without_elapsed
-from support.requirements import NATIVE_FIXTURES, R, SQL, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, R, SQL, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint, wait_for_worker_file
 from support.client import McpClient, stop_client
@@ -619,7 +619,7 @@ def test_recovers_when_python_dbapi_connection_raises_base_exception(
     return client.finish()
 
 
-@requires(SQL)
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_allows_python_dbapi_callbacks_to_select_an_r_connection(
     binary: Path,
@@ -1132,7 +1132,7 @@ def display_width(text: str) -> int:
     )
 
 
-@requires(SQL)
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_interrupts_sql_warmup_without_losing_worker(
     binary: Path, execution: Execution
@@ -1206,7 +1206,7 @@ def test_interrupts_sql_warmup_without_losing_worker(
     return [{"sql_warmup_interrupt_withholds_cell_and_retains_worker": True}]
 
 
-@requires(SQL)
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_optional_sql_warmup_failure_preserves_runtime(
     binary: Path, execution: Execution
@@ -1260,7 +1260,7 @@ def test_optional_sql_warmup_failure_preserves_runtime(
     return [{"optional_sql_warmup_failure_preserves_runtime_and_later_sql": True}]
 
 
-@requires(SQL)
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_closes_provisional_connections_after_sql_setup_failure(
     binary: Path, execution: Execution
@@ -1377,7 +1377,7 @@ def startup_sql_client(
             release.close()
 
 
-@requires(SQL)
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_creates_managed_connection_without_a_send(
     binary: Path, execution: Execution

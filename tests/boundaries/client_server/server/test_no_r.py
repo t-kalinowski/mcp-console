@@ -266,7 +266,9 @@ def test_no_r_interrupt_requirements_reject_before_control_and_stdin(
         return client.finish()[3:]
 
 
-@requires(SQL)
+# Native DuckDB query cancellation uses Unix SIGINT; Windows covers cooperative
+# DB-API callbacks and native R queries in its acceptance suite.
+@requires(POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_no_r_sql_interrupt_and_worker_crash(
     binary: Path, execution: Execution

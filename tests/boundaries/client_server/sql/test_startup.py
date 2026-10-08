@@ -354,7 +354,7 @@ def startup_plots(
     )
 
 
-@requires(R, SQL)
+@requires(POSIX, R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_python_startup_preserves_identity_transactions_and_captured_restart(
     binary: Path, execution: Execution
@@ -522,7 +522,7 @@ def test_python_startup_without_r(binary: Path, execution: Execution) -> Transcr
     ]
 
 
-@requires(R, SQL)
+@requires(POSIX, R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_r_startup_preserves_native_identity_and_transaction(
     binary: Path, execution: Execution

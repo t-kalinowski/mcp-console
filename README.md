@@ -12,7 +12,7 @@ Responses keep large outputs out of the model context while retaining logs and a
 
 **Development preview:** interfaces may change.
 macOS and Linux are supported.
-Windows x64 has experimental [local R and Python support with a native sandbox](docs/WINDOWS.md).
+Windows x64 has experimental [local R, Python, and SQL support with a native sandbox](docs/WINDOWS.md).
 Console runs local processes and prepares dependencies on the host where it is launched.
 
 ## Quickstart

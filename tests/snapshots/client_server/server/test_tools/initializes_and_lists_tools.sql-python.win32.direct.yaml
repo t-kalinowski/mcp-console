@@ -24,16 +24,19 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent custom-worker workbench. Send one complete `r`, `python`, or
+        Persistent Python and SQL workbench for local execution on Windows for
+        calculations, data analysis, and plots. Send one complete `python` or
         `sql` cell per call. Inspect its output and reuse persistent objects.
+        Results display automatically; supported plots return as images.
 
 
-        Language fields describe the configured interface; evaluation, display,
-        SQL, and sharing depend on the worker. Console does not supply built-in
-        runtime packages, import hooks, or a default SQL connection. Managed
-        requirements need compatible worker callbacks; Python requirements are
-        unavailable. Switch languages when useful, using the worker's
-        capabilities.
+        For databases and structured files, consider DuckDB SQL first for
+        inspection, joins, and aggregation. Use Python when its libraries or
+        format-specific parsing simplify the task. Switch languages when useful.
+
+
+        DuckDB can query CSV, Parquet, JSON, and JSONL directly, including
+        nested JSON.
 
 
         Run one cell at a time. Wait for its `send` to return before another
@@ -56,29 +59,44 @@ result:
         additionalProperties: false
         type: object
         properties:
-          r:
-            description: Evaluate one complete R cell in the custom worker.
-            type:
-              - string
-              - "null"
           python:
-            description: Evaluate one complete Python cell in the custom worker.
+            description: >-
+              Evaluate one complete Python cell in persistent `__main__` state. The
+              final visible expression autoprints; leave the primary result last.
+              Import packages normally; managed sessions prepare missing PyPI
+              distributions on first import. Use `requirements.python` when import and
+              distribution names differ or to prepare before execution. Select a
+              user-owned DB-API connection for SQL cells with
+              `console_sql_connection(connection)`; restore managed DuckDB with
+              `console_sql_connection(None)`. `sql_connection()` requires Python-owned
+              DuckDB; register frames with `sql_connection().register(name, frame)`
+              (globals are not scanned). At cell end, even after errors, open
+              `matplotlib.pyplot` figures return once as PNGs and close; `show()` is
+              optional. Closing a figure suppresses capture.
             type:
               - string
               - "null"
           sql:
             description: >-
-              Evaluate one complete SQL cell; the custom worker supplies the
-              connection, dialect, and display.
+              Evaluate one complete SQL cell through the active connection. Managed
+              DuckDB keeps a persistent catalog. Results are bounded table previews
+              that abbreviate long text cells; query focused subsets or aggregates.
+              The selected driver supplies its own SQL dialect and types. Managed
+              conveniences/extensions apply only to DuckDB. Read SQLite with `ATTACH
+              'path' AS name (TYPE sqlite, READ_ONLY)`. With a sandbox, attach
+              existing DuckDB databases outside writable paths using `ATTACH 'path' AS
+              name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, or
+              `EXPLAIN`; CLI dot commands are not supported.
             type:
               - string
               - "null"
           timeout_ms:
-            description: |-
-              Wait for output for up to this many milliseconds (default 60,000). `0` returns without
-              waiting for completion. Expiry returns available output while work continues. This is a wait
-              budget, not cancellation or a whole-call deadline: preparation and control can exceed it;
-              standalone preparation has no timeout.
+            description: >-
+              Wait for output for up to this many milliseconds (default 60,000). `0`
+              returns without waiting for completion. Expiry returns available output
+              while work continues. This is a wait budget, not cancellation or a
+              whole-call deadline: preparation and control can exceed it; standalone
+              preparation has no timeout.
             type: integer
             format: uint64
             minimum: 0
@@ -88,8 +106,8 @@ result:
               Apply control before same-call stdin/code. `interrupt` requests a
               cooperative interrupt and cancellation of dependency preparation,
               preserving live state. A following cell runs only if prior work stops.
-              `restart` discards live interpreter, database, debugger, and
-              unread-input state; same-call stdin/code go only to the replacement.
+              `restart` discards live state, including debugger and unread input;
+              same-call stdin/code go only to the replacement.
             type: string
             enum:
               - interrupt
@@ -174,12 +192,11 @@ result:
                   type: string
                   minLength: 1
               python:
-                description: >-
-                  Named PEP 508 registry requirements for dependency preparation, e.g.
-                  duckdb>=1, with versions, extras, or markers. Paths, URLs, editable
-                  requirements, direct references, and local sources are rejected. Bare or
-                  user-selected environments and custom workers disable managed registry
-                  requirements.
+                description: |-
+                  Named PEP 508 registry requirements with versions, extras, or markers, e.g. polars>=1 or
+                  requests[socks]. Paths, URLs, editable requirements, direct references, and local sources
+                  are rejected. Bare or explicitly selected Python environments and custom workers disable
+                  managed Python requirements.
                 type: array
                 items:
                   type: string

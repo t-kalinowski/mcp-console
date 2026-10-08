@@ -363,6 +363,9 @@ def test_queries_a_ragnar_store_created_in_r(
           !identical(connection, store@con),
           !identical(connection, reader@con)
         )
+        # Windows requires the other DuckDB instances to release the file.
+        DBI::dbDisconnect(reader@con)
+        DBI::dbDisconnect(store@con)
         invisible(DBI::dbExecute(
           connection,
           paste(
