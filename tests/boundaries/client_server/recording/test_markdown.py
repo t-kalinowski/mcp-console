@@ -111,9 +111,10 @@ def test_records_real_mixed_language_session(
         assert quarto.endswith("\n")
 
         session_event = events[0]
+        assert Path(session_event["working_directory"]).samefile(workspace)
         markdown = markdown.replace(session_event["run_id"], "<run ID>")
         markdown = markdown.replace(
-            session_event["working_directory"],
+            json.dumps(session_event["working_directory"])[1:-1],
             "<workspace>",
         )
         quarto = quarto.replace(

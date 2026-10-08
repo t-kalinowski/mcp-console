@@ -936,7 +936,7 @@ def test_resolves_reached_import_in_managed_worker(
 ) -> Transcript:
     with preparation_directory() as directory:
         root = Path(directory)
-        expose_uv(root)
+        uv = expose_uv(root)
         with McpClient(
             installed_console(binary),
             execution.serve(),
@@ -1002,7 +1002,7 @@ def test_resolves_reached_import_in_managed_worker(
                 "structuredContent"
             ]["requirements"]
             assert {"py-yaml12", "pydash"}.issubset(declaration["python"])
-            (root / "uv").unlink()
+            uv.unlink()
             client.expect(
                 "[prepared]", requirements={"python": ["py-yaml12", "pydash"]}
             )

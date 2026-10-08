@@ -163,7 +163,16 @@ def test_empty_declaration_and_round_trip(
     client.send(python=python)
     assert last_tool_text(client) == "(42, None, None, None, None)\n"
     assert inspect(client) == empty
-    client.send(r="stopifnot(identical(2L + 2L, 4L))")
+    # Initialize the preview dependency before observing the query's output.
+    client.send(
+        # fmt: r
+        r=code("""
+            stopifnot(
+              suppressPackageStartupMessages(requireNamespace("arrow", quietly = TRUE)),
+              identical(2L + 2L, 4L)
+            )
+            """),
+    )
     client.send(sql="SELECT 42 AS answer")
     assert inspect(client) == empty
     client.send(control="restart")
