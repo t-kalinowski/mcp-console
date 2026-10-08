@@ -522,6 +522,55 @@ class WindowsPackaging(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
 class WindowsConsole(unittest.TestCase):
+    def test_native_home_configuration_discovery(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            workspace = root / "workspace"
+            workspace.mkdir()
+            profile = root / "profile"
+            config = profile / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text("languages: []", encoding="utf-8")
+            environment = os.environ | {"USERPROFILE": str(profile)}
+            for name in ("MCP_CONSOLE_HOME", "HOME"):
+                environment.pop(name, None)
+
+            def launch(env):
+                result = subprocess.run(
+                    [BINARY, "serve", "--no-sandbox"],
+                    cwd=workspace,
+                    env=env,
+                    input="",
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 1, result)
+                self.assertEqual(result.stdout, "", result)
+                return result.stderr
+
+            for home in (None, ""):
+                with self.subTest(HOME=home):
+                    env = environment.copy()
+                    if home is not None:
+                        env["HOME"] = home
+                    error = launch(env)
+                    self.assertIn(str(config), error)
+                    self.assertIn("languages must contain at least one", error)
+            explicit_home = root / "explicit-home"
+            explicit_config = explicit_home / ".agents/console/config.yaml"
+            explicit_config.parent.mkdir(parents=True)
+            explicit_config.write_text("cache: invalid", encoding="utf-8")
+            error = launch(environment | {"HOME": str(explicit_home)})
+            self.assertIn(str(explicit_config), error)
+            self.assertNotIn(str(config), error)
+            for name in ("HOME", "USERPROFILE"):
+                with self.subTest(relative=name):
+                    self.assertIn(
+                        "must be an absolute path",
+                        launch(environment | {name: "relative"}),
+                    )
+
     def test_consumes_idle_interrupt_before_next_cell(self):
         # Exercise the same public contract as the Unix Python-only case,
         # including both runtime initialization orders and a shared send.
