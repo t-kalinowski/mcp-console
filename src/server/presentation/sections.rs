@@ -25,7 +25,7 @@ pub(super) const CUSTOM_SWITCHING: &str =
     " Switch languages when useful, using the worker's capabilities.";
 
 pub(super) const WINDOWS_SCOPE: &str =
-    "Persistent R and Python workbench for local execution on Windows. SQL is not yet supported.";
+    "Persistent R, Python, and SQL workbench for local execution on Windows.";
 
 pub(super) const SQL_SELECTION: &str = "For databases and structured files, consider DuckDB SQL first for inspection, joins, and aggregation. ";
 

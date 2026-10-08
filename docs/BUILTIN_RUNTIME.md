@@ -350,7 +350,7 @@ Recordings are not checkpoints and cannot recover data a language printer never 
 Partial R initialization or unsafe bridge/startup failure can require restart even when ordinary Python remains usable.
 
 macOS and Linux are supported.
-Windows x64 supports experimental [local R and Python](WINDOWS.md), including managed dependency resolution; SQL is deferred.
+Windows x64 supports experimental [local R, Python, and SQL](WINDOWS.md), including managed dependency resolution.
 Native enforcement and descendant retirement have explicit [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
 `--no-sandbox` removes native enforcement and descendant cleanup.
 Preparation remains a separate [trusted host operation](REQUIREMENTS.md#host-resolution-and-trust).

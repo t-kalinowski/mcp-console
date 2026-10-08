@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.requirements import POSIX, SQL, command, requires
+from support.requirements import POSIX, R, SQL, command, requires
 from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
@@ -95,7 +95,7 @@ def test_inspection_completes_while_prepared_cells_overlap(
     ]
 
 
-@requires(SQL)
+@requires(R, SQL)
 @executions(DIRECT, SANDBOXED)
 def test_empty_declaration_and_round_trip(
     binary: Path, execution: Execution
@@ -380,7 +380,7 @@ def test_interrupted_replacement_preserves_worker(
                 checkpoint.close()
 
 
-@requires(POSIX, SQL)
+@requires(R, POSIX, SQL)
 @executions(DIRECT, SANDBOXED)
 @requires(command("ir"))
 def test_r_duckdb_replacement_failure_and_reset(
