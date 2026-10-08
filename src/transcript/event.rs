@@ -22,11 +22,13 @@ pub(super) enum Event<'a> {
         working_directory: &'a str,
         dynamic_resolution: Option<bool>,
         python_preparation: Option<bool>,
+        startup_requirements: Option<&'a crate::worker_client::Declaration>,
     },
     EnvironmentDiscovered {
         dynamic_resolution: bool,
         python_preparation: bool,
         r_available: bool,
+        startup_requirements: &'a crate::worker_client::Declaration,
     },
     StartupFailed {
         message: &'a str,
