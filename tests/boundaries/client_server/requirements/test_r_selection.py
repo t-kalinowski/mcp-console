@@ -4,7 +4,7 @@ import json
 import shlex
 import sys
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -229,6 +229,43 @@ def test_r_launcher_inspection_uses_worker_permissions(
                     ]
                 ).replace(str(root), "<workspace>")
             )
+
+
+@requires(POSIX, R)
+@executions(DIRECT)
+def test_r_inspection_uses_worker_temporary_storage(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        environment, rscript = r_test_environment()
+        selected = root / "chosen R"
+        selected.write_text(
+            '#!/bin/sh\nset -e\nscratch=$(mktemp -d "$TMPDIR/mcp-console-probe.XXXXXX")\nrmdir "$scratch"\nexec '
+            + shlex.quote(str(rscript.with_name("R")))
+            + ' "$@"\n'
+        )
+        selected.chmod(0o755)
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c",
+                "cache=host",
+                "-c",
+                "r.executable=./chosen R",
+                "-c",
+                "environment.TMPDIR="
+                + str(root / "invalid configured temporary directory"),
+                "-c",
+                "resolver.environment.TMPDIR=" + gettempdir(),
+            ),
+            environment,
+            root,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("42\n", r="cat(42, '\\n', sep='')")
+            client.finish()
+            return [{"R_inspection_uses_worker_temporary_storage": True}]
 
 
 if __name__ == "__main__":
