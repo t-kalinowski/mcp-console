@@ -31,7 +31,6 @@ config_environment <- function() {
 #' @export
 ConfigDiscovery <- S7::new_class(
   "ConfigDiscovery",
-  package = "mcp.console",
   parent = ConfigNode,
   properties = list(
     global = S7::new_property(
@@ -74,7 +73,6 @@ ConfigDiscovery <- S7::new_class(
 #' @export
 RConfig <- S7::new_class(
   "RConfig",
-  package = "mcp.console",
   parent = ConfigNode,
   properties = list(
     executable = config_scalar(),
@@ -96,7 +94,6 @@ RConfig <- S7::new_class(
 
 PythonConfig <- S7::new_class(
   "PythonConfig",
-  package = "mcp.console",
   parent = ConfigNode,
   abstract = TRUE
 )
@@ -122,7 +119,6 @@ PythonConfig <- S7::new_class(
 #' @export
 ExistingPython <- S7::new_class(
   "ExistingPython",
-  package = "mcp.console",
   parent = PythonConfig,
   properties = list(
     existing = S7::new_property(
@@ -142,7 +138,6 @@ ExistingPython <- S7::new_class(
 #' @export
 ManagedPython <- S7::new_class(
   "ManagedPython",
-  package = "mcp.console",
   parent = PythonConfig,
   properties = list(
     version = config_scalar(),
@@ -167,7 +162,6 @@ ManagedPython <- S7::new_class(
 #' @export
 ResolverConfig <- S7::new_class(
   "ResolverConfig",
-  package = "mcp.console",
   parent = ConfigNode,
   properties = list(
     environment = config_environment(),
@@ -239,7 +233,6 @@ ResolverConfig <- S7::new_class(
 #' @export
 ConsoleConfig <- S7::new_class(
   "ConsoleConfig",
-  package = "mcp.console",
   parent = ConfigNode,
   properties = list(
     discovery = NULL | ConfigDiscovery,

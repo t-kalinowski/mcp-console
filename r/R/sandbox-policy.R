@@ -2,7 +2,6 @@
 # It has no state, defaults, or policy of its own.
 ConfigNode <- S7::new_class(
   "ConfigNode",
-  package = "mcp.console",
   abstract = TRUE
 )
 
@@ -88,7 +87,6 @@ config_flag <- function() {
 #' @export
 Filesystem <- S7::new_class(
   "Filesystem",
-  package = "mcp.console",
   parent = ConfigNode,
   properties = list(
     read_only = config_string_list(),
@@ -102,7 +100,6 @@ Filesystem <- S7::new_class(
 #' @export
 Domains <- S7::new_class(
   "Domains",
-  package = "mcp.console",
   parent = ConfigNode,
   properties = list(allow = config_string_list(), deny = config_string_list())
 )
@@ -118,7 +115,6 @@ Domains <- S7::new_class(
 #' @export
 Proxy <- S7::new_class(
   "Proxy",
-  package = "mcp.console",
   parent = ConfigNode,
   properties = list(
     mode = config_choice(c("full", "limited")),
@@ -140,7 +136,6 @@ Proxy <- S7::new_class(
 #' @export
 Sockets <- S7::new_class(
   "Sockets",
-  package = "mcp.console",
   parent = ConfigNode,
   properties = list(unix_sockets = config_string_list())
 )
@@ -155,7 +150,6 @@ Sockets <- S7::new_class(
 #' @export
 Network <- S7::new_class(
   "Network",
-  package = "mcp.console",
   parent = ConfigNode,
   properties = list(
     proxy = S7::new_property(Proxy, default = quote(Proxy())),
@@ -172,7 +166,6 @@ Network <- S7::new_class(
 #' @export
 SandboxPolicy <- S7::new_class(
   "SandboxPolicy",
-  package = "mcp.console",
   parent = ConfigNode,
   properties = list(
     filesystem = NULL | Filesystem,
