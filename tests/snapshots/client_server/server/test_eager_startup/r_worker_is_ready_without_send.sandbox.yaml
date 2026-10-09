@@ -14,6 +14,11 @@ result:
   serverInfo:
     name: mcp-console
     version: 0.0.4
+  instructions: >-
+    Persistent R REPL for calculations, data exploration and analysis,
+    database queries, debugging, simulations, and plots. Reuse objects
+    across calls to inspect results, test hypotheses, and compare
+    approaches.
 ---
 input:
   method: notifications/initialized

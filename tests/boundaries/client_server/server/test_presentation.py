@@ -4,6 +4,7 @@
 import difflib
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -52,9 +53,23 @@ def _configured_language_matrix(binary: Path) -> Transcript:
                 fields = set(properties) & {"r", "python", "sql"}
                 assert fields == set(enabled.split(",")), fields
                 description = tool["description"]
+                instructions = client.transcript[0]["result"]["instructions"]
+                paragraphs = description.split("\n\n")
+                assert instructions == paragraphs[0]
+                assert "\n" not in instructions and len(instructions) <= 250
+                names = {
+                    name for name in ("R", "Python", "SQL") if name.lower() in fields
+                }
+                assert set(re.findall(r"\b(?:R|Python|SQL)\b", instructions)) == names
+                assert set(re.findall(r"\b(?:R|Python|SQL)\b", description)) == names
+                assert (
+                    set(re.findall(r"\b(?:R|Python|SQL)\b", json.dumps(properties)))
+                    == names
+                )
+                cell_guidance = paragraphs[1].split(" cell per call", 1)[0]
+                assert set(re.findall(r"`(r|python|sql)`", cell_guidance)) == fields
+                assert "on Windows" not in description
                 assert (R_SCRIPT_GUIDANCE in description) == ("r" in fields)
-                if os.name == "nt":
-                    assert "local execution on Windows" in description, description
                 assert ("Switch languages when useful" in description) == (
                     len(fields) > 1
                 )
@@ -82,22 +97,22 @@ def _configured_language_matrix(binary: Path) -> Transcript:
                             "properties": expected,
                         },
                     }
-                    assert tool == expected_tool, "\n".join(
+                    expected_metadata = _without_descriptions(expected_tool)
+                    metadata = _without_descriptions(tool)
+                    assert metadata == expected_metadata, "\n".join(
                         difflib.unified_diff(
-                            json.dumps(expected_tool, indent=2).splitlines(),
-                            json.dumps(tool, indent=2).splitlines(),
+                            json.dumps(expected_metadata, indent=2).splitlines(),
+                            json.dumps(metadata, indent=2).splitlines(),
                         )
                     )
-                # Pin the varying paragraph; compare every shared paragraph and
-                # field schema in full so the matrix does not repeat them.
-                paragraphs = description.split("\n\n")
+                # Pin selected guidance; compare shared paragraphs and schema
+                # metadata in full while descriptions follow visible fields.
                 baseline_paragraphs = baseline["description"].split("\n\n")
-                assert paragraphs[0] == baseline_paragraphs[0]
                 if "sql" in fields:
-                    assert paragraphs[2:] == baseline_paragraphs[2:]
+                    assert paragraphs[3:] == baseline_paragraphs[3:]
                 else:
-                    assert paragraphs[2:] == baseline_paragraphs[3:]
-                guidance = paragraphs[1]
+                    assert paragraphs[3:] == baseline_paragraphs[4:]
+                guidance = paragraphs[2]
                 records.append({"languages": enabled, "language_guidance": guidance})
                 # Observe completed preparation before closing. Discovery stays
                 # responsive even when eager startup cannot prepare a runtime.
@@ -113,6 +128,18 @@ def _configured_language_matrix(binary: Path) -> Transcript:
                 if enabled == languages[0]:
                     records[-1].update(preparation_error=result, stderr=stderr)
     return records
+
+
+def _without_descriptions(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            key: _without_descriptions(item)
+            for key, item in value.items()
+            if key != "description"
+        }
+    if isinstance(value, list):
+        return [_without_descriptions(item) for item in value]
+    return value
 
 
 if __name__ == "__main__":
