@@ -538,10 +538,11 @@ def test_interrupts_running_r_evaluation(
                   "mcp_test_register_input_handler",
                   file.path(tempdir(), "input-handler-fifo"),
                   function() {
+                    # Install cleanup before the checkpoint permits interruption.
+                    on.exit(boundary_interrupt_cleanup <<- TRUE)
                     checkpoint <- fifo("r-boundary-interrupt-started", open = "wb")
                     writeBin(charToRaw("1"), checkpoint)
                     close(checkpoint)
-                    on.exit(boundary_interrupt_cleanup <<- TRUE)
                     repeat {
                       Sys.sleep(60)
                     }
@@ -570,7 +571,8 @@ def test_interrupts_running_r_evaluation(
                 timeout_ms=0,
             )
             client.send(r="c(boundary_interrupt_state, boundary_interrupt_cleanup)")
-            assert last_tool_text(client) == "[1] 42  1\n"
+            output = last_tool_text(client)
+            assert output == "[1] 42  1\n", output
 
             client.send(control="interrupt", timeout_ms=0)
             assert last_tool_text(client) == "\n\n[idle]"
