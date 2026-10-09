@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.client_server.python.test_without_r import environment
+from support.assertions import wait_for_worker_ready
 from support.client import McpClient
 from support.execution import DIRECT, Execution, executions
 from support.normalization import code
@@ -346,6 +347,7 @@ def test_early_set_retains_configured_reset_baseline(
             result = client.send(requirements={"action": "set"})
             assert not result.get("isError"), result
             assert inspect(client)["requirements"]["r"] == []
+            wait_for_worker_ready(client, "worker after early requirements set")
             client.send(requirements={"action": "reset"})
             startup = inspect(client)
             assert startup["requirements"]["r"] == ["praise"], startup

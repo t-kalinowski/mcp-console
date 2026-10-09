@@ -156,7 +156,10 @@ def test_managed_python_requires_home_for_default_extensions(
             record_in_project=False,
             arguments=("-c", "cache=host"),
         ) as client:
-            failure = client.send(sql="SELECT 42 AS answer")
+            failure = client.send(
+                sql="SELECT 42 AS answer",
+                timeout_ms=int(client.response_timeout * 1_000),
+            )
             assert failure.get("isError"), failure
             diagnostic = (
                 "resolver.environment: preparation requires an absolute HOME or "
@@ -233,7 +236,10 @@ def test_default_extension_failure_preserves_close_failure(
             record_in_project=False,
             arguments=("-c", "cache=host"),
         ) as client:
-            failure = client.send(sql="SELECT 42 AS answer")
+            failure = client.send(
+                sql="SELECT 42 AS answer",
+                timeout_ms=int(client.response_timeout * 1_000),
+            )
             assert failure.get("isError"), failure
             if execution is SANDBOXED:
                 diagnostic = last_result_text(client)
@@ -290,8 +296,7 @@ def test_prepares_extension_before_first_worker_and_loads_from_cache(
             env[LOADER_VARIABLE] = str(build_interposer(root, "deny_worker_connect"))
             env["MCP_CONSOLE_TEST_DENY_WORKER_NETWORK"] = "1"
         with sql_client(binary, execution, env) as client:
-            result = client.send(requirements={"duckdb": ["fts"]})
-            assert not result.get("isError"), result
+            client.expect("[prepared]", requirements={"duckdb": ["fts"]})
             (extension,) = cache.glob("v*/**/fts.duckdb_extension")
             shadow.unlink()
             client.send(
@@ -367,7 +372,10 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
             env[LOADER_VARIABLE] = str(build_interposer(root, "deny_worker_connect"))
             env["MCP_CONSOLE_TEST_DENY_WORKER_NETWORK"] = "1"
         with sql_client(binary, execution, env) as client:
-            client.send(sql="CREATE TABLE retained AS SELECT 42 AS value")
+            client.expect(
+                "Count\n-----\n1\n",
+                sql="CREATE TABLE retained AS SELECT 42 AS value",
+            )
             client.send(
                 # fmt: python
                 python=code("""
@@ -388,10 +396,9 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
                     """)
             )
             assert last_tool_text(client) == "state ready\n"
-            prepared = client.send(
-                requirements={"duckdb": ["fts"], "python": ["duckdb"]}
+            client.expect(
+                "[prepared]", requirements={"duckdb": ["fts"], "python": ["duckdb"]}
             )
-            assert not prepared.get("isError"), prepared
             assert len(list(cache.glob("v*/**/fts.duckdb_extension"))) == 1
             client.send(
                 # fmt: python
@@ -413,13 +420,14 @@ def test_adds_extensions_to_idle_worker_without_losing_state(
             client.send(
                 requirements={"duckdb": ["excel"]},
                 sql="SET autoinstall_known_extensions = false; LOAD excel; SELECT value FROM retained",
+                timeout_ms=int(client.response_timeout * 1_000),
             )
             assert "42" in last_tool_text(client)
-            client.send(
+            client.expect(
+                "Python cell retained\n",
                 requirements={"duckdb": ["parquet"]},
                 python="assert os.getpid() == worker_pid and id(identity) == identity_id; print('Python cell retained')",
             )
-            assert last_tool_text(client) == "Python cell retained\n"
             inspected = client.send(requirements={"action": "get"})
             assert inspected["structuredContent"]["requirements"]["duckdb"] == [
                 "excel",
@@ -451,7 +459,8 @@ def test_combines_python_and_extension_candidates_across_duckdb_versions(
         env = managed_environment(root)
         cache = extension_cache(root, execution)
         with sql_client(binary, execution, env) as client:
-            first = client.send(
+            client.expect(
+                "first candidate\n",
                 requirements={
                     "action": "set",
                     "python": ["duckdb==1.4.4", "six"],
@@ -459,8 +468,6 @@ def test_combines_python_and_extension_candidates_across_duckdb_versions(
                 },
                 python="import duckdb, six; assert duckdb.__version__ == '1.4.4'; print('first candidate')",
             )
-            assert not first.get("isError"), first
-            assert last_tool_text(client) == "first candidate\n"
             assert len(list(cache.glob("v1.4.4/**/fts.duckdb_extension"))) == 1
             inspected = client.send(requirements={"action": "get"})
             assert inspected["structuredContent"]["requirements"] == {
@@ -478,6 +485,7 @@ def test_combines_python_and_extension_candidates_across_duckdb_versions(
                     "duckdb": ["fts"],
                 },
                 sql="SET autoinstall_known_extensions = false; LOAD fts",
+                timeout_ms=int(client.response_timeout * 1_000),
             )
             assert not second.get("isError"), second
             assert "Error:" not in last_tool_text(client)
@@ -490,10 +498,12 @@ def test_combines_python_and_extension_candidates_across_duckdb_versions(
                 control="restart",
                 requirements={"action": "set", "python": ["six"], "duckdb": []},
                 python="sentinel = object(); original = sentinel",
+                timeout_ms=int(client.response_timeout * 1_000),
             )
             added = client.send(
                 requirements={"python": ["duckdb==1.5.5"], "duckdb": ["fts"]},
                 sql="SET autoinstall_known_extensions = false; LOAD fts",
+                timeout_ms=int(client.response_timeout * 1_000),
             )
             assert not added.get("isError"), added
             assert "Error:" not in last_tool_text(client), client.transcript[-1]
@@ -538,14 +548,17 @@ def test_extension_actions_replace_and_reset_declarations(
         with sql_client(binary, execution, env) as client:
 
             def declaration():
-                inspected = client.send(requirements={"action": "get"})
+                inspected = client.send(
+                    requirements={"action": "get"},
+                    timeout_ms=int(client.response_timeout * 1_000),
+                )
                 assert not inspected.get("isError"), inspected
                 return inspected["structuredContent"]["requirements"]
 
             assert declaration()["duckdb"] == ["icu", "json", "sqlite"]
-            client.send(requirements={"duckdb": ["fts"]})
+            client.expect("[prepared]", requirements={"duckdb": ["fts"]})
             assert declaration()["duckdb"] == ["fts", "icu", "json", "sqlite"]
-            client.send(requirements={"duckdb": ["parquet"]})
+            client.expect("[prepared]", requirements={"duckdb": ["parquet"]})
             assert declaration()["duckdb"] == [
                 "fts",
                 "icu",
@@ -553,12 +566,13 @@ def test_extension_actions_replace_and_reset_declarations(
                 "parquet",
                 "sqlite",
             ]
-            client.send(
+            client.expect(
+                "[prepared]",
                 requirements={
                     "action": "set",
                     "python": ["duckdb"],
                     "duckdb": ["fts"],
-                }
+                },
             )
             assert declaration()["python"] == ["duckdb"]
             assert declaration()["duckdb"] == ["fts"]
@@ -566,7 +580,9 @@ def test_extension_actions_replace_and_reset_declarations(
             client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
             assert "Error:" not in last_tool_text(client)
             client.send(
-                control="restart", requirements={"action": "set", "python": ["duckdb"]}
+                control="restart",
+                requirements={"action": "set", "python": ["duckdb"]},
+                timeout_ms=int(client.response_timeout * 1_000),
             )
             assert declaration()["duckdb"] == []
             assert extension.is_file(), (
@@ -574,7 +590,11 @@ def test_extension_actions_replace_and_reset_declarations(
             )
             client.send(sql="SET autoinstall_known_extensions = false; LOAD fts")
             assert "Error:" not in last_tool_text(client)
-            client.send(control="restart", requirements={"action": "reset"})
+            client.send(
+                control="restart",
+                requirements={"action": "reset"},
+                timeout_ms=int(client.response_timeout * 1_000),
+            )
             assert declaration()["python"] == [
                 "numpy",
                 "pandas",
