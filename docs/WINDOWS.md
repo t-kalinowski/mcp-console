@@ -81,6 +81,7 @@ The complete transport can still explicitly select the unelevated backend for ne
 Use one stable state directory per Windows user: accounts and firewall policy are machine resources, and capability ACL entries persist on filesystem objects.
 Managed proxy mappings and explicit resolver sandbox settings are rejected before workload/preparation launch.
 Omitted resolver settings retain existing host preparation with environment/cache controls; parser parity does not imply native enforcement parity.
+Sandbox environment inheritance omits Windows' hidden per-drive working-directory metadata such as `=C:`; ordinary variables remain inherited, and explicit names containing `=` remain invalid.
 
 The native runner owns a non-breakaway Job for each workload.
 It terminates remaining descendants and confirms zero active processes before reporting exit.
@@ -239,6 +240,7 @@ Windows workflow phases use Jobs to retire descendants on completion or cancella
 These are development-command ownership guarantees; they do not add sandboxing to evaluated user code.
 
 The acceptance interpreter needs `packaging` and `matplotlib`; R needs `reticulate` and `jsonlite`.
+Windows CI also builds and checks the R package, including its ellmer chat and requirements integration tests; these checks additionally need `ellmer`, `processx`, `ps`, `httr2`, and `testthat`.
 Resolver acceptance also needs uv and package repository access.
 Full checks include shared plotting and R resolver cases that require `ir` 0.4.0 or later on PATH; install it with `uv tool install r-lib-ir`, as CI does.
 For installed-wheel acceptance, set `MCP_CONSOLE_TEST_BINARY` to the installed `mcp-console.exe` and run the same tests.
