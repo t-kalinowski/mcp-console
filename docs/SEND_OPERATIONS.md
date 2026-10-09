@@ -134,6 +134,8 @@ After startup, explicit preparation, interrupt/grace, restart retirement/startup
 Standalone preparation has no `timeout_ms` execution limit.
 With a running evaluation, polling/input/control observe using the remaining budget.
 Idle polls return immediately.
+When waiting for completion, use `timeout_ms=300000` for a long poll instead of repeatedly polling at short intervals such as `timeout_ms=1000`.
+The poll returns early when work finishes or requests input; the timeout is a maximum wait, not a fixed delay.
 
 Transport setup and retirement have their own deadlines, not a total resolver installation deadline.
 Interrupt targets active resolver work; connection closure cancels and retires it.

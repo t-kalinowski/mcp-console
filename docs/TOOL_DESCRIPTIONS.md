@@ -46,6 +46,8 @@ Keep interrupt's partial effects explicit: supported interrupt-plus-cell prepara
 
 Response notices own current state, omitted-output locations, and missing-provider preparation instructions.
 Keep the empty-send polling rule in the tool description; do not repeat the notices' detailed instructions or advertise a help API.
+State argument defaults in prose, including at tool level, because clients may omit schema defaults and field descriptions from agent context.
+When an agent is waiting for completion, recommend a long poll (`timeout_ms=300000`) and explain that it returns early on completion or an input request; discourage repeated short polls such as `timeout_ms=1000`.
 Do not assume a client has this repository or remove a capability's only usable explanation in favor of an external guide.
 
 Prefer concrete choices: SQL for structured-file/database inspection and aggregation, R for vectorized/statistical work, Python when its libraries fit the task.
