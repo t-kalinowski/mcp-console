@@ -1,19 +1,20 @@
 ---
 title: Get started
-description: Install MCP Console, connect an MCP client, and run your first analysis.
+description: Install Console, connect an MCP client, and run an analysis.
 ---
 
-MCP Console runs on the same host as your MCP client.
-For remote work, run the client and Console together on that host, alongside the client's shell and filesystem tools.
+Console runs on the same host as your MCP client.
+For remote work, run both on the remote host, alongside the client's shell and filesystem tools.
+Console does not manage remote connections or containers.
 
 ## Install
 
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
-To use R, install it with [rig](https://github.com/r-lib/rig#id-installation) and run `rig add release`.
+To use R, install it separately, for example with [rig](https://github.com/r-lib/rig#id-installation) and `rig add release`.
 Python and SQL also work without R.
 
-Source installation requires Git, [rustup](https://rustup.rs/) with Rust 1.95 or later, and platform build tools.
-On macOS, run:
+Source installation needs Git, [rustup](https://rustup.rs/) with a compiler satisfying `Cargo.toml`, and platform build tools.
+On macOS:
 
 ```sh
 xcode-select --install
@@ -23,62 +24,97 @@ On Ubuntu:
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y build-essential git pkg-config libcap-dev libcurl4-openssl-dev binutils
+sudo apt-get install -y build-essential git pkg-config libcap-dev libssl-dev libcurl4-openssl-dev binutils
 ```
 
-For Windows, follow the [Windows build and installation guide](WINDOWS.md#build-and-run).
+Windows users should follow [Windows installation](WINDOWS.md#build-and-run).
+Package source builds can require additional system libraries; the [release guide](../RELEASE.md#private-sandbox-executable) covers native build requirements.
 
-Install Console and its private sandbox runner:
+Install Console and its pinned sandbox runner:
 
 ```sh
 uv tool install git+https://github.com/t-kalinowski/mcp-console
 ```
 
-Installation builds the pinned sandbox runner with its own toolchain.
-Initial runtime preparation can download interpreters, packages, and extensions.
-The [release guide](../RELEASE.md#private-sandbox-executable) lists the build prerequisites.
+Installation builds native components.
+First startup can also download interpreters, packages, and extensions.
 
 ## Connect your client
 
-Configure your MCP client to launch `uvx mcp-console serve` over stdio.
-For clients that use an `mcpServers` configuration:
+Configure a stdio MCP server with command `mcp-console` and arguments `["serve"]`.
+For clients using an `mcpServers` mapping:
 
 ```json
 {
   "mcpServers": {
     "console": {
-      "command": "uvx",
-      "args": ["mcp-console", "serve"]
+      "command": "mcp-console",
+      "args": ["serve"]
     }
   }
 }
 ```
 
-The [repository quickstart](../README.md#quickstart) includes commands for individual clients.
-Confirm that your client exposes the `send` tool.
+For Codex:
 
-Without R, Console uses `uv` to select Python.
-To use an existing project environment, set `python: .venv/bin/python` in `.agents/console/config.yaml`; that environment's packages must already be installed.
-See [configuration](CONFIGURATION.md#python-environment-selection) for selection rules and Windows paths.
+```sh
+codex mcp add console -- mcp-console serve
+```
+
+For Claude Code:
+
+```sh
+claude mcp add --transport stdio console -- mcp-console serve
+```
+
+A launcher that uses `uvx mcp-console serve` may run a published version rather than your source installation.
+Use the installed command above when reviewing current development behavior.
+
+Confirm that the client exposes `send`.
+Tool discovery can finish before runtime preparation; the first call may report that work is still running.
+Let the agent collect that result rather than submit the code again.
 
 ## Try an analysis
 
 Ask your agent:
 
-> Use MCP Console to explore the Palmer Penguins data from the R package `palmerpenguins`.
-> Fit a logistic regression in R to predict penguin sex from body measurements, summarize the data by species with SQL, and plot the model's predictions with Python and Matplotlib.
+> Use MCP Console to generate a small dataset with NumPy and pandas, fit a simple model, and plot the result.
 > Keep the data and model for follow-up.
 
 Then ask:
 
-> Where does the model make the most mistakes?
-> Show me a plot and the path to the recorded session transcript.
+> Which observations does the model fit poorly?
+> Show a plot and the path to the recorded session.
 
-For a Python-only session, ask Console to generate and analyze a small simulated dataset with NumPy and pandas.
+With R installed, try the Palmer Penguins data from `palmerpenguins`, summarize it with SQL, and plot it from Python.
+The [runtime guide](BUILTIN_RUNTIME.md) explains the language bridges.
 
-## Next steps
+## Choose permissions and an environment
 
-- Read the [runtime guide](BUILTIN_RUNTIME.md) for language bridges, SQL, input, and plots.
-- Use [requirements](REQUIREMENTS.md) to select packages and interpreters.
-- Inspect [recordings](RECORDING.md) and prepare a Quarto report from a session.
-- Review the [sandbox limits](SANDBOX.md#supported-hosts-and-lifetime-limits) before choosing a policy.
+No configuration file is required.
+The default sandbox allows host reads, but not ordinary workspace writes or direct network access.
+It does not protect readable secrets.
+
+For workspace writes, create `.agents/console/config.yaml` in the launch directory:
+
+```yaml
+sandbox:
+  filesystem:
+    read_write: [.]
+```
+
+To use an existing project Python environment rather than a Console-managed one, add:
+
+```yaml
+python: .venv
+```
+
+That environment must already contain the required packages.
+See [Configuration](CONFIGURATION.md) for global/project layering and runtime selection, and [Sandbox configuration](SANDBOX_CONFIGURATION.md) for permissions.
+Do not load configuration from an unfamiliar project without reviewing it; `--no-project-config` skips that layer.
+
+## Keep the session
+
+Console records transcripts and artifacts locally.
+Read [Recordings and reports](RECORDING.md) for their location and how to turn a reviewed copy into a report.
+Recordings are not checkpoints, contain input and output without redaction, and are not automatically deleted.

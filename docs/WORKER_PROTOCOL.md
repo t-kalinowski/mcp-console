@@ -1,83 +1,48 @@
 # Worker protocol
 
-This private interface connects one relay to one worker generation, including custom workers selected by `serve --worker PATH`.
-[Architecture](ARCHITECTURE.md) explains ownership; [relay protocol](RELAY_PROTOCOL.md) defines the outer transport.
-The schemas in [`src/worker_protocol.rs`](../src/worker_protocol.rs), incremental framing in [`src/jsonl.rs`](../src/jsonl.rs), native endpoints selected by [`src/sideband.rs`](../src/sideband.rs), and executable boundary tests are authoritative.
-The sideband schema is unversioned; custom workers must implement the current contract.
-The sideband evolves in lockstep with the relay; update both endpoints and fixtures together.
+This private interface connects a relay to one worker generation, including custom workers selected with `serve --worker PATH`.
+It evolves in lockstep without an independent version.
+Custom workers must implement the current build's contract, not a stable third-party API.
+
+[`src/worker_protocol.rs`](../src/worker_protocol.rs) defines the exact message objects.
+[`src/jsonl.rs`](../src/jsonl.rs), [`src/sideband.rs`](../src/sideband.rs), and the boundary tests define framing and endpoints.
+This guide explains the protocol's phases and invariants without duplicating every nested field.
 
 ## Launch and transport
 
-On macOS/Linux, the relay starts one executable with piped fd 0, 1, and 2 and two anonymous sideband pipes:
+On macOS/Linux, the relay supplies stdin/stdout/stderr plus two sideband pipes named by `MCP_CONSOLE_SIDEBAND_READ_FD` and `MCP_CONSOLE_SIDEBAND_WRITE_FD`.
+Adopt the descriptors, remove the variables, set close-on-exec, and close the endpoints in fork-only children without disturbing the parent.
 
-```text
-MCP_CONSOLE_SIDEBAND_READ_FD   worker reads relay messages
-MCP_CONSOLE_SIDEBAND_WRITE_FD  worker writes semantic events
-```
+Windows supplies decimal named-pipe handles through `MCP_CONSOLE_SIDEBAND_READ_HANDLE` and `MCP_CONSOLE_SIDEBAND_WRITE_HANDLE`, plus `MCP_CONSOLE_INTERRUPT_HANDLE` and `MCP_CONSOLE_INPUT_READY_HANDLE` events.
+Adopt them, clear inheritance, and remove the variables before user code runs.
 
-The worker owns those endpoints.
-Before user code or descendants run, remove both environment variables, set close-on-exec on both descriptors, and close them in fork-only children without disturbing the parent's endpoints.
+Each direction is ordered UTF-8 JSONL: one object and newline, flushed per frame.
+Frames cannot interleave.
+Unknown kinds/fields, wrong types, invalid UTF-8, malformed JSON, and partial-frame closure fail the boundary.
+Nested objects are strict too.
+No general frame-size limit is defined.
 
-On Windows, the standard streams remain piped and sideband uses overlapped named-pipe handles in `MCP_CONSOLE_SIDEBAND_READ_HANDLE` and `MCP_CONSOLE_SIDEBAND_WRITE_HANDLE` (decimal handle values).
-Adopt these handles, clear inheritance, and remove their environment variables before user code runs.
-`MCP_CONSOLE_INTERRUPT_HANDLE` and `MCP_CONSOLE_INPUT_READY_HANDLE` carry inherited event handles for cooperative interruption and managed stdin readiness; adopt them with the same inheritance/environment discipline.
-The framing and messages below are unchanged; see [Windows execution](WINDOWS.md) for current runtime limits.
-A descendant retaining sideband endpoints violates the closure contract.
-Descendants may retain stdout/stderr, subject to bounded retirement drainage.
-
-Each sideband direction is ordered UTF-8 JSONL: one JSON object followed by `\n`, flushed after every frame.
-Frames must not interleave.
-There is no general frame-size limit.
-Partial-frame closure, malformed JSON, invalid UTF-8, unknown kinds or fields, and wrong field types fail the boundary.
-Nested objects also reject unknown fields; payload-free messages contain only `kind`.
-
-Fd 0 is one generation-long byte stream, not records.
-Accepted strings are UTF-8 encoded and appended without newline, echo, or line buffering; empty input adds nothing.
-Bundled stdin precedes `evaluate` on the relay command stream, but an existing read can consume it before that cell starts.
-Payload end is not EOF; fd-0 closure retires the generation and discards unread input.
-There is no general stdin queue-size limit.
-
-Fd 1 and fd 2 are independent raw byte streams.
-Each source preserves its own order, but no chronological order exists across sideband, stdout, and stderr.
-Raw output written before an operation result can be observed afterward.
-Outer base64 encoding, backpressure, and drainage belong to the [relay](RELAY_PROTOCOL.md).
+Stdin is one generation-long byte stream, not cell records.
+Writes append exact UTF-8 bytes without newline or echo.
+Payload end is not EOF; unread bytes can reach later reads.
+There is no general stdin-queue limit.
+Sideband endpoint leakage to descendants violates the closure contract; stdout/stderr inheritance is handled by bounded relay drainage.
 
 ## Message schemas
 
-Every frame has a string `kind` plus exactly the fields listed below.
-`string[]` means an array of strings; an em dash means no payload.
+All objects have `kind`.
+The source enums are the complete schema; these are the principal message families:
 
-### Server to worker
-
-| Kind                                                           | Fields                                                              |
-| -------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `evaluate`                                                     | `language`: `r`, `python`, or `sql`; `source`: string               |
-| `prepare_r`, `r_resolved`                                      | `library`: string                                                   |
-| `r_resolution_failed`                                          | `failure`: `host`, `interrupted`, or `operation`; `message`: string |
-| `prepare_python`                                               | `packages`: string[]                                                |
-| `python_resolved`                                              | `python`: string; optional `native`: inspected activation candidate |
-| `python_resolution_failed`, `python_version_resolution_failed` | `message`: string                                                   |
-| `python_version_resolved`                                      | `version`: string                                                   |
-| `shutdown`                                                     | —                                                                   |
-
-### Worker to server
-
-| Kind                                                       | Fields                                                      |
-| ---------------------------------------------------------- | ----------------------------------------------------------- |
-| `ready`, `completed`, `python_prepared`                    | —                                                           |
-| `runtime_initialized`                                      | `interrupted`: boolean; built-in interpreter bootstrap only |
-| `console_output`, `console_diagnostic`                     | `data`: string                                              |
-| `image`                                                    | `data`: valid base64 string; `mime_type`: string            |
-| `input_requested`                                          | `prompt`: string                                            |
-| `input_received`, `input_cancelled`                        | —                                                           |
-| `r_prepared`, `r_activated`                                | `library`: string                                           |
-| `r_preparation_failed`                                     | `message`: string                                           |
-| `resolve_r`                                                | `packages`: string[]                                        |
-| `r_activation_failed`                                      | `library`: string; `message`: string                        |
-| `resolve_python`                                           | `request`: Python resolution request                        |
-| `resolve_python_version`                                   | `request`: object with required `constraints`: string[]     |
-| `python_activated`, `python_activation_failed`             | `requirements`: complete Python manifest                    |
-| `python_preparation_failed`, `python_preparation_rejected` | `message`: string                                           |
+| Direction   | Purpose              | Messages                                                                                                                                          |
+| ----------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| To worker   | Evaluation/control   | `evaluate`, `shutdown`                                                                                                                            |
+| To worker   | Explicit preparation | `prepare_r`, `prepare_python`                                                                                                                     |
+| To worker   | Resolver replies     | `r_resolved`, `r_resolution_failed`, `python_resolved`, `python_resolution_failed`, `python_version_resolved`, `python_version_resolution_failed` |
+| From worker | Readiness/lifecycle  | `ready`, `runtime_initialized`, `r_initialization`, `completed`                                                                                   |
+| From worker | Output/input         | `console_output`, `console_diagnostic`, `image`, `input_requested`, `input_received`, `input_cancelled`                                           |
+| From worker | Preparation results  | `r_prepared`, `r_preparation_failed`, `python_prepared`, `python_preparation_failed`, `python_preparation_rejected`                               |
+| From worker | Resolver requests    | `resolve_r`, `resolve_python`, `resolve_python_version`                                                                                           |
+| From worker | Activation receipts  | `r_activated`, `r_activation_failed`, `python_activated`, `python_activation_failed`                                                              |
 
 For example:
 
@@ -85,157 +50,118 @@ For example:
 { "kind": "evaluate", "language": "python", "source": "2 + 2" }
 ```
 
-The worker reports ordinary language output and then `{"kind":"completed"}`.
-The sideband has no structured language-error result, poll, interrupt, response cut, output acknowledgment, session name, or general request ID.
-Interrupt is a relay-owned process signal; response assembly is server-owned.
-
-### Python request objects
-
-A manifest requires `packages`; `python_version` defaults to `[]` and `exclude_newer` to null:
-
 ```json
-{
-  "packages": ["requests>=2"],
-  "python_version": [">=3.11"],
-  "exclude_newer": "2026-01-01"
-}
+{ "kind": "console_output", "data": "4\n" }
 ```
 
-Empty version lists and absent cutoffs are omitted when serialized.
-`resolve_python.request` requires two manifests: physical `requirements` for resolution and logical `retained_requirements` for commit.
-Their packages and cutoff must match; version constraints may differ to pin physical resolution to the active interpreter while retaining a broader declaration.
-Optional `initialized` defaults to false and identifies a live interpreter requiring the accepted executable.
+```json
+{ "kind": "completed" }
+```
 
-Optional `import_resolution` contains `module` and `distribution` strings.
-It is valid during evaluation or built-in interpreter bootstrap: the module is a top-level ASCII identifier and the distribution a bare name present in both manifests.
-The server validates it against the proposed addition and emits any differently-named resolution notice only after matching activation.
+Ordinary language errors are text followed by completion when the worker remains usable.
+There is no structured language-error result, poll, output acknowledgment, general request ID, or session name.
+Interrupt delivery belongs to the outer relay; MCP response assembly belongs to the server.
 
-`python_resolved.native` contains `selected` and `requirements`.
-`selected.embedding` requires `python`, `libpython`, and `python_home`; `selected` also requires `prefix`, `exec_prefix`, `base_prefix`, and `base_exec_prefix`.
-These are execution-host-inspected strings, not rediscovery hints.
-The built-in worker requires this candidate for managed replies, including R-side declarations.
-No request carries an arbitrary resolver environment map.
+Python environment replies contain inspected runtime identity and manifests, not rediscovery hints.
+Runtime callbacks cannot supply arbitrary resolver programs or environment maps.
+Public package declarations and private activation objects are different schemas.
 
 ## Readiness and operations
 
-`ready` must be the first semantic frame and occur exactly once.
-Startup diagnostics may use raw stdout/stderr before it.
-For the built-in worker, readiness means command admission is available, not that either interpreter has initialized.
-Enabled R and Python then initialize on the existing serialized worker thread; hooks may emit output, images, input, resolver, and activation messages before evaluation.
-The bootstrap attempt ends with `{"kind":"runtime_initialized","interrupted":false}`; an interrupt observed during initialization reports `interrupted:true`.
-Other incomplete Python setup before R startup preserves an admitted cell, allowing its language to retry initialization as needed.
-It sends no `completed` frame and consumes no Python user-cell filename ID.
-The server withholds an accepted cell's `evaluate` frame until bootstrap finishes, while delivering its stdin normally.
-An interrupted bootstrap withholds any cell admitted before its incomplete receipt, including a cell whose evaluator has not begun waiting; a later cell can retry incomplete Python setup before native R initialization begins.
-The controller also orders interrupt admission against this receipt and withholds the waiting cell when the interrupt comes first.
-This covers signals delivered after the worker has sampled its interrupt state: the relay's interrupt result acknowledges signal dispatch, not worker-side handling.
-Native R startup emits `{"kind":"r_initialization","complete":false}` before entering R, and `complete:true` only after initialization and attachment succeed without an interrupt.
-Admission withholds automatic retry for that generation, including through unused-worker replacement; completion permits ordinary failure recovery again.
-These lifecycle events do not wait behind preparation's bootstrap callback barrier, and retirement retains admission evidence without reopening the generation.
-Fatal or interrupted R startup retains diagnostics and requires explicit restart after confirmed retirement.
-External custom workers retain their existing readiness and evaluation contract and need not send this event.
-The default local launcher opts into interpreter bootstrap with the private `worker --bootstrap-runtimes` argument.
+`ready` is the first semantic message and appears exactly once; early diagnostics can use raw streams.
+For built-in workers it means services are connected, not that interpreters are initialized.
+Bootstrap then uses the same interpreter thread and can produce output, input, and resolver requests before evaluation.
 
-The server admits one evaluation or explicit preparation at a time.
-Each ordinary operation has exactly one matching terminal result:
+`runtime_initialized` ends built-in bootstrap and reports interruption.
+The server withholds an already admitted cell's evaluation until bootstrap settles.
+Native R startup reports its admission and successful completion through `r_initialization`; failed or interrupted R initialization requires explicit restart rather than in-place or automatic retry.
+Custom workers need not send built-in bootstrap events.
 
-| Command          | Successful result                               | Ordinary failure result                                                     |
-| ---------------- | ----------------------------------------------- | --------------------------------------------------------------------------- |
-| `evaluate`       | `completed`                                     | Language error text followed by `completed`, when the worker remains usable |
-| `prepare_r`      | `r_prepared` with the requested normalized path | `r_preparation_failed`                                                      |
-| `prepare_python` | `python_prepared`                               | `python_preparation_rejected` or `python_preparation_failed`                |
-| `shutdown`       | Process exit                                    | No sideband reply                                                           |
+Each admitted ordinary operation has one matching terminal result:
 
-A result without its matching active operation, a wrong result kind, or a different R library receipt is a protocol violation.
-All semantic output and images belonging to an operation must precede its result; later frames are idle activity.
-The relay reads idle frames continuously without waiting for a client poll or result acknowledgment.
-New code is admitted only after the server collects the previous evaluation result.
+| Operation        | Success                                          | Ordinary failure                                              |
+| ---------------- | ------------------------------------------------ | ------------------------------------------------------------- |
+| `evaluate`       | `completed`                                      | Error text then `completed`, if usable.                       |
+| `prepare_r`      | `r_prepared` with the normalized requested path. | `r_preparation_failed`.                                       |
+| `prepare_python` | `python_prepared`                                | `python_preparation_rejected` or `python_preparation_failed`. |
+| `shutdown`       | Process exit.                                    | No sideband acknowledgment.                                   |
+
+Wrong, duplicate, unsolicited, or mismatched results fail the protocol.
+Semantic output belonging to an operation precedes its result; later events are idle activity.
+Independent stdout/stderr can be observed later regardless of their write time.
 
 ### Managed input
 
-A managed read sends `input_requested` with the exact prompt immediately before waiting on fd 0.
-It then sends `input_received` before resuming, or `input_cancelled` before interruption unwinds the runtime.
-Only one request may be outstanding, including while idle.
-A duplicate request, unmatched terminal input event, or completion before input termination fails the boundary.
-Preparation is noninteractive: an input request during R or Python preparation fails both preparation and the worker.
-Direct fd-0 readers emit no input events.
+A managed read sends `input_requested` immediately before waiting, then exactly one `input_received` or `input_cancelled` before resuming/unwinding.
+One request may be outstanding, including while idle.
+Completion cannot precede termination of its managed input request.
+Direct stdin readers emit no such events.
+
+Preparation is noninteractive.
+A managed input request during explicit preparation fails preparation and the worker.
 
 ### Nested managed-R resolution
 
-During evaluation, built-in interpreter bootstrap, or an idle callback, `resolve_r` requests host resolution of validated plain package names.
-The server resolves the complete retained environment outside the worker sandbox.
-`r_resolved` is provisional: after applying the library, the worker sends matching `r_activated` before continuing the package load.
-Only that current-generation receipt commits the candidate.
-A later package-load or cell error does not undo activation.
+A runtime `resolve_r` asks the host to prepare the retained declaration plus validated package names.
+`r_resolved` is provisional: apply the library, then send matching `r_activated` before resuming the load.
+Only that current-generation receipt commits it.
+A later load or cell failure does not undo acceptance.
 
-If application fails, send `r_activation_failed` before propagating the R error.
-The candidate is discarded and further requirement changes need restart; this receipt alone does not stop the worker.
-`r_resolution_failed.failure` distinguishes ordinary host/validation failure (`host`), explicit resolver interruption (`interrupted`), and lifecycle/operation failure ending the boundary (`operation`).
-Transport errors must not be disguised as host failures.
-
-An idle callback reserves environment-change ownership until activation or failure.
-Explicit preparation cannot enter that interval.
-If explicit preparation reserved first, the server replies to the callback with ordinary host failure before its preparation command.
-A runtime R callback after explicit preparation begins is out of phase.
+Report failed activation explicitly before propagating the language error; further requirement changes may need restart.
+Distinguish ordinary host failure, resolver interruption, and boundary-ending operation failure.
+Do not disguise transport failure as an ordinary missing package.
 
 ### Live Python preparation
 
-Idle `prepare_python` uses the same worker-owned control path with or without R:
+The ordinary sequence is:
 
 ```text
-prepare_python -> resolve_python -> python_resolved
-               -> python_activated -> python_prepared
+prepare_python → resolve_python → python_resolved
+               → python_activated → python_prepared
 ```
 
-The server resolves and inspects the complete candidate against the accepted executable, including applicable DuckDB extensions.
-The worker validates and activates that candidate; the server commits its manifest and launch identity only on the matching receipt.
-Before interpreter initialization, `python_prepared` can instead commit the last materialized candidate without `python_activated`.
-
-Pre-mutation compatibility rejection returns `python_preparation_rejected` and leaves the accepted environment usable.
-Unsafe activation failure reports diagnostics before `python_preparation_failed`, withholds same-call input/code, and requires restart before more changes.
-Activation is not a rollback mechanism for arbitrary site-hook effects.
-See [live environment behavior](REQUIREMENTS.md#live-python-preparation) for compatibility and interruption semantics.
+Before interpreter initialization, final preparation can accept a materialized selection without a live activation receipt.
+After initialization, compatibility checks protect the running interpreter and loaded distributions.
+Pre-mutation rejection leaves the accepted environment usable; unsafe mutation can require restart.
 
 ### Nested managed-Python resolution
 
-`resolve_python` and `resolve_python_version` are allowed during evaluation, built-in interpreter bootstrap, Python preparation, or idle runtime callbacks.
-Environment replies are provisional; version replies create no environment candidate.
-The worker reports a complete normalized logical manifest in `python_activated` before the enclosing result or resumed import.
-It must match a provisional candidate or the unchanged managed environment.
-A matching `python_activation_failed` reports unsafe post-mutation failure during evaluation, preparation, or idle activity and marks changes restart-required without itself stopping the worker.
+Environment requests carry physical resolution requirements and logical retained requirements.
+Version constraints may differ to pin physical resolution to the live interpreter.
+A matching complete activation receipt commits the logical manifest; a version-only reply creates no candidate.
 
-An accepted activation survives later import, cell, or subsequent preparation failure.
+Accepted activation survives later import/cell/preparation failure.
 Unaccepted candidates are discarded when the operation ends or the generation retires.
-The relay neither tracks candidates nor decides commits.
+The relay never decides commits.
 
 ### Synchronous resolver waits
 
-Only one nested R, Python-environment, or Python-version request may be outstanding, so no resolver request ID is needed.
-The worker waits for exactly the matching reply.
-It may retain an already-queued `evaluate` for after the callback; `shutdown` terminates the wait.
-Wrong-kind, duplicate, or unsolicited resolver replies are protocol failures.
-Generation checks prevent an old receipt from committing into a replacement.
+Only one nested resolver request may be outstanding.
+Wait for its matching reply; shutdown terminates the wait.
+An already queued evaluation can be retained until the callback finishes.
+Wrong-kind, duplicate, or unsolicited replies fail the boundary.
+
+Explicit preparation and idle callbacks share environment-change ownership.
+Generation checks prevent old candidates from committing to a replacement.
+See [Architecture](ARCHITECTURE.md#preparation-and-activation).
 
 ## Shutdown and closure
 
-The relay concurrently closes fd 0 and attempts `shutdown`; the worker must not require both signals in a particular order.
-It exits without acknowledgment, or the relay forcibly terminates and reaps the direct child after the supplied grace.
-Remaining descendants and private storage belong to the native runner, not this sideband.
+The relay closes stdin and attempts shutdown concurrently; workers cannot require a particular order or both signals.
+Exit without acknowledgment.
+The relay can forcibly terminate and reap the direct child after grace; descendants/private storage belong to the native runner.
 
 Outside intentional retirement, unexpected sideband EOF or worker exit, including status zero, fails the generation.
-The relay drains within its bounded allowances and reports closure and process outcome through the outer protocol.
-Those events do not prove native sandbox retirement.
-See [relay retirement](RELAY_PROTOCOL.md#retirement-and-failure).
+Closure and direct-worker outcome do not prove native cleanup.
 
 ## Custom-worker conformance
 
-A custom worker implements the descriptor, framing, readiness, input, operation-result, shutdown, and signal contracts above.
-`--worker PATH` selects one executable without arguments or shell parsing; its SIGINT behavior is worker-defined.
+`--worker PATH` selects one executable without arguments or shell parsing.
+Implement framing, descriptor ownership, readiness, input, results, shutdown, and worker-defined interruption.
+The hidden interface is for development and must match this build.
 
-Custom workers can use explicit R/DuckDB preparation and optionally nested managed-R callbacks.
-They must honor prepared `R_LIBS`, apply the first managed R library before loading DuckDB, and use the native extension cache.
-Managed Python resolution and activation are unavailable to custom workers.
+Custom workers have no built-in defaults or managed Python.
+Explicit R/DuckDB preparation and optional runtime R callbacks must honor prepared `R_LIBS`, apply the managed R library before loading DuckDB, and use the supplied extension directory when set.
 
-[`tests/fixtures/zod`](../tests/fixtures/zod) exercises the custom-worker contract.
-Fixture commands are test behavior, not protocol extensions.
-Use the [boundary tests](../tests/boundaries/README.md) for conformance and failure coverage.
+[`tests/fixtures/zod`](../tests/fixtures/zod) exercises conformance; fixture commands are not protocol extensions.
+Use the [boundary tests](../tests/boundaries/README.md), not prose alone, to validate changes to either endpoint.

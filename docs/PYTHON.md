@@ -1,186 +1,69 @@
-# Python integrations
+# Python clients and adapters
 
-The Python package supplies sync/async clients and framework adapters around the same persistent MCP session.
-It requires Python 3.11 or newer; the executable alone does not require framework dependencies.
+The `mcp_console` package provides synchronous/asynchronous clients and model-framework adapters around the same persistent MCP session.
+The package requires Python 3.11 or newer; framework dependencies are optional.
 
-The [Python API reference](https://t-kalinowski.github.io/mcp-console/python/reference/index.html) documents the clients and adapters.
+## Call Console directly
 
-From a source checkout, select the appropriate extra:
+Install the `client` extra.
+From a source checkout:
 
 ```sh
-uv tool run --python 3.12 --from ".[client]" python your_client.py
+uv tool run --python 3.13 --from ".[client]" python your_client.py
 ```
-
-| Integration         | Extra           | Adapter                                      |
-| ------------------- | --------------- | -------------------------------------------- |
-| Python client       | `client`        | `MCPConsole`, `AsyncMCPConsole`              |
-| chatlas             | `chatlas`       | `chatlas.tool`, `chatlas.register`           |
-| OpenAI Responses    | `openai`        | `openai.responses_tool`                      |
-| OpenAI Agents       | `openai-agents` | `openai.agents_tool`, `openai.agents_server` |
-| Anthropic           | `anthropic`     | `anthropic.tool`, `anthropic.tools`          |
-| Official thread SDK | `codex`         | `codex.server`                               |
-
-Source installation may build the native bundle; see [installation prerequisites](../RELEASE.md#private-sandbox-executable).
-[`pyproject.toml`](../pyproject.toml) owns dependency versions.
-Helpers use Console installed in the current Python environment, then `PATH`, and launch `serve`.
-Override `command=` and `args=` for another executable; pass stdio `env`/`cwd` through the helper's parameter mapping.
-
-## Python clients
 
 ```python
 from mcp_console import MCPConsole
 
 with MCPConsole() as console:
-    print(console.send(python="answer = 42; answer"))
-    print(console.send(sql="SELECT 6 * 7 AS answer"))
+    print(console.send(python="values = [2, 4, 6]; values"))
+    print(console.send(python="sum(values)"))
 ```
 
-The async equivalent uses `async with AsyncMCPConsole()` and `await console.send(...)`.
-Enter and close an async connection in the same task; the sync wrapper owns an AnyIO portal thread.
-Explicit `connect()`/`close()` are also available.
-Reconnect starts a new session, so recreate adapters after reconnecting.
-The MCP SDK owns subprocess/transport cleanup.
+Use `AsyncMCPConsole` with `async with` and `await` for asynchronous code.
+Enter and close an async connection in the same task.
+Reconnect starts a new session; recreate adapters after reconnecting.
 
-`console(...)` aliases `send(...)` for ordinary Python calls.
-It returns text, uses MIME placeholders for images, and raises `RuntimeError` for MCP tool errors.
-Native MCP integrations and the Responses adapter preserve images.
+Helpers prefer Console in the current Python environment, then PATH, and launch `serve`.
+Override `command`/`args` for another executable.
+Stdio environment and working-directory options are supplied through the corresponding helper's parameter mapping; exact signatures are in the [API reference](https://t-kalinowski.github.io/mcp-console/python/reference/index.html).
 
-Use one connection per conversation, send at most one language cell per call, and collect unfinished work before submitting another cell.
-`timeout_ms` limits observation, not execution: after `[running; poll with an empty send]`, call `send()` without code to collect new output.
-Never rerun a cell to retrieve its original result.
-[Runtime](BUILTIN_RUNTIME.md), [`send` ordering](SEND_OPERATIONS.md), and [recordings](RECORDING.md) define the shared behavior and output limits.
+## Choose a model integration
 
-Adapters read the connected server's schema from `console.send_tool`.
-Import `mcp_console` and access framework adapters through it at the point of use.
-Do not register `console.send` through automatic Python annotation inference: its annotations cannot express the particular server's configured capabilities.
-The application owns model clients, agents, chats, and tool loops.
+| Framework        | Extra           | Adapter for an open client                                                                                      | Framework-owned connection                                                                                                |
+| ---------------- | --------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| chatlas          | `chatlas`       | [chatlas.tool](https://t-kalinowski.github.io/mcp-console/python/reference/chatlas.tool.html)                   | [chatlas.register](https://t-kalinowski.github.io/mcp-console/python/reference/chatlas.register.html)                     |
+| OpenAI Responses | `openai`        | [openai.responses_tool](https://t-kalinowski.github.io/mcp-console/python/reference/openai.responses_tool.html) | Application owns the tool loop.                                                                                           |
+| OpenAI Agents    | `openai-agents` | [openai.agents_tool](https://t-kalinowski.github.io/mcp-console/python/reference/openai.agents_tool.html)       | [openai.agents_server](https://t-kalinowski.github.io/mcp-console/python/reference/openai.agents_server.html)             |
+| Anthropic        | `anthropic`     | [anthropic.tool](https://t-kalinowski.github.io/mcp-console/python/reference/anthropic.tool.html)               | [anthropic.tools](https://t-kalinowski.github.io/mcp-console/python/reference/anthropic.tools.html)                       |
+| Thread SDK       | `codex`         | —                                                                                                               | [codex.server](https://t-kalinowski.github.io/mcp-console/python/reference/codex.server.html) returns configuration only. |
 
-## chatlas
+Each reference page contains a complete example with framework setup and cleanup.
+The application owns model clients, chats, agents, and any function-calling loop.
+Creating a Console tool does not create or choose a model.
 
-```python
-import mcp_console
-from chatlas import ChatOpenAI
-from mcp_console import MCPConsole
+Adapters read `console.send_tool` from the connected server.
+Do not register `console.send` through annotation inference: it cannot describe that server's configured fields.
+For chatlas, use `set_tools()` on a new chat to retain the adapter's explicit schema; native registration has its own cleanup method.
+Use default native tool names unless the installed adapter documents otherwise.
 
-chat = ChatOpenAI()
-with MCPConsole() as console:
-    chat.set_tools([mcp_console.chatlas.tool(console)])
-    chat.chat("Use the console to calculate 20!.")
-```
+## Results and lifetime
 
-`mcp_console.chatlas.tool()` accepts either client and returns the matching sync/async tool.
-Use `set_tools()` on a new chat to retain its explicit schema; `register_tool()` in the tested chatlas 0.23.0 rebuilds it from annotations.
-For native async MCP registration, call `await mcp_console.chatlas.register(chat)`, use `chat.chat_async(...)`, and close with `await chat.cleanup_mcp_tools()` in `finally`.
-Use default native tool names: the tested `namespace=` option also renames the requested server tool.
+`console(...)` aliases `send(...)`.
+Ordinary Python calls return text, represent images with MIME placeholders, and raise `RuntimeError` for MCP tool errors.
+The text-tool adapters have the same image limitation.
+Responses and native MCP integrations preserve images.
 
-## OpenAI Responses
+Keep one connection per conversation.
+`timeout_ms` limits observation, not execution; after a running notice, poll with `console.send(timeout_ms=300000)` rather than rerunning code.
+Use [Send operations](SEND_OPERATIONS.md) for input, control, and sequencing, and [Recordings](RECORDING.md) for retained output.
 
-`mcp_console.openai.responses_tool(console)` exposes `.definition` for `responses.create(tools=...)` and returns a `function_call_output` when called with a model function call.
-The adapter uses the live non-strict MCP schema and preserves text/images:
+## Inspect or replace requirements
 
-```python
-import mcp_console
-from mcp_console import MCPConsole
-from openai import OpenAI
+Both clients accept the shared `get`, `add`, `set`, and `reset` actions through the `requirements` argument.
+Inspection returns JSON text after startup is ready; during startup it can return `[worker starting]` instead.
+Check the response before parsing it as JSON—an earlier call returning does not prove startup completed.
 
-client = OpenAI()
-with MCPConsole() as console:
-    tool = mcp_console.openai.responses_tool(console)
-    response = client.responses.create(
-        model="your-model",
-        input="Use the console to calculate 20!.",
-        tools=[tool.definition],
-    )
-    while calls := [
-        item
-        for item in response.output
-        if item.type == "function_call" and item.name == "send"
-    ]:
-        response = client.responses.create(
-            model="your-model",
-            previous_response_id=response.id,
-            input=[tool(call) for call in calls],
-            tools=[tool.definition],
-        )
-    print(response.output_text)
-```
-
-For async code, use `AsyncOpenAI` and `AsyncMCPConsole`, awaiting both API and tool calls.
-The application owns the function-calling loop and routing of any other tools.
-
-## OpenAI Agents
-
-```python
-import mcp_console
-from agents import Agent, Runner
-from mcp_console import MCPConsole
-
-with MCPConsole() as console:
-    agent = Agent(
-        name="Data analyst",
-        tools=[mcp_console.openai.agents_tool(console)],
-    )
-    result = Runner.run_sync(agent, "Use the console to calculate 20!.")
-    print(result.final_output)
-```
-
-`mcp_console.openai.agents_tool()` also accepts the async client for `Runner.run`.
-It preserves optional fields with `strict_json_schema=False`.
-For native MCP, enter `async with mcp_console.openai.agents_server() as server` and pass `[server]` as the agent's `mcp_servers`.
-That SDK connection has no read deadline by default; set `client_session_timeout_seconds=` deliberately and supply stdio settings through `params=`.
-
-## Anthropic
-
-```python
-import mcp_console
-from anthropic import Anthropic
-from mcp_console import MCPConsole
-
-client = Anthropic()
-with MCPConsole() as console:
-    runner = client.beta.messages.tool_runner(
-        model="your-model",
-        max_tokens=4096,
-        tools=[mcp_console.anthropic.tool(console)],
-        messages=[{"role": "user", "content": "Use the console to calculate 20!."}],
-    )
-    for message in runner:
-        print(message)
-```
-
-Use `AsyncAnthropic`, `AsyncMCPConsole`, and `async for` for async execution.
-For native image-preserving MCP tools, enter `async with mcp_console.anthropic.tools() as tools` and supply them to the async runner.
-That context owns its connection; `server_parameters=` supplies stdio settings and `tool_kwargs=` supplies conversion options.
-
-## Official thread SDK
-
-`mcp_console.codex.server()` returns a stdio configuration entry for `openai-codex`; it creates no client, thread, or process:
-
-```python
-import mcp_console
-from openai_codex import Codex
-
-config = {"mcp_servers": {"mcp-console": mcp_console.codex.server()}}
-with Codex() as client:
-    thread = client.thread_start(config=config)
-    print(thread.run("Use the console to calculate 20!.").final_response)
-```
-
-Add model and other settings in the application configuration; pass Console stdio settings through `server_parameters=`.
-
-## Inspecting and replacing requirements
-
-Both clients accept the shared `get`, `add`, `set`, and `reset` actions.
-Once startup has settled, inspection returns complete JSON text:
-
-```python
-snapshot = json.loads(console.send(requirements={"action": "get"}))
-declaration = snapshot["requirements"]
-declaration["python"] = ["requests>=2"]
-console.send(control="restart", requirements={**declaration, "action": "set"})
-```
-
-This fragment assumes `import json` and an open `console`.
-During startup, inspection can instead return `[worker starting]`; wait and retry before parsing JSON.
-`set` empties omitted fields; `reset` accepts no payload.
-See [requirements](REQUIREMENTS.md#inspecting-and-replacing-requirements) for transaction and target restrictions.
+To replace a declaration, copy the complete `requirements` object, edit it, add `action: "set"`, and send it with `control="restart"`.
+Omitted fields are emptied, not preserved.
+[Requirements](REQUIREMENTS.md) owns the examples, policies, syntax, and activation semantics.

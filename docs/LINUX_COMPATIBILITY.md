@@ -1,65 +1,48 @@
 # Linux host compatibility
 
-Compatibility depends on effective permissions and host facilities, not just a kernel version.
-[`sandbox-runner.json`](../sandbox-runner.json) selects the native implementation; [sandbox configuration](SANDBOX_CONFIGURATION.md) defines Console's policy choices.
-A previously passing host/pin is not acceptance of every revision.
+Linux compatibility depends on effective permissions and host facilities, not only a kernel version.
+[`sandbox-runner.json`](../sandbox-runner.json) selects the native implementation; [sandbox configuration](SANDBOX_CONFIGURATION.md) selects application policy.
 
 ## Policy and backend contract
 
-Default native execution uses bubblewrap, user/mount/PID namespaces, requested filesystem/network enforcement, and supervised retirement.
-It requires procfs, permitted namespace setup, and the requested native/seccomp capabilities.
-It does not require host subreaper, child-list, or namespace-PID discovery.
+Default execution uses bubblewrap with user, mount, and PID namespaces, requested filesystem/network rules, and supervised retirement.
+It needs procfs, permitted namespace setup, and the requested native/seccomp facilities.
+
+There is no automatic Landlock or unsandboxed fallback.
+Standalone `linux_backend: landlock` is rejected.
+A namespace failure remains a launch failure.
 
 Fresh namespace-local procfs is optional.
-The native inherited-procfs alternative retains isolation/policy but can reveal host PIDs and permitted metadata.
-It is not a backend switch.
-Pidfds are optional emergency termination; without them, a stopped namespace init can exceed the cleanup deadline.
-Missing native wait evidence causes failure and retained storage, never inferred successful cleanup.
-Resolver child observation uses SIGCHLD notifications and non-reaping `waitid`, without requiring pidfds.
-Its observer unblocks SIGCHLD on its own thread, retains an independent cancellation endpoint, and unregisters the notification before joining; cancellation is not evidence of child exit.
+An inherited-procfs alternative keeps the backend and policy but can reveal host PIDs and permitted metadata.
+Pidfds are an optional emergency mechanism; without them, a stopped namespace init can exceed cleanup deadlines.
+Missing native wait evidence causes failure and retained storage, not inferred cleanup success.
 
-The standalone Landlock backend has been removed; `linux_backend: landlock` is rejected before native setup.
-There is no automatic Landlock or unsandboxed fallback.
+### Filesystem limits
 
-### Filesystem classification
+Native classification uses effective permissions, not only a kind label.
+Full-write policies do not become restricted because their entries contain ineffective carve-outs.
+`unrestricted` ignores narrowing entries; `external-sandbox` without a proxy delegates both filesystem and networking enforcement to an outer boundary.
 
-Native classification uses effective permissions, not only the `kind` string:
+Mount masking can hide a narrower read beneath a broader denial or make deeper denials fail setup.
+Individual-file write roots can be rejected, and missing write roots are skipped until another launch.
+Create intended writable directories first.
+Console does not create permanent placeholders, grant parents, or switch backends to work around native limits.
 
-| Policy                                               | Result                                                                                     |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `unrestricted`                                       | Full filesystem access, native supervision, selected networking. Entries do not narrow it. |
-| `external-sandbox`, no proxy                         | Delegated filesystem/network enforcement; ordinary process-group supervision.              |
-| Restricted special-root write, no effective carveout | Full-write classification with native supervision.                                         |
-| Root write with effective read/deny carveouts        | Restricted policy subject to native mount validation.                                      |
-| Root read with writable directories                  | Restricted policy subject to writable-root/host prerequisites.                             |
-
-At equal targets, write overrides read and deny overrides both; narrower paths have their native precedence.
-A literal `/` path is not the special root entry and undergoes writable-root preparation.
-Classification is not proof setup can succeed: protected metadata mount targets can be absent or inaccessible.
-
-The mount backend cannot fully reopen a narrower read beneath a broader denial; an ancestor mask may hide it and a deeper denial may fail setup.
-Existing file write roots also have a native limitation; missing write roots are skipped until a later launch.
-Console does not grant parents, create permanent placeholders, or switch backends to work around these outcomes.
-See [writable paths](SANDBOX_CONFIGURATION.md#filesystem).
-
-Full-write modes can influence shared files and unsandboxed processes.
-Restricted- policy security results must not be attributed to those modes.
-External mode without a proxy adds no networking restriction, even with `network: restricted`.
+[Sandbox configuration](SANDBOX_CONFIGURATION.md#filesystem) owns path precedence and metadata protection.
+Restricted-policy security results must not be attributed to unrestricted or externally enforced workloads.
 
 ## Host and container setup
 
-Ubuntu AppArmor policy may allow a system `/usr/bin/bwrap` while denying namespace operations to a relocated bundled helper.
-Check native diagnostics and kernel AppArmor records; do not infer bundle support from a working system helper.
-Missing namespace permission remains a launch error, not a reason to retry with weaker isolation.
+Ubuntu AppArmor policy can permit system `/usr/bin/bwrap` while denying a relocated bundled helper.
+Check native diagnostics and kernel policy records; a working system helper does not validate the bundle.
 
-Ordinary Docker containers may deny nested namespace operations.
-Console adds no privileged flags or implicit backend changes.
-Deliberately choosing external mode delegates enforcement to the container, with its different guarantees.
-Use a namespace-capable disposable environment for bundled-helper and nested- procfs tests rather than changing a user's host security policy.
+Ordinary containers may deny nested namespace setup.
+Console adds no privileged flags or implicit policy changes.
+Deliberately selecting external mode delegates enforcement to the container and has different cleanup guarantees.
 
-A suitable trusted host helper takes precedence; a damaged unused bundle does not block it.
-A selected bundled helper must match its embedded digest and is executed through that same verified descriptor.
-[Release checks](../RELEASE.md) exercise the bundled path with an empty PATH and validate actual ELF dependencies.
+A trusted host helper can take precedence.
+When the bundled helper is selected, its digest is verified and it is executed through the verified descriptor.
+Test that path in an approved disposable environment; do not weaken a user's host security policy merely to pass a check.
 
 ## Reproducing the comparisons
 
@@ -69,14 +52,13 @@ scripts/test cli/sandbox/test_configuration
 python3 tests/sandbox_installation.py target/release/mcp-console
 ```
 
-The procfs fixtures use disposable same-user processes, synthetic data, an explicitly ptraceable host process, control pipes, and a loopback listener.
-The matrix combines fresh/inherited procfs with readable/denied sentinel paths and restricted/enabled networking.
-It checks direct policy behavior and attempts through host environ/root/cwd/fds/memory, signals, ptrace, process-memory syscalls, and network-namespace entry.
+The procfs matrix compares fresh/inherited views with readable/denied sentinel paths and restricted/enabled networking.
+It checks direct policy behavior and attempts through process metadata, descriptors, memory, signals, and namespace entry.
 Host restrictions must not substitute for the sandbox property under test.
-The inherited-procfs fixture uses an outer namespace and a libseccomp mount filter to deny fresh procfs mounts deterministically; it excludes WSL bridges so it exercises the generic Linux inherited view.
-Root-write fixtures reconstruct the host's top-level view on a disposable namespace root, allowing protected metadata mount targets without creating host root directories.
 
-Runner contracts additionally deny pidfd/subreaper syscalls, withhold native wait status, stop namespace init, and reject unsupported policies/backends.
-These establish specific interfaces and failure behavior, not a general proof against all kernel attacks.
-Test fixture process-observation requirements are separate from production requirements.
-See the [boundary guide](../tests/boundaries/README.md) for execution modes, skips, and safe namespace-PID handling.
+These probes establish specific contracts, not proof against all kernel attacks.
+Fixture process-observation requirements are separate from production requirements.
+[Boundary tests](../tests/boundaries/README.md) covers capability skips and safe namespace-PID handling.
+
+Release acceptance additionally checks the installed bundle with an empty PATH and native floor-runtime images.
+See [Release](../RELEASE.md#linux-floor-validation); an ABI report, successful normalization, or skipped native probe is not a sandbox acceptance result.

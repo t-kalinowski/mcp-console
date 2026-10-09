@@ -1,120 +1,51 @@
 # MCP Console
 
-An interactive, persistent computational workspace for agents.
-One MCP tool, `send`, runs R, Python, and SQL, returns text and plots, and supports interactive input, dependency preparation, interruption, and restart.
-Data, models, imports, and database state survive between calls.
+A persistent R, Python, and SQL workspace for agents.
+One MCP tool, `send`, runs code and returns text and plots.
+Objects, imports, models, and database state remain available between calls.
 
-With both runtimes available, Python reads R objects through `r.name`, R reads Python objects through `py$name`, and SQL can query live R data frames.
-Python and SQL also work without R.
-Responses keep large outputs out of the model context while retaining logs and artifacts on disk.
-
-## Status
+Python and SQL work without R.
+When both runtimes are available, reticulate connects them: Python can read `r.name`, R can read `py$name`, and R-backed SQL can query R data frames.
 
 **Development preview:** interfaces may change.
-macOS and Linux are supported.
-Windows x64 has experimental [local R, Python, and SQL support with a native sandbox](docs/WINDOWS.md).
-Console runs local processes and prepares dependencies on the host where it is launched.
+macOS and Linux are supported; Windows x64 support is [experimental](docs/WINDOWS.md).
 
 ## Quickstart
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
-To use R, install it with [rig](https://github.com/r-lib/rig#id-installation) and `rig add release`.
-
-Source installation also requires Git, [rustup](https://rustup.rs/) with Rust 1.95 or later, and platform build tools.
-On macOS, run `xcode-select --install`.
-On Ubuntu:
-
-```sh
-sudo apt-get update
-sudo apt-get install -y build-essential git pkg-config libcap-dev libcurl4-openssl-dev binutils
-```
-
-Install Console and its private sandbox runner:
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then install Console from source:
 
 ```sh
 uv tool install git+https://github.com/t-kalinowski/mcp-console
 ```
 
-Configure your MCP client to launch `uvx mcp-console serve` over stdio.
-For [Codex](https://developers.openai.com/codex/mcp):
+Source installation requires Git, Rust, and platform build tools.
+See [Get started](docs/getting-started.qmd) for prerequisites, optional R installation, and client setup.
 
-```sh
-codex mcp add console -- uvx mcp-console serve
-codex
-```
+Configure your MCP client to launch `mcp-console serve` over stdio.
+Run the client and Console on the same host, with the client's shell and filesystem tools using the same workspace.
 
-For [Claude Code](https://code.claude.com/docs/en/mcp):
+Ask your agent:
 
-```sh
-claude mcp add --transport stdio console -- uvx mcp-console serve
-claude
-```
-
-Installation builds the pinned sandbox runner with its own toolchain.
-Initial runtime preparation can download interpreters, packages, and extensions.
-See [build prerequisites](RELEASE.md#private-sandbox-executable) and [dependency selection](docs/REQUIREMENTS.md).
-
-Without R, Console uses `uv` to select Python.
-To use an existing project environment instead, put `python: .venv/bin/python` in `.agents/console/config.yaml`; that environment's packages must already be installed.
-See [configuration](docs/CONFIGURATION.md).
-
-## Execution host
-
-Console runs local processes on the host where it is launched.
-For work on a remote host, run the MCP client and Console together on that host, alongside the client's shell and filesystem tools.
-The client or deployment tooling chooses the host, container, or VM; Console manages language sessions within it.
-
-## Try an analysis
-
-Check that your client exposes `send` (`/mcp` in Codex), then ask:
-
-> Use MCP Console to explore the Palmer Penguins data from the R package `palmerpenguins`.
-> Fit a logistic regression in R to predict penguin sex from body measurements, summarize the data by species with SQL, and plot the model's predictions with Python and Matplotlib.
+> Use Console to generate a small dataset, fit a model, and plot the result.
 > Keep the data and model for follow-up.
-
-Then ask:
-
-> Where does the model make the most mistakes?
-> Show me a plot and the path to the recorded session transcript.
-
-For a Python-only session, ask Console to generate and analyze a small simulated dataset with NumPy and pandas.
-See the [runtime guide](docs/BUILTIN_RUNTIME.md) for language bridges, SQL connections, input, and plots.
-
-## Recordings and reports
-
-Sessions produce a readable `transcript.md`, a source-only `transcript.qmd`, raw cell logs, and image artifacts.
-Records go under `.agents/console/sessions/` when `.agents/console` already exists in the launch directory, otherwise under `~/.agents/console/sessions/`.
-[`MCP_CONSOLE_HOME`](docs/CONFIGURATION.md) relocates that fallback directory.
-
-The Quarto document is a starting point for a report, not a replay or checkpoint.
-Review a copy before rendering: it can contain failed or rejected submissions, omits interactive input, and executes outside the worker sandbox.
-See [recording and rendering](docs/RECORDING.md).
 
 ## Limits and trust boundaries
 
-Evaluated code has shell-class capability.
-The default local native sandbox allows host-file reads, restricts direct networking, and denies regular-file writes outside private temporary storage.
-**It does not protect readable secrets.** Trusted [policy configuration](docs/SANDBOX_CONFIGURATION.md) can change these defaults.
-There is no automatic unsandboxed fallback; constrained Linux hosts may lack the required [capabilities](docs/LINUX_COMPATIBILITY.md).
+Code has shell-class capability.
+The default sandbox permits host-file reads, restricts direct networking, and permits regular-file writes only in private temporary storage.
+**Readable secrets are not protected.** Project configuration is trusted input and may widen permissions.
 
-**Dependency preparation uses a separate native sandbox on local macOS and Linux hosts.** Its default policy permits host reads, package cache writes, and downloads through a managed proxy.
-See [resolver configuration and expanded defaults](docs/RESOLVER.md).
-Local sandboxed sessions use Console-specific caches by default; `-c cache=host` opts into shared host caches, and `--no-sandbox` uses host caches by default.
-Configurable permissions and package execution still require trusted requirements and resolver configuration.
-Read the [trust boundary](docs/REQUIREMENTS.md#host-resolution-and-trust) and [sandbox lifetime limits](docs/SANDBOX.md#supported-hosts-and-lifetime-limits).
+Dependency preparation has its own permissions.
+Recordings contain code, input, and output without redaction, and have no automatic cleanup.
+Read [Sandbox and trust](docs/SANDBOX.md) before changing permissions and [Recordings](docs/RECORDING.md) before sharing session files.
 
-There is one implicit session and cells run sequentially.
-Cells are not transactional; an error can leave earlier changes in place.
-Restart discards live state across languages, but retains accepted requirements and recordings.
-Each response contains at most 8 KiB of text, with separate image limits; raw text retention is capped at 1 GiB per cell.
-Reading omitted output requires filesystem access to the server's recording directory.
+There is one session and one active cell per connection.
+Errors do not roll back earlier effects.
+Restart discards live objects but retains accepted requirements and recordings.
 
-Recordings include source, stdin, requirements, and output **without redaction**.
-There is no aggregate retention quota or automatic cleanup.
+## Documentation
 
-## More
+[Get started](docs/getting-started.qmd) · [User guides and reference](docs/README.md) · [Python clients](docs/PYTHON.md) · [R and ellmer](r/README.md) · [Development](docs/DEVELOPMENT.md)
 
-[Python clients](docs/PYTHON.md) · [ellmer integration](r/README.md) · [Documentation](docs/README.md) · [Contributing](AGENTS.md)
-
-MCP Console grew out of [`mcp-repl`](https://github.com/posit-dev/mcp-repl).
+MCP Console grew out of [mcp-repl](https://github.com/posit-dev/mcp-repl).
 Licensed under the [MIT license](LICENSE).

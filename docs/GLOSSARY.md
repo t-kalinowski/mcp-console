@@ -1,54 +1,55 @@
 # Glossary
 
-**Session** — The logical console owned by one MCP server connection.
-There is one implicit session, not a named-session API.
-It can outlive several workers.
+## User terms
 
-**Cell** — A complete R, Python, or SQL submission.
-Cells execute one at a time; interactive input is separate from source code.
+**Session:** The persistent workspace owned by one MCP connection.
+It can outlive several workers; there is no named-session API.
 
-**Operation** — Server-owned work admitted by a `send` call, such as evaluation, preparation, or control.
-A call may stop waiting before its admitted work ends.
+**Cell:** One complete R, Python, or SQL submission.
+Source and interactive input are separate.
 
-**Worker generation** — One worker lifetime and the state tied to it.
-Restart creates a new generation.
-Old callbacks, stdin, and evaluations must not reach the replacement.
+**Poll:** A `send` call without code that waits for new output or completion.
+It does not rerun the prior cell.
 
-**Server / controller** — The process speaking MCP to the client.
-It owns admission, requirements, bounded responses, and recording.
+**Requirements / declaration / manifest:** The accepted dependency request, not an installed-package inventory or lockfile.
+It survives worker restart, not a new server connection.
 
-**Relay** — The process between server and worker.
-It translates the worker's sideband and standard streams into relay events, delivers signals, and reaps its direct worker.
-It is not the sandbox supervisor.
+**Preparation:** Making dependencies available.
+It does not import, attach, or load them for the user.
 
-**Worker** — The process holding live interpreter and database state.
-The built-in worker coordinates R, Python, and SQL on one execution thread; a custom worker implements the [worker protocol](WORKER_PROTOCOL.md).
+**Recording:** Files containing calls, source, input, output, and artifacts.
+They are unredacted records, not live-state checkpoints.
 
-**Sideband** — Private framed messages between relay and worker, separate from stdin, stdout, and stderr.
-It carries commands, semantic output, and completion.
+## Developer terms
 
-**Execution host** — The host running the MCP client and Console.
-The server, resolver, relay, and worker share that host.
+**Server / controller:** The process speaking MCP.
+It owns admission, retained declarations, bounded responses, and recording.
 
-**Native runner** — The verified private sandbox executable.
-It owns native policy enforcement, temporary storage, and descendant supervision.
-Console integrates it as an ordinary child process.
+**Worker:** The process holding interpreter and database state.
+The built-in worker coordinates R, Python, and SQL on one execution thread.
 
-**Preparation owner / resolver** — Trusted execution-host machinery that selects interpreters and prepares dependencies outside the worker sandbox.
-The server owns the requested manifest and decides whether to accept results.
+**Generation:** One worker lifetime and all work tied to it.
+Old input, callbacks, evaluations, and candidate commits must not reach its replacement.
 
-**Manifest / retained requirements** — The server's accepted dependency declaration.
-It survives worker restart; live variables and database state do not.
-A resolved environment is a concrete result of preparing that declaration.
+**Relay:** The process translating worker sideband and standard streams, delivering interruption, and reaping the direct worker.
+It is not the native sandbox supervisor.
 
-**Candidate / activation** — A proposed environment and the transition that makes it usable by the worker.
-Resolving a candidate is not the same as publishing it or committing the retained manifest.
+**Sideband:** Private JSONL commands and semantic events, separate from stdin/stdout/stderr.
 
-**Retirement / cleanup receipt** — Stopping an owned resource and obtaining the owner's confirmation that its cleanup contract completed.
-Stream closure alone is not proof of process retirement or native cleanup.
+**Native runner:** The verified private executable owning native policy enforcement, temporary storage, and its descendant-cleanup contract.
 
-**Output cut** — A finite boundary in the server's ordered output tape used to construct one response.
-It is not a global timestamp order across streams.
+**Preparation owner:** The machinery owning discovery/materializer processes and their cleanup.
+The server, not this owner, accepts declarations.
 
-**Recording** — Server-side files containing calls, source, input, output, and artifacts.
-Recordings are unredacted and are not live-state checkpoints.
+**Candidate / activation:** A proposed environment and the step making it usable by a worker.
+Materialization, activation, and server acceptance are distinct.
+
+**Retirement / cleanup receipt:** Stopping an owned resource and obtaining confirmation that its owner's cleanup contract completed.
+Stream closure alone is not that confirmation.
+
+**Output cut:** A finite boundary selected for one response.
+It does not establish chronology across independent streams.
+
+**Execution host:** The machine or environment where the client, Console, and its files/processes run.
+
+See [Architecture](ARCHITECTURE.md) for relationships between these components.
