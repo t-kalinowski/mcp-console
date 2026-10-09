@@ -166,7 +166,7 @@ def test_empty_declaration_and_round_trip(
     assert last_tool_text(client) == "(42, None, None, None, None)\n"
     assert inspect(client) == empty
     # Initialize the preview dependency before observing the query's output.
-    client.send(
+    client.expect(
         # fmt: r
         r=code("""
             stopifnot(
@@ -175,7 +175,10 @@ def test_empty_declaration_and_round_trip(
             )
             """),
     )
-    client.send(sql="SELECT 42 AS answer")
+    result = client.send(
+        sql="SELECT 42 AS answer", timeout_ms=int(client.response_timeout * 1_000)
+    )
+    assert not result.get("isError"), result
     assert inspect(client) == empty
     client.send(control="restart")
     client.send(python=python)

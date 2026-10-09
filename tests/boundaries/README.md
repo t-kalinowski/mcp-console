@@ -90,7 +90,8 @@ Ordinary runtime cases stay with their subject even when sandboxed.
 
 Available modes run sequentially within one case deadline and compare against one snapshot.
 During updates, the first mode writes and later modes must match, not overwrite differences.
-Use `@execution_snapshots` from `support.snapshots` when captured launch policy makes the advertised definition differ: direct keeps `CASE.yaml`, sandbox uses `CASE.sandbox.yaml`, and both modes update and verify their own records.
+Use `@execution_snapshots` from `support.snapshots` when the case owns differing execution behavior or captured launch policy: direct keeps `CASE.yaml`, sandbox uses `CASE.sandbox.yaml`, and both modes update and verify their own records.
+Fixture write grants alone do not require execution-specific snapshots.
 Unavailable modes report a skip, not validation.
 Test-host requirements such as Linux process-observation facilities do not imply the same runtime requirements.
 Windows full checks run shared direct cases in addition to native acceptance.
@@ -164,9 +165,10 @@ Launch-rejection or protocol-failure cases may have no handshake or an incomplet
 Update it before other affected cases.
 The runner compares the complete exchange before replacing an exact match with `!same-as`; the tag records that comparison and does not load a file.
 Different or incomplete handshakes remain in full.
-The canonical case owns mode-specific companions; fixtures with different captured policies declare separate execution snapshots.
+The canonical case owns mode-specific companions; cases that test different captured policies declare separate execution snapshots.
 After response assertions, `McpClient.finish()` normalizes CLI fixture write roots in tool descriptions to `<writable-root>`; it preserves the grant and leaves other output untouched.
 The canonical writable-root companions retain that policy shape for exact handshake comparison.
+After that comparison, shared execution transcripts use the corresponding base variant's label for fixture write grants; execution-specific transcripts retain the writable-root variant label.
 
 ## Fixtures
 

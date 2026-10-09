@@ -1113,12 +1113,15 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
                 sessions = root / ".agents/console/sessions"
                 assert not list(sessions.glob("*/artifacts/*"))
                 release.release()
+                # Discovery release still leaves host dependency preparation
+                # before startup can render its image.
                 image = wait_for_checkpoint(
                     lambda: next(sessions.glob("*/artifacts/*.png"), None),
                     "startup image retained after discovery",
                     root=sessions,
                     recursive=True,
                     client=client,
+                    timeout=client.response_timeout,
                 )
                 client.finish()
             session = image.parent.parent

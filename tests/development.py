@@ -6,16 +6,101 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 
 from support.normalization import code
+from support.requirements import command, gnu_tar
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 class DevelopmentTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "native Windows CI archive paths")
+    def test_windows_ci_source_archive_round_trip(self) -> None:
+        for requirement in (command("pwsh"), gnu_tar()):
+            if not requirement.available:
+                self.skipTest(requirement.reason)
+        workflow = (ROOT / ".github/workflows/ci.yaml").read_text()
+        step = workflow.split(
+            "      - name: Prepare native Windows sandbox source archive\n", 1
+        )[1].split("\n      - name:", 1)[0]
+        program = code(step.split("        run: |\n", 1)[1])
+        source = self.root / ".sandbox-runner-source"
+        source.mkdir()
+        subprocess.run(["git", "init", "-q", source], check=True)
+        tracked = source / "codex-rs/main.rs"
+        tracked.parent.mkdir()
+        tracked.write_text("fn main() {}\n")
+        (source / ".gitignore").write_text("codex-rs/target/\n")
+        for arguments in (
+            ["add", "."],
+            [
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.org",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "Fixture",
+            ],
+        ):
+            subprocess.run(["git", "-C", source, *arguments], check=True)
+        target = source / "codex-rs/target"
+        target.mkdir()
+        (target / "build-output").write_text("excluded build output")
+        temporary = self.root / "runner temp"
+        temporary.mkdir()
+        archive = temporary / "sandbox-source.tar"
+        self.assertTrue(archive.drive)
+        output = temporary / "output"
+        environment = os.environ | {
+            "RUNNER_TEMP": str(temporary),
+            "GITHUB_OUTPUT": str(output),
+            "MCP_CONSOLE_HOME": str(self.root / "home"),
+        }
+        timestamp = 1_600_000_000
+        os.utime(tracked, (timestamp, timestamp))
+        for cache in ("miss", "hit"):
+            self.assertEqual(archive.exists(), cache == "hit")
+            if cache == "hit":
+                tracked.unlink()
+            result = subprocess.run(
+                [
+                    "pwsh",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "$ErrorActionPreference = 'Stop'\n" + program,
+                ],
+                cwd=self.root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(
+                result.returncode, 0, f"cache {cache}: {result.stdout}{result.stderr}"
+            )
+            self.assertEqual(tracked.read_text(), "fn main() {}\n")
+            self.assertEqual(tracked.stat().st_mtime, timestamp)
+            with tarfile.open(archive) as contents:
+                names = contents.getnames()
+            self.assertIn("./codex-rs/main.rs", names)
+            self.assertFalse(any(name.startswith("./.git/") for name in names))
+            self.assertNotIn("./.git", names)
+            self.assertFalse(
+                any(name.startswith("./codex-rs/target") for name in names)
+            )
+        digests = output.read_text().splitlines()
+        self.assertEqual(len(digests), 2)
+        self.assertEqual(digests[0], digests[1])
+        self.assertRegex(digests[0], r"^archive-sha256=[0-9a-f]{64}$")
+
     def test_windows_ci_reuses_complete_sandbox_builds(self) -> None:
         workflow = (ROOT / ".github/workflows/ci.yaml").read_text()
         windows = workflow.split("  windows:\n", 1)[1].split("\n  check:", 1)[0]

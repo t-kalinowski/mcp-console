@@ -7,26 +7,88 @@ real_mcp_console <- function() {
   normalizePath(binary, mustWork = TRUE)
 }
 
+mcp_console_fixture <- function(binary, environment, unset) {
+  if (.Platform$OS.type == "windows") {
+    # Launch the native executable directly so MCP retains its stdio pipes.
+    return(list(path = binary, environment = environment, unset = unset))
+  }
+  launcher <- tempfile("mcp-console-launcher-")
+  lines <- c(
+    "#!/bin/sh",
+    paste("unset", paste(unset, collapse = " ")),
+    sprintf("export %s=%s", names(environment), shQuote(environment)),
+    sprintf("exec %s \"$@\"", shQuote(binary))
+  )
+  writeLines(lines, launcher)
+  Sys.chmod(launcher, "0755")
+  list(path = launcher, environment = NULL, unset = character())
+}
+
+with_mcp_console_environment <- function(fixture, code) {
+  if (!length(fixture$environment) && !length(fixture$unset)) {
+    return(force(code))
+  }
+  old <- Sys.getenv(
+    c(names(fixture$environment), fixture$unset),
+    unset = NA_character_
+  )
+  on.exit(
+    {
+      missing <- is.na(old)
+      Sys.unsetenv(names(old)[missing])
+      if (any(!missing)) {
+        do.call(Sys.setenv, as.list(old[!missing]))
+      }
+    },
+    add = TRUE
+  )
+  Sys.unsetenv(fixture$unset)
+  if (length(fixture$environment)) {
+    do.call(Sys.setenv, as.list(fixture$environment))
+  }
+  force(code)
+}
+
 bare_mcp_console <- function() {
   binary <- real_mcp_console()
   library <- tempfile("mcp-console-bare-library-")
   dir.create(library)
-  launcher <- tempfile("mcp-console-bare-")
-  writeLines(
+  windows <- .Platform$OS.type == "windows"
+  if (windows) {
+    python <- Sys.which("python")
+    skip_if(
+      !nzchar(python),
+      "Windows fixture needs Python for the stdlib relay"
+    )
+    python <- trimws(
+      processx::run(
+        python,
+        c("-I", "-c", "import sys; print(sys._base_executable)")
+      )$stdout
+    )
+    stopifnot(file.exists(python))
+  }
+  mcp_console_fixture(
+    binary,
     c(
-      "#!/bin/sh",
-      "unset R_TESTS RETICULATE_UV",
-      "export PATH=/usr/bin:/bin:/usr/sbin:/sbin",
-      sprintf("export R_HOME=%s", shQuote(R.home())),
-      sprintf("export R_LIBS=%s", shQuote(library)),
-      sprintf("export R_LIBS_USER=%s", shQuote(library)),
-      sprintf("export R_LIBS_SITE=%s", shQuote(library)),
-      sprintf("exec %s \"$@\"", shQuote(binary))
+      PATH = if (windows) {
+        paste(
+          dirname(binary),
+          R.home("bin"),
+          dirname(python),
+          file.path(Sys.getenv("SystemRoot"), "System32"),
+          sep = .Platform$path.sep
+        )
+      } else {
+        "/usr/bin:/bin:/usr/sbin:/sbin"
+      },
+      R_HOME = R.home(),
+      R_LIBS = library,
+      R_LIBS_USER = library,
+      R_LIBS_SITE = library
     ),
-    launcher
+    unset = c("R_TESTS", "RETICULATE_UV")
   )
-  Sys.chmod(launcher, "0755")
-  launcher
 }
 
 managed_python_mcp_console <- function() {
@@ -34,19 +96,34 @@ managed_python_mcp_console <- function() {
   directory <- tempfile("mcp-console-python-")
   dir.create(directory)
   uv <- Sys.which("uv")
-  stopifnot(nzchar(uv), file.symlink(uv, file.path(directory, "uv")))
-  launcher <- file.path(directory, "mcp-console")
-  writeLines(
-    c(
-      "#!/bin/sh",
-      "unset R_TESTS R_HOME RHOME RETICULATE_UV RETICULATE_PYTHON",
-      sprintf("export PATH=%s", shQuote(directory)),
-      sprintf("exec %s \"$@\"", shQuote(binary))
-    ),
-    launcher
+  stopifnot(nzchar(uv))
+  windows <- .Platform$OS.type == "windows"
+  exposed <- if (windows) {
+    file.copy(uv, file.path(directory, "uv.exe"))
+  } else {
+    file.symlink(uv, file.path(directory, "uv"))
+  }
+  stopifnot(exposed)
+  path <- if (windows) {
+    paste(
+      directory,
+      file.path(Sys.getenv("SystemRoot"), "System32"),
+      sep = .Platform$path.sep
+    )
+  } else {
+    directory
+  }
+  mcp_console_fixture(
+    binary,
+    c(PATH = path),
+    unset = c(
+      "R_TESTS",
+      "R_HOME",
+      "RHOME",
+      "RETICULATE_UV",
+      "RETICULATE_PYTHON"
+    )
   )
-  Sys.chmod(launcher, "0755")
-  launcher
 }
 
 with_path <- function(path, code) {
@@ -154,10 +231,15 @@ test_that("console_tool works when registered with an ellmer chat", {
 
   with_temp_working_directory({
     with_mcp_console_languages("r", {
-      directory <- tempfile("mcp-console-path-")
-      dir.create(directory)
-      file.copy(bare_mcp_console(), file.path(directory, "mcp-console"))
-      Sys.chmod(file.path(directory, "mcp-console"), "0755")
+      fixture <- bare_mcp_console()
+      if (.Platform$OS.type == "windows") {
+        directory <- dirname(fixture$path)
+      } else {
+        directory <- tempfile("mcp-console-path-")
+        dir.create(directory)
+        file.copy(fixture$path, file.path(directory, "mcp-console"))
+        Sys.chmod(file.path(directory, "mcp-console"), "0755")
+      }
 
       with_path(directory, {
         chat <- ellmer::chat_openai_compatible(
@@ -168,7 +250,10 @@ test_that("console_tool works when registered with an ellmer chat", {
         )
         tryCatch(
           {
-            chat$register_tool(console_tool())
+            chat$register_tool(with_mcp_console_environment(
+              fixture,
+              console_tool()
+            ))
             text <- NULL
             chat$on_tool_result(function(result) text <<- result@value@text)
 
@@ -200,12 +285,16 @@ test_that("console_tool works when registered with an ellmer chat", {
               "outputs",
               "call-000001.log"
             )
-            expect_match(
-              text,
-              paste0(" UTF-8 bytes; raw log: ", raw_log, "]"),
-              fixed = TRUE
-            )
             expect_true(file.exists(raw_log))
+            notice <- regmatches(
+              text,
+              regexec(" UTF-8 bytes; raw log: ([^\\n]+)\\]", text, perl = TRUE)
+            )[[1L]]
+            expect_length(notice, 2L)
+            expect_identical(
+              normalizePath(notice[[2L]], mustWork = TRUE),
+              normalizePath(raw_log, mustWork = TRUE)
+            )
             expect_identical(
               readChar(raw_log, file.info(raw_log)$size, useBytes = TRUE),
               paste0(
@@ -246,7 +335,11 @@ inspect_requirements <- function(send) {
 test_that("requirements actions preserve scalar fields and empty lists", {
   with_temp_working_directory({
     # Exercise declaration serialization without rebuilding unrelated R packages.
-    send <- console_tool(path = managed_python_mcp_console(), no_sandbox = TRUE)
+    fixture <- managed_python_mcp_console()
+    send <- with_mcp_console_environment(
+      fixture,
+      console_tool(path = fixture$path, no_sandbox = TRUE)
+    )
     startup <- inspect_requirements(send)
     # Inspect the committed default environment after worker readiness.
     expect_true(startup$prepared)

@@ -984,8 +984,13 @@ def test_interrupts_python_cache_warmup_without_committing(
                 "MCP_CONSOLE_TEST_WARMUP_RELEASE": str(warmup_release.path),
             },
         )
-        preparation = client.start_send(requirements={"python": ["py-yaml12"]})
-        warmup_started.wait("Python cache warmup started", timeout=5)
+        preparation = client.start_send(
+            requirements={"python": ["py-yaml12"]},
+            timeout_ms=int(client.response_timeout * 1_000),
+        )
+        warmup_started.wait(
+            "Python cache warmup started", timeout=client.response_timeout
+        )
 
         interrupt = client.start_send(
             control="interrupt",
@@ -1102,8 +1107,13 @@ def test_stops_before_cache_warmup_after_python_resolver_interrupt(
             },
         )
         block_tool_run.touch()
-        preparation = client.start_send(requirements={"python": ["py-yaml12"]})
-        tool_run_started.wait("Python resolver started", timeout=5)
+        preparation = client.start_send(
+            requirements={"python": ["py-yaml12"]},
+            timeout_ms=int(client.response_timeout * 1_000),
+        )
+        tool_run_started.wait(
+            "Python resolver started", timeout=client.response_timeout
+        )
 
         interrupt = client.start_send(
             control="interrupt",

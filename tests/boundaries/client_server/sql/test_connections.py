@@ -256,8 +256,7 @@ def test_routes_sql_cells_to_a_selected_dbi_connection(
           sep = ""
         )
         """)
-    client.send(r=r, requirements={"r": ["RSQLite"]})
-    assert last_tool_text(client) == "selected: TRUE\nvalid: TRUE\n"
+    client.expect("selected: TRUE\nvalid: TRUE\n", r=r, requirements={"r": ["RSQLite"]})
 
     # fmt: r
     r = code(r"""
@@ -397,8 +396,7 @@ def test_python_restores_managed_connection_before_r_reads_it(
         .console$sql_connection(lite)
         invisible()
         """)
-    client.send(r=r, requirements={"r": ["RSQLite"]})
-    assert last_tool_text(client) == "[done]"
+    client.expect(r=r, requirements={"r": ["RSQLite"]})
 
     client.send(python="_console.sql_connection(None)")
     assert last_tool_text(client) == "[done]"

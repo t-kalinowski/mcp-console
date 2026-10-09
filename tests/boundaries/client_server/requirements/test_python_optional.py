@@ -610,11 +610,12 @@ def test_default_package_imports_do_not_prepare_optional_dependencies(
         ) as client:
             client.initialize_and_list_tools()
             if with_r:
-                client.send(r='reticulate::py_run_string("pass")')
+                client.expect(r='reticulate::py_run_string("pass")')
             # Background preparation must finish before recording resolver calls.
-            client.send(python="pass")
+            client.expect(python="pass")
             before = uv_tool_run_requirements(record)
-            client.send(
+            client.expect(
+                "(3, 3)\n",
                 # fmt: python
                 python=code("""
                     import numpy
@@ -623,7 +624,6 @@ def test_default_package_imports_do_not_prepare_optional_dependencies(
                     (numpy.arange(3).sum().item(), pandas.Series([1, 2]).sum().item())
                     """),
             )
-            assert last_result_text(client) == "(3, 3)\n", last_result_text(client)
             assert uv_tool_run_requirements(record) == before, (
                 before,
                 uv_tool_run_requirements(record),
