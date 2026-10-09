@@ -9,16 +9,17 @@ Include information that changes tool choice, call construction, or result inter
 The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records it.
 Regenerate that snapshot deliberately through the [boundary tests](../tests/boundaries/README.md), never by editing expected output.
 Writable-root companions capture the extra grant; affected fixtures use separate direct/sandbox snapshots because their advertised policies differ.
+Direct-handshake snapshots are shared across supported platforms; the discovery summary does not name the operating system.
 
 Descriptions depend on captured configuration, not completed runtime discovery.
 The presentation profile selects sections from configured languages, built-in or custom worker selection, and host preparation.
-Platform conditionals select Windows language and temporary-directory guidance without matching or removing sentences.
+Platform conditionals select temporary-directory guidance without matching or removing sentences.
 For the same configuration, they stay stable as background startup finishes or fails.
 The captured `languages` list selects direct code fields, field guidance, and language-sharing sections together.
-Omission retains the legacy `MCP_CONSOLE_LANGUAGES` filter; neither discovery nor interpreter initialization changes the advertised schema.
+Omission uses the `MCP_CONSOLE_LANGUAGES` filter; neither discovery nor interpreter initialization changes the advertised schema.
 Hidden source keys, including null values, are rejected before same-call effects.
 Requirements remain visible for hidden SQL providers, and execution still checks actual runtime availability.
-For an explicit `languages` configuration, tool and exposed-field descriptions mention only visible languages, including requirements, control, and timeout guidance.
+For both `languages` configuration and the environment filter, tool and exposed-field descriptions mention only visible languages, including requirements, control, and timeout guidance.
 Tool-level SQL guidance describes file queries directly; runtime diagnostics identify any missing dependencies and preparation needed.
 Requirement keys remain available even when their language is hidden; their descriptions then explain host-provider preparation without advertising a direct code field.
 Visibility selects direct code fields and applicable examples, not SQL ownership: managed DuckDB still uses R when available and Python otherwise.

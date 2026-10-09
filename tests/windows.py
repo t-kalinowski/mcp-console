@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 from queue import Queue
+import re
 import shutil
 import subprocess
 import sys
@@ -1136,7 +1137,6 @@ class WindowsConsole(unittest.TestCase):
             "which starts without live Console objects."
         )
         for custom in (False, True):
-            baseline = None
             for languages in (
                 "r,python,sql",
                 "r,python",
@@ -1170,6 +1170,24 @@ class WindowsConsole(unittest.TestCase):
                         self.assertEqual(session.request("ping", {}), {})
                         properties = tool["inputSchema"]["properties"]
                         fields = set(languages.split(","))
+                        names = {
+                            name
+                            for name in ("R", "Python", "SQL")
+                            if name.lower() in fields
+                        }
+                        self.assertEqual(
+                            set(re.findall(r"\b(?:R|Python|SQL)\b", instructions)),
+                            names,
+                        )
+                        self.assertEqual(
+                            set(
+                                re.findall(
+                                    r"\b(?:R|Python|SQL)\b",
+                                    json.dumps(tool["inputSchema"]),
+                                )
+                            ),
+                            names,
+                        )
                         self.assertEqual(
                             set(properties) & {"r", "python", "sql"}, fields
                         )
@@ -1187,18 +1205,6 @@ class WindowsConsole(unittest.TestCase):
                                 tool["description"].index("Send one complete"),
                                 tool["description"].index(script_guidance),
                             )
-                        if baseline is None:
-                            baseline = tool
-                        else:
-                            expected = {
-                                field: schema
-                                for field, schema in baseline["inputSchema"][
-                                    "properties"
-                                ].items()
-                                if field not in {"r", "python", "sql"}
-                                or field in fields
-                            }
-                            self.assertEqual(properties, expected)
                         if custom:
                             self.assertIn(
                                 "Persistent custom-worker",
@@ -1210,7 +1216,17 @@ class WindowsConsole(unittest.TestCase):
                             )
                         else:
                             self.assertIn(
-                                "Persistent R, Python, and SQL REPL",
+                                "Persistent "
+                                + (
+                                    "R, Python, and SQL"
+                                    if fields == {"r", "python", "sql"}
+                                    else " and ".join(
+                                        name
+                                        for name in ("R", "Python", "SQL")
+                                        if name.lower() in fields
+                                    )
+                                )
+                                + " REPL",
                                 tool["description"],
                             )
                             self.assertEqual(
@@ -1221,12 +1237,26 @@ class WindowsConsole(unittest.TestCase):
                                 "Switch languages when useful" in tool["description"],
                                 len(fields) > 1,
                             )
-                            for field in fields:
-                                text = properties[field]["description"].lower()
-                                self.assertIn("sql", text)
                         self.assertEqual(
                             session.request("tools/list", {})["tools"], [tool]
                         )
+                        configured = Session(
+                            environment,
+                            relay=sys.executable if custom else None,
+                            overrides=(
+                                "languages=" + json.dumps(languages.split(",")),
+                            ),
+                        )
+                        try:
+                            configured.initialize()
+                            self.assertEqual(
+                                configured.request("tools/list", {})["tools"], [tool]
+                            )
+                            self.assertEqual(
+                                configured.server_info["instructions"], instructions
+                            )
+                        finally:
+                            configured.close()
                     finally:
                         session.close()
 
@@ -1248,7 +1278,9 @@ class WindowsConsole(unittest.TestCase):
             "Requires host preparation support",
             properties["requirements"]["description"],
         )
-        self.assertIn("on Windows", tool["description"])
+        self.assertTrue(
+            tool["description"].startswith("Persistent R, Python, and SQL REPL for ")
+        )
         for language in ("r", "python"):
             with self.subTest(language=language):
                 description = properties[language]["description"].lower()

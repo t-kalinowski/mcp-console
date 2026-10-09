@@ -65,7 +65,6 @@ impl ConsoleServer {
         // Presentation has no dependency on the client or its discovered capabilities.
         let (tool_router, instructions) = Self::configured_presentation(
             languages,
-            visibility.is_some(),
             worker.is_none(),
             &sandbox_settings,
             no_sandbox,

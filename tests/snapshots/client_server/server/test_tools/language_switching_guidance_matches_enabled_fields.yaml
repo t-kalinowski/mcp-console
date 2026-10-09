@@ -1,17 +1,18 @@
 ---
 languages: r
 description: >-
-  Persistent custom-worker R, Python, and SQL REPL. Reuse objects across calls
-  to inspect results, test hypotheses, and compare approaches.
+  Persistent custom-worker R REPL. Reuse objects across calls to inspect
+  results, test hypotheses, and compare approaches.
 
 
-  Send one complete `r`, `python`, or `sql` cell per call.
+  Send one complete `r` cell per call.
 
 
-  Language fields describe the configured interface; evaluation, display, SQL,
-  and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements need
-  compatible worker callbacks; Python requirements are unavailable.
+  Language fields describe the configured interface; evaluation, display,
+  connections, and sharing depend on the worker. Console does not supply
+  built-in runtime packages, import hooks, or a default database connection.
+  Managed requirements need compatible worker callbacks; registry package
+  preparation is unavailable.
 
 
   Run one cell at a time. Wait for its `send` to return before another call with
@@ -34,17 +35,18 @@ description: >-
 ---
 languages: python
 description: >-
-  Persistent custom-worker R, Python, and SQL REPL. Reuse objects across calls
-  to inspect results, test hypotheses, and compare approaches.
+  Persistent custom-worker Python REPL. Reuse objects across calls to inspect
+  results, test hypotheses, and compare approaches.
 
 
-  Send one complete `r`, `python`, or `sql` cell per call.
+  Send one complete `python` cell per call.
 
 
-  Language fields describe the configured interface; evaluation, display, SQL,
-  and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements need
-  compatible worker callbacks; Python requirements are unavailable.
+  Language fields describe the configured interface; evaluation, display,
+  connections, and sharing depend on the worker. Console does not supply
+  built-in runtime packages, import hooks, or a default database connection.
+  Managed requirements need compatible worker callbacks; registry package
+  preparation is unavailable.
 
 
   Run one cell at a time. Wait for its `send` to return before another call with
@@ -67,18 +69,19 @@ description: >-
 ---
 languages: r,python
 description: >-
-  Persistent custom-worker R, Python, and SQL REPL. Reuse objects across calls
-  to inspect results, test hypotheses, and compare approaches.
+  Persistent custom-worker R and Python REPL. Reuse objects across calls to
+  inspect results, test hypotheses, and compare approaches.
 
 
-  Send one complete `r`, `python`, or `sql` cell per call.
+  Send one complete `r` or `python` cell per call.
 
 
-  Language fields describe the configured interface; evaluation, display, SQL,
-  and sharing depend on the worker. Console does not supply built-in runtime
-  packages, import hooks, or a default SQL connection. Managed requirements need
-  compatible worker callbacks; Python requirements are unavailable. Switch
-  languages when useful, using the worker's capabilities.
+  Language fields describe the configured interface; evaluation, display,
+  connections, and sharing depend on the worker. Console does not supply
+  built-in runtime packages, import hooks, or a default database connection.
+  Managed requirements need compatible worker callbacks; registry package
+  preparation is unavailable. Switch languages when useful, using the worker's
+  capabilities.
 
 
   Run one cell at a time. Wait for its `send` to return before another call with
