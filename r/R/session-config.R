@@ -286,29 +286,25 @@ S7::method(as.list, ConsoleConfig) <- function(x, ...) {
 }
 
 console_cli_arguments <- function(config) {
-  discovery <- config@discovery
+  settings <- S7::props(config)
+  discovery <- if (!is.null(settings$discovery)) S7::props(settings$discovery)
+  resolver <- if (!is.null(settings$resolver)) S7::props(settings$resolver)
   flags <- if (
-    is.null(discovery) || (!discovery@global && !discovery@project)
+    is.null(discovery) || (!discovery$global && !discovery$project)
   ) {
     "--no-config"
   } else {
     c(
-      if (!discovery@global) "--no-global-config",
-      if (!discovery@project) "--no-project-config"
+      if (!discovery$global) "--no-global-config",
+      if (!discovery$project) "--no-project-config"
     )
   }
-  disabled <- identical(config@sandbox, FALSE)
+  disabled <- identical(settings$sandbox, FALSE)
   # Clear permission nodes before replacing them: ordinary map overlays merge.
   clears <- c(
-    if (disabled || !is.null(config@sandbox)) "sandbox",
-    if (
-      disabled ||
-        (!is.null(config@resolver) &&
-          !is.null(config@resolver@sandbox))
-    ) {
-      "resolver.sandbox"
-    },
-    if (!is.null(config@python)) "python"
+    if (disabled || !is.null(settings$sandbox)) "sandbox",
+    if (disabled || !is.null(resolver$sandbox)) "resolver.sandbox",
+    if (!is.null(settings$python)) "python"
   )
   values <- as.list(config)
   c(
