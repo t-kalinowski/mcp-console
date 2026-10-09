@@ -1,172 +1,124 @@
-# `send` operation order
+# Calls, input, and control
 
-`send` operates on one implicit session and accepts at most one complete `r`, `python`, or `sql` cell.
-Submit cells sequentially and collect unfinished results before another cell.
-A control-only interrupt may overlap pending work; `requirements.action="get"` may inspect the last commit during evaluation or resolution without consuming output.
-If another send owns evaluation polling or response delivery, the interrupt returns `[running; poll with an empty send]` without consuming that send's output.
-Otherwise, it observes and collects the interrupted evaluation normally.
+`send` operates on one session and accepts at most one complete `r`, `python`, or `sql` cell.
+Submit cells sequentially and collect unfinished results before sending another cell.
+See the [API reference](API.md) for argument types and limits.
 
-[Runtime behavior](BUILTIN_RUNTIME.md) and [requirements](REQUIREMENTS.md) explain the operations themselves.
-This page defines their order and partial effects.
+## Cells and polling
+
+```json
+{ "python": "answer = 6 * 7; answer" }
+```
+
+If the response says `[running; poll with an empty send]`, send `{}` to collect more output.
+Do not resubmit the source: the accepted cell continues and is not replayed.
+New code is rejected while a cell or its uncollected result is active.
+
+`timeout_ms` defaults to 60,000 and limits observation, not execution.
+`0` observes immediately.
+A long poll such as `{"timeout_ms": 300000}` returns early on completion or managed input; it avoids repeated short polls.
+
+Completion returns text/images, or `[done]` when empty.
+An idle poll returns pending idle output and `[idle]`.
+Elapsed/phase notices describe observations, not a queue position or completion guarantee.
 
 ## Server readiness
 
-MCP initialization, tool discovery, and pings do not wait for runtime discovery, default preparation, or built-in worker startup.
-The interface comes from captured configuration, not installed-runtime availability.
-One shared startup owner prepares and prelaunches the real worker.
-After transport readiness connects resolver, input, and output services, the built-in worker initializes enabled R and Python on its serialized thread without waiting for code.
-Explicit or host-resolved Python selections start through the native facade; unresolved R-side selection retains its compatibility rules.
-SQL bridges accompany runtime setup; enabled SQL opens its managed connection during bootstrap when its optional provider is installed.
-First-query work remains lazy.
-Custom workers remain lazy.
+MCP initialization, tool discovery, and ping do not wait for runtime preparation.
+A valid early cell can be accepted while the shared startup continues.
+Its observation deadline includes startup; timeout does not cancel it or create another worker.
 
-A structurally valid early cell immediately reserves the evaluation slot.
-Its single observation deadline starts at call entry, including shared startup and deferred preparation.
-Expiry returns `[running; poll with an empty send]`; the cell stays accepted and runs at most once.
-Its evaluation frame waits behind interpreter bootstrap; timeout and polling never replay it.
-An empty poll or `get` without an accepted cell can instead return `[worker starting]`.
-`timeout_ms=0` observes immediately; it does not skip validation or create another worker.
+An empty poll or requirements inspection can return `[worker starting]`.
+Early standalone requirements that time out before readiness are not accepted and must be submitted again.
+Once transport is ready, `[idle]` does not necessarily mean every interpreter startup hook has finished.
 
-Starting and running responses include the latest Console-owned phase when available.
-An accepted cell can report `[elapsed: 2.3s since admission; phase: dependency preparation]`; startup without a cell instead reports `[phase: startup]` alongside `[worker starting]`, with no cell clock.
-Phases are broad observations of startup, dependency preparation, or replacement owners.
-Worker startup remains observable until transport readiness, including after its process is registered for control.
-An observation is omitted while its owner is busy; it never extends a response deadline or delays cancellation.
-They do not describe interpreter activity or promise initialization completion.
-Completion and generation retirement invalidate the matching observation; sending an interrupt or cancelling a poll does not.
-If a captured owner completes before projection, the response observes the current lifecycle owner in that generation.
-Replacement remains the phase until its single successor reaches transport readiness; retirement is confirmed before that worker starts.
-Recovered responses refresh their observation when the current owner is available.
-Phase updates do not accumulate in output, and their text shares the complete 8 KiB response budget with diagnostics and other notices.
+After initial setup failure, fix the reported problem and explicitly restart.
+Ordinary calls retain the failure rather than retrying setup.
+Rejected code and input are not replayed.
 
-Early standalone requirements that time out before readiness have **not** been accepted and must be submitted again.
-Early code-free stdin is buffered for its generation; a cell's bundled stdin waits for its requirements.
-Startup hooks can emit output, plots, errors, and managed input requests without a submitted cell.
-An empty poll can return `[idle]` while interpreters initialize after transport readiness; it does not certify initialization completion.
-Before discovery finishes, control needing configuration can time out without applying; any bundled cell is explicitly reported as not run.
+## Standard input and managed reads
 
-Requirements already admitted when discovery finishes can select the initial candidate.
-Later early declarations use the same preparation transaction after shared startup.
-Changed requirements may replace an **unused** prewarmed worker after successful preparation and confirmed retirement, without an explicit restart.
-Initialization alone does not make that worker used; user code or nonempty stdin ends this exception.
-Replacement serializes bootstrap callbacks with preparation and confirms old-worker retirement before launching the successor.
-If native R startup has begun, preparation waits for that attempt to complete before using the unused-worker exception.
-Failed or interrupted R initialization closes this exception; only an explicit restart authorizes another attempt.
-Runtime site hooks can run once in each new generation, including a replacement before the first cell.
-A [captured startup source](CONFIGURATION.md#session-startup-source) is user code and ends the unused-worker exception at launch.
-Only explicit restart may replay it in a new generation after confirmed retirement; partial startup effects are not rolled back.
-Once user code or nonempty stdin has reached it, normal live/restart rules apply.
-Prewarming must not change the user's effective declaration semantics.
+`stdin` queues exact UTF-8 bytes.
+It adds no newline, echoes nothing, and does not close the stream or acknowledge consumption.
+Line-oriented input normally needs `\n`:
 
-Cancellation before admission leaves no accepted cell.
-Cancellation after early admission releases the caller's wait, not the accepted cell or shared startup; poll to discover retained state.
-Timeout likewise cancels nothing.
-Closing MCP input cancels startup and follows normal retirement; outstanding response delivery after closure is unspecified.
+```json
+{ "stdin": "yes\n" }
+```
 
-Discovery or initial preparation failure is retained by ordinary sends; tool discovery remains usable with the same schema.
-Closing the connection preserves completed setup failures in the server's exit status and stderr, including failures before a resolver is registered.
-Connection closure that refuses pending startup admission exits quietly; that refusal is separate from a completed setup error.
-After correcting setup, an explicit `control="restart"` retries that failed readiness attempt using the server's captured configuration and current filesystem/tool availability.
-Concurrent restart callers share an in-flight retry; request cancellation and timeout leave it running, while connection closure cancels and retires it.
-Cancelling a restart before its code or nonempty stdin is admitted leaves that work unaccepted, including stdin-only retries.
-If cancellation arrives during its bundled requirements preparation, preparation can commit, but that call's code and stdin stay unaccepted.
-If setup still fails, the retry reports and retains its new diagnostic.
-Previously rejected cells and their bundled stdin or requirements are not replayed; their diagnostics remain available for polling.
-A retry that succeeds accepts its environment once; joining restart callers do not replace that worker or discard state accepted meanwhile.
-A code-free retry routes its stdin through any cell admitted during shared readiness and observes that evaluation under ordinary polling ownership, including after preparation accepts unchanged requirements.
-After configuration is accepted, restart uses the retained environment and ordinary worker replacement.
-Same-call code, stdin, and requirements proceed only after readiness succeeds and retain their ordinary admission rules.
-A code-free retry with changed requirements starts the prepared replacement before returning readiness, even when preparation retired the unused prewarmed worker.
-Retries require confirmed cleanup of the failed preparation attempt.
-The preparation connection must also close and reap its child; a completed operation does not prove that retirement.
-An unconfirmed connection retirement blocks further retries in that session and retains its diagnostic.
-After discovery, a failed built-in worker prelaunch is reported once by the next idle poll, cell, or requirements inspection, with its diagnostics.
-The declaration remains available and ordinary worker recovery still applies.
-The first failure response includes captured startup diagnostics, including for requirements-only calls and restart.
-Early calls and their results remain recorded if discovery fails; unavailable metadata stays unknown.
-Later environment/worker-start failures follow the ordinary later-cell retry boundary, not an automatic retry loop.
+R `readline()` / `browser()` and main-thread Python `input()` / `pdb` can report `[waiting for stdin]`.
+Answer with `stdin`, not another code cell.
+In R's debugger, for example, `c\n` continues and `Q\n` quits.
 
-## Validation before actions
+Unread bytes can satisfy later reads and are discarded on restart.
+Direct fd-0 and descendant reads bypass managed-input notifications.
+Queue order does not determine which reader consumes the bytes.
 
-Decoding and structural checks precede side effects: unknown fields/types, multiple or configured-disabled languages, incompatible get/reset payloads, set/reset with interrupt, standalone preparation with nonempty stdin, and interrupt-plus-requirements without a cell are rejected first.
-Runtime-capability checks precede execution/preparation, though an early accepted cell can report such an error through its polling result.
+## Interruption
 
-Bare workers reject mutations before control, stdin, or evaluation.
-Python-only sessions reject **all** interrupt-plus-requirements combinations before signaling or queuing input, including retained requirements.
+```json
+{ "control": "interrupt" }
+```
 
-Requirement-content errors and dependency-policy denials normally precede effects too.
-The exception is a supported interrupt-plus-cell: signal delivery, input enqueue, grace, and settlement of the old evaluation precede deferred content and policy validation.
-If the old evaluation remains active, the new cell is not run or queued.
+Interrupt signals the active resolver, otherwise the current worker.
+It does not start a missing worker or retarget a replacement.
+Interruption is cooperative: code can catch, delay, or block it.
+Use restart when fresh state is required.
+
+A control-only interrupt may overlap a pending call.
+If that call owns polling or output delivery, interrupt returns a running notice without consuming its output.
+This is a control exception, not support for concurrent cells.
+
+## Explicit restart
+
+```json
+{ "control": "restart" }
+```
+
+Restart prepares changed requirements before retiring the old worker.
+Failed preparation preserves the old state.
+After retirement begins, replacement failure cannot restore live objects.
+Accepted requirements and recordings survive; language objects, database catalogs, and unread input do not.
+
+A bundled cell or stdin reaches only the replacement after it is ready.
+Native R startup and configured session startup can run again and repeat side effects.
+No failed cell is automatically replayed.
 
 ## Operations
 
-The following order applies after shared startup.
-Admission can still fail on a conflicting operation or generation transition.
+Prefer separate calls for control, dependency changes, and execution unless bundling serves a clear purpose.
 
-| Call                                        | Ordered effects                                                                                                                                                                                       |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Cell, optionally requirements/stdin         | Validate and prepare requirements → reserve the cell → start worker if needed → queue/deliver input before evaluation. Failed preconditions withhold the cell.                                        |
-| Requirements only                           | Validate → prepare/retain supported changes. No worker launch solely for prestart preparation; nonempty stdin is invalid.                                                                             |
-| Interrupt + cell                            | Signal active resolver or worker → acknowledge delivery → queue stdin → wait 100 ms → settle prior evaluation → validate deferred requirements → prepare → admit new cell only if prior work stopped. |
-| Interrupt without cell                      | Signal → acknowledge → queue stdin → wait 100 ms → observe. Requirements are invalid.                                                                                                                 |
-| Restart, optionally requirements/stdin/cell | Validate and resolve candidate → commit → retire old worker → start replacement → send input and code only to the ready replacement.                                                                  |
-| Empty poll                                  | Collect the current evaluation or idle output; do not start an initial/stopped worker.                                                                                                                |
-| Stdin only                                  | Queue for the current generation and observe; after shared startup, start an initial/stopped worker if needed. Empty text queues no bytes.                                                            |
-| Requirements `get`                          | Wait for initial readiness within budget → report an unconsumed prelaunch failure, otherwise read the committed snapshot without evaluation admission or output collection.                           |
+| Call                                           | Effect order                                                                                                           |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Cell, with optional requirements/stdin         | Validate and prepare requirements, then admit the cell and deliver input.                                              |
+| Requirements only                              | Validate and prepare; return `[prepared]`. Nonempty stdin is invalid.                                                  |
+| Interrupt + cell                               | Deliver interrupt and input, allow interruption to settle, then prepare/admit the new cell only if prior work stopped. |
+| Restart, with optional requirements/stdin/cell | Validate and prepare, commit requirements, retire, start replacement, deliver input/code.                              |
+| Empty poll                                     | Collect output; do not start an initial or stopped worker.                                                             |
+| Stdin only                                     | Queue input for the current generation and observe; after shared startup, it can start an initial/stopped worker.      |
+| Requirements `get`                             | Read the committed declaration without consuming output.                                                               |
 
-Control and optional cell admission share one lifecycle boundary.
-Interrupt's generation must remain current; restart's input/code can reach only its replacement.
-An already waiting read may consume same-generation stdin before a new cell, including while interrupted work unwinds.
-Enqueue is not a receipt of consumption.
+Structural errors are rejected before actions.
+In the supported interrupt-plus-cell path, deferred requirement-content or policy errors occur **after** interrupt/input effects; those effects are not rolled back.
+Interrupt with requirements but no cell is invalid.
+Python-only sessions reject interrupt-plus-requirements entirely.
 
-Changed set/reset on a worker that has accepted user execution requires restart; unchanged replacement skips preparation, not an explicitly requested restart.
-Get rejects code, stdin (including empty), control, and payloads.
-See [requirements actions](REQUIREMENTS.md#inspecting-and-replacing-requirements).
+Changed `set`/`reset` normally needs explicit restart after user execution.
+A still-unused prewarmed worker has a limited replacement exception; configured session startup or nonempty user input ends it.
+See [Requirements actions](REQUIREMENTS.md#inspecting-and-replacing-requirements).
 
-## Wait timing
+## Wait timing and cancellation
 
-`timeout_ms` defaults to **60,000 ms** and is one observation deadline from call entry.
-It does not cancel evaluation, startup, or resolution.
-Shared initial startup consumes the budget; evaluation gets no fresh deadline afterward.
-Automatic import/package resolution and one failure-replacement attempt belong to the evaluation's wait.
+The observation deadline starts at call entry.
+After startup, explicit preparation and control/retirement work can make the total call exceed it.
+Standalone package preparation has no `timeout_ms` execution deadline.
 
-After startup, explicit preparation, interrupt/grace, restart retirement/startup, and input submission without an evaluation finish before observation and can make the whole call exceed its deadline.
-Standalone preparation has no `timeout_ms` execution limit.
-With a running evaluation, polling/input/control observe using the remaining budget.
-Idle polls return immediately.
-When waiting for completion, use `timeout_ms=300000` for a long poll instead of repeatedly polling at short intervals such as `timeout_ms=1000`.
-The poll returns early when work finishes or requests input; the timeout is a maximum wait, not a fixed delay.
+Cancelling a request's wait after admission does not cancel the accepted cell or shared startup.
+Poll to discover retained state.
+Cancelling before admission leaves the cell unaccepted.
+Closing the MCP connection instead triggers owned cleanup.
 
-Transport setup and retirement have their own deadlines, not a total resolver installation deadline.
-Interrupt targets active resolver work; connection closure cancels and retires it.
-See [sandbox lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
-
-## Preparation and failure
-
-Standalone success returns `[prepared]`; bundled preparation has no such marker.
-Exact repeats perform no resolver/worker preparation.
-Packages are not attached, imported, or loaded by preparation.
-
-Before startup or restart, complete candidates commit only after successful host preparation.
-Failure then preserves the current worker/declaration and withholds same-call input/code.
-Once retirement begins, replacement failure cannot restore live state or roll back the accepted environment.
-
-Live preparation has separate activation receipts: a Python success can remain if a later R update fails.
-Arbitrary site hooks and host cache/build effects are not rolled back.
-Some activation failures preserve the worker for state recovery but require restart for further changes; infrastructure failure stops it.
-See [live preparation](REQUIREMENTS.md#live-preparation).
-
-An acknowledged interrupt and queued input remain effective even when later preparation or cell admission fails.
-Signal-delivery failure prevents later input enqueue.
-No failed cell is automatically replayed.
-
-## Output and retained files
-
-A controlled send combines prior output, lifecycle notices, and new-cell output under one delivery owner and one 8 KiB text budget; images have separate limits.
-Polling consumes its observed interval, including omitted text.
-Get returns the complete manifest in structured content, not a truncated declaration.
-
-[Raw cell logs](RECORDING.md) are flushed at response cuts and can be read while evaluation continues.
-Paths refer to the local Console server.
-Reading a file does not move the polling cursor; resubmitting code is not output retrieval.
-[Architecture](ARCHITECTURE.md#output-and-delivery) covers response recovery and the limits of delivery guarantees.
+Outputs are bounded and consumed by polling.
+Recovery after cancellation is not exactly-once client delivery: bytes can reach a client before cancellation settles.
+A recorded result proves assembly, not receipt.
+Developer details belong to [Architecture](ARCHITECTURE.md#output-and-delivery).

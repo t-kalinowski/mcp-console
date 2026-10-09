@@ -1,284 +1,168 @@
 # Architecture
 
-The shared runtime coordinator supports independent R and Python startup on [Windows](WINDOWS.md) for local sandboxed or unsandboxed sessions, including managed dependency resolution through the shared `resolve` subcommand with `ir` and `uv` materializing environments on the host.
-Windows uses native pipe/event/process primitives, and resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code; cancellation and normal completion require confirmed empty Jobs.
-These Jobs own trusted host preparation and inspection processes, not evaluated user code, and are not sandboxes.
-Windows SQL uses the shared R DBI and Python DB-API providers and managed DuckDB defaults.
+Console separates session management from live execution.
+The server owns state that survives worker replacement; the worker owns interpreter and database state.
+The native runner owns OS enforcement and process-tree cleanup.
 
-Console separates session management from code execution.
-The server owns what survives a worker; the worker owns live language state.
-A relay connects them, and the native runner enforces the execution boundary.
-See the [glossary](GLOSSARY.md) for terms used below.
+Read [Public interfaces](API.md) for user-visible behavior.
+This page describes the ownership and invariants contributors must preserve, not every implementation step.
+The [glossary](GLOSSARY.md) defines recurring terms.
 
 ## Process layout
-
-Default local execution:
 
 ```text
 MCP client
   │ MCP over stdio
   ▼
-server ───── native runner → resolve → dependencies   resolver sandbox
+server ── native runner → resolve → package tools     preparation
   │
-  ▼
-sandbox frontend → private native runner            same PID on Unix
-  │
-  ▼
-relay ───── worker                                  sandboxed workload
-            └─ R, Python, SQL
+  └────── sandbox frontend → native runner
+                                 └─ relay → worker    execution
+                                             ├─ R
+                                             ├─ Python
+                                             └─ SQL providers
 ```
 
-The frontend verifies the installed companion and passes immutable launch configuration.
-Unix replaces the frontend with the runner; Windows waits for its exit and uses native owner handles.
-Native enforcement, private storage, and descendant supervision belong to that runner, not to Console's relay.
+On Windows, dependency preparation runs with host permissions rather than through a resolver sandbox.
 
-All Console processes run on the local host.
-The MCP client and its shell and filesystem tools should run on that same host.
-For remote work, run the client and Console together in the chosen environment; deployment and its outer lifecycle belong to the client or deployment tooling.
+These processes run on the same host.
+Remote placement belongs to the client or deployment tooling.
+`--no-sandbox` omits native enforcement and descendant cleanup, not the server/worker separation.
 
-`serve --no-sandbox` skips native enforcement.
-Direct host execution has no runner-provided descendant cleanup.
-See [sandbox limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
+The frontend verifies the pinned companion before launch.
+On Unix it becomes the runner through `exec`; on Windows it waits for the runner.
+Console must not introduce another native supervisor that competes for the runner's resources.
 
 ## Ownership
 
-| Component         | Owns                                                                                  | Does not own                                                  |
-| ----------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| Server            | Session, admission, generations, retained requirements, response delivery, recordings | Interpreter execution or native supervision                   |
-| Preparation owner | Execution-host discovery, resolver processes, confirmed resolver cleanup              | Accepted session manifest or worker activation                |
-| Native runner     | Its enforcement and resource-retirement contract                                      | MCP operations or language state                              |
-| Relay             | Worker descriptors, stream translation, signals, direct-worker shutdown and reaping   | Session policy, response budgets, or process-tree enforcement |
-| Worker            | Interpreter state, cell evaluation, input, semantic output, environment activation    | Durable session state or MCP response ownership               |
+| Owner             | Responsibility                                                                                                 |
+| ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| Server            | MCP admission, session identity, worker generations, retained declarations, response delivery, and recordings. |
+| Preparation owner | Discovery, materializer/inspection processes, and confirmed cleanup before publishing their results.           |
+| Native runner     | Native permissions, owned temporary storage, and its documented descendant-retirement contract.                |
+| Relay             | Worker descriptors, stream translation, interruption, and direct-worker shutdown/reaping.                      |
+| Worker            | Interpreter state, evaluation, input, semantic output, SQL connections, and live environment activation.       |
 
-The server-relay transport is [JSONL](RELAY_PROTOCOL.md).
-The relay-worker [sideband](WORKER_PROTOCOL.md) carries commands and semantic events separately from interactive stdin and direct stdout/stderr.
-Each producer preserves its own order; observation order does not reconstruct chronology across streams.
+Each operation should have one canonical owner.
+In particular, relay exit is not a native cleanup receipt, materialization is not manifest acceptance, and assembled output is not confirmed client receipt.
+
+The [server-relay](RELAY_PROTOCOL.md) and [relay-worker](WORKER_PROTOCOL.md) transports are private JSONL interfaces.
+Interactive stdin and direct stdout/stderr are separate streams.
+Each producer preserves order, but their observation order does not reconstruct a global chronology.
 
 ## Startup and runtime ownership
 
-The server captures launch configuration and constructs tool presentation before runtime discovery.
-One connection-owned background task discovers capabilities, prepares defaults, and prelaunches the built-in worker through transport readiness.
-The worker then initializes enabled R and Python on its serialized interpreter thread, after input, resolver, and output services are connected.
-MCP initialization, tool discovery, and pings do not wait for it.
-Failed initial discovery/preparation can be retried only by explicit restart, under that same connection owner and after confirmed preparation cleanup.
-The connection retains cleanup evidence for every stage of an attempt: a completed inspection cannot supersede unconfirmed retirement of retained dependency preparation.
-That confirmation includes closing the preparation connection and reaping its child; a completed resolver operation alone cannot authorize another attempt.
-The owner retains its captured initializer, replaces only the failed readiness attempt, and shares the new attempt among concurrent restart callers.
-Cells capture readiness at admission, so replacing a failed attempt cannot revive a rejected cell.
-Accepted configuration and post-acceptance worker recovery retain their existing ownership.
+The server captures configuration once and constructs tool presentation from it.
+One connection-owned background task discovers runtimes, prepares defaults, and prelaunches the built-in worker.
+MCP initialization, tool discovery, and pings do not wait.
 Custom workers remain lazy.
-An explicit R launcher is inspected with captured worker permissions before dependency discovery.
-The server retains its installation identity, matching Rscript and runtime resources across worker generations; preparation uses those same resources, while native startup stays inside the worker.
-The captured public `languages` selection governs presentation and source-argument admission only; it is not forwarded into worker runtime configuration.
-Hidden source keys are rejected before same-call control, preparation, or stdin effects.
-Configured language fields stay visible even when a runtime is unavailable; execution validates discovered capabilities.
-SQL provider routing uses actual R capability independently of public visibility, so hidden interpreters can implement SQL.
 
-Early cells reserve the ordinary evaluation slot while startup finishes.
-There is no cell queue.
-A call's observation deadline includes that wait; timeout or request cancellation does not cancel admitted evaluation or shared startup.
-Connection closure cancels startup through the existing preparation and worker owners and waits for their cleanup contract.
-The preparation close barrier joins its owner thread after protocol closure and child reaping, so the server cannot exit with resolver cleanup still in flight.
-If the owner failed, closing retains its protocol error instead of replacing it with a generic stopped-owner error.
-A failed close handshake kills the preparation child before joining I/O and reaping, without starting a second exit allowance.
-It joins owned shutdown before retiring relay I/O so the relay can stop and reap its direct worker.
-Retirement cancels an in-flight Python bootstrap inspection without reporting that cancellation as a Python setup error.
+Transport readiness connects command, input, output, and resolver services before built-in interpreter bootstrap.
+It does not mean either interpreter is initialized.
+Early cells reserve the ordinary evaluation slot; there is no queue.
+Cancelling a call's wait does not cancel shared startup or replay an admitted cell.
 
-An unused worker can be replaced during preparation, but an incomplete native R initialization cannot authorize another startup attempt.
-User input or evaluation consumes the unused-worker replacement exception.
-Preparation reserves an ordered bootstrap-callback barrier before acquiring the environment.
-Once a callback is deferred, later output, images, and input events from that worker sideband wait behind it; independent stdout, stderr, and retirement observations remain responsive.
-Deferred events use a private temporary spool capped at 16 MiB and removed when its last handle closes; the dispatcher resumes them in order before accepting later sideband events.
-Exceeding that limit or a spool I/O failure fails the worker boundary and releases the spool; retirement also releases it.
-Failed preparation resumes the current bootstrap; successful replacement confirms old-worker retirement before starting its successor.
-The accepted first cell retains its admission and is never replayed.
+A failed initial attempt is retried only by explicit restart and only after its preparation and execution owners confirm cleanup.
+Every stage's cleanup evidence matters; a later successful inspection cannot erase an earlier unretired process.
 
-Worker readiness is not interpreter initialization.
-One coordinator initializes enabled interpreters and runs cells on a single owning thread.
-After runtime attachment, bootstrap owns a graphics scope without marking user code active; configured Console startup output and plots use the ordinary output tape.
-Native R startup precedes Console's plot device and uses R's native graphics device.
-Enabled SQL opens its managed connection during bootstrap when its optional provider is installed; first-query work remains lazy.
-Custom workers retain lazy initialization, and an absent provider can be prepared on later SQL demand.
-An explicit or host-resolved Python selection can start without R.
-Unresolved R-side selection hints use R's compatibility adapter when installed; its absence does not prevent bare R use.
-Background selection also permits an ordinary absent-interpreter discovery result, preserving R without treating selection errors as absence.
-Later R cells, Python's R bridge, and R-owned SQL enter R through the same facade.
-Failed or interrupted native R initialization requires an explicit worker restart; it is never retried in place.
-Console owns CPython bootstrap and services; reticulate supplies R selection compatibility and object conversion.
-Attaching the bridge must use the running interpreter identity, not select or initialize a second Python.
-Host inspection remains isolated; after setup, conversion paths and NumPy metadata describe the live interpreter without preparing or importing optional packages.
-NumPy metadata comes from an already loaded module or a matching installed distribution; a shadowing workspace module/package is treated as absent.
-Missing or unusable optional distribution metadata is also treated as absent.
+### Worker
 
-The coordinator owns command dispatch, cell bookkeeping, input, and completion.
-Language adapters own their runtime-specific event, graphics, error, and unwind boundaries.
-Signal handlers only mark native state and wake waiters; they never enter an interpreter.
-Keep R affinity, GIL ownership, and reentrant callbacks on the current thread model.
-Do not split evaluators across threads without a new ownership design.
-[Runtime limitations](BUILTIN_RUNTIME.md#current-limitations) include the remaining late-R-startup environment constraint.
+One coordinator serializes interpreter initialization and cell execution on one thread.
+R affinity, CPython thread state/GIL ownership, and reentrant cross-language callbacks constrain this design.
+Signal handlers mark state and wake waits; they do not enter interpreters.
+Do not hold locks or mutable state borrows across reentrant interpreter calls.
 
-SQL routes to an R DBI or Python DB-API provider.
-R capability selects the default managed provider independently of initialization order; without R, Python owns the managed DuckDB connection.
-An optional captured startup source runs on its owning interpreter after helpers and runtime setup, before cell dispatch; it selects a native connection without managed warmup.
-The worker retains failed startup admission, and the server refuses automatic replay after a configured launch; only explicit restart authorizes another attempt after confirmed retirement.
-Explicitly selected connections remain user-owned.
-The [runtime guide](BUILTIN_RUNTIME.md) owns connection and interoperability rules.
+R and Python are peer runtimes.
+Console owns CPython bootstrap and services; reticulate supplies compatibility and conversion.
+Bridge attachment must use the running interpreter, not select or initialize another one.
+Failed or interrupted native R initialization is not retried in place.
+
+SQL connections stay in their owning runtime.
+Actual R capability chooses the default managed provider independently of public language visibility or initialization order.
+Selecting or attaching another runtime must not replace a user-selected connection.
+
+Configured SQL startup code runs once per worker after its helpers are installed.
+A failed startup cannot be silently replayed or replaced with a fallback connection.
+Native R profiles run earlier, inside the worker boundary, before Console's managed graphics device.
+
+The remaining process-environment constraint during late R initialization is recorded in [TODO](TODO.md#runtime-and-resource-limits).
+Splitting interpreter threads would not solve process-wide environment mutation.
 
 ## Generations and operations
 
-Every evaluation, stdin write, resolver callback, control target, and environment commit belongs to the generation that admitted it.
-Work from an old generation must never reach or commit into its replacement.
+An evaluation, input write, control target, resolver callback, candidate, and commit belong to the generation that admitted them.
+Old work must never reach or commit into a replacement.
 
-A normal cell is admitted once, prepared if needed, and dispatched through the relay.
-A controlled send retains admission across control and reservation of its optional following cell.
-Same-call stdin and code after restart belong only to the replacement.
-After interrupt, they cannot silently migrate to a different generation.
-See [`send` ordering](SEND_OPERATIONS.md) for validation and failures.
+A cell is admitted once.
+Control-and-cell calls retain that admission across their ordered steps.
+Restart input/code targets only the replacement; an interrupt's follow-up cannot silently migrate after a failure.
+[Send operations](SEND_OPERATIONS.md) owns the public ordering and partial-effect rules.
 
-Restart resolves a changed candidate before retiring the old worker.
-Resolution failure preserves the old worker; failure after an accepted manifest commit does not roll that commit back.
-Successful replacement starts fresh interpreters and database state with the server's retained requirements.
-
-An established worker failure permits one automatic replacement attempt for the call.
-The failed cell and stdin are **not replayed**.
-Explicit and failure-driven replacement both respect retirement barriers.
-Native R startup reports its admission and completion through the generation-owned worker protocol.
-A failed or interrupted R initialization withholds automatic replacement until explicit restart authorizes another attempt.
-R's own surviving profile errors remain ordinary diagnostics.
+Restart prepares a changed environment before retiring the current worker.
+Failure before acceptance preserves the old declaration and worker.
+Failure after retirement cannot restore live state.
+An established worker failure can trigger one replacement attempt, but never replay of the failed cell or input.
 
 ## Preparation and activation
 
-Local dependency resolution runs in a separate native resolver sandbox on macOS and Linux.
-Its cache and download policy is independent of the worker policy; see [resolver configuration](RESOLVER.md).
-The hidden `resolve` command owns local preparation over a private JSONL connection.
-Its client and child run from the same Console executable, so their schema is unversioned.
+The hidden `resolve` process materializes environments under the separate [resolver policy](RESOLVER.md).
+The preparation owner publishes a result only after its process and I/O cleanup contract completes.
+The server owns accepted declarations, not the materializer.
 
-The server owns the accepted manifest and candidate transactions.
-The preparation owner returns a result only after resolver cleanup.
-For live changes, the worker checks and activates a provisional environment, then publishes acceptance.
-The server commits only the matching candidate from the current generation.
-An accepted activation survives a later import or cell error; an unactivated stale candidate does not.
-Unsafe partial activation can require restart.
+For live changes, a resolved environment is provisional.
+The worker validates and activates it, then sends an acceptance receipt.
+Only a matching candidate from the current generation can commit.
+Accepted activation survives a later import or cell error; unaccepted stale candidates do not.
 
-Explicit preparation and worker-originated requests share environment-change ownership, preventing a stale preparation result from overwriting a newer manifest.
-Automatic R loads and Python imports request packages only when execution reaches them; cells are not scanned or rerun.
+Explicit changes and runtime-originated callbacks share environment-change ownership.
+This prevents a result resolved from an old declaration from overwriting a newer one.
+Live activations can have separate acceptance points; arbitrary package installation, cache, or site-hook effects are not transactional.
 
-Transactions protect accepted environments; the resolver sandbox bounds preparation permissions.
-Its default host reads and Console-specific writable caches still require trusted dependencies and inputs.
-[Requirements](REQUIREMENTS.md) defines supported changes and the trust boundary.
+The precise message objects live in the [worker protocol](WORKER_PROTOCOL.md); the user's supported changes live in [Requirements](REQUIREMENTS.md).
+Do not duplicate those schemas here.
 
 ## Retirement and cancellation
 
-Each worker launch owns one retained retirement operation.
-Lifecycle reserves its original budgets while holding admission, then releases that mutex before command writes, preparation cancellation, process observation or task joins.
-Restart, EOF, startup failure and failed-worker recovery observe the same request and terminal cleanup/I/O result.
-They send Shutdown once and join every owned transport task once; a late startup registration retires through its launch's owner before startup completion permits connection shutdown to finish.
-Publishing a failed-worker transition checks that its generation still owns it.
-If restart takes over during failed-worker retirement, the retiring caller keeps the captured process outcome in the old generation's output region for response settlement.
+Each launch has one retained retirement operation, shared by restart, EOF, startup failure, and recovery.
+Later requests observe that operation; they do not renew budgets, resend controls to old PIDs, or join the same tasks independently.
 
-The operation keeps normal command/barrier failure separate from physical cleanup and the dispatcher outcome.
-Confirmed physical cleanup and joined tasks can supersede a failed normal barrier; failed native cleanup still blocks replacement.
-Launcher reaping and successful I/O settlement also supersede that barrier when launcher-status or temporary-storage cleanup reports an independent error; the cleanup error remains authoritative.
-Process and worker consumers read separate cleanup and I/O views of that retained result, avoiding duplicate diagnostics within one shutdown response.
-Restart and EOF check the retiring launch's retained I/O result even when an initial launch failed before readiness, a failed evaluation has already stopped the logical worker or physical cleanup fails.
-Failed-worker replacement also requires launcher reaping and confirmed retirement of its owned temporary storage.
-On Unix, retiring direct-worker temporary storage restores owner access to its private directories through directory-relative, no-follow operations; linked project libraries retain their permissions even if a child is replaced by a symlink during traversal.
-Traversal retains directory descriptors so deep trees do not require full child paths.
-The temporary parent needs search access, not read access.
-Readable private directories restore permissions through their opened descriptors without requiring `fchmodat2` or procfs; unreadable directories require the platform's no-follow chmod support.
-A vanished child does not confirm root retirement; cleanup must remove the owned root or confirm that the root itself is absent.
-Available output is drained even when cleanup fails.
-The existing worker, relay, launcher and force-stop allowances are captured once.
-Relay drain eligibility uses when the local dispatcher processes ShutdownStarted.
-Connection closure passes its original worker deadline into startup cancellation.
+Retirement closes admission, requests orderly shutdown, bounds command/output handling, settles owned I/O, and obtains native cleanup evidence.
+Blocked writes, inherited descriptors, and partial frames must not keep shutdown waiting indefinitely.
+Aborting a partial command ends that transport; no control can be inserted into its bytes.
 
-The relay bounds shutdown and reaps its direct worker.
-Its stream draining must not wait forever for descendants retaining descriptors or for a blocked output consumer.
-It does not infer process-tree membership from a process group.
+Physical cleanup, protocol settlement, and output delivery are separate results.
+Available output is drained within bounds even when cleanup fails.
+Unconfirmed native retirement blocks replacement.
+A forced launcher kill or pipe EOF cannot be promoted into proof of successful cleanup.
 
-The server's sole command writer owns bootstrap and JSONL serialization for one generation.
-Normal retirement queues ordered Shutdown and allows the relay its grace period.
-Forced transport retirement closes command admission and independently aborts pending writes or an idle queue wait, then joins the writer.
-It does not use stdout closure to decide whether stdin can be retired, and it never inserts a control into a partial frame.
-Retirement settles outstanding control receipts; cancelling a call's observation does not redirect its queued interrupt.
-Owned output readers preserve their bounded available-output drain even when launcher cleanup fails; joining I/O does not confirm native cleanup.
-Worker-client native adapters own endpoint setup and separate output wakeup from command cancellation.
-The shared process and generation owners retain exit observation, I/O joins, and retirement decisions.
-The preparation owner bounds exit observation after forced termination and reaps only an observed exited child.
-If termination fails, it reports unconfirmed retirement and stops diagnostic collection even when the child keeps stderr open.
-It retains the child and exit observer in a background reaping owner and retries termination during connection closure, without erasing the original retirement failure.
-
-The server integrates a local native launcher as an ordinary child; successful managed exit is the cleanup barrier.
-Unconfirmed retirement blocks replacement.
-Startup retains cleanup evidence for every preparation and inspection stage; a later retired inspection peer cannot authorize retry while an earlier preparation peer remains unretired.
-Worker, relay, and native retirement allowances have different owners; none is a universal end-to-end cleanup deadline.
-
-Connection closure that refuses the next preparation stage is separate from control of a completed operation.
-It permits a quiet exit only after the refused stage's cleanup is confirmed.
-Preparation retains the operation's terminal result, control cause and cleanup confirmation.
-The subprocess owner captures its cause when collection finishes; a later control acknowledgment cannot replace an independent setup failure.
-When an interrupted subprocess exits unsuccessfully, its formatted materializer error retains that captured cause and its complete diagnostic.
-Unix interruption confirms the leader is stopped or exited before delivering SIGINT, then resumes a stopped leader; a successful signal call alone cannot distinguish a live process from an unreaped zombie.
-Nonblocking exit probes leave stop notifications intact for that suspension wait.
-Windows interruption records whether native root termination began, then terminates the Job with the control-C exit status and confirms retirement before attributing the failure; a natural exit retains its own diagnostic and cause even when its exit code matches that status.
-Preparation that consumes control after successful collection retains that cause before publishing its terminal result.
-For multistage preparation, only a subprocess report matching the operation's final result supplies its control cause; cleanup confirmation still includes every stage.
-Errors closing the preparation connection remain visible.
-Cancellation of a preparation operation does not suppress an independent failure of the preparation connection's close handshake.
-
-Interrupt targets the active resolver, otherwise the current worker.
-It is not retried against a replacement.
-Each materializer invocation owns its child, non-reaping exit observer, stdin writer, and stdout/stderr readers.
-Success, cancellation, registration failure, and process or I/O failure share one retirement path.
-Retirement cancels stdin independently and joins every I/O task, including when native process cleanup fails.
-Output collection preserves bytes already read plus a finite snapshot of queued bytes per stream after process retirement; it does not wait for inherited descriptors to close or accept an endless final producer.
-Failed process cleanup cancels and joins exit observation without signalling or reaping the remaining child.
-The original operation failure and cleanup failures remain separate until diagnostic formatting.
-Resolver cleanup confirmation combines the native process owner's result with settled observer/I/O tasks; it does not confirm preparation transport or worker retirement.
-Unix signals the owned process group and reaps its leader after observation settles; it does not provide a separate empty-group receipt, and escaped descendants remain outside that scope.
-Windows retains suspended creation and kill-on-close Job ownership, requires a confirmed empty Job, and shares its existing retirement allowance with exit observation.
-Interrupting a live Windows resolver terminates that Job and retains interruption as the operation's cause before materializer error formatting; an already completed setup failure keeps its own cause.
-On connection closure, the server closes admission, cancels preparation, retires owned execution resources, settles accepted responses, and bounds blocked MCP delivery.
-Native runner death has no independent recovery guarantee.
+Connection closure cancels startup/preparation, retires execution resources, settles accepted responses, and bounds blocked MCP delivery.
+Native runner loss retains the [documented lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits); Console has no independent recovery daemon.
 
 ## Output and delivery
 
-The server owns an ordered output tape across generations.
-It selects finite output cuts for responses, retains bounded text beginnings and tails, admits images separately, and adds lifecycle notices.
-The final text budget is 8 KiB including notices.
-Raw-file retention and inline omission are separate; collection stays bounded even when recording fails.
-Startup diagnostics use this tape, including preparation and launcher stderr on Unix.
-Each diagnostic producer retains its own incomplete UTF-8 scalar until more bytes arrive or that producer closes.
-Diagnostic ingestion also preserves pending UTF-8 bytes from the worker's direct streams.
-Closing one diagnostic producer does not flush another producer's pending terminal update; response cuts and shutdown finish the shared terminal projection.
+The server owns an ordered output tape, finite response cuts, text/image budgets, and generated notices.
+Relays forward events; they do not decide MCP response boundaries or candidate acceptance.
 
 One recoverable response remains owned until local delivery or cancellation settles it.
-Controlled sends can combine earlier output with a following cell; a failed delivery restores the whole combined region, not just its last part.
-A poll already waiting for startup waits for an intervening response's delivery within its remaining observation budget before claiming that evaluation's output.
-Expiry reports pending delivery; expiry and cancellation leave the output unclaimed.
-This is not exactly-once client observation: cancellation can race with bytes already visible to the client.
-A journaled result likewise records assembly, not receipt.
+Failed delivery restores the entire claimed region, including output preceding a combined control-and-cell call.
+This does not guarantee exactly-once observation: cancellation can race with bytes already visible to a client.
 
-## Recording, cell output, and image artifacts
-
-The controller records calls and assembled output independently of the private protocols.
-The journal is authoritative; Markdown and Quarto are projections, not worker checkpoints.
-Paths, formats, failure behavior, and rendering safety are covered in [recordings](RECORDING.md).
-Startup and idle output can be recorded before a tool call; discovery fills in pending recording metadata without replacing the session owner.
-Buffered calls and results retain their original timestamps and precede the discovery event when startup output has already materialized the recording.
-Discovery failure retains pending calls and their results alongside the startup failure, with unavailable metadata left unknown.
+The journal records calls and assembled results.
+Markdown and QMD are projections, not interpreter checkpoints; a journaled result does not prove client receipt.
+See [Recordings](RECORDING.md).
 
 ## Where to look in source
 
-| Concern                                       | Entry point                                                                                                                     |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| MCP and shared startup                        | [`src/server.rs`](../src/server.rs), [`src/server/startup.rs`](../src/server/startup.rs)                                        |
-| Session operations and generations            | [`src/worker_client.rs`](../src/worker_client.rs) and its modules                                                               |
-| Relay transport and direct-worker supervision | [`src/worker_relay.rs`](../src/worker_relay.rs)                                                                                 |
-| Language coordination                         | [`src/worker/coordinator.rs`](../src/worker/coordinator.rs), [`src/python.rs`](../src/python.rs), [`src/sql.rs`](../src/sql.rs) |
-| Host preparation                              | [`src/resolver/preparation.rs`](../src/resolver/preparation.rs)                                                                 |
-| Local launch ownership                        | [`src/worker_client/process.rs`](../src/worker_client/process.rs), [`src/sandbox.rs`](../src/sandbox.rs)                        |
-| Recording                                     | [`src/transcript.rs`](../src/transcript.rs)                                                                                     |
+| Concern                            | Entry point                                                                                                                     |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| MCP arguments and presentation     | [`src/server/arguments.rs`](../src/server/arguments.rs), [`src/server/presentation.rs`](../src/server/presentation.rs)          |
+| Connection startup                 | [`src/server/startup.rs`](../src/server/startup.rs)                                                                             |
+| Session and generation ownership   | [`src/worker_client.rs`](../src/worker_client.rs)                                                                               |
+| Relay and direct worker            | [`src/worker_relay.rs`](../src/worker_relay.rs)                                                                                 |
+| Interpreter coordination           | [`src/worker/coordinator.rs`](../src/worker/coordinator.rs), [`src/python.rs`](../src/python.rs), [`src/sql.rs`](../src/sql.rs) |
+| Preparation                        | [`src/resolver/preparation.rs`](../src/resolver/preparation.rs)                                                                 |
+| Launch and enforcement integration | [`src/worker_client/process.rs`](../src/worker_client/process.rs), [`src/sandbox.rs`](../src/sandbox.rs)                        |
+| Recording                          | [`src/transcript.rs`](../src/transcript.rs)                                                                                     |
 
-Follow these owners into their modules rather than maintaining a parallel file inventory in prose.
-Public evidence is organized by the [tested process boundaries](../tests/boundaries/README.md).
+Follow these owners into their modules instead of maintaining an exhaustive file inventory.
+[Boundary tests](../tests/boundaries/README.md) provide observable evidence; implementation comments hold local algorithms and exceptional cases.

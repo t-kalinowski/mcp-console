@@ -1,6 +1,10 @@
 # Sandbox configuration
 
-To edit the workspace and call one API:
+The public schema applies to both `sandbox` (evaluated code) and `resolver.sandbox` (dependency preparation).
+Their permissions are independent.
+[Configuration](CONFIGURATION.md) defines discovery and merge rules.
+
+To permit workspace writes and one API host:
 
 ```yaml
 sandbox:
@@ -13,8 +17,7 @@ sandbox:
 ```
 
 Configuration is trusted and can widen permissions.
-[Configuration](CONFIGURATION.md) defines discovery and ordered CLI layering.
-This schema also applies unchanged to `resolver.sandbox`; neither policy inherits the other's permissions.
+Read [Sandbox and trust](SANDBOX.md) before granting access.
 
 ## Filesystem
 
@@ -26,65 +29,43 @@ sandbox:
     deny: [./secrets]
 ```
 
-Groups compile to native concrete-path entries with `read`, `write`, and `deny` access, respectively.
-There are no glob entries, native kinds, profiles, or expansion operations in the public format.
-Omitted groups in an explicit mapping are empty.
-Worker entries modify its existing host-read/private-write baseline; omission grants no workspace writes.
-An omitted resolver filesystem retains its cache defaults; an explicit mapping replaces its default entries, including host reads and cache grants.
-`resolver.sandbox.filesystem: {}` therefore supplies no configured grants.
-Include necessary reads and writable caches explicitly; see [resolver policy](RESOLVER.md).
+Paths are concrete paths, not globs.
+They resolve against the captured launch directory, not the configuration file.
+They do not expand `~` or variables, create directories, grant parent directories, or erase symlink components.
 
-Native specificity controls access: narrower paths take precedence; at equal paths deny wins over write, then read.
-Group and list order do not define precedence.
-The native runner protects writes to `.git`, `.agents`, `.codex`, and `.aws` beneath writable roots; explicit equal-path or narrower write grants can override those protections.
-Broader writable roots can subsume narrower roots and their native metadata defaults.
-Include fixed workspace metadata paths in `read_only` when granting an ancestor directory to retain those guards.
-It does not add metadata read grants beneath denied ancestors.
-To retain the former workspace profile's additional `.claude` protection, configure `read_only: [.claude]` explicitly.
-The trusted Console macOS extension remains Console-owned.
+Worker entries modify the host-read/private-write baseline.
+Omitting `read_write` grants no workspace writes.
+An explicit resolver filesystem instead **replaces** its default entries, including host reads and cache writes; see [resolver grants](RESOLVER.md#filesystem-grants).
 
-Configured paths and `--writable-root` grants resolve against the fixed launch workspace.
-They do not expand `~` or variables, create directories, grant parents, or erase symlink components.
-Private temporary storage and cache adjustments retain their existing ownership.
-macOS can grant individual files and permit creation at absent granted paths.
-Linux skips absent write roots until another launch and can reject existing file roots during metadata preparation.
-Nested read exceptions beneath denials can remain hidden by Linux mount masking, or deeper denials can fail setup.
-Console neither rewrites these policies nor switches backends; a successful parser test does not prove those native grants work.
+Narrower native rules take precedence.
+At equal paths, deny wins over write, then read.
+List order does not decide access.
+
+The native runner protects writes to `.git`, `.agents`, `.codex`, and `.aws` beneath writable roots by default.
+These are not unchangeable denial ceilings: explicit equal-path or narrower writes can override them, and broader ancestor grants can subsume narrower roots and their metadata defaults.
+Add fixed metadata paths to `read_only` when needed.
+`.claude` is not in this default set; use `read_only: [.claude]` to protect it explicitly.
+
+Platform behavior matters.
+macOS can grant individual files and creation at absent granted paths.
+Linux can reject file write roots, skips absent write roots until a later launch, and cannot reliably reopen a narrower read beneath a broader denied mount.
+Create intended writable directories first.
+Console does not grant extra paths or switch backends to make an unsupported policy work.
 
 ## Network choices
 
-Choose one of:
+| Value                   | Effect                                                 |
+| ----------------------- | ------------------------------------------------------ |
+| `network: restricted`   | Restricted native networking, without a managed proxy. |
+| `network: enabled`      | Host networking; filesystem enforcement remains.       |
+| `network: {proxy: {…}}` | Restricted native networking with a managed proxy.     |
 
-```yaml
-sandbox:
-  network: restricted
-```
+Worker networking defaults to restricted without a proxy.
+Resolver networking on macOS/Linux defaults to its [download proxy](RESOLVER.md#expanded-public-default).
+Explicit scalar values also remove that generated resolver proxy.
 
-```yaml
-sandbox:
-  network: enabled
-```
-
-```yaml
-sandbox:
-  network:
-    proxy: {}
-```
-
-Scalars select native networking without a managed proxy.
-`enabled` changes networking only; filesystem enforcement stays in place.
-A mapping requires a non-null `proxy` mapping and compiles to restricted native networking with an enabled managed proxy.
-There is no public proxy-enabled Boolean or `network: full` shortcut.
-Explicit scalars also remove the resolver's generated download proxy.
-
-Omitted worker networking is restricted without a proxy.
-Omitted resolver networking preserves its download policy on macOS/Linux; Windows preparation retains host networking and permissions.
-For managed mappings, mode defaults to full, full-mode SOCKS to TCP, upstream routing to false, and Unix sockets to an empty allowlist.
-Local binding defaults to false for workers and true for resolvers.
-Omitted domains use the process's destination default: empty for workers and the download allowlist for resolvers.
-An explicit `domains` mapping replaces that generated default; omitted allow/deny lists are empty.
-`domains: {allow: []}` clears the resolver allowlist.
-This replacement does not change the generic file/CLI map merge algorithm.
+A managed mapping requires a non-null `proxy` mapping.
+There is no `network: full` shortcut or public proxy-enabled boolean.
 
 ## Proxy modes and destinations
 
@@ -92,156 +73,123 @@ This replacement does not change the generic file/CLI map merge algorithm.
 sandbox:
   network:
     proxy:
-      mode: limited
+      mode: full
+      socks5: tcp
+      allow_upstream_proxy: false
       domains:
         allow: [api.example.com, "*.example.org"]
         deny: [blocked.example.org]
 ```
 
-Full mode accepts `domains`, `allow_upstream_proxy`, and `socks5`.
-Limited mode accepts `domains` and `allow_upstream_proxy`; every explicitly supplied `socks5` selector is rejected, even `disabled`.
-Generated defaults are selected after the mode, so limited mode always sends both native SOCKS flags as false.
-A CLI mode change that leaves an explicit SOCKS selector present is an error; clear and rebuild the proxy mapping to remove it.
+Full mode is the default and supports HTTP/HTTPS proxying and the selected SOCKS mode.
+`socks5` accepts `disabled`, `tcp` (default), or `tcp_udp` in the schema; **Console currently rejects `tcp_udp` on macOS and Linux**, as described below.
 
-| Full-mode `socks5` | Native `enableSocks5` | Native `enableSocks5Udp` |
-| ------------------ | --------------------- | ------------------------ |
-| `disabled`         | false                 | false                    |
-| `tcp` (default)    | true                  | false                    |
-| `tcp_udp`          | true                  | true                     |
+Limited mode permits plain HTTP GET, HEAD, and OPTIONS.
+It rejects POST, HTTPS CONNECT, and SOCKS; every explicitly supplied `socks5` field is invalid in limited mode, even `disabled`.
+It is not read-only HTTPS, does not intercept TLS, and does not guarantee side-effect-free requests.
 
-The pinned limited proxy permits plain HTTP GET, HEAD, and OPTIONS and rejects POST, HTTPS CONNECT, and SOCKS traffic.
-It has no TLS interception and provides no read-only HTTPS or side-effect guarantee.
+Domain rules use hostnames, not URLs, paths, or host-and-port restrictions.
+Exact names match that host only; `*.example.org` matches subdomains but not the apex, and `**.example.org` matches both.
+Matching deny rules win.
+Native IP-literal forms are also accepted.
 
-Domain lists compile to the native domain-permission map.
-Matching and normalization remain native: an exact hostname covers only that host; `*.example.org` covers subdomains at any depth but not the apex; `**.example.org` covers both.
-Matching deny rules take precedence over allows.
-Host-with-port and URL-path inputs are rejected because native matching would discard those restrictions.
-IPv4, bracketed/unbracketed IPv6, and scoped IP literals remain supported.
+An explicit `domains` mapping replaces the generated destination default; omitted allow/deny lists are empty.
+Worker defaults allow no destinations; resolver defaults allow its package sources.
+This does not override ordinary deep merging between configuration layers.
+To remove an explicitly inherited field, clear and rebuild its containing mapping.
 
-`allow_upstream_proxy` maps to `allowUpstreamProxy` and defaults to false.
-It selects onward routing using the trusted launch environment, without overriding destination or method policy.
-Workload environment overrides cannot choose that trusted hop.
-There are no port rules, URL rules, credential injection, listener addresses, TLS interception, or per-request approvals in this format.
+`allow_upstream_proxy` defaults to false.
+When enabled, onward routing uses the trusted launch environment, not workload overrides; destination and method restrictions still apply.
+The public format has no per-port rules, URL rules, credential injection, listener configuration, or per-request approval API.
 
 ## Unix sockets and local binding
 
 ```yaml
 sandbox:
   network:
-    proxy: {mode: limited}
+    proxy: {mode: full}
     sockets:
       unix_sockets: [/tmp/service.sock]
     allow_local_binding: true
 ```
 
-`unix_sockets` accepts only a literal absolute-path list or `dangerously_allow_all`.
-A list, including `[]`, generates a native `unixSockets` allow map and clears `dangerouslyAllowAllUnixSockets`.
-Allow-all generates an empty map and sets that Boolean to true.
-There are no deny lists, Boolean shortcuts, globs, or aliases.
-Native macOS direct socket grants use subpath matching; HTTP-to-socket forwarding has its own native matching.
-The allowlist is not an exact-match firewall across all native socket paths, and filesystem permissions still apply.
+`unix_sockets` accepts an absolute-path list or `dangerously_allow_all`.
+An empty list is the default.
+There are no deny lists or globs.
+Native macOS direct-socket grants use subpath matching, so this is not an exact-path firewall across every socket route.
+Filesystem permissions still apply.
 
-`allow_local_binding` is alongside `proxy` and `sockets`, and maps to native `proxy.allowLocalBinding`.
-It affects private-address destination checks and native local socket behavior, including macOS loopback traffic and DNS.
+`allow_local_binding` defaults to false for workers and true for resolvers.
+It affects private-address checks and native local socket access, including macOS loopback traffic and DNS.
 It does not expose a Linux network namespace to a host browser.
-Both socket controls ultimately populate the native proxy object; this organization adds no proxy-free enforcement path.
 
-Limited mode leaves explicit socket and local permissions intact.
-Direct connections granted by those permissions do not pass through the proxy's method filter.
-Limited mode with those grants therefore does not restrict every channel to HTTP GET/HEAD/OPTIONS.
+Direct connections allowed by socket/local permissions do not pass through the proxy's HTTP-method filter.
+Limited mode therefore does not restrict every granted channel to GET/HEAD/OPTIONS.
 
 ## Native capabilities
 
-One schema and normalization path serves all platforms; native capabilities still differ.
-Explicit managed proxy mappings are rejected on Windows, where the pinned runner has no managed proxy.
-Explicit `resolver.sandbox` requests are rejected on Windows because dependency preparation remains unsandboxed.
-Environment and cache controls still apply there.
+| Platform | Important limits                                                                                                                                     |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS    | Managed proxy supported. Console rejects `tcp_udp`; historical evidence records a native reply-routing issue.                                        |
+| Linux    | Managed bridge is TCP-only. Nonempty Unix-socket path lists and `tcp_udp` are rejected. Socket allow-all is supported, but is not path-specific.     |
+| Windows  | Managed proxy mappings and explicit `resolver.sandbox` settings are rejected. Resolver environment/cache controls still apply with host permissions. |
 
-Linux's managed bridge carries TCP only; explicit `tcp_udp` and nonempty Unix-socket path lists are rejected before launch.
-Unix-socket allow-all is supported by the pinned Linux filter; it does not provide path-specific grants.
-An empty socket list remains valid.
-The pinned native SOCKS UDP reply path sends received replies back to the destination rather than the client, including on macOS.
-`tcp_udp` is therefore rejected on this pin on macOS as well, even with local binding enabled.
-The table above describes the native flag mapping; it does not claim usable UDP routing.
-A local native fixture records the reply returning to the origin; closing this runner limitation is outside this format change.
-Successful macOS normalization and HTTP tests establish no Linux/Windows enforcement parity.
-See [sandbox limits](SANDBOX.md) and [Windows](WINDOWS.md).
+A common schema does not imply equal native capabilities.
+Console rejects unsupported explicit requests rather than silently ignoring them.
+[TODO](TODO.md#sandbox-and-platforms) records related upstream and platform work without promising parity.
 
 ## Explicit complete policy
 
-A trusted standalone caller can bypass discovery and all Console defaults:
+Advanced standalone callers can use `sandbox --config-env NAME` with a **complete native JSON policy**.
+This bypasses automatic configuration and all generated Console policy defaults, including private temporary-storage and application-extension additions.
 
 ```sh
 SANDBOX_POLICY='{"filesystem":{"kind":"restricted","entries":[{"path":{"type":"special","value":{"kind":"root"}},"access":"read"}]},"network":"restricted"}' \
   mcp-console sandbox --config-env SANDBOX_POLICY -- /bin/echo 'literal argument'
 ```
 
-The value is JSON, not a path.
-No application extension, `.claude` protection, private TMPDIR, or profile adjustment is merged.
-The runner consumes the chosen variable once and strips it and reserved transport names from helper/target maps, including attempted reintroduction.
-`--config-env` rejects `-c`, writable roots, and conflicting private handoffs.
-Stdin always belongs to the target.
+The variable holds JSON, not a filename.
+The runner consumes it; stdin belongs to the target.
+This mode rejects `-c`, discovery options, and writable-root composition.
+Use a child-specific environment rather than mutating a multithreaded parent's global environment.
 
-The pinned [runner protocol](https://github.com/t-kalinowski/cobox/blob/85d407d8a4544ed0916aff3c7a273461e739f215/codex-rs/mcp-console-sandbox/PROTOCOL.md#complete-json-reference) is the canonical complete schema.
-The private protocol is unversioned; a `version` field is rejected.
-Key differences from Console's application policy: filesystem/network are required without a profile; environment inheritance defaults true; lifecycle storage and caller observation are opt-in.
-On Unix, `parent_pid` must identify the actual caller; supervised cleanup defaults to 1000 ms, with explicit values from 1 to 60000 ms.
-Windows observes the runner's direct parent plus an optional session owner and uses a fixed five-second Job retirement deadline.
+The [pinned runner schema](https://github.com/t-kalinowski/cobox/blob/42322a3931c2feeab838351e41d8048b1de8eb62/codex-rs/mcp-console-sandbox/PROTOCOL.md#complete-json-reference) is authoritative; its private protocol is unversioned.
+Runnable examples are provided in [shell](../examples/sandbox-config.sh), [Python](../examples/sandbox-config.py), and [R](../examples/sandbox-config.R).
 
-Use the runnable [shell](../examples/sandbox-config.sh), [Python](../examples/sandbox-config.py), or [R](../examples/sandbox-config.R) examples.
-They pass child-specific environment maps rather than mutating a multithreaded parent's global environment.
+Complete policies can request OS-specific options unavailable in `config.yaml`.
+Environment/argument size limits still apply: a nominally valid JSON payload can exceed native process-launch limits.
+The internal bootstrap-descriptor transport belongs to the pinned protocol, not this public YAML reference.
 
 ## Filesystem and enforcement modes
 
-| Filesystem kind    | Meaning without a proxy                                                                                    |
-| ------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `restricted`       | Native filesystem rules and selected network policy, with native supervision.                              |
-| `unrestricted`     | Full OS-permitted filesystem access; native supervision/network policy remain. Entries do not narrow it.   |
-| `external-sandbox` | Delegate filesystem **and networking** to an outer sandbox. It neither creates nor verifies that boundary. |
+These **complete-native-policy** kinds are not `config.yaml` permission groups:
+
+| Kind               | Meaning without a proxy                                                                                  |
+| ------------------ | -------------------------------------------------------------------------------------------------------- |
+| `restricted`       | Native filesystem rules, selected networking, and native supervision.                                    |
+| `unrestricted`     | Full OS-permitted filesystem access; entries do not narrow it. Native supervision/network policy remain. |
+| `external-sandbox` | Delegate filesystem and networking to an outer boundary. The runner does not create or verify it.        |
 
 In external mode without a proxy, `network: restricted` installs no network restriction.
-Linux retires the original group/direct child; the outer sandbox must retire escaped descendants.
-macOS retains its documented observation limits.
-A supplied enabled proxy selects native managed networking for any kind, while external filesystem enforcement remains delegated.
+Linux then supervises the original group/direct child; the outer boundary must retire escaped descendants.
+A managed proxy can add native networking while filesystem enforcement remains delegated.
 
-Full filesystem writes can modify shared files or influence unsandboxed processes, undermining network/supervisor restrictions.
+Full filesystem writes can influence unsandboxed processes and shared artifacts.
 Restricted-policy isolation guarantees do not extend to hostile unrestricted workloads.
-Cleanup is not a proof of isolation.
-See [lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits).
+Cleanup is not proof of isolation.
 
 ## Windows backend selection
 
-Windows application launches use the native `elevated` default and require explicit `mcp-console sandbox-setup` provisioning.
-Native `windows_state_dir` can select an absolute persistent state directory.
-An explicitly selected `unelevated` backend requires `network: enabled` and host reads; it rejects read-deny policy.
-Neither mode silently weakens policy when a feature is unavailable.
-Managed proxy configuration and custom cleanup timeouts are currently unsupported.
-See [Windows support](WINDOWS.md#native-sandbox) for lifecycle and setup details.
+Ordinary application launches use the native elevated backend and default state directory.
+Provision it explicitly with `mcp-console sandbox-setup`.
+A complete policy may select `unelevated`, which requires enabled networking and host reads and rejects read-deny policy.
+It does not silently replace an unavailable elevated sandbox.
+See [Windows](WINDOWS.md#native-sandbox).
 
 ## Explicit Linux backend selection
 
-Omitted/`bubblewrap` uses namespace supervision for native execution, including full-write policies.
-Namespace failure never causes a backend switch or unsandboxed retry.
-The inherited-procfs alternative retains the same backend and policy.
-External mode without a proxy still delegates enforcement with `bubblewrap` set.
-
-Standalone `linux_backend: landlock` has been removed and is rejected before native setup.
-Omit `linux_backend` or select `bubblewrap` explicitly.
+The native default is bubblewrap.
+Namespace failure does not trigger a backend switch or unsandboxed retry.
+The inherited-procfs alternative keeps the same backend and policy.
+Standalone `linux_backend: landlock` has been removed and is rejected.
 See [Linux compatibility](LINUX_COMPATIBILITY.md#policy-and-backend-contract).
-
-## Integrity, stdin, and large requests
-
-The OS copies the launch environment; later parent or target changes cannot alter accepted policy.
-Removing transport variables prevents propagation, not caller authentication or secure memory erasure.
-The trusted launcher owns initial loader state, executable choice, policy, and authority conveyed by stdio.
-
-JSON is limited to 1 MiB, but native exec limits can be smaller and include argv, environment, and platform overhead.
-An initial oversized exec may fail with `E2BIG` before Console can print anything.
-Malformed-policy diagnostics do not echo complete values.
-Native protocol 2 requires UTF-8 inputs.
-
-On Unix the private runner also supports `--bootstrap-fd N`: an inherited readable fd above stderr contains a four-byte big-endian length and 1–1,048,576 JSON bytes.
-That form includes command, absolute cwd, and a complete target environment and rejects inheritance.
-Start the reader before writing more than a pipe buffer.
-The trusted writer must control all bytes until complete acceptance; the runner then closes the descriptor without waiting for EOF.
-Neither transport spills policy to mutable files or bypasses the final target's exec limits.

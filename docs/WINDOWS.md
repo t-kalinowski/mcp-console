@@ -1,252 +1,142 @@
 # Windows local execution
 
-Native Windows x64 support is experimental and supports local sandboxed or `--no-sandbox` sessions with R, Python, and SQL.
-R and Python are peer runtimes: enabled interpreters initialize in the background before the first cell, and either can run without the other installed.
-Persistent state, interactive input, plots, cooperative interruption, restart, and session recording are supported.
-Reticulate provides interoperability when both runtimes and the bridge are available; Python-only sessions do not require R or reticulate.
+Native Windows x64 support is experimental.
+Local sandboxed and `--no-sandbox` sessions support R, Python, SQL, persistent state, input, plots, interruption, restart, and recording.
+Either R or Python can run without the other; reticulate bridges them when both are available.
 
-Managed R and Python dependencies use the shared hidden `resolve` subcommand, with `ir` and `uv` materializing the environments on the host.
-SQL uses the shared R DBI and Python DB-API providers: R capability selects managed DuckDB when available, and Python owns DuckDB without R.
-Managed sessions prepare the same `icu`, `json`, and `sqlite` defaults as macOS/Linux through trusted host resolution.
-Explicit Python selections need preinstalled DuckDB or a user-selected DB-API connection; captured startup can select a native connection before the first SQL cell.
-The release workflow does not publish Windows wheels; Windows source checkouts can build and install a local wheel.
+The release workflow does not publish Windows wheels.
+Build and install Console from source.
+Windows dependency preparation uses host permissions; process cleanup through Jobs is not sandboxing.
 
 ## Build and run
 
-Install Rust's MSVC toolchain, Visual Studio's C++ build tools and Windows SDK, Python 3.11 or newer, and uv.
-For R execution, install current x64 R and set `R_HOME` to its installation directory (or place R on `PATH`).
-PATH discovery supports `R.exe`, `R.bat`, and `R.cmd`, including rig's batch launcher.
-It searches directories in PATH order, preferring `.exe`, then `.bat`, then `.cmd` within each directory.
-An explicit `R_HOME` takes precedence; a broken selected installation or launcher reports an error.
-R is not required to build or run Python-only sessions.
-Windows builds stage the pinned native sandbox executable and both Windows helpers.
-Installed wheels expose an environment-bound Python launcher so `uv tool install` can copy the command onto PATH while the native executable and verified helpers remain together under the tool environment's `libexec` directory.
-Install CMake for the companion build.
-Cargo-only builds first need `python scripts/stage-sandbox-runner`.
+Install Python 3.11+, uv, Git, Rust's MSVC toolchain, Visual Studio C++ build tools, the Windows SDK, and CMake.
+R is optional for building and Python-only execution.
+For R, use an x64 installation selected through public `r` configuration, `R_HOME`, or PATH.
 
 From PowerShell in the repository root:
 
 ```powershell
-$env:R_HOME = 'C:/Program Files/R/R-4.6.1'
-$env:RETICULATE_PYTHON = 'C:/path/to/python.exe'
 uv tool install --reinstall .
 mcp-console sandbox-setup
+mcp-console sandbox-setup --status
 mcp-console serve
 ```
 
-Replace the paths with the installed runtime locations; omit `R_HOME` for a machine without R.
-Select an existing Python with the project `python` setting or `-c 'python="C:/path/to/python.exe"'`, then `RETICULATE_PYTHON`.
-Use the actual interpreter or virtualenv executable, not a Windows App Execution Alias.
-Explicit Python selections use preinstalled packages; `matplotlib` is needed for Python plots.
-With no explicit Python selection, `uv` prepares a managed environment; Python-only sessions require `uv` on `PATH`.
-R preparation prefers `ir` (at least 0.4.0) on `PATH`, then `uv tool run --from r-lib-ir ir`, then reticulate's uv bootstrap when available.
-Without an R resolver bootstrap, R uses preinstalled packages, with an available PATH Python as a fallback.
-Use `requirements` to stage packages, add them to a compatible live environment, or replace the declaration with a restart; reached missing imports and R package loads can request dependencies automatically.
-See [requirements](REQUIREMENTS.md) for selection, activation, and the host trust boundary.
-Python selection is inspected at startup, and enabled interpreters initialize in the background before the first cell.
+Source packaging stages the pinned companion and native helpers.
+Direct Cargo builds need `scripts/stage-sandbox-runner.cmd` first.
+Use `scripts/with-checkout.cmd` for direct mutating build commands.
 
-The server waits for an MCP client on standard input; it does not open an interactive terminal.
-Configure clients with command `mcp-console` and arguments `["serve"]`; use `["serve", "--no-sandbox"]` to explicitly run with host permissions.
-Local sandboxed sessions redirect resolver and worker caches to `%LOCALAPPDATA%/mcp-console/cache/dependencies`, or `<XDG_CACHE_HOME>/mcp-console/dependencies` when selected.
-`cache: host` retains host caches, as does `--no-sandbox` by default.
-Cache redirection does not sandbox Windows dependency preparation; it retains host permissions and its owned Job lifecycle.
-There is no automatic fallback from sandboxed execution.
-Keep embedded R sources checked out with LF line endings as specified by `.gitattributes`.
-R startup selects the first nonempty `R_USER` or `HOME`, then the Windows user profile directory.
-Recording follows the shared [recording directory discovery](RECORDING.md), including `MCP_CONSOLE_HOME` and an existing project `.agents/console` directory.
+`serve` waits for MCP traffic; it is not an interactive prompt.
+Configure your client with command `mcp-console` and arguments `["serve"]`.
+
+To select preinstalled Python:
+
+```yaml
+python: C:/project/.venv
+```
+
+Use a real interpreter/venv, not a Windows App Execution Alias.
+Its packages must already be installed.
+Without an explicit selection, PATH uv prepares managed Python.
+Shared [requirements](REQUIREMENTS.md), [configuration](CONFIGURATION.md), and [recording](RECORDING.md) rules apply.
+
+Sandboxed sessions default to Console caches under `%LOCALAPPDATA%/mcp-console/cache/dependencies`, subject to the [documented overrides](RESOLVER.md#cache-locations).
+Redirecting caches does not sandbox preparation.
+There is no automatic fallback to host execution when sandbox setup fails.
 
 ## Native sandbox
 
-`mcp-console sandbox-setup` explicitly provisions the Console sandbox accounts and network rules through Windows UAC.
-Run it interactively, then use `mcp-console sandbox-setup --status` to check readiness.
-The current runner requires setup version 6; older provisioning needs an approved setup refresh before elevated execution.
-Ordinary sandbox launches fail with setup guidance if provisioning is missing; they do not silently retry unsandboxed or choose a weaker backend.
-The native diagnostic names `mcp-console-sandbox setup`; installed Console users run its public equivalent, `mcp-console sandbox-setup`, with the same state directory.
-Setup uses Console accounts, separate from Codex accounts.
-Persistent state defaults to `%LOCALAPPDATA%\mcp-console`.
-Help and successful setup output describe the resources setup creates or reuses: the local accounts `McpConsoleSandboxOff` (restricted networking) and `McpConsoleSandboxOn` (network enabled), the `ConsoleSandboxUsers` security group, account-scoped Windows Firewall rules and WFP loopback filters, and protected state directories.
-Within the state directory, `.sandbox` holds setup records, `.sandbox-secrets` holds encrypted credentials, and `.sandbox-bin` stores helpers with sandbox read/execute access.
-An up-to-date setup is reused without changes; this summary describes provisioning resources, not a fresh audit of firewall policy.
-`--status` retains its read-only JSON readiness report.
+`mcp-console sandbox-setup` explicitly provisions or refreshes Console's resources through UAC.
+Run it interactively.
+Ordinary launches fail with setup guidance if provisioning is missing or outdated; they do not provision accounts or choose a weaker backend silently.
 
-The default elevated backend enforces restricted networking and filesystem writes.
-Grouped filesystem permissions and `--writable-root` use native policy composition.
-Private storage is exported through `TMPDIR`, `TEMP`, and `TMP`.
-Standalone execution uses the same bundle: `mcp-console sandbox -- python script.py`.
+Setup creates or reuses:
 
-Public `config.yaml` uses the same schema as macOS/Linux and keeps the native elevated backend and default state directory.
-OS-specific backend and state-directory controls belong only to the separate complete-native-policy CLI transport.
-The default state directory is `%LOCALAPPDATA%\mcp-console`; provision that location for ordinary application launches.
-The complete transport can still explicitly select the unelevated backend for network-enabled workloads; it requires host reads and rejects read-deny policies.
-Use one stable state directory per Windows user: accounts and firewall policy are machine resources, and capability ACL entries persist on filesystem objects.
-Managed proxy mappings and explicit resolver sandbox settings are rejected before workload/preparation launch.
-Omitted resolver settings retain existing host preparation with environment/cache controls; parser parity does not imply native enforcement parity.
-Sandbox environment inheritance omits Windows' hidden per-drive working-directory metadata such as `=C:`; ordinary variables remain inherited, and explicit names containing `=` remain invalid.
+- `McpConsoleSandboxOff` and `McpConsoleSandboxOn` local accounts, plus the `ConsoleSandboxUsers` group.
+- Account-scoped Windows Firewall rules and WFP loopback filters.
+- Protected setup, encrypted-credential, and helper storage beneath the state directory.
 
-The native runner owns a non-breakaway Job for each workload.
-It terminates remaining descendants and confirms zero active processes before reporting exit.
-Only that receipt permits a replacement generation and private-storage removal.
-After confirmed Job retirement, private-storage removal retries sharing violations for up to five seconds while Windows releases file or image mappings.
-Cleanup failure retains storage and blocks replacement.
-The Windows frontend waits for the runner; forced frontend termination does not confirm cleanup.
-Process handles monitor both the frontend and session owner.
-Runner/helper death can terminate Jobs, but does not guarantee storage deletion.
+The default state directory is `%LOCALAPPDATA%\mcp-console`.
+Use one stable directory per Windows user; accounts and network policy are machine resources, and ACL entries persist on filesystem objects.
+`--status` reports readiness without provisioning; it is not a fresh firewall audit.
+
+Ordinary `config.yaml` launches use the elevated backend and default state directory.
+It enforces restricted networking and filesystem writes and supplies private `TMPDIR`, `TEMP`, and `TMP`.
+Workspace permissions use the common [sandbox schema](SANDBOX_CONFIGURATION.md).
+
+Complete native policies may choose another state directory or opt into the unelevated backend.
+Unelevated execution requires enabled networking and host reads and rejects read-deny policy.
+Those controls are not fields in the public YAML schema.
+
+Managed proxy mappings and explicit resolver sandbox policies are unsupported and rejected.
+Resolver environment/cache settings remain usable with host permissions.
 
 ## Lifecycle and platform differences
 
-The Windows relay uses private named pipes with overlapped I/O, inherited events for interrupts and managed stdin wakeups, and process handles for exit observation.
-Pipe permissions use the current logon SID so restricted tokens can open both endpoints; remote clients are rejected and both endpoints are connected before the worker starts.
-The public MCP messages, server-relay JSONL, and worker sideband message shapes remain shared across platforms.
-R, Python, and SQL callback interrupts are cooperative and preserve state when handled; a native call that does not check for interruption may require `restart`.
-R-owned DuckDB queries handle interruption; a long native Python-owned DuckDB query can require `restart` on Windows.
-The worker updates interpreter pending state and invokes the C runtime's current SIGINT handler without requiring a console window.
-Its idle command wait also wakes for interrupts and consumes them before dispatching a following cell, including an interrupt and cell supplied in the same `send`.
-After R initializes, the idle wait also wakes for Windows messages and services R's background event loop, including `later` timers, on the interpreter thread.
-The wait retires pending pipe I/O and releases the command-reader lock before dispatching callbacks, so callback input and resolver requests can use the same sideband.
-Incomplete command frames survive message and interrupt wakeups.
+The native runner owns a non-breakaway Job and confirms zero active processes before successful retirement.
+Private-storage removal follows that confirmation; cleanup failure retains storage and blocks replacement.
+Forced frontend exit is not a cleanup receipt, and runner/helper death does not guarantee storage deletion.
 
-Resolvers and Python inspection enter kill-on-close Jobs while suspended, before executing code.
-Cancellation and resolver interruption terminate the Job, and results are accepted only after the Job has no active processes.
-Resolver interruption records whether native root termination began or the process was already terminating, then confirms Job retirement before reporting the result.
-A natural exit racing with termination keeps its original diagnostics, even when its exit code matches the interruption status.
-These Jobs own trusted host preparation, not evaluated user code, and are not sandboxes.
-The server invokes `mcp-console resolve` over cancellable pipes; a lost or unconfirmed cleanup receipt blocks replacement.
-After spawning a resolver, the parent releases the command builder's child-side pipe handles so a rejected startup can confirm shutdown and EOF without a spurious retirement timeout.
-R resolver scripts remain compile-time embedded and are passed through temporary files because Windows Rscript does not preserve multiline `-e` arguments.
-Unsandboxed evaluated code runs with the user's permissions.
-Normal retirement reaps the direct worker but does not promise cleanup of its descendants, matching the existing direct-execution boundary.
-An inherited output writer cannot keep the server waiting indefinitely after its owned process exits.
-Blocked synchronous relay output may leave an I/O thread until relay process exit, after the worker has been retired.
+Interruption is cooperative.
+R/Python callbacks can handle it without losing state, but an unresponsive native call may need restart.
+R-owned DuckDB supports native query interruption; long native Python-owned DuckDB queries can require restart on Windows.
 
-Windows MCP input has one reader and a bounded 128 KiB queue shared between startup and the running transport.
-Startup EOF cancels active Python inspection once the reader observes it; queue backpressure can delay EOF observation until input is consumed.
-After startup finishes, EOF is reported only after the queued MCP input is consumed, preserving final request responses.
-Windows uses a UTF-8 executable manifest, UTF-16 Python configuration, and native executable suffixes.
-On Windows x64, each Console process restores an absent or empty `PROCESSOR_ARCHITECTURE` to `AMD64` before runtime loading.
-This keeps R DuckDB preparation and teardown usable when an MCP client or configured environment filters ordinary Windows variables; nonempty supplied values are retained.
-The built-in worker uses the C runtime's inherited stdin descriptor because R subprocess helpers can clear the Windows standard-handle table.
-After R compatibility calls, Console restores that table from the live CRT descriptors so Python subprocesses can inherit stdio.
-R/Python interoperability markers synchronize the Win32 and CRT environment views before native R startup.
-Python bootstrap uses native separators when R supplies a forward-slash executable path, so CPython finds the selected virtualenv's `pyvenv.cfg`.
-R's `commandArgs()` retains the selected launcher and the full interactive startup arguments, matching the Unix worker's interpreter identity.
-Live Python activation also updates an already imported Joblib process backend's interpreter selection; virtualenv launchers must not retain handles intended for its task processes.
+Windows uses native pipes, events, and process handles rather than Unix signals/descriptors.
+Those implementation choices do not create different public MCP message shapes.
+Direct execution reaps its direct worker but does not guarantee descendant cleanup.
 
 ## Validation
 
-Native sandbox acceptance covers policy enforcement, stdio/exit propagation, private storage, and descendant retirement before restart.
-Native runtime acceptance covers Python-first and R-first startup, each runtime without the other, SQL-first managed Python sessions, R-owned SQL and native query interruption, DB-API selection and cooperative callback interruption, a Unicode virtualenv path, both bridge directions, input, active and idle interrupts including Python sleep and same-call following cells, plots, recording, restart, Python inspection cleanup/cancellation, and packaging serialization.
-`tests/windows.py` includes `tests/windows_relay.py`, which checks relay framing, fatal-error ordering, stdin failures, and final sideband delivery.
-It also includes `tests/windows_resolver.py`, covering the resolver protocol, ir/uv arguments, real environment materialization, failures, interrupts, and descendant retirement.
-Run native commands exclusively in a checkout.
-The default workflow runs native Windows acceptance.
-The full workflow also discovers and runs the shared boundary cases whose declared capabilities are available.
-The transcript supervisor merges private per-case timing logs after process completion, serializing Windows append writes so parallel cases cannot overwrite records.
-Installation checks additionally exercise the copied public command from an isolated `uv tool install`, including sandbox setup inspection, worker state/restart, stdio, and full-width exit status.
-The `.cmd` launchers work in PowerShell and Command Prompt; `python scripts/COMMAND` is an equivalent entry point using an explicitly selected Python.
-Python 3.11 or newer is required; CI uses Python 3.13.
-
-Configure `R_HOME` before running the complete suite, and use the C locale to match CI.
-An explicit `R_HOME` selects the installation for runtime and resolver tests and enables R sandbox acceptance.
-Replace the example path below with the installed R directory.
+Use Python 3.13 to match CI.
+Full coverage needs R/Python, PATH uv/ir, package repository access, prepared dependencies, and an explicitly provisioned sandbox.
+Native acceptance does not provision the machine itself.
 
 ```powershell
-$env:R_HOME = 'C:/Program Files/R/R-4.6.1'
 $env:LC_ALL = 'C'
 scripts/preflight.cmd
 scripts/stage-sandbox-runner.cmd
+mcp-console sandbox-setup --status
 scripts/test.cmd --list
-scripts/test.cmd --locate WindowsConsole.test_python_without_r
 scripts/test.cmd WindowsConsole.test_python_without_r
 scripts/test.cmd client_server/python/test_runtime
-scripts/test.cmd --full --list
 scripts/format.cmd
 scripts/check.cmd
 scripts/check.cmd --full
-scripts/with-checkout.cmd cargo build
-scripts/review-diff.cmd origin/main
 ```
 
-`preflight` is read-only; its Windows inventory currently skips companion inspection.
-Stage the Windows companion with `scripts/stage-sandbox-runner.cmd` before native build, test, or check commands; packaging stages it automatically.
-R is optional in its inventory so Python-only setups can be inspected; the complete acceptance suite needs both runtimes.
-Failed optional R probes remain visible in the inventory without failing preflight; required tool and probe failures still fail it.
-`test` builds `target/debug/mcp-console.exe` unless `MCP_CONSOLE_TEST_BINARY` selects an installed executable; no selectors runs all native cases.
-Boundary selectors use the shared `BOUNDARY/SUITE::CASE` syntax and support `--update`, `--jobs`, and `--timeout`.
-Unscoped `test --full` adds all applicable shared cases.
-Shared concurrency defaults to `max(2, 2 * N)` on all platforms, where `N` is the logical CPU count.
-An unavailable CPU count uses two cases.
-Explicit `--jobs N` overrides must be at least one.
-Boundary selectors also accept `-j N`; unscoped `test --full` runs require `--jobs N`.
-`check` validates embedded sources, architecture, Rust formatting, Clippy, Rust tests, and native acceptance.
-`--full` adds shared boundary cases, portable transcript-runner/MCP-client/release tooling regressions, wheel acceptance, and source-install acceptance in a temporary virtualenv.
-`format` runs ruff, yamark, rustfmt, and air, reports every failure, and only returns failure with `--strict`.
-Install those formatters separately; missing tools and host policy blocks are reported rather than silently ignored.
+Set `R_HOME` to the installed R directory when the complete suite requires it.
+`preflight` is read-only; successful inventory is not build or sandbox acceptance.
+Packaging stages its companion automatically, while direct checks need explicit staging.
+
+The ordinary gate runs native Windows acceptance.
+The full gate adds applicable shared boundary cases, tooling, wheel, and source-install checks.
+Shared selectors and snapshot rules are documented in [Development](DEVELOPMENT.md#validation-ladder) and [Boundary tests](../tests/boundaries/README.md).
+
+For installed acceptance, `MCP_CONSOLE_TEST_BINARY` selects the installed public command.
+A copied uv launcher also needs `MCP_CONSOLE_TEST_NATIVE_BINARY` for fixtures requiring the actual native executable or bundle relocation.
 
 ### Testing parity and remaining gaps
 
-Native input/interrupt acceptance uses the public `waiting for stdin` receipt before providing input, then observes loop output before interrupting.
-It requires no networking or host-to-sandbox fixture access.
-The same scenario runs directly and with the public `network: enabled` selection in `WindowsSandbox.test_network_enabled_input_and_interrupt`.
-Public-policy tests use the default elevated backend and default persistent state directory (`%LOCALAPPDATA%/mcp-console`).
-They run against the default backend without a provisioning opt-in.
-`WindowsSandbox.test_provisioned_network_restricted_input_and_interrupt` exercises the public network-restricted selection against that default backend.
-The test never provisions accounts or chooses another backend.
-Missing provisioning reports a test failure with setup guidance.
-Setup-reuse and private-installation checks discover the state directory through `sandbox-setup --status`; `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` can still select an explicit directory for those checks.
-Windows CI builds the staged Console and runs `python scripts/prepare-windows-tests` before the full gate.
-GitHub-hosted Windows runners [run as administrators with UAC disabled](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#administrative-privileges), so setup can provision their sandbox without an interactive elevation prompt.
-Preparation provisions the runner's sandbox state when needed, verifies setup readiness, and exports both `R_HOME` and `MCP_CONSOLE_TEST_WINDOWS_STATE_DIR` to subsequent steps.
-Hosted Console and runtime installations can live outside the native backend's standard read roots.
-CI passes those asset directories to preparation with repeated `--read-root` arguments, which grant read/execute ACLs to the verified Console sandbox accounts before exporting the test environment.
-This is a trusted host preparation operation requiring permission to update the selected directories; local callers can omit these grants when their installations are already readable.
-The full gate therefore includes the provisioned elevated test in both checkout and installed-wheel acceptance.
-Local validation uses the same tests: inspect `mcp-console sandbox-setup --status`, then run `scripts/check.cmd` or `scripts/check.cmd --full`.
-The private-installation regression uses preparation's `--require-configured` mode so an unavailable setup fails without provisioning accounts.
-Provision an unconfigured local machine explicitly with `mcp-console sandbox-setup`; the acceptance tests themselves do not provision it.
+The shared suite runs portable R/Python/SQL behavior in addition to Windows-specific tests.
+Unix namespace, signal, PTY, ELF, and procfs tests remain platform-specific.
+Some shell/FIFO/layout fixtures still exclude Windows even when the underlying behavior is supported; native counterparts do not replace every skipped scenario.
+Port those fixtures before removing capability restrictions.
 
-Inspection, resolver, raw relay, and inherited-writer fixture checkpoints use unique local named pipes with ordinary host ACLs and non-inheritable handles.
-Their readiness and release operations have bounded deadlines; cancellation joins pending native I/O before releasing its storage.
-The host pins process identities before release or cancellation.
-These are host-plumbing tests, not sandbox-enforcement evidence.
-`WindowsSandbox.test_network_enabled_allows_loopback_exchange` explicitly tests positive loopback communication with networking enabled.
-The provisioned backend's loopback restriction still needs separate acceptance against its established policy contract; unelevated tests do not imply loopback denial.
+Use `scripts/test.cmd --full --list` and skip diagnostics to inspect coverage.
+A passing macOS equivalent or skipped Windows case is not Windows validation.
+[TODO](TODO.md#sandbox-and-platforms) collects this fixture debt.
 
-Shared discovery reports unavailable capabilities per case and execution mode; a skip is not validation.
-Windows full checks exercise portable R/Python/SQL execution, startup, bridge attachment, input, plots, managed activation, process creation, recording, CLI configuration, and protocol behavior in addition to native acceptance.
-The shared Windows pipe reader uses blocking native reads with socket notifications.
-Each shared case runs in a kill-on-close Job; cancellation gives the case 15 seconds to run cleanup, then requires confirmed descendant retirement before deleting its workspace.
-Owner-loss cleanup remains independent of the case interpreter, including native calls holding Python's GIL.
-Portable idle R callback cases declare `R_EVENT_LOOP` and run on Windows; Unix FIFO input-handler fixtures retain `POSIX`.
-Windows `later` uses window messages and timers rather than Unix polled-event hooks.
-Native acceptance also exercises callback input, plots, interruption, and shared R/Python state directly and with a restricted token, and preserves incomplete UTF-8 commands across timer dispatch.
-Shared interpreter-identity cases launch native `R.exe` and `Rscript.exe` and compare resource paths by filesystem identity, since the stock Windows launcher may shorten `R_HOME` to an 8.3 path.
-The native child-launch fixture uses ASCII arguments because the stock `R.exe` delegates through an ANSI command line; shared cell tests separately exercise Unicode R input.
+CI prepares the sandbox explicitly before acceptance and may grant sandbox-account read access to installations outside standard roots.
+Those are trusted host setup operations, not permission changes performed by tests or ordinary sessions.
 
-| Exclusion                                                                                                                  | Assessment and Windows coverage                                                                                                                                                                                                                                                     |
-| -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Seatbelt/bubblewrap policy, ELF interposition, procfs, Unix signals, PTYs, descriptor inheritance, and non-UTF-8 filenames | OS-specific contracts and fixtures remain on their owning platforms. Native Windows policy, relay, input, cancellation, and Job retirement have separate acceptance cases. The shared `sandbox` capability refers to Unix fixtures, not absence of a Windows sandbox.               |
-| Shell/shebang fake workers and resolvers, FIFO checkpoints, Unix virtualenv or R-library layouts                           | Remaining fixture debt for otherwise supported behavior. These cases declare `POSIX`; Windows native tests cover some corresponding contracts, but do not replace every skipped admission, SDK, resolver, and lifecycle scenario. Port the fixture before removing its requirement. |
-| Unix staging/release executable fixtures and Rust Unix descriptor fixtures                                                 | Keep the native ABI/build requirements. Windows checkout ownership, packaging, and installation are exercised through the native workflow; portable release-manifest, client, and runner checks run on both platforms.                                                              |
+## Troubleshooting
 
-Handshakes, CLI usage, early explicit-selection failures, and background Python stdout retain Windows snapshots where public behavior differs.
-Background Python threads use their original stdout stream and its CRLF line endings on Windows.
-Generic snapshots remain the Unix references; platform updates preserve both and remove only obsolete companions owned by the updated case.
-Use `test --full --list` and capability skip diagnostics to audit current coverage instead of treating native acceptance alone as parity.
+A missing/outdated setup error requires explicit `sandbox-setup`, not `--no-sandbox` as an automatic workaround.
+Use the default state directory for ordinary application launches.
 
-Build, test, and packaging entry points share `.dev-workflow/checkout.lock`, outside `target`.
-Use `with-checkout` for direct build commands.
-Independent workflows fail when busy; source/wheel packaging waits, and nested packaging reuses the workflow's owner.
-Windows workflow phases use Jobs to retire descendants on completion or cancellation before releasing the lock.
-These are development-command ownership guarantees; they do not add sandboxing to evaluated user code.
+Windows process-creation error 4551 indicates host application-control policy.
+The host must permit the executable and downloaded interpreter DLLs; this is separate from Console's sandbox settings.
 
-The acceptance interpreter needs `packaging` and `matplotlib`; R needs `reticulate` and `jsonlite`.
-Windows CI also builds and checks the R package, including its ellmer chat and requirements integration tests; these checks additionally need `ellmer`, `processx`, `ps`, `httr2`, and `testthat`.
-Resolver acceptance also needs uv and package repository access.
-Full checks include shared plotting and R resolver cases that require `ir` 0.4.0 or later on PATH; install it with `uv tool install r-lib-ir`, as CI does.
-For installed-wheel acceptance, set `MCP_CONSOLE_TEST_BINARY` to the installed `mcp-console.exe` and run the same tests.
-When selecting a copied tool command outside its environment, also set `MCP_CONSOLE_TEST_NATIVE_BINARY` to that environment's `libexec/mcp-console.exe` for fixtures that require the native PID or relocate its bundle.
-Tests use `rustc` to build small process fixtures.
-R source validation finds `Rscript.exe` under `R_HOME` (including `bin/x64`) or on `PATH`, and uses `LC_ALL=C` for the syntax checker.
-
-Windows error 4551 during process creation indicates a host application-control block.
-Local executables and downloaded interpreter DLLs must be permitted by the host policy; this is separate from Console sandbox support.
+Keep embedded R sources in LF form as specified by `.gitattributes`.
+For Linux workflows under WSL, use an independent Linux checkout and follow [WSL development](DEVELOPMENT.md#windows-development-through-wsl2).
