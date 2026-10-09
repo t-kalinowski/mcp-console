@@ -119,7 +119,8 @@ Do not treat Cargo reuse as detection of all external compiler/SDK changes.
 
 Windows CI keeps the pinned source at `.sandbox-runner-source` for the entire job, including wheel and source-installation builds via `MCP_CONSOLE_SANDBOX_SOURCE`.
 It restores the source timestamp archive separately from `codex-rs/target` and the complete `wheel-data/data` plus `target/sandbox-runner-build.json` staging output.
-GNU tar creation and extraction use `--force-local` so absolute Windows drive paths are treated as local archive files.
+Restoration validates archived contents against the clean checkout and applies only timestamps, preserving Git's native files and symlink representation.
+GNU tar creation uses `--force-local` so absolute Windows drive paths are treated as local archive files.
 The exact Cargo cache key includes the timestamp archive's digest so regenerating an evicted archive cannot permanently pair newer source mtimes with older build intermediates.
 An exact staging/build cache pair may skip initial staging; compatible Cargo fallbacks still stage normally.
 The completed-output key includes the sandbox's pinned Rust toolchain, source pin, Windows target, runner OS version, and staging recipe inputs.

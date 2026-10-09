@@ -275,6 +275,13 @@ def _initializes_and_lists_tools(
             ), description
             assert "Run one cell at a time" in description
             assert "An error can leave earlier changes in place" in description
+            assert f"`timeout_ms={properties['timeout_ms']['default']}`" in description
+            assert '`requirements.action="add"`' in description
+            for guidance in (description, properties["timeout_ms"]["description"]):
+                assert "timeout_ms=300000" in guidance, guidance
+                assert "returns early" in guidance, guidance
+                assert "Avoid repeated short polls" in guidance, guidance
+                assert "timeout_ms=1000" in guidance, guidance
             assert "active host resolver" not in properties["control"]["description"]
             if custom:
                 assert "custom-worker" in description
