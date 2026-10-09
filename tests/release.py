@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import shlex
@@ -14,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import tomllib
 import unittest
@@ -2525,6 +2527,195 @@ version = "0.0.0"
 
 
 class PortableReleaseTests(ReleaseFixture):
+    def test_source_timestamp_restore_rejects_invalid_cache_before_mutation(
+        self,
+    ) -> None:
+        for name, kind, contents in (
+            ("./changed", tarfile.REGTYPE, b"cached contents"),
+            ("./missing", tarfile.REGTYPE, b"contents"),
+            ("../outside", tarfile.REGTYPE, b"contents"),
+            ("C:/outside", tarfile.REGTYPE, b"contents"),
+            ("./changed", tarfile.SYMTYPE, b""),
+        ):
+            with (
+                self.subTest(member=name, kind=kind),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                source = root / "source"
+                source.mkdir()
+                first = source / "first"
+                first.write_bytes(b"same contents")
+                (source / "changed").write_bytes(b"checkout contents")
+                original_time = 1_600_000_100
+                os.utime(first, (original_time, original_time))
+                archive = root / "source.tar"
+                with tarfile.open(archive, "w") as cached:
+                    for filename, member_kind, payload in (
+                        ("./first", tarfile.REGTYPE, b"same contents"),
+                        (name, kind, contents),
+                    ):
+                        member = tarfile.TarInfo(filename)
+                        member.type = member_kind
+                        member.size = len(payload)
+                        member.mtime = 1_600_000_000
+                        member.linkname = "wrong target"
+                        cached.addfile(member, io.BytesIO(payload))
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "scripts/restore-source-timestamps"),
+                        str(archive),
+                        str(source),
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertIn(name.removeprefix("./"), result.stderr)
+                self.assertEqual(first.stat().st_mtime, original_time)
+                self.assertEqual(first.read_bytes(), b"same contents")
+                self.assertEqual(
+                    (source / "changed").read_bytes(), b"checkout contents"
+                )
+                self.assertFalse((root / "outside").exists())
+
+    @unittest.skipUnless(os.name == "posix", "Native symlink timestamp support")
+    def test_source_timestamp_restore_preserves_symlinks_without_following_them(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            outside = root / "outside"
+            outside.write_bytes(b"external contents")
+            original_time = 1_600_000_100
+            os.utime(outside, (original_time, original_time))
+            link = source / "link"
+            link.symlink_to("../outside")
+            archive = root / "source.tar"
+            for kind in (tarfile.SYMTYPE, tarfile.REGTYPE):
+                with self.subTest(kind=kind):
+                    with tarfile.open(archive, "w") as cached:
+                        member = tarfile.TarInfo("./link")
+                        member.type = kind
+                        member.linkname = "../outside"
+                        member.mtime = 1_600_000_000
+                        payload = b"../outside" if kind == tarfile.REGTYPE else b""
+                        member.size = len(payload)
+                        cached.addfile(member, io.BytesIO(payload))
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(ROOT / "scripts/restore-source-timestamps"),
+                            str(archive),
+                            str(source),
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(os.readlink(link), "../outside")
+                    self.assertEqual(link.lstat().st_mtime, 1_600_000_000)
+                    self.assertEqual(outside.stat().st_mtime, original_time)
+                    self.assertEqual(outside.read_bytes(), b"external contents")
+
+    @unittest.skipUnless(os.name == "nt", "Native Windows CI archive restoration")
+    def test_windows_source_cache_preserves_git_symlink_checkout(self) -> None:
+        workflow = (ROOT / ".github/workflows/ci.yaml").read_text(encoding="utf-8")
+        step = workflow.split(
+            "      - name: Prepare native Windows sandbox source archive\n", 1
+        )[1].split("      - name:", 1)[0]
+        lines = step.split("        run: |\n", 1)[1].splitlines()
+        program = "\n".join(line[10:] for line in lines)
+        with tempfile.TemporaryDirectory(prefix="source cache ") as temporary:
+            root = Path(temporary)
+            source = root / ".sandbox-runner-source"
+            source.mkdir()
+            shutil.copytree(ROOT / "scripts", root / "scripts")
+
+            def git(*arguments: str, **options):
+                return subprocess.run(
+                    ["git", "-C", str(source), *arguments],
+                    check=True,
+                    capture_output=True,
+                    **options,
+                ).stdout
+
+            git("init", "--quiet")
+            git("config", "core.symlinks", "false")
+            git("config", "core.autocrlf", "false")
+            git("config", "user.name", "Fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            (source / "COPYING").write_bytes(b"fixture license\n")
+            git("add", "COPYING")
+            target = (
+                git("hash-object", "-w", "--stdin", input=b"COPYING").decode().strip()
+            )
+            git("update-index", "--add", "--cacheinfo", "120000", target, "LICENSE")
+            git("checkout-index", "--all", "--force")
+            git("commit", "--quiet", "-m", "fixture")
+            self.assertEqual(git("status", "--porcelain"), b"")
+
+            archive = root / "sandbox-source.tar"
+            cached_time = 1_600_000_000
+            with tarfile.open(archive, "w") as cached:
+                copying = tarfile.TarInfo("./COPYING")
+                copying.size = len(b"fixture license\n")
+                copying.mtime = cached_time
+                cached.addfile(copying, io.BytesIO(b"fixture license\n"))
+                license = tarfile.TarInfo("./LICENSE")
+                license.type = tarfile.SYMTYPE
+                license.linkname = "COPYING"
+                license.mtime = cached_time
+                cached.addfile(license)
+            for path in (source / "COPYING", source / "LICENSE"):
+                os.utime(path, (cached_time + 100, cached_time + 100))
+
+            # CI's R setup exposes GNU tar; use Git for Windows' bundled copy.
+            git_root = Path(git("--exec-path").decode().strip()).parents[2]
+            tar_directory = git_root / "usr/bin"
+            self.assertTrue((tar_directory / "tar.exe").is_file())
+            environment = dict(
+                os.environ,
+                RUNNER_TEMP=str(root),
+                GITHUB_OUTPUT=str(root / "output"),
+                PATH=os.pathsep.join(
+                    (
+                        str(Path(sys.executable).parent),
+                        str(tar_directory),
+                        os.environ["PATH"],
+                    )
+                ),
+            )
+            for state in ("symlink archive", "cache miss", "generated archive"):
+                with self.subTest(cache=state):
+                    if state == "cache miss":
+                        archive.unlink()
+                    (root / "output").unlink(missing_ok=True)
+                    result = subprocess.run(
+                        ["pwsh", "-NoProfile", "-NonInteractive", "-Command", program],
+                        cwd=root,
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    self.assertEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertEqual(git("status", "--porcelain"), b"")
+                    self.assertFalse((source / "LICENSE").is_symlink())
+                    self.assertEqual((source / "LICENSE").read_bytes(), b"COPYING")
+                    for path in (source / "COPYING", source / "LICENSE"):
+                        self.assertEqual(path.stat().st_mtime, cached_time)
+                    self.assertEqual(
+                        (root / "output").read_text().strip(),
+                        "archive-sha256="
+                        + hashlib.sha256(archive.read_bytes()).hexdigest(),
+                    )
+
     def test_verify_wheel_set_requires_macos_and_linux_architectures(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             directory = Path(temporary_directory)

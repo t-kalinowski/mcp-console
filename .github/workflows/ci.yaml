@@ -86,7 +86,7 @@ jobs:
         id: sandbox-source
         run: |
           if (Test-Path "$env:RUNNER_TEMP/sandbox-source.tar") {
-            tar --force-local -xf "$env:RUNNER_TEMP/sandbox-source.tar" -C .sandbox-runner-source
+            python scripts/restore-source-timestamps "$env:RUNNER_TEMP/sandbox-source.tar" .sandbox-runner-source
           } else {
             # Use the Unix timestamp archive convention; never cache .git.
             tar --force-local -cf "$env:RUNNER_TEMP/sandbox-source.tar" --exclude=./.git --exclude=./codex-rs/target -C .sandbox-runner-source .
