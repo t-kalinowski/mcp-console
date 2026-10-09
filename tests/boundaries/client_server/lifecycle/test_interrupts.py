@@ -47,7 +47,7 @@ from boundaries.client_server._harness import (
 )
 
 
-@requires(R)
+@requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_interrupt_with_requirements_in_mixed_managed_session(
     binary: Path, execution: Execution
