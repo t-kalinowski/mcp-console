@@ -249,6 +249,8 @@ Transport/protocol/infrastructure failure instead stops a worker whose state can
 Console uses the same native requirement owner with or without R; reticulate metadata is an optional compatibility projection.
 Before initialization, preparation can materialize a selection without starting either interpreter.
 After initialization, a candidate must match the loaded `libpython` identity and running version and must not change or remove a loaded distribution's version.
+Unchanged distribution versions need no file-ownership scan.
+For changed or removed versions, Console still matches recorded distribution files to loaded modules, including namespace contributions.
 Add is not a promise that arbitrary upgrades are safe: a newly added package can change unloaded/transitive dependencies.
 Use restart for changes needing fresh imports; changing an already declared distribution requires replacement.
 

@@ -33,6 +33,8 @@ def write_test_wheel(
     native_module: Path | None = None,
     package_files: dict[str, str] | None = None,
     package_name: str | None = None,
+    version: str = "1.0.0",
+    requires: tuple[str, ...] = (),
 ) -> Path:
     wheels = root / "wheels"
     wheels.mkdir(exist_ok=True)
@@ -40,11 +42,12 @@ def write_test_wheel(
     if native_module is not None:
         platform = sysconfig.get_platform().replace("-", "_").replace(".", "_")
         tag = f"cp39-abi3-{platform}"
-    wheel = wheels / f"{name}-1.0.0-{tag}.whl"
-    dist_info = f"{name}-1.0.0.dist-info"
+    wheel = wheels / f"{name}-{version}-{tag}.whl"
+    dist_info = f"{name}-{version}.dist-info"
     entries: dict[str, str | bytes] = {
         f"{dist_info}/METADATA": (
-            f"Metadata-Version: 2.3\nName: {name.replace('_', '-')}\nVersion: 1.0.0\n"
+            f"Metadata-Version: 2.3\nName: {name.replace('_', '-')}\nVersion: {version}\n"
+            + "".join(f"Requires-Dist: {requirement}\n" for requirement in requires)
         ),
         f"{dist_info}/WHEEL": (
             "Wheel-Version: 1.0\nGenerator: mcp-console test\n"
@@ -67,8 +70,9 @@ def write_test_wheel(
         for path, content in entries.items():
             archive.writestr(path, content)
     index = root / "index" / name.replace("_", "-")
-    index.mkdir(parents=True)
-    (index / "index.html").write_text(f'<a href="{wheel.as_uri()}">{wheel.name}</a>\n')
+    index.mkdir(parents=True, exist_ok=True)
+    with (index / "index.html").open("a") as listing:
+        listing.write(f'<a href="{wheel.as_uri()}">{wheel.name}</a>\n')
     return index.parent
 
 
