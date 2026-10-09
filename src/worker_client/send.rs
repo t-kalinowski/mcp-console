@@ -155,7 +155,11 @@ impl Client {
         if let Some(cell) = &request.cell {
             self.validate_cell(cell)?;
         }
-        request.validate(self.0.dynamic_resolution || self.0.python_preparation)?;
+        request.validate(
+            self.0.r_resolution == crate::settings::Resolution::Disabled
+                || self.0.dynamic_resolution
+                || self.0.python_preparation,
+        )?;
         if initial_restart && let Some(response) = self.take_prelaunch_failure()? {
             return Ok(response);
         }
@@ -549,7 +553,10 @@ impl Client {
                 return Err("R requirements are unavailable in Python sessions without R".into());
             }
         }
-        if !self.0.dynamic_resolution && !self.0.python_preparation {
+        if self.0.r_resolution != crate::settings::Resolution::Disabled
+            && !self.0.dynamic_resolution
+            && !self.0.python_preparation
+        {
             return Err(crate::local_runtime::RESOLUTION_UNAVAILABLE.into());
         }
         Ok(())
