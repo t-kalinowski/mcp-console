@@ -20,19 +20,31 @@ from support.suites import run_this_suite
 def test_direct_py_access_attaches_on_demand(
     binary: Path, execution: Execution
 ) -> Transcript:
-    records = []
-    for getter in (
-        "reticulate::py",
-        "py",
-        'get("py", envir = as.environment("package:reticulate"))',
-    ):
-        environment, _ = r_test_environment()
-        with McpClient(
-            binary,
-            execution.serve("-c", f"python={json.dumps(sys.executable)}"),
-            environment,
-        ) as client:
-            client.initialize_and_list_tools()
+    environment, _ = r_test_environment()
+    with McpClient(
+        binary,
+        execution.serve("-c", f"python={json.dumps(sys.executable)}"),
+        environment,
+    ) as client:
+        client.initialize_and_list_tools()
+        for index, getter in enumerate(
+            (
+                "reticulate::py",
+                "py",
+                'get("py", envir = as.environment("package:reticulate"))',
+            )
+        ):
+            if index:
+                # Getter spelling changes no launch configuration. Reuse this
+                # case's preparation, but attach only in fresh worker state.
+                client.expect(
+                    "[worker stopped: in-memory state lost]\n"
+                    "[starting new worker]\n[idle]",
+                    control="restart",
+                )
+                # This reset replaces incidental setup between getter branches.
+                # The restart exercised inside each branch stays in the record.
+                client.transcript.pop()
             for restart in (False, True):
                 if restart:
                     client.send(control="restart")
@@ -77,8 +89,7 @@ def test_direct_py_access_attaches_on_demand(
                         print("bridge state retained")
                         """),
                 )
-            records.extend(client.finish()[3:])
-    return records
+        return client.finish()[3:]
 
 
 @requires(R)
