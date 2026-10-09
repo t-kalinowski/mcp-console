@@ -9,14 +9,26 @@ function Pandoc(doc)
   return doc
 end
 
--- Link the package README to pkgdown; other files outside the site stay on GitHub.
+-- Pandoc make_relative removes a directory prefix; it does not add ".." for siblings.
+local function package_link(path)
+  local input_dir = pandoc.path.directory(quarto.doc.input_file)
+  local relative_dir = pandoc.path.make_relative(input_dir, quarto.project.directory)
+  local depth = 0
+  for component in relative_dir:gsub("\\", "/"):gmatch("[^/]+") do
+    if component ~= "." then depth = depth + 1 end
+  end
+  return string.rep("../", depth) .. path
+end
+
+-- Keep public package URLs usable on GitHub and local in the rendered website.
 function Link(link)
-  if link.target == "https://t-kalinowski.github.io/mcp-console/python/reference/index.html" then
-    link.target = pandoc.path.make_relative(
-      pandoc.path.join({quarto.project.directory, "python/reference/index.html"}),
-      pandoc.path.directory(quarto.doc.input_file)
-    )
-    return link
+  local public_prefix = "https://t-kalinowski.github.io/mcp-console/"
+  if link.target:sub(1, #public_prefix) == public_prefix then
+    local path, suffix = link.target:sub(#public_prefix + 1):match("^([^#?]+)(.*)$")
+    if path and (path:match("^python/") or path:match("^r/")) then
+      link.target = package_link(path) .. suffix
+      return link
+    end
   end
   local path, suffix = link.target:match("^([^#?]+)(.*)$")
   if path and not path:match("^[/#]") and not path:match("^%a[%w+.-]*:") then
@@ -29,9 +41,7 @@ function Link(link)
       source = source:gsub("[^/]+/%.%./", "")
     end
     if source == "r/README.md" then
-      link.target = pandoc.path.make_relative(
-        pandoc.path.join({quarto.project.directory, "r/index.html"}), input_dir
-      ) .. suffix
+      link.target = package_link("r/index.html") .. suffix
     elseif not source:match("^docs/") or source:match("^docs/templates/") then
       link.target = "https://github.com/t-kalinowski/mcp-console/blob/main/" .. source .. suffix
     end

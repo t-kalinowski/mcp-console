@@ -73,6 +73,17 @@ class WebsiteTests(unittest.TestCase):
         shutil.copytree(ROOT / "python", docs.parent / "python")
         for name in ("pyproject.toml", "great-docs.yml", "LICENSE"):
             shutil.copy2(ROOT / name, docs.parent / name)
+        for directory in (docs, docs / "benchmarks"):
+            r_readme = "../r/README.md" if directory == docs else "../../r/README.md"
+            (directory / "package-links.md").write_text(
+                "# Package links\n\n"
+                "[R reference](https://t-kalinowski.github.io/mcp-console/"
+                "r/reference/console_tool.html?view=full#arguments)\n\n"
+                "[Python reference](https://t-kalinowski.github.io/mcp-console/"
+                "python/reference/MCPConsole.html?view=full#"
+                "mcp_console.MCPConsole.send)\n\n"
+                f"[R overview]({r_readme})\n"
+            )
         result = subprocess.run(
             ["quarto", "render", str(docs), "--to", "html"],
             capture_output=True,
@@ -241,6 +252,21 @@ class WebsiteTests(unittest.TestCase):
                         (self.site / f"python/reference/{name}.{method}.html").exists(),
                         "methods should be documented on the class page",
                     )
+
+    def test_package_links_are_relative_at_each_depth(self) -> None:
+        for name, prefix in (
+            ("package-links.html", ""),
+            ("benchmarks/package-links.html", "../"),
+        ):
+            with self.subTest(page=name):
+                page = self.pages[self.site / name]
+                for target in (
+                    "r/reference/console_tool.html?view=full#arguments",
+                    "python/reference/MCPConsole.html?view=full#"
+                    "mcp_console.MCPConsole.send",
+                    "r/index.html",
+                ):
+                    self.assertIn(prefix + target, page.links)
 
     def test_python_adapters_show_complete_examples(self) -> None:
         for name, factory in (
