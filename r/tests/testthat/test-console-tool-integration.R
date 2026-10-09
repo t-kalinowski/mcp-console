@@ -25,6 +25,9 @@ mcp_console_fixture <- function(binary, environment, unset) {
 }
 
 with_mcp_console_environment <- function(fixture, code) {
+  if (!length(fixture$environment) && !length(fixture$unset)) {
+    return(force(code))
+  }
   old <- Sys.getenv(
     c(names(fixture$environment), fixture$unset),
     unset = NA_character_
