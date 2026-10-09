@@ -7,16 +7,56 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub(crate) struct PythonChoice {
     pub(crate) executable: Option<PathBuf>,
-    pub(crate) managed: Option<super::ManagedPython>,
-    pub(crate) source: String,
+    pub(crate) managed: Managed,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Mapping {
     Existing(PathBuf),
-    Managed(super::ManagedPython),
+    Managed(Managed),
     FirstAvailable(Vec<Value>),
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct Managed {
+    #[serde(deserialize_with = "super::sandbox::supplied")]
+    pub(crate) packages: Option<Vec<String>>,
+    #[serde(deserialize_with = "super::sandbox::supplied")]
+    pub(crate) version: Option<String>,
+    #[serde(deserialize_with = "super::resolution::managed")]
+    pub(crate) resolution: super::Resolution,
+}
+
+impl Managed {
+    fn validate(&self) -> Result<(), String> {
+        if let Some(packages) = &self.packages {
+            crate::python_requirement::validate_all(packages)
+                .map_err(|error| format!("packages: {error}"))?;
+        }
+        if let Some(version) = &self.version {
+            crate::python_requirement::validate_version_constraint(version)
+                .map_err(|error| format!("version: {error}"))?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn manifest(
+        &self,
+        native: bool,
+    ) -> crate::worker_protocol::PythonRequirementManifest {
+        let mut manifest = if native {
+            crate::worker_protocol::default_native_python_requirement_manifest()
+        } else {
+            crate::worker_protocol::default_python_requirement_manifest()
+        };
+        if let Some(packages) = &self.packages {
+            manifest.packages = packages.clone();
+        }
+        manifest.python_version = self.version.iter().cloned().collect();
+        manifest.normalized()
+    }
 }
 
 pub(super) struct Python(Value);
@@ -37,17 +77,20 @@ impl<'de> Deserialize<'de> for Python {
 enum Candidate {
     Existing(PathBuf),
     ActiveVenv,
-    Managed(super::ManagedPython),
+    Managed(Managed),
 }
 
 impl Python {
     pub(super) fn capture(self) -> Result<PythonChoice, String> {
         if let Some(path) = self.0.as_str() {
-            return existing(&capture_path(Path::new(path))?, "python.existing");
+            return existing(&capture_path(Path::new(path))?);
         }
         match mapping(self.0)? {
-            Mapping::Existing(path) => existing(&capture_path(&path)?, "python.existing"),
-            Mapping::Managed(options) => Ok(PythonChoice::managed(options, "python.managed")),
+            Mapping::Existing(path) => existing(&capture_path(&path)?),
+            Mapping::Managed(managed) => Ok(PythonChoice {
+                executable: None,
+                managed,
+            }),
             Mapping::FirstAvailable(values) => {
                 if values.is_empty() {
                     return Err("python.first_available must not be empty".into());
@@ -62,18 +105,17 @@ impl Python {
                     } else {
                         match mapping(value).map_err(|error| format!("python.first_available[{index}]: {error}"))? {
                             Mapping::Existing(path) => Candidate::Existing(capture_path(&path)?),
-                            Mapping::Managed(options) if index + 1 == count => Candidate::Managed(options),
+                            Mapping::Managed(managed) if index + 1 == count => Candidate::Managed(managed),
                             _ => return Err("python.first_available permits existing paths, one active_venv, and one optional managed candidate last; nested chains are unsupported".into()),
                         }
                     };
                     candidates.push(candidate);
                 }
-                for (index, candidate) in candidates.into_iter().enumerate() {
-                    let source = format!("python.first_available[{index}]");
+                for candidate in candidates {
                     match candidate {
                         Candidate::Existing(path) => match std::fs::symlink_metadata(&path) {
                             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                            _ => return existing(&path, &source),
+                            _ => return existing(&path),
                         },
                         Candidate::ActiveVenv => {
                             let Some(path) =
@@ -92,10 +134,13 @@ impl Python {
                                     "python.active_venv must name a standard venv directory".into(),
                                 );
                             }
-                            return existing(&path, &format!("{source}.active_venv"));
+                            return existing(&path);
                         }
-                        Candidate::Managed(options) => {
-                            return Ok(PythonChoice::managed(options, &source));
+                        Candidate::Managed(managed) => {
+                            return Ok(PythonChoice {
+                                executable: None,
+                                managed,
+                            });
                         }
                     }
                 }
@@ -109,18 +154,12 @@ fn mapping(value: Value) -> Result<Mapping, String> {
     if !value.is_object() || value.as_object().is_some_and(|value| value.len() != 1) {
         return Err("python: expected exactly one of existing, managed, first_available".into());
     }
-    if value
-        .get("managed")
-        .is_some_and(|options| !options.is_object())
-    {
-        return Err("python.managed: expected managed options as a mapping".into());
-    }
     let mapping =
         serde_path_to_error::deserialize(value).map_err(|error| format!("python: {error}"))?;
-    if let Mapping::Managed(options) = &mapping {
-        options
-            .capture()
-            .map_err(|error| format!("python.{error}"))?;
+    if let Mapping::Managed(managed) = &mapping {
+        managed
+            .validate()
+            .map_err(|error| format!("python.managed.{error}"))?;
     }
     Ok(mapping)
 }
@@ -141,7 +180,7 @@ fn capture_path(path: &Path) -> Result<PathBuf, String> {
     std::path::absolute(path).map_err(|error| format!("cannot locate configured Python: {error}"))
 }
 
-fn existing(path: &Path, source: &str) -> Result<PythonChoice, String> {
+fn existing(path: &Path) -> Result<PythonChoice, String> {
     let metadata = std::fs::metadata(path)
         .map_err(|error| format!("cannot use existing Python {}: {error}", path.display()))?;
     let executable = if metadata.is_dir() {
@@ -197,8 +236,7 @@ fn existing(path: &Path, source: &str) -> Result<PythonChoice, String> {
     }
     Ok(PythonChoice {
         executable: Some(executable),
-        managed: None,
-        source: source.into(),
+        managed: Default::default(),
     })
 }
 
@@ -214,75 +252,4 @@ fn reject_conda(prefix: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
-}
-
-impl PythonChoice {
-    pub(crate) fn ambient() -> Result<Self, String> {
-        match std::env::var_os("RETICULATE_PYTHON")
-            .filter(|value| !value.is_empty() && value != "managed")
-        {
-            Some(value) => Ok(Self {
-                executable: Some(if cfg!(windows) {
-                    crate::python::explicit_executable(&value)?
-                } else {
-                    PathBuf::from(value)
-                }),
-                managed: None,
-                source: "RETICULATE_PYTHON".into(),
-            }),
-            None => Ok(Self::managed(
-                super::ManagedPython::default(),
-                "default managed",
-            )),
-        }
-    }
-
-    fn managed(options: super::ManagedPython, source: &str) -> Self {
-        Self {
-            executable: None,
-            managed: Some(options),
-            source: source.into(),
-        }
-    }
-
-    pub(crate) fn validate_environment(
-        &self,
-        settings: &crate::settings::SandboxSettings,
-    ) -> Result<(), String> {
-        if self.managed.is_none() {
-            return Ok(());
-        }
-        let Some(values) = settings
-            .get("environment")
-            .and_then(serde_json::Value::as_object)
-        else {
-            return Ok(());
-        };
-        for (name, value) in values {
-            let Some(value) = value.as_str() else {
-                continue;
-            };
-            let conflicts = match name.as_str() {
-                "RETICULATE_PYTHON" => !value.is_empty() && value != "managed",
-                "UV_PYTHON" => !value.is_empty(),
-                "UV_PYTHON_PREFERENCE" => value != "only-managed",
-                "UV_NO_MANAGED_PYTHON" => !matches!(
-                    value.to_ascii_lowercase().as_str(),
-                    "0" | "false" | "f" | "no" | "n" | "off"
-                ),
-                "UV_MANAGED_PYTHON" => !matches!(
-                    value.to_ascii_lowercase().as_str(),
-                    "1" | "true" | "t" | "yes" | "y" | "on"
-                ),
-                _ => false,
-            };
-            if conflicts {
-                return Err(format!(
-                    "{}: environment.{name} conflicts with managed Python configuration; remove the selection control and use python.managed.version or python.existing",
-                    self.source
-                ));
-            }
-        }
-        Ok(())
-    }
 }

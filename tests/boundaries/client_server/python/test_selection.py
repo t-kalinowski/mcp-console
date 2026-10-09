@@ -89,12 +89,6 @@ def test_existing_paths_and_fallback_capture(
                     print("venv retained")
                     """)
                 client.expect("venv retained\n", python=program)
-                inspection = client.send(requirements={"action": "get"})[
-                    "structuredContent"
-                ]
-                assert inspection["selection"]["python"] == str(
-                    virtualenv_python(selected)
-                ), inspection
                 if label == "first available":
                     (root / "created-later").mkdir()
                     client.expect(

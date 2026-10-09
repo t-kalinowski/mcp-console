@@ -81,10 +81,12 @@ The complete transport can still explicitly select the unelevated backend for ne
 Use one stable state directory per Windows user: accounts and firewall policy are machine resources, and capability ACL entries persist on filesystem objects.
 Managed proxy mappings and explicit resolver sandbox settings are rejected before workload/preparation launch.
 Omitted resolver settings retain existing host preparation with environment/cache controls; parser parity does not imply native enforcement parity.
+Sandbox environment inheritance omits Windows' hidden per-drive working-directory metadata such as `=C:`; ordinary variables remain inherited, and explicit names containing `=` remain invalid.
 
 The native runner owns a non-breakaway Job for each workload.
 It terminates remaining descendants and confirms zero active processes before reporting exit.
 Only that receipt permits a replacement generation and private-storage removal.
+After confirmed Job retirement, private-storage removal retries sharing violations for up to five seconds while Windows releases file or image mappings.
 Cleanup failure retains storage and blocks replacement.
 The Windows frontend waits for the runner; forced frontend termination does not confirm cleanup.
 Process handles monitor both the frontend and session owner.
@@ -120,6 +122,8 @@ Windows MCP input has one reader and a bounded 128 KiB queue shared between star
 Startup EOF cancels active Python inspection once the reader observes it; queue backpressure can delay EOF observation until input is consumed.
 After startup finishes, EOF is reported only after the queued MCP input is consumed, preserving final request responses.
 Windows uses a UTF-8 executable manifest, UTF-16 Python configuration, and native executable suffixes.
+On Windows x64, each Console process restores an absent or empty `PROCESSOR_ARCHITECTURE` to `AMD64` before runtime loading.
+This keeps R DuckDB preparation and teardown usable when an MCP client or configured environment filters ordinary Windows variables; nonempty supplied values are retained.
 The built-in worker uses the C runtime's inherited stdin descriptor because R subprocess helpers can clear the Windows standard-handle table.
 After R compatibility calls, Console restores that table from the live CRT descriptors so Python subprocesses can inherit stdio.
 R/Python interoperability markers synchronize the Win32 and CRT environment views before native R startup.
@@ -236,6 +240,7 @@ Windows workflow phases use Jobs to retire descendants on completion or cancella
 These are development-command ownership guarantees; they do not add sandboxing to evaluated user code.
 
 The acceptance interpreter needs `packaging` and `matplotlib`; R needs `reticulate` and `jsonlite`.
+Windows CI also builds and checks the R package, including its ellmer chat and requirements integration tests; these checks additionally need `ellmer`, `processx`, `ps`, `httr2`, and `testthat`.
 Resolver acceptance also needs uv and package repository access.
 Full checks include shared plotting and R resolver cases that require `ir` 0.4.0 or later on PATH; install it with `uv tool install r-lib-ir`, as CI does.
 For installed-wheel acceptance, set `MCP_CONSOLE_TEST_BINARY` to the installed `mcp-console.exe` and run the same tests.

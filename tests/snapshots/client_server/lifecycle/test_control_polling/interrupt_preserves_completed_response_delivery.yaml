@@ -16,6 +16,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": false,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -23,17 +24,7 @@ result:
               "jsonlite"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": null,
-            "python": null,
-            "python_source": null
-          },
-          "prepared": false
+          }
         }
   structuredContent:
     requirements:
@@ -42,20 +33,13 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: false
     runtime_requirements:
       r:
         - DBI
         - duckdb
         - jsonlite
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: ~
-      python: ~
-      python_source: ~
-    prepared: false
   isError: false
 ---
 send:

@@ -120,11 +120,6 @@ pub(crate) fn setup_runtime(libpython: &Path, managed: bool) -> Result<bool, Str
 }
 
 fn import_policy(managed: bool) -> ImportResolution<'static> {
-    if managed && std::env::var("MCP_CONSOLE_PYTHON_AUTOMATIC_RESOLUTION").as_deref() == Ok("0") {
-        return ImportResolution::Disabled(
-            "automatic Python resolution is disabled by configuration; use send(requirements=...) when policy permits changes",
-        );
-    }
     if managed {
         return ImportResolution::Managed;
     }

@@ -265,7 +265,6 @@ impl WorkerRuntime {
             None
         };
         command.env_remove("MCP_CONSOLE_MATPLOTLIB_CACHE");
-        command.env_remove("MCP_CONSOLE_R_LIBRARY");
         if !no_sandbox
             && cfg!(unix)
             && python.is_none_or(|python| python.managed().is_some())
@@ -277,9 +276,6 @@ impl WorkerRuntime {
         command.env_remove(crate::local_runtime::ENVIRONMENT);
         if let Some(python) = python {
             python.configure_worker(&mut command);
-        } else if builtin {
-            command.env_remove("MCP_CONSOLE_MANAGED_PYTHON");
-            command.env_remove("RETICULATE_PYTHON");
         }
         if let Some(runtime) = local_runtime {
             runtime.configure(&mut command)?;
@@ -298,21 +294,7 @@ impl WorkerRuntime {
         }
         command.env(
             "MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION",
-            if dynamic_resolution
-                && local_runtime.is_none_or(|runtime| runtime.r_settings.resolution.automatic())
-            {
-                "1"
-            } else {
-                "0"
-            },
-        );
-        command.env(
-            "MCP_CONSOLE_PYTHON_AUTOMATIC_RESOLUTION",
-            if local_runtime.is_none_or(|runtime| runtime.python_resolution.automatic()) {
-                "1"
-            } else {
-                "0"
-            },
+            if dynamic_resolution { "1" } else { "0" },
         );
         if let Some(languages) = languages {
             languages.configure(&mut command);
@@ -827,6 +809,7 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
         continue_environment_preparation: bool,
         duckdb_extensions: Option<std::collections::BTreeSet<String>>,
         commit: PythonPreparationCommit,
@@ -835,6 +818,7 @@ impl Worker {
             commit,
             continue_environment_preparation,
             duckdb_extensions,
+            requirements,
         )?;
         self.relay
             .commands

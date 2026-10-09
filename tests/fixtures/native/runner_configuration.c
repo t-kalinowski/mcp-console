@@ -23,8 +23,7 @@ static int capture_execvp(const char *path, char *const arguments[]) {
         for (size_t index = 3; arguments[index] != NULL; index++) {
             if (strcmp(arguments[index], "--") == 0) {
                 if (arguments[index + 1] != NULL && arguments[index + 2] != NULL &&
-                    strcmp(arguments[index + 2], "resolve") == 0 &&
-                    getenv("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY") != NULL) {
+                    strcmp(arguments[index + 2], "resolve") == 0) {
                     destination = getenv("MCP_CONSOLE_TEST_RESOLVER_CONFIGURATION");
                     if (destination == NULL) return execvp(path, arguments);
                 }

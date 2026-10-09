@@ -10,8 +10,9 @@ stderr: >
   `1`, expected a string; see docs/CONFIGURATION.md for the public format
 ---
 setting: r.packages=[""]
-stderr: |
-  r.packages: R requirement strings must not be empty
+stderr: >
+  configuration with CLI overrides: r.packages: R requirement strings must
+  not be empty
 ---
 setting: python.managed.packages=null
 stderr: |
@@ -60,7 +61,7 @@ stderr: >
 setting: python.managed.extra_packages=[]
 stderr: >
   python: managed.extra_packages: unknown field `extra_packages`, expected
-  one of `version`, `packages`, `resolution`
+  one of `packages`, `version`, `resolution`
 ---
 setting: "python.existing={executable: .venv, packages: []}"
 stderr: |

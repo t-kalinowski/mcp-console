@@ -46,14 +46,6 @@ impl Client {
                 "worker environment lock poisoned".to_string(),
             )
         })?;
-        if !environment.r_policy().automatic() {
-            return Err(RuntimeRResolutionFailure::Ordinary(
-                environment.r_policy().reject("automatic R"),
-            ));
-        }
-        environment
-            .validate_r_selection()
-            .map_err(RuntimeRResolutionFailure::Ordinary)?;
         let (requirements, changed) = merge_r_requirements(&environment, packages);
         if !changed {
             let managed = environment.r.clone().ok_or_else(|| {
@@ -63,6 +55,18 @@ impl Client {
             })?;
             self.ensure_runtime_r_generation(&generation)?;
             return Ok(managed);
+        }
+        if !environment
+            .startup
+            .r_resolution
+            .permits_automatic_additions()
+        {
+            return Err(RuntimeRResolutionFailure::Ordinary(
+                environment
+                    .startup
+                    .r_resolution
+                    .denial("R", "runtime package request"),
+            ));
         }
         match self
             .requirement_change_state(&generation)

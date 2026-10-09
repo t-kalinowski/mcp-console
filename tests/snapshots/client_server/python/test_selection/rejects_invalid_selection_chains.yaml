@@ -24,7 +24,7 @@ stderr: |
 ---
 choice: null managed options
 stderr: |
-  python.managed: expected managed options as a mapping
+  python: managed: invalid type: null, expected struct Managed
 ---
 choice: empty path
 stderr: |

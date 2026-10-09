@@ -6,16 +6,180 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 
 from support.normalization import code
+from support.requirements import command, gnu_tar
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 class DevelopmentTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "native Windows CI archive paths")
+    def test_windows_ci_source_archive_round_trip(self) -> None:
+        for requirement in (command("pwsh"), gnu_tar()):
+            if not requirement.available:
+                self.skipTest(requirement.reason)
+        workflow = (ROOT / ".github/workflows/ci.yaml").read_text()
+        step = workflow.split(
+            "      - name: Prepare native Windows sandbox source archive\n", 1
+        )[1].split("\n      - name:", 1)[0]
+        program = code(step.split("        run: |\n", 1)[1])
+        source = self.root / ".sandbox-runner-source"
+        source.mkdir()
+        subprocess.run(["git", "init", "-q", source], check=True)
+        tracked = source / "codex-rs/main.rs"
+        tracked.parent.mkdir()
+        tracked.write_text("fn main() {}\n")
+        (source / ".gitignore").write_text("codex-rs/target/\n")
+        for arguments in (
+            ["add", "."],
+            [
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.org",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "Fixture",
+            ],
+        ):
+            subprocess.run(["git", "-C", source, *arguments], check=True)
+        target = source / "codex-rs/target"
+        target.mkdir()
+        (target / "build-output").write_text("excluded build output")
+        temporary = self.root / "runner temp"
+        temporary.mkdir()
+        archive = temporary / "sandbox-source.tar"
+        self.assertTrue(archive.drive)
+        output = temporary / "output"
+        environment = os.environ | {
+            "RUNNER_TEMP": str(temporary),
+            "GITHUB_OUTPUT": str(output),
+            "MCP_CONSOLE_HOME": str(self.root / "home"),
+        }
+        timestamp = 1_600_000_000
+        os.utime(tracked, (timestamp, timestamp))
+        for cache in ("miss", "hit"):
+            self.assertEqual(archive.exists(), cache == "hit")
+            if cache == "hit":
+                tracked.unlink()
+            result = subprocess.run(
+                [
+                    "pwsh",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "$ErrorActionPreference = 'Stop'\n" + program,
+                ],
+                cwd=self.root,
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(
+                result.returncode, 0, f"cache {cache}: {result.stdout}{result.stderr}"
+            )
+            self.assertEqual(tracked.read_text(), "fn main() {}\n")
+            self.assertEqual(tracked.stat().st_mtime, timestamp)
+            with tarfile.open(archive) as contents:
+                names = contents.getnames()
+            self.assertIn("./codex-rs/main.rs", names)
+            self.assertFalse(any(name.startswith("./.git/") for name in names))
+            self.assertNotIn("./.git", names)
+            self.assertFalse(
+                any(name.startswith("./codex-rs/target") for name in names)
+            )
+        digests = output.read_text().splitlines()
+        self.assertEqual(len(digests), 2)
+        self.assertEqual(digests[0], digests[1])
+        self.assertRegex(digests[0], r"^archive-sha256=[0-9a-f]{64}$")
+
+    def test_windows_ci_reuses_complete_sandbox_builds(self) -> None:
+        workflow = (ROOT / ".github/workflows/ci.yaml").read_text()
+        windows = workflow.split("  windows:\n", 1)[1].split("\n  check:", 1)[0]
+        self.assertIn(
+            "      MCP_CONSOLE_SANDBOX_SOURCE: ${{ github.workspace }}/.sandbox-runner-source",
+            windows,
+        )
+
+        def step(name):
+            return windows.split(f"      - name: {name}\n", 1)[1].split(
+                "\n      - ", 1
+            )[0]
+
+        outputs = step("Restore native Windows sandbox outputs")
+        build = step("Restore native Windows sandbox build intermediates")
+        downloads = step("Restore Windows Cargo downloads")
+        for path in ("~/.cargo/registry", "~/.cargo/git"):
+            self.assertIn(path, downloads)
+            self.assertIn(path, step("Save Windows Cargo downloads"))
+            self.assertNotIn(path, step("Restore Windows build and dependency caches"))
+        for path in ("wheel-data/data", "target/sandbox-runner-build.json"):
+            self.assertIn(path, outputs)
+            self.assertIn(path, step("Save native Windows sandbox outputs"))
+        self.assertNotIn("restore-keys:", outputs)
+        self.assertIn(".sandbox-runner-source/codex-rs/target", build)
+        self.assertIn("restore-keys:", build)
+        self.assertIn("steps.sandbox-source.outputs.archive-sha256", build)
+        for cache in (outputs, build):
+            self.assertNotIn("steps.rust.outputs.cachekey", cache)
+            for identity in (
+                "CI_BUILD_CACHE_VERSION",
+                "steps.epoch.outputs.week",
+                "steps.epoch.outputs.image",
+                "runner.os",
+                "runner.arch",
+                "x86_64-pc-windows-msvc",
+                ".sandbox-runner-source/codex-rs/rust-toolchain.toml",
+            ):
+                self.assertIn(identity, cache)
+        for input in (
+            "sandbox-runner.json",
+            "scripts/stage-sandbox-runner",
+            "build.rs",
+        ):
+            self.assertIn(input, outputs)
+        staging = step("Stage native Windows sandbox")
+        for cache in ("sandbox-cache", "sandbox-build-cache"):
+            self.assertIn(f"steps.{cache}.outputs.cache-hit != 'true'", staging)
+        validation = step("Validate native Windows sandbox artifacts")
+        self.assertIn(
+            "scripts/with-checkout.cmd cargo build --target-dir target", validation
+        )
+        self.assertIn("LastWriteTimeUtc", validation)
+        for name in (
+            "Save native Windows sandbox source timestamps",
+            "Save native Windows sandbox outputs",
+            "Save native Windows sandbox build intermediates",
+            "Save Windows Cargo downloads",
+        ):
+            saving = step(name)
+            self.assertNotIn("always()", saving)
+            self.assertNotIn("!cancelled()", saving)
+            self.assertLess(
+                windows.index("Validate native Windows sandbox artifacts"),
+                windows.index(name),
+            )
+            self.assertLess(
+                windows.index(name),
+                windows.index("Provision native Windows sandbox acceptance"),
+            )
+        self.assertIn("scripts/check.cmd --full", windows)
+        source = step("Prepare native Windows sandbox source archive")
+        self.assertIn("--exclude=./.git", source)
+        self.assertIn("--exclude=./codex-rs/target", source)
+        self.assertIn(
+            "persist-credentials: false",
+            step("Check out native Windows sandbox source"),
+        )
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

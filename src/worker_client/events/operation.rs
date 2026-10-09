@@ -58,6 +58,7 @@ enum OperationKind {
     },
     PreparePython {
         commit: PythonPreparationCommit,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
         continue_environment_preparation: bool,
         duckdb_extensions: Option<std::collections::BTreeSet<String>>,
     },
@@ -293,24 +294,44 @@ impl WorkerOperationState {
         commit: PythonPreparationCommit,
         continue_environment_preparation: bool,
         duckdb_extensions: Option<std::collections::BTreeSet<String>>,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
     ) -> Result<mpsc::Receiver<Result<OperationResult, String>>, String> {
         self.begin_preparation(OperationKind::PreparePython {
             commit,
             continue_environment_preparation,
             duckdb_extensions,
+            requirements,
         })
     }
 
-    pub(super) fn python_preparation_intent(
+    pub(super) fn python_preparation_extensions(
         &self,
-    ) -> Result<(bool, Option<std::collections::BTreeSet<String>>), String> {
+    ) -> Result<Option<std::collections::BTreeSet<String>>, String> {
         let state = self.lock()?;
         Ok(
             match state.operation.as_ref().map(|operation| &operation.kind) {
                 Some(OperationKind::PreparePython {
                     duckdb_extensions, ..
-                }) => (true, duckdb_extensions.clone()),
-                _ => (false, None),
+                }) => duckdb_extensions.clone(),
+                _ => None,
+            },
+        )
+    }
+
+    pub(super) fn python_preparation_requirements(
+        &self,
+    ) -> Result<Option<crate::worker_protocol::PythonRequirementManifest>, String> {
+        Ok(
+            match self
+                .lock()?
+                .operation
+                .as_ref()
+                .map(|operation| &operation.kind)
+            {
+                Some(OperationKind::PreparePython { requirements, .. }) => {
+                    Some(requirements.clone())
+                }
+                _ => None,
             },
         )
     }

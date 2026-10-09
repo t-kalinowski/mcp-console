@@ -344,10 +344,7 @@ impl Client {
             }
         };
         if let Some(requirements) = requirements {
-            if let Err(error) = requirements
-                .validate()
-                .and_then(|_| self.validate_requirements(&requirements))
-            {
+            if let Err(error) = requirements.validate() {
                 control_prelude.push_tool_error(error);
                 return Ok(self.return_controlled_response(control_prelude));
             }

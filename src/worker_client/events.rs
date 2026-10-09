@@ -614,9 +614,11 @@ fn handle_semantic_event(
                 })?;
             }
             let import_resolution = request.import_resolution.clone();
-            let response = match callbacks
-                .resolve_python(request, operation.python_preparation_intent()?)
-            {
+            let response = match callbacks.resolve_python(
+                request,
+                operation.python_preparation_extensions()?,
+                operation.python_preparation_requirements()?,
+            ) {
                 Ok((managed, configuration)) => {
                     let python = managed.python().to_string_lossy().into_owned();
                     let native = Some(Box::new(crate::worker_protocol::NativePythonActivation {
@@ -661,7 +663,7 @@ fn handle_semantic_event(
                 requirements,
                 managed,
                 configuration,
-                operation.python_preparation_intent()?.1,
+                operation.python_preparation_extensions()?,
             )?;
             if disposition == OldGenerationCommitDisposition::Commit
                 && let Some(resolution) = resolution

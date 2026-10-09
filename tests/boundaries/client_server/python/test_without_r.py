@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.requirements import POSIX, SQL, UNPRIVILEGED, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, SQL, UNPRIVILEGED, requires
 from support.assertions import (
     assert_exact_interleaving,
     assert_result_content,
@@ -33,7 +33,7 @@ from support.snapshots import execution_snapshots
 from support.python import virtualenv_python
 from support.resolvers import expose_uv
 from support.normalization import code, normalize_python_resolution_error
-from support.native import build_interposer
+from support.native import LOADER_VARIABLE, build_interposer
 from support.r import r_test_environment
 from support.python import runtime_source_line, write_test_wheel
 
@@ -1222,15 +1222,21 @@ def automatic_resolution_failure_and_cancel_keep_accepted_state(
                 installed_console(binary), execution.serve("-c", "cache=host"), env
             ) as client:
                 client.initialize_and_list_tools()
-                client.send(
+                client.expect(
                     python="import os; worker_pid = os.getpid(); steps = []; identity = object()"
                 )
                 initial = client.send(requirements={"action": "get"})[
                     "structuredContent"
                 ]["requirements"]
                 (root / "mode").write_text("failure")
-                client.send(python="steps.append('failure'); import yaml12")
-                assert "fixture Python resolution failed" in last_result_text(client)
+                failure = wait_for_evaluation_output(
+                    client,
+                    None,
+                    "automatic Python resolution failure",
+                    completion_timeout_seconds=client.response_timeout,
+                    python="steps.append('failure'); import yaml12",
+                )
+                assert "fixture Python resolution failed" in failure, failure
                 assert (
                     client.send(requirements={"action": "get"})["structuredContent"][
                         "requirements"
@@ -1239,9 +1245,12 @@ def automatic_resolution_failure_and_cancel_keep_accepted_state(
                 )
                 (root / "mode").write_text("interrupt")
                 pending = client.start_send(
-                    python="steps.append('cancel'); import yaml12"
+                    python="steps.append('cancel'); import yaml12",
+                    timeout_ms=int(client.response_timeout * 1_000),
                 )
-                started.wait("automatic Python resolver entered")
+                started.wait(
+                    "automatic Python resolver entered", timeout=client.response_timeout
+                )
                 assert os.read(alive, 1) == b"1"
                 assert (
                     client.send(requirements={"action": "get"})["structuredContent"][
@@ -1263,8 +1272,11 @@ def automatic_resolution_failure_and_cancel_keep_accepted_state(
                     python="assert steps == ['failure', 'cancel']; assert os.getpid() == worker_pid; print('accepted state retained')",
                 )
                 (root / "mode").write_text("success")
-                client.send(python="import yaml12; print('retry resolved import')")
-                assert "retry resolved import\n" in last_result_text(client)
+                client.expect(
+                    "[resolved PyPI distribution 'py-yaml12' for Python import 'yaml12']\n"
+                    "retry resolved import\n",
+                    python="import yaml12; print('retry resolved import')",
+                )
                 return preparation_records(client.finish(), root)
         finally:
             started.close()
@@ -3095,7 +3107,7 @@ def test_records_managed_python_defaults(
         )
 
 
-@requires(POSIX, UNPRIVILEGED)
+@requires(NATIVE_FIXTURES, UNPRIVILEGED)
 @executions(DIRECT)
 def test_reports_direct_storage_retirement_failure(
     binary: Path, execution: Execution
@@ -3153,13 +3165,15 @@ def test_reports_direct_storage_retirement_failure(
                     """)
                 (site / "sitecustomize.py").write_text(hook)
             try:
+                environment = selected_environment(virtualenv_python(venv).parent)
+                environment["TMPDIR"] = str(temporary_parent)
+                environment[LOADER_VARIABLE] = str(
+                    build_interposer(workspace, "temporary_directory_failure")
+                )
                 with McpClient(
                     binary,
                     execution.serve(),
-                    dict(
-                        selected_environment(virtualenv_python(venv).parent),
-                        TMPDIR=str(temporary_parent),
-                    ),
+                    environment,
                     workspace,
                 ) as client:
                     client.initialize_and_list_tools()

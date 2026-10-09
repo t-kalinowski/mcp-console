@@ -78,7 +78,7 @@ SQL chunks need a user-supplied DBI connection.
 Front matter supplies dependency declarations, not a lockfile.
 Sessions combine the captured startup declaration and recorded additions, which need not match every successfully accepted or automatically inferred package.
 An existing Python environment starts with an empty managed Python declaration, including in an R session.
-Managed Python sessions also track accepted Python environments and omit rejected candidates; neither mode pins the complete environment or Python version.
+Managed Python-only sessions also track accepted Python environments and omit rejected candidates; neither mode pins the complete environment or Python version.
 Bare sessions omit managed defaults.
 
 Committed `set`/`reset` operations create requirement boundaries and disable QMD evaluation: one header manifest cannot reproduce cells that used incompatible historical environments.

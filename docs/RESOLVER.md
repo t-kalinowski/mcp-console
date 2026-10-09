@@ -1,10 +1,7 @@
 # Resolver sandbox
 
 On macOS and Linux, local dependency preparation runs inside the native sandbox runner.
-Discovery, installation, package builds, managed Python inspection, and DuckDB extension installation use the resolver policy.
-Execution-based inspection of an explicitly selected R launcher or existing Python environment uses the captured worker policy, including existing Python site hooks.
-Selecting a path does not grant resolver permissions to executable code in that environment.
-Interpreter choices, startup package declarations, and per-language resolution policies belong to top-level `r` and `python`; see [configuration](CONFIGURATION.md).
+The existing preparation process, including discovery, installation, package builds, Python inspection, and DuckDB extension installation, uses one resolver policy.
 `serve --no-sandbox` uses ordinary host permissions.
 Windows retains its host resolver and Job lifecycle; its native runner does not support managed proxy routing.
 
@@ -39,7 +36,6 @@ Console overrides cache-location variables inherited from the host or supplied i
 uv's cache, Python installations, tools, and executable links use `uv/`; IR uses `ir/`; renv uses `renv/`; R's package cache base is the Console root, including `R/reticulate` and `R/pkgcache`.
 DuckDB uses `duckdb/extensions`, Matplotlib uses `matplotlib`, and Python's bytecode cache uses `python/bytecode`.
 Managed Python also redirects its user base to `python/user`.
-This includes a managed candidate reached through `python.first_available`.
 An explicit `python` or `RETICULATE_PYTHON` selection preserves the inherited or configured `PYTHONUSERBASE` so preinstalled user-site packages remain importable.
 This preserves reads without adding resolver write grants for host package locations.
 `RENV_PATHS_CACHE`, `RENV_PATHS_SOURCE`, and `RENV_PATHS_BINARY` are redirected explicitly so an inherited override cannot share host artifacts.

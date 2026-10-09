@@ -9,6 +9,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+/* R exports this wrapper, but Rinterface.h declares only its callback pointer. */
+extern int R_ReadConsole(const char *, unsigned char *, int, int);
+
 #define TEST_CONSOLE_BUFFER_SIZE 4
 
 static InputHandler *registered_handler = NULL;

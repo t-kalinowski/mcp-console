@@ -1,6 +1,0 @@
-# Save as .agents/console/config.yaml in the launch workspace.
-python:
-  first_available:
-    - existing: .venv
-    - active_venv
-    - managed: {}

@@ -91,8 +91,6 @@ pub(crate) enum Mode {
     PythonOnly,
     Custom,
     Auto,
-    BareR,
-    AutoBareR,
 }
 
 impl Mode {

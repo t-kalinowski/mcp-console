@@ -184,9 +184,6 @@ The managed candidate accepts `packages`, `version`, and `resolution`, as descri
 All candidate syntax is validated, but an unreached managed candidate's packages and version are not prepared or checked for runtime availability.
 An explicit managed choice requires available managed preparation; it does not select a PATH interpreter when preparation is unavailable.
 When `python` is omitted, Console retains the launch-time `RETICULATE_PYTHON` compatibility behavior.
-Managed selection ignores ambient uv interpreter preferences.
-With explicit managed Python configuration, conflicting selection controls supplied through `environment` or `resolver.environment` are errors; use the Python settings instead.
-Inspection exposes the selected Python path and branch provenance.
 
 ## Startup package declarations
 
@@ -248,32 +245,93 @@ Console captures the effective startup declaration once per server connection.
 A plain restart retains the accepted declaration, including later additions; it does not reread configuration.
 See [requirements replacement](REQUIREMENTS.md#inspecting-and-replacing-requirements).
 
-## Resolution policy
+## Dependency-resolution policies
 
-Choose independent preparation policies for R and managed Python:
+`r.resolution` and `python.managed.resolution` independently control Console's dependency preparation.
+Both default to `automatic`.
+
+| Policy                         | Prepare configured startup declaration | Later deliberate MCP changes | Automatic/runtime additions |
+| ------------------------------ | -------------------------------------- | ---------------------------- | --------------------------- |
+| `automatic`                    | Yes                                    | Yes                          | Yes                         |
+| `explicit`                     | Yes                                    | Yes                          | No                          |
+| `startup_only`                 | Yes                                    | No                           | No                          |
+| R `disabled` / existing Python | No                                     | No                           | No                          |
+
+Require MCP requests for additional packages:
 
 ```yaml
 r:
+  packages: [dplyr, dbplyr]
   resolution: explicit
 python:
   managed:
+    packages: [numpy, pandas]
+    resolution: explicit
+```
+
+Prepare configured packages once, then reject declaration changes through Console:
+
+```yaml
+r:
+  packages: [dplyr, dbplyr, ggplot2]
+  resolution: startup_only
+python:
+  managed:
+    version: "3.13"
+    packages: [numpy, pandas, matplotlib]
     resolution: startup_only
 ```
 
-R accepts `automatic`, `explicit`, `startup_only`, and `disabled`; managed Python accepts the first three.
-Both default to `automatic`.
-`explicit` prepares startup requirements and deliberate MCP requirements changes, without automatic missing-package preparation.
-`startup_only` prepares the captured startup declaration and rejects later changes.
-Unchanged requirements remain no-ops.
-R `disabled` and existing Python suppress Console preparation for their language.
-Nonempty R packages with disabled resolution are invalid; use `startup_only` to prepare them once.
-R `explicit` and `startup_only` require startup preparation support even when `packages` is omitted and selects the bundled defaults.
-When R is available but Python preparation is unavailable, omitting Python configuration preserves bare R startup; explicitly requested managed Python still requires preparation support.
+Use preinstalled or project R packages with independent managed Python:
 
-Available ambient packages remain usable in every policy.
-Missing dependencies retain ordinary runtime failures.
-These policies do not restrict installation code submitted by the user or promise offline operation.
-See [requirements](REQUIREMENTS.md#resolution-policy), [startup-only preparation](../examples/config-startup-only.yaml), and [Python fallback](../examples/config-fallback.yaml).
+```yaml
+r:
+  resolution: disabled
+python:
+  managed:
+    packages: [numpy]
+    resolution: explicit
+```
+
+R `disabled` has an empty Console startup declaration and skips optional defaults, IR preparation, and Console's R infrastructure bootstrap.
+Omitted `packages` and `packages: []` are valid; a nonempty list is an error, with `startup_only` suggested for initial preparation.
+Native R startup and installed packages still work.
+Missing preinstalled adapters may leave particular capabilities unavailable; Console does not install them implicitly.
+An explicitly managed Python still prepares through uv without preparing R.
+
+With R present, `explicit` and `startup_only` require startup preparation support, including for omitted package lists that select bundled defaults.
+An empty optional list retains required infrastructure.
+Behavior-only R settings do not require R in a Python-only session; a nonempty R list still does.
+The default `automatic` policy retains the existing bare-R fallback when preparation is unavailable.
+
+Managed Python accepts only `automatic`, `explicit`, and `startup_only`.
+To use preinstalled Python packages, select an existing environment; to prepare once, use `startup_only`.
+Modes must be strings; booleans, null, unknown values, and misplaced fields are errors.
+
+The policy also belongs to a managed fallback candidate:
+
+```yaml
+python:
+  first_available:
+    - existing: .venv
+    - managed:
+        packages: [numpy, pandas]
+        resolution: startup_only
+```
+
+Only the selected candidate's policy applies.
+An existing selection remains preinstalled-only; an unreached managed candidate is syntax-validated without preparation.
+
+```sh
+mcp-console serve -c r.resolution=disabled
+mcp-console serve -c python.managed.resolution=explicit
+mcp-console serve -c 'r.packages=[]' -c r.resolution=startup_only
+```
+
+Permission and capability are separate: an available resolver does not authorize automatic additions under `explicit`.
+These settings govern Console preparation, not network access, package immutability, or installation code evaluated inside a worker.
+Policies are captured once per server connection; worker restart, startup profiles, runtime callbacks, and environment-variable changes do not reload them.
+See [policy admission](REQUIREMENTS.md#resolution-policy-admission) for replacement, reset, and interrupt ordering.
 
 ## R executable selection
 

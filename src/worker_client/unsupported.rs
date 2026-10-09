@@ -35,11 +35,17 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
         continue_environment_preparation: bool,
-        native: Option<(crate::resolver::ManagedPython, crate::python::NativePython)>,
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
         _commit: super::PythonPreparationCommit,
     ) -> Result<super::PreparationOutcome, String> {
-        let _ = (packages, continue_environment_preparation, native);
+        let _ = (
+            packages,
+            requirements,
+            continue_environment_preparation,
+            duckdb_extensions,
+        );
         unreachable!("unsupported workers cannot start")
     }
 

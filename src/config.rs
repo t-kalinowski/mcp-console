@@ -93,8 +93,7 @@ pub fn load(
     })
 }
 
-// The R path is syntax sugar for a mapping at each input boundary, before
-// generic recursive merging. Null still replaces the complete R mapping.
+// Expand the R path at each input boundary so later options merge with it.
 fn expand_r_shorthand(value: &mut Value) {
     if let Some(r) = value.get_mut("r")
         && r.is_string()

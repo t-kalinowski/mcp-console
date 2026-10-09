@@ -40,20 +40,11 @@ result:
             ],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": null,
-            "python": "<selected Python>",
-            "python_source": "python.first_available[1]"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -66,17 +57,10 @@ result:
       python_version:
         - ">=3.12,<3.14"
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r: []
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: ~
-      python: <selected Python>
-      python_source: python.first_available[1]
-    prepared: true
   isError: false
 ---
 send:
@@ -114,20 +98,11 @@ result:
             ],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": null,
-            "python": "<selected Python>",
-            "python_source": "python.first_available[1]"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -140,17 +115,10 @@ result:
       python_version:
         - ">=3.12,<3.14"
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r: []
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: ~
-      python: <selected Python>
-      python_source: python.first_available[1]
-    prepared: true
   isError: false
 ---
 send:
@@ -218,20 +186,11 @@ result:
             ],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": null,
-            "python": "<selected Python>",
-            "python_source": "python.first_available[1]"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -244,15 +203,8 @@ result:
       python_version:
         - ">=3.12,<3.14"
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r: []
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: ~
-      python: <selected Python>
-      python_source: python.first_available[1]
-    prepared: true
   isError: false

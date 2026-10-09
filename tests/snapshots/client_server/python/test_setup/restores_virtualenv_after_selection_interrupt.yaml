@@ -3,7 +3,6 @@
 ---
 send:
   r: |
-    Sys.unsetenv("RETICULATE_PYTHON")
     reticulate::use_python(
       normalizePath(
         if (.Platform$OS.type == "windows") {

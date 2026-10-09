@@ -7,19 +7,6 @@ send:
     action: set
     python:
       - six
-  timeout_ms: 0
-result:
-  content:
-    - type: text
-      text: |-
-
-        [elapsed: <elapsed>s since admission; no new output; phase: startup]
-        [running; poll with an empty send]
-  isError: false
----
-send:
-  requirements:
-    action: get
 result:
   content:
     - type: text
@@ -28,7 +15,17 @@ result:
         failed
   isError: true
 ---
-send: {}
+send:
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: "[worker evaluation is already being polled]"
+  isError: true
+---
+send:
+  requirements:
+    action: get
 result:
   content:
     - type: text
@@ -72,20 +69,11 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": null,
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -102,17 +90,10 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r: []
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: ~
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:

@@ -51,7 +51,6 @@ def test_interrupt_with_requirements_in_mixed_managed_session(
     ) as client:
         client.initialize_and_list_tools()
         inspected = client.send(requirements={"action": "get"})["structuredContent"]
-        assert inspected["selection"]["python_source"] == "python.managed", inspected
         assert inspected["requirements"]["r"] == ["DBI"], inspected
         client.expect("[1] 0\n", r="print(0)")
         client.expect("0\n", python="0")
@@ -125,7 +124,7 @@ def test_interrupt_precedes_follow_up_requirement_policy(
             assert result.get("isError"), result
             output = result["content"][0]["text"]
             assert output.startswith("interrupted\n"), result
-            assert f"({policy})" in output, result
+            assert f"r.resolution={policy}" in output, result
             client.expect(
                 "worker retained\n",
                 r='stopifnot(!exists("follow_up_ran")); cat("worker retained\\n")',

@@ -536,11 +536,13 @@ class WindowsSandbox(unittest.TestCase):
         self.assertTrue(json.loads(before.stdout)["configured"])
         # Refuse to provision an unconfigured machine in acceptance tests.
         # A current setup must reuse its records and credentials without UAC.
+        # Runtime logs can append during other sessions; they are not setup records.
         records = {
             path: path.read_bytes()
             for directory in (".sandbox", ".sandbox-secrets")
             for path in (Path(state) / directory).rglob("*")
             if path.is_file()
+            and not (directory == ".sandbox" and path.match("sandbox.*.log"))
         }
         result = subprocess.run(command, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)

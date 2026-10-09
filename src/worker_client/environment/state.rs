@@ -23,8 +23,7 @@ impl super::super::Client {
 
 #[derive(Clone)]
 pub(in crate::worker_client) struct Environment {
-    pub(in crate::worker_client) startup: Option<super::inspection::Declaration>,
-    pub(in crate::worker_client) python_source: Option<String>,
+    pub(in crate::worker_client) startup: StartupRequirements,
     /// Launch configuration commits with the managed executable and manifest.
     pub(in crate::worker_client) local_runtime: Option<crate::local_runtime::Selection>,
     pub(in crate::worker_client) custom_worker: bool,
@@ -34,6 +33,15 @@ pub(in crate::worker_client) struct Environment {
     pub(in crate::worker_client) python: Option<PythonEnvironment>,
     pub(in crate::worker_client) r: Option<crate::resolver::ManagedR>,
     pub(in crate::worker_client) r_resolver: super::super::RResolver,
+}
+
+/// Effective configuration intent stays independent of later accepted declarations.
+#[derive(Clone, Default)]
+pub(in crate::worker_client) struct StartupRequirements {
+    pub(in crate::worker_client) r: Option<Vec<String>>,
+    pub(in crate::worker_client) r_resolution: crate::settings::Resolution,
+    pub(in crate::worker_client) python: crate::settings::ManagedPythonSettings,
+    pub(in crate::worker_client) native_duckdb: BTreeSet<String>,
 }
 
 const USER_SELECTED_PYTHON_ERROR: &str = "managed Python requirements are disabled because the session uses a user-selected Python environment";
@@ -146,29 +154,4 @@ pub(super) fn commit_managed_r(
 ) {
     push_duckdb_r_target(&mut environment.duckdb_r_targets, managed_r.clone());
     environment.r = Some(managed_r);
-}
-
-impl Environment {
-    pub(in crate::worker_client) fn r_policy(&self) -> crate::settings::Resolution {
-        self.local_runtime
-            .as_ref()
-            .map(|runtime| runtime.r_settings.resolution)
-            .unwrap_or_default()
-    }
-    pub(in crate::worker_client) fn python_policy(&self) -> crate::settings::Resolution {
-        self.local_runtime
-            .as_ref()
-            .map(|runtime| runtime.python_resolution)
-            .unwrap_or_default()
-    }
-    pub(in crate::worker_client) fn validate_r_selection(&self) -> Result<(), String> {
-        if let Some(installation) = self
-            .local_runtime
-            .as_ref()
-            .and_then(|runtime| runtime.installation.as_ref())
-        {
-            installation.validate()?;
-        }
-        Ok(())
-    }
 }

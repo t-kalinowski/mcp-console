@@ -26,6 +26,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -39,17 +40,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -58,6 +49,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -70,14 +62,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -107,6 +91,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -120,17 +105,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -139,6 +114,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -151,14 +127,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -213,6 +181,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -226,17 +195,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -245,6 +204,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -257,14 +217,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -285,6 +237,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -298,17 +251,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -318,6 +261,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -330,12 +274,4 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false

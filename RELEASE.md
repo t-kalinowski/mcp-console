@@ -117,6 +117,18 @@ Cargo freshness still applies when a finished artifact is not an exact hit.
 Bump `CI_BUILD_CACHE_VERSION` in `.github/workflows/ci.yaml` when workflow build flags or native dependencies change outside hashed inputs.
 Do not treat Cargo reuse as detection of all external compiler/SDK changes.
 
+Windows CI keeps the pinned source at `.sandbox-runner-source` for the entire job, including wheel and source-installation builds via `MCP_CONSOLE_SANDBOX_SOURCE`.
+It restores the source timestamp archive separately from `codex-rs/target` and the complete `wheel-data/data` plus `target/sandbox-runner-build.json` staging output.
+GNU tar creation and extraction use `--force-local` so absolute Windows drive paths are treated as local archive files.
+The exact Cargo cache key includes the timestamp archive's digest so regenerating an evicted archive cannot permanently pair newer source mtimes with older build intermediates.
+An exact staging/build cache pair may skip initial staging; compatible Cargo fallbacks still stage normally.
+The completed-output key includes the sandbox's pinned Rust toolchain, source pin, Windows target, runner OS version, and staging recipe inputs.
+Cargo's existing `build.rs` validation rejects missing or mismatched artifacts before cache saving or sandbox use, even on an exact restore.
+Successful caches are saved before provisioning and acceptance/installation tests.
+Cargo downloads have their own early checkpoint, matching the Unix layout; the Console build/dependency cache retains its final checkpoint.
+Accounts, credentials, ACLs and provisioning state are never cached; provisioning and the full Windows gate still run.
+Local/source builds always invoke Cargo.
+
 Keep the installed bundled-helper smoke with an empty PATH; a working system bwrap does not validate the relocated bundled helper.
 Ubuntu AppArmor user- namespace restrictions can permit `/usr/bin/bwrap` but reject the bundle.
 Do not weaken a user's host policy merely to pass a test.

@@ -290,9 +290,7 @@ def test_later_stage_failure_does_not_inherit_earlier_control(
             process.stdin.flush()
 
         def receive() -> object:
-            line = reader.readline(timeout=10)
-            assert line, (process.wait(timeout=10), process.stderr.read())
-            message = json.loads(line)
+            message = json.loads(reader.readline(timeout=10))
             messages.append(message)
             return message
 

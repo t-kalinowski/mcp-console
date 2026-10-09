@@ -545,10 +545,15 @@ impl WorkerCallbacks {
     fn resolve_python(
         &self,
         request: crate::worker_protocol::PythonResolveRequest,
-        intent: (bool, Option<std::collections::BTreeSet<String>>),
+        duckdb_extensions: Option<std::collections::BTreeSet<String>>,
+        deliberate: Option<crate::worker_protocol::PythonRequirementManifest>,
     ) -> Result<PythonCandidate, String> {
-        self.client
-            .resolve_runtime_python(self.generation.clone(), request, intent.0, intent.1)
+        self.client.resolve_runtime_python(
+            self.generation.clone(),
+            request,
+            duckdb_extensions,
+            deliberate,
+        )
     }
 
     fn fail_python_activation(&self) -> Result<OldGenerationCommitDisposition, String> {

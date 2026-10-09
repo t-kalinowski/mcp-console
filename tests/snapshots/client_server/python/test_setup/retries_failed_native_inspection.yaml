@@ -5,7 +5,6 @@ send:
   r: |
     retained_pid <- Sys.getpid()
     retained_value <- 41L
-    Sys.unsetenv("RETICULATE_PYTHON")
     invisible(asNamespace("reticulate"))
     return_missing <- TRUE
     assignInNamespace(

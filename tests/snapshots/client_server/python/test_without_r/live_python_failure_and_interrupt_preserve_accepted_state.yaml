@@ -32,20 +32,11 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": null,
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -62,17 +53,10 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r: []
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: ~
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -128,20 +112,11 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": null,
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -158,17 +133,10 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r: []
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: ~
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -222,20 +190,11 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": null,
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -252,17 +211,10 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r: []
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: ~
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -300,20 +252,11 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": null,
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -330,17 +273,10 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r: []
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: ~
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:

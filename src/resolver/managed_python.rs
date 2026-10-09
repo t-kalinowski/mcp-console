@@ -112,11 +112,7 @@ uv output:
             python.display()
         ));
     }
-    if requirements.packages.iter().any(|package| {
-        crate::python_requirement::distribution_name(package).is_ok_and(|name| name == "matplotlib")
-    }) {
-        warm_matplotlib(&python, &resolver, &mut on_started)?;
-    }
+    warm_matplotlib(&python, &resolver, &mut on_started)?;
     Ok(ManagedPython {
         python,
         requirements,

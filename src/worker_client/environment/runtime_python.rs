@@ -12,8 +12,8 @@ impl Client {
         &self,
         generation: WorkerGeneration,
         request: crate::worker_protocol::PythonResolveRequest,
-        explicit_preparation: bool,
         duckdb_extensions: Option<std::collections::BTreeSet<String>>,
+        deliberate: Option<crate::worker_protocol::PythonRequirementManifest>,
     ) -> Result<super::super::PythonCandidate, String> {
         self.ensure_generation(&generation)?;
         let environment = self.0.environment.as_ref().ok_or_else(|| {
@@ -31,23 +31,6 @@ impl Client {
             .as_ref()
             .ok_or_else(|| "managed Python environment is unavailable".to_string())?
             .managed_parts()?;
-        if !environment.python_policy().automatic() && !explicit_preparation {
-            if request.requirements.clone().normalized() != *current.requirements()
-                || request.retained_requirements.clone().normalized() != *current.requirements()
-            {
-                return Err(environment.python_policy().reject("runtime Python"));
-            }
-            let inspected = environment
-                .local_runtime
-                .as_ref()
-                .and_then(|runtime| runtime.python.as_ref())
-                .ok_or("accepted Python inspection is unavailable")?
-                .selected
-                .as_ref()
-                .clone();
-            return Ok((current.clone(), inspected));
-        }
-        environment.validate_r_selection()?;
         let current = current.clone();
         let crate::worker_protocol::PythonResolveRequest {
             requirements,
@@ -70,6 +53,33 @@ impl Client {
                 "Python resolution and retained requirements differ outside the Python version"
                     .to_string(),
             );
+        }
+        let policy = environment.startup.python.resolution;
+        // A deferred runtime declaration is not authorized by a later MCP
+        // addition. Only the normalized candidate owned by that operation is.
+        let deliberate = deliberate.as_ref() == Some(&retained_requirements);
+        if current.requirements() != &retained_requirements
+            && !(if deliberate {
+                policy.permits_deliberate_changes()
+            } else {
+                policy.permits_automatic_additions()
+            })
+        {
+            return Err(policy.denial(
+                "Python",
+                if deliberate {
+                    "MCP preparation"
+                } else {
+                    "runtime dependency request"
+                },
+            ));
+        }
+        if current.requirements() == &retained_requirements && import_resolution.is_none() {
+            self.ensure_generation(&generation)?;
+            let inspected = self
+                .inspect_managed_python(&generation, &current, resolver)
+                .map_err(|failure| failure.into_message())?;
+            return Ok((current, inspected));
         }
         if (initialized || self.0.python_only) && import_resolution.is_none() {
             if self.requirement_change_state(&generation)?
@@ -140,13 +150,6 @@ impl Client {
                 .map_err(|failure| failure.into_message())?;
             return Ok((candidate, inspected));
         }
-        if current.requirements() == &retained_requirements {
-            self.ensure_generation(&generation)?;
-            let inspected = self
-                .inspect_managed_python(&generation, &current, resolver)
-                .map_err(|failure| failure.into_message())?;
-            return Ok((current, inspected));
-        }
         match self.requirement_change_state(&generation)? {
             RequirementChangeState::Available => {}
             RequirementChangeState::RestartRequired => {
@@ -193,14 +196,19 @@ impl Client {
         if environment.custom_worker {
             return Err("Python requirements are unavailable with a custom worker".to_string());
         }
-        environment.validate_r_selection()?;
-        let (_, resolver) = environment
+        let (current, resolver) = environment
             .python
             .as_ref()
             .ok_or_else(|| "managed Python environment is unavailable".to_string())?
             .managed_parts()?;
-        if !environment.python_policy().automatic() {
-            return Err(environment.python_policy().reject("runtime Python version"));
+        let policy = environment.startup.python.resolution;
+        let mut constraints = request.constraints.clone();
+        constraints.sort();
+        constraints.dedup();
+        if !policy.permits_automatic_additions()
+            && constraints != current.requirements().python_version
+        {
+            return Err(policy.denial("Python", "runtime version resolution"));
         }
         let result = crate::resolver::execution::resolve_python_version(
             request.constraints,

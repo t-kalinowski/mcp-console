@@ -190,7 +190,6 @@ impl Client {
                 r_changed,
             } = delta;
             let managed_r = if r_changed {
-                environment.validate_r_selection()?;
                 match self.resolve_managed_r(generation, &environment.r_resolver, r_requirements) {
                     Ok(managed_r) => Some(managed_r),
                     Err(failure) => {
@@ -249,6 +248,7 @@ impl Client {
                 generation,
                 worker,
                 python_packages,
+                python_candidate,
                 managed_r,
                 duckdb_candidate,
             );
@@ -393,6 +393,7 @@ impl Client {
         generation: &WorkerGeneration,
         mut worker: std::sync::MutexGuard<'_, WorkerState>,
         python_packages: Vec<String>,
+        python_candidate: Option<crate::worker_protocol::PythonRequirementManifest>,
         managed_r: Option<crate::resolver::ManagedR>,
         duckdb_extensions: Option<BTreeSet<String>>,
     ) -> Result<PrepareResult, String> {
@@ -454,6 +455,7 @@ impl Client {
             });
             let result = running.prepare_python(
                 python_packages,
+                python_candidate.expect("Python additions retain their admitted candidate"),
                 includes_r,
                 self.0
                     .python_only

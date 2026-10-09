@@ -1,16 +1,6 @@
 ---
 send:
   requirements:
-    action: set
-    python: []
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-send:
-  requirements:
     python:
       - console-initial-fixture
 result:

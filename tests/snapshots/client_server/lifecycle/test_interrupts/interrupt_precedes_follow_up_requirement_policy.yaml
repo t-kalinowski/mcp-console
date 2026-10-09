@@ -5,7 +5,7 @@ interrupt:
     - type: text
       text: |-
         interrupted
-        R resolution is disabled by configuration for this operation (startup_only); use resolution: explicit for MCP requirements changes or automatic for runtime preparation
+        R requirements cannot change under r.resolution=startup_only (requirements.action=add)
   isError: true
 ---
 policy: disabled
@@ -14,5 +14,5 @@ interrupt:
     - type: text
       text: |-
         interrupted
-        R resolution is disabled by configuration for this operation (disabled); use resolution: explicit for MCP requirements changes or automatic for runtime preparation
+        R requirements cannot change under r.resolution=disabled (requirements.action=add)
   isError: true

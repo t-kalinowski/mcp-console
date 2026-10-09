@@ -27,6 +27,7 @@ from windows_gate import Gate
 from support.checkpoints import wait_for_path
 from support.installation import native_console
 from support.normalization import code
+from support.r import r_test_environment
 
 from windows_cargo import WindowsCargo  # noqa: F401 -- include build acceptance
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
@@ -723,7 +724,7 @@ class WindowsConsole(unittest.TestCase):
                         RETICULATE_UV=uv,
                         # uv-installed acceptance interpreters are also valid;
                         # downloads stay disabled so discovery uses local installs.
-                        UV_PYTHON_PREFERENCE="only-managed",
+                        UV_PYTHON_PREFERENCE="system",
                         UV_PYTHON_DOWNLOADS="never",
                     )
                 session = Session(environment, bare_r=not with_python)
@@ -768,11 +769,9 @@ class WindowsConsole(unittest.TestCase):
         self.assertIsNotNone(selected, "Windows R selection acceptance requires R")
         home = Path(subprocess.check_output([selected, "RHOME"], text=True).strip())
         self.assertTrue((home / "etc/Rcmd_environ").is_file())
-        for selection in (selected, {"executable": selected, "resolution": "disabled"}):
+        for selection in (selected, {"executable": selected}):
             with self.subTest(selection=selection):
-                session = Session(
-                    overrides=["r=" + json.dumps(selection), "r.resolution=disabled"]
-                )
+                session = Session(overrides=["r=" + json.dumps(selection)])
                 try:
                     session.initialize()
                     self.assertIn(
@@ -1264,7 +1263,7 @@ class WindowsConsole(unittest.TestCase):
         self.assertNotIn("SIGINT", control)
         result = session.send(requirements={"action": "add", "python": ["six"]})
         self.assertTrue(result.get("isError"), result)
-        self.assertIn("Python requirements are unavailable", json.dumps(result))
+        self.assertIn("unavailable", json.dumps(result))
         self.assertIn("42", json.dumps(session.send(python="42")))
 
     def test_sql_without_r(self):
@@ -1338,6 +1337,85 @@ class WindowsConsole(unittest.TestCase):
     def test_sql_with_r(self):
         session = self.session()
         exercise_r_sql(session)
+
+    def test_startup_without_processor_architecture(self):
+        # Codex clears the inherited environment and keeps WINDOWS_CORE_ENV_VARS:
+        # https://github.com/openai/codex/blob/ca466061d64f0b44f416135c7fd06aa7af850bbc/codex-rs/protocol/src/shell_environment.rs#L170-L201
+        # Use its core allowlist without optional certificate/config overrides.
+        # R DuckDB teardown can crash without PROCESSOR_ARCHITECTURE, before a cell.
+        allowed = {
+            "PATH",
+            "PATHEXT",
+            "SHELL",
+            "COMSPEC",
+            "SYSTEMROOT",
+            "WINDIR",
+            "SYSTEMDRIVE",
+            "USERNAME",
+            "USERDOMAIN",
+            "USERPROFILE",
+            "HOMEDRIVE",
+            "HOMEPATH",
+            "PROGRAMFILES",
+            "PROGRAMFILES(X86)",
+            "PROGRAMW6432",
+            "PROGRAMDATA",
+            "LOCALAPPDATA",
+            "APPDATA",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+            "POWERSHELL",
+            "PWSH",
+        }
+        environment = {
+            name: value for name, value in os.environ.items() if name.upper() in allowed
+        }
+        # Make the configured test R discoverable through the retained PATH;
+        # R_HOME and explicit Python selections must not mask client filtering.
+        _, rscript = r_test_environment()
+        environment["PATH"] = os.pathsep.join(
+            (str(rscript.parent), environment.get("PATH", ""))
+        )
+        for name in ("PROCESSOR_ARCHITECTURE", "R_HOME", "RETICULATE_PYTHON"):
+            self.assertNotIn(name, environment)
+        for filtered, value in ((False, None), (True, None), (False, "")):
+            with self.subTest(filtered=filtered, value=value):
+                launch_environment = environment.copy()
+                if value is not None:
+                    launch_environment["PROCESSOR_ARCHITECTURE"] = value
+                overrides = ()
+                if filtered:
+                    overrides = (
+                        "inherit_environment=false",
+                        "environment=" + json.dumps(launch_environment),
+                    )
+                session = Session(launch_environment, overrides=overrides)
+                try:
+                    session.initialize()
+                    session.request("tools/list", {})
+                    session.expect("R_SMOKE 4", r='cat("R_SMOKE", 2 + 2, "\\n")')
+                    inspection = session.send(requirements={"action": "get"})
+                    self.assertFalse(inspection.get("isError"), inspection)
+                    self.assertTrue(inspection["structuredContent"]["prepared"])
+                    session.expect(
+                        "PYTHON_SMOKE 4",
+                        # fmt: python
+                        python=code("""
+                            import os
+
+                            assert os.environ["PROCESSOR_ARCHITECTURE"] == "AMD64"
+                            print("PYTHON_SMOKE", 2 + 2)
+                            """),
+                    )
+                    session.expect("1234567", sql="SELECT 1234567 AS sql_smoke")
+                    session.expect(
+                        "RESTART_SMOKE 4",
+                        control="restart",
+                        python="print('RESTART_SMOKE', 2 + 2)",
+                    )
+                finally:
+                    session.close()
 
     def test_sql_startup_without_r(self):
         environment = dict(

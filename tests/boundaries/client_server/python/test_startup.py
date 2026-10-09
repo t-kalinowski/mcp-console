@@ -344,7 +344,6 @@ def interrupted_initialization(
                     """),
             )
             environment = bare_runtime_environment(r_environment, library)
-            environment.pop("RETICULATE_PYTHON", None)
             if os.name == "nt":
                 environment["PATH"] = os.pathsep.join(
                     entry

@@ -37,7 +37,6 @@ fn run_session(bootstrap_runtimes: bool) -> Result<(), Box<dyn Error>> {
             r: true,
             installation: None,
             r_settings: Default::default(),
-            python_resolution: Default::default(),
             python: None,
         },
     );

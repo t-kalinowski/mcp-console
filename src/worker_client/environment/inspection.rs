@@ -3,7 +3,7 @@ use super::state::{Environment, PythonEnvironment};
 use crate::worker_protocol::PythonRequirementManifest;
 
 /// The declaration is derived from retained resolver results, never a candidate.
-#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct Declaration {
     pub r: Vec<String>,
     pub python: Vec<String>,
@@ -13,7 +13,7 @@ pub(crate) struct Declaration {
 }
 
 impl Declaration {
-    pub(in crate::worker_client) fn python_manifest(&self) -> PythonRequirementManifest {
+    pub(super) fn python_manifest(&self) -> PythonRequirementManifest {
         PythonRequirementManifest {
             packages: self.python.clone(),
             python_version: self.python_version.clone(),
@@ -21,7 +21,7 @@ impl Declaration {
         }
     }
 
-    pub(in crate::worker_client) fn normalized(mut self) -> Self {
+    pub(super) fn normalized(mut self) -> Self {
         self.r.sort();
         self.r.dedup();
         self.duckdb.sort();
@@ -48,7 +48,7 @@ const R_RUNTIME_REQUIREMENTS: &[&str] = &[
 ];
 
 impl Environment {
-    pub(in crate::worker_client) fn manages_python(&self) -> bool {
+    pub(super) fn manages_python(&self) -> bool {
         match &self.r_resolver {
             RResolver::Pending(setup) => {
                 PythonEnvironment::uses_managed(setup.configured_python.as_deref())
@@ -62,7 +62,40 @@ impl Environment {
     }
 
     pub(in crate::worker_client) fn startup_declaration(&self) -> Declaration {
-        self.startup.clone().unwrap_or_default()
+        let managed_r = !self.custom_worker && !matches!(self.r_resolver, RResolver::Disabled);
+        let python = if self.manages_python() {
+            self.startup.python.manifest(
+                self.local_runtime
+                    .as_ref()
+                    .is_some_and(crate::local_runtime::Selection::python_only),
+            )
+        } else {
+            Default::default()
+        };
+        Declaration {
+            r: if managed_r {
+                self.startup.r.clone().unwrap_or_else(|| {
+                    super::super::DEFAULT_R_REQUIREMENTS
+                        .iter()
+                        .map(|s| (*s).into())
+                        .collect()
+                })
+            } else {
+                vec![]
+            },
+            python: python.packages,
+            python_version: python.python_version,
+            duckdb: if managed_r {
+                super::super::DEFAULT_DUCKDB_EXTENSIONS
+                    .iter()
+                    .map(|s| (*s).into())
+                    .collect()
+            } else {
+                self.startup.native_duckdb.iter().cloned().collect()
+            },
+            ..Default::default()
+        }
+        .normalized()
     }
 
     pub(super) fn declaration(&self) -> Declaration {
@@ -102,13 +135,6 @@ impl Environment {
     pub(in crate::worker_client) fn inspection(&self) -> serde_json::Value {
         serde_json::json!({
             "requirements": self.declaration(),
-            "startup_requirements": self.startup_declaration(),
-            "resolution": {"r": self.r_policy(), "python": self.python_policy()},
-            "selection": {
-                "r": self.local_runtime.as_ref().and_then(|runtime| runtime.r_home.as_ref()).map(|home| home.to_string_lossy()),
-                "python": self.local_runtime.as_ref().and_then(|runtime| runtime.python.as_ref()).map(|python| &python.selected.embedding.python),
-                "python_source": self.python_source,
-            },
             "prepared": self.r.is_some() || self.python.as_ref().and_then(PythonEnvironment::managed).is_some(),
             "runtime_requirements": {"r": self.runtime_r_requirements(), "python": []},
         })
@@ -117,15 +143,6 @@ impl Environment {
 
 impl Client {
     pub(crate) fn inspect_requirements(&self) -> serde_json::Value {
-        let mut snapshot = self.requirements_snapshot();
-        snapshot
-            .as_object_mut()
-            .expect("requirements inspection object")
-            .remove("startup_requirements");
-        snapshot
-    }
-
-    pub(in crate::worker_client) fn requirements_snapshot(&self) -> serde_json::Value {
         self.0
             .requirements_snapshot
             .lock()

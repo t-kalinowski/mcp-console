@@ -149,16 +149,16 @@ impl Client {
                 }
             }
         }
-        if (!matches!(request.control, Some(SendControl::Interrupt)) || self.0.python_only)
-            && let Some(requirements) = &request.requirements
-        {
+        if let Some(requirements) = &request.requirements {
             self.validate_requirements(requirements)?;
         }
         if let Some(cell) = &request.cell {
             self.validate_cell(cell)?;
         }
         request.validate(
-            self.0.dynamic_resolution || self.0.python_preparation || self.0.languages.is_some(),
+            self.0.r_resolution == crate::settings::Resolution::Disabled
+                || self.0.dynamic_resolution
+                || self.0.python_preparation,
         )?;
         if initial_restart && let Some(response) = self.take_prelaunch_failure()? {
             return Ok(response);
@@ -542,41 +542,20 @@ impl Client {
     }
 
     pub(super) fn validate_requirements(&self, requirements: &Requirements) -> Result<(), String> {
-        let snapshot = self.requirements_snapshot();
-        if !self.0.python_preparation
-            && snapshot["selection"]["python_source"]
-                .as_str()
-                .is_some_and(|source| source != "default managed")
-            && (!requirements.python.is_empty()
-                || !requirements.python_version.is_empty()
-                || requirements.exclude_newer.is_some())
-        {
-            return Err(if self.0.python_only {
-                crate::local_runtime::PREPARATION_DISABLED.into()
-            } else {
-                "managed Python requirements are disabled because the session uses a user-selected Python environment".into()
-            });
+        if self.0.python_only {
+            if !self.0.python_preparation {
+                if !requirements.duckdb.is_empty() {
+                    return Err("DuckDB extension preparation is unavailable with a user-selected Python environment; install extensions before starting the session".into());
+                }
+                return Err(crate::local_runtime::PREPARATION_DISABLED.into());
+            }
+            if !requirements.r.is_empty() {
+                return Err("R requirements are unavailable in Python sessions without R".into());
+            }
         }
-        let current = serde_json::from_value(snapshot["requirements"].clone())
-            .expect("captured requirement declaration");
-        let startup = serde_json::from_value(snapshot["startup_requirements"].clone())
-            .expect("captured startup declaration");
-        let r_policy =
-            serde_json::from_value(snapshot["resolution"]["r"].clone()).expect("captured R policy");
-        let python_policy = serde_json::from_value(snapshot["resolution"]["python"].clone())
-            .expect("captured Python policy");
-        super::environment::requirements::validate_policies(
-            &current,
-            &startup,
-            r_policy,
-            python_policy,
-            !self.0.python_only,
-            requirements,
-        )?;
-        if !self.0.dynamic_resolution
+        if self.0.r_resolution != crate::settings::Resolution::Disabled
+            && !self.0.dynamic_resolution
             && !self.0.python_preparation
-            && !self.0.python_only
-            && (!requirements.r.is_empty() || !requirements.duckdb.is_empty())
         {
             return Err(crate::local_runtime::RESOLUTION_UNAVAILABLE.into());
         }

@@ -270,7 +270,7 @@ def test_late_attachment_preserves_environment_metadata(
         (modules / "sitecustomize.py").write_text(DEFER_R_STARTUP)
         executable = Path(sys._base_executable)
         prefix = root / "virtualenv"
-        for kind in ("base", "virtualenv"):
+        for kind in ("base", "virtualenv", "conda-marker"):
             if kind == "virtualenv":
                 subprocess.run(
                     [sys.executable, "-m", "venv", "--without-pip", str(prefix)],
@@ -284,11 +284,16 @@ def test_late_attachment_preserves_environment_metadata(
                     check=True,
                     capture_output=True,
                 )
+            elif kind == "conda-marker":
+                # Exercise both values of reticulate's Conda metadata marker in
+                # a test-owned environment, without installing a Conda manager.
+                (prefix / "conda-meta").mkdir()
             environment = dict(
                 os.environ,
                 RETICULATE_PYTHON=str(executable),
                 RETICULATE_PYTHONPATH=str(modules),
                 MCP_CONSOLE_TEST_PYTHON=str(executable),
+                MCP_CONSOLE_TEST_ENVIRONMENT_KIND=kind,
                 MCP_CONSOLE_TEST_VIRTUALENV="" if kind == "base" else str(prefix),
             )
             with McpClient(binary, execution.serve(), environment, root) as client:
@@ -313,7 +318,10 @@ def test_late_attachment_preserves_environment_metadata(
                         normalizePath(sys$base_exec_prefix)
                       ),
                       !isTRUE(config$ephemeral),
-                      identical(config$conda, FALSE),
+                      identical(
+                        config$conda,
+                        Sys.getenv("MCP_CONSOLE_TEST_ENVIRONMENT_KIND") == "conda-marker"
+                      ),
                       identical(
                         normalizePath(config$virtualenv, mustWork = FALSE),
                         normalizePath(Sys.getenv("MCP_CONSOLE_TEST_VIRTUALENV"), mustWork = FALSE)

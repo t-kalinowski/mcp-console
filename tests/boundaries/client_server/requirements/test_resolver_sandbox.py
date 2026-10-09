@@ -396,9 +396,7 @@ def test_preserves_python_selection_in_resolver_environment(binary: Path) -> Tra
                         "environment": {
                             "HOME": env["HOME"],
                             "PATH": env["PATH"],
-                            "RETICULATE_PYTHON": "managed"
-                            if source == "managed"
-                            else sys.executable,
+                            "RETICULATE_PYTHON": sys.executable,
                             "UV_NO_CONFIG": "1",
                         },
                     }

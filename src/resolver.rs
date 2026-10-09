@@ -98,7 +98,6 @@ pub(crate) use managed_python::{resolve_python_manifest_for_host, resolve_python
 #[cfg(any(unix, windows))]
 pub(crate) use managed_r::{
     ManagedRBootstrap, ManagedRResolverConfiguration, discover, resolve_r, resolve_r_with,
-    selected_rscript,
 };
 #[cfg(any(unix, windows))]
 pub(crate) use process::{ResolverControl, ResolverPhase, ResolverStopHandle};

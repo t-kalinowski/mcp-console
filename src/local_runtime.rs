@@ -44,8 +44,6 @@ pub(crate) struct Selection {
     pub(crate) installation: Option<RInstallation>,
     #[serde(default)]
     pub(crate) r_settings: crate::settings::R,
-    #[serde(default)]
-    pub(crate) python_resolution: crate::settings::Resolution,
     // In managed sessions, None leaves R declarations and selection hints lazy.
     pub(crate) python: Option<Python>,
 }
@@ -68,8 +66,6 @@ pub(crate) struct WorkerSelection {
     pub(crate) installation: Option<RInstallation>,
     #[serde(default)]
     pub(crate) r_settings: crate::settings::R,
-    #[serde(default)]
-    pub(crate) python_resolution: crate::settings::Resolution,
     pub(crate) python: Option<Python>,
 }
 
@@ -155,7 +151,6 @@ impl Selection {
             r_home: None,
             installation: None,
             r_settings: Default::default(),
-            python_resolution: Default::default(),
             python: Some(Python {
                 selected: Box::new(selected),
                 explicit,
@@ -221,7 +216,6 @@ impl Selection {
                 r: self.r_home.is_some(),
                 installation: self.installation.clone(),
                 r_settings: self.r_settings.clone(),
-                python_resolution: self.python_resolution,
                 python: self.python.clone(),
             })
             .map_err(|error| format!("cannot encode runtime selections: {error}"))?,

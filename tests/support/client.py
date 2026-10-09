@@ -399,32 +399,6 @@ class McpClient:
             assert extra_output == "", f"unexpected extra output: {extra_output}"
             for entry in self.transcript:
                 if isinstance(result := entry.get("result"), dict):
-                    inspection = result.get("structuredContent", {})
-                    selection = (
-                        inspection.get("selection")
-                        if isinstance(inspection, dict)
-                        else None
-                    )
-                    if isinstance(selection, dict):
-                        for language in ("r", "python"):
-                            selected = selection.get(language)
-                            if selected is None:
-                                continue
-                            assert (
-                                isinstance(selected, str)
-                                and Path(selected).is_absolute()
-                            ), selection
-                            label = (
-                                "<selected R home>"
-                                if language == "r"
-                                else "<selected Python>"
-                            )
-                            selection[language] = label
-                            for content in result.get("content", []):
-                                if content.get("type") == "text":
-                                    content["text"] = content["text"].replace(
-                                        json.dumps(selected)[1:-1], label
-                                    )
                     for tool in result.get("tools", []):
                         for index, root in enumerate(self.writable_roots):
                             label = (

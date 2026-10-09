@@ -168,12 +168,11 @@ def test_runs_joblib_process_backend(binary: Path, execution: Execution) -> Tran
 
         Parallel(n_jobs=2)(delayed(abs)(value) for value in range(-2, 3))
         """)
-    client.send(
+    client.expect(
+        "[2, 1, 0, 1, 2]\n",
         python=python,
         requirements={"python": ["joblib"]},
     )
-    output = last_result_text(client)
-    assert output == "[2, 1, 0, 1, 2]\n", repr(output)
     client.expect(
         python="from joblib.externals.loky import get_reusable_executor\nget_reusable_executor().shutdown(wait=True)"
     )
@@ -196,9 +195,7 @@ def test_runs_joblib_process_backend_after_live_resolution(
 
         Parallel(n_jobs=2)(delayed(abs)(value) for value in range(-2, 3))
         """)
-    client.send(python=python)
-    output = last_result_text(client)
-    assert output == "[2, 1, 0, 1, 2]\n", repr(output)
+    client.expect("[2, 1, 0, 1, 2]\n", python=python)
     client.expect(
         python="from joblib.externals.loky import get_reusable_executor\nget_reusable_executor().shutdown(wait=True)"
     )

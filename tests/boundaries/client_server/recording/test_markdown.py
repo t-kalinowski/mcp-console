@@ -1,7 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,7 +15,6 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript, TranscriptWithCompanions
-from support.resolvers import ir_cache_directory
 from support.suites import run_this_suite
 
 
@@ -61,132 +59,6 @@ def test_records_existing_python_startup_declaration(
         assert startup["python"] == [], startup
         assert startup["r"] == inspection["requirements"]["r"], startup
         return [{"recorded_startup_requirements": startup}]
-
-
-@requires(POSIX, R, command("ir"), command("uv"))
-@executions(DIRECT, SANDBOXED)
-def test_records_python_prepared_through_r_bootstrap(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as temporary:
-        workspace = Path(temporary).resolve()
-        environment, _ = r_test_environment()
-        environment["IR_CACHE_DIR"] = ir_cache_directory(environment)
-        environment.pop("RETICULATE_PYTHON", None)
-        environment.update(
-            RETICULATE_UV="managed", XDG_CACHE_HOME=str(workspace / "cache")
-        )
-        uv = workspace / "cache/R/reticulate/uv/bin/uv"
-        uv.parent.mkdir(parents=True)
-        shutil.copy2(shutil.which("uv"), uv)
-        with McpClient(
-            binary,
-            execution.serve(
-                "-c",
-                "cache=host",
-                "-c",
-                "r.packages=[]",
-                "-c",
-                "python.managed.packages=[]",
-            ),
-            environment,
-            workspace,
-        ) as client:
-            client.initialize_and_list_tools()
-            client.expect(
-                "managed Python ready\n", python="print('managed Python ready')"
-            )
-            client.expect(
-                "automatic import recorded\n",
-                python="import six; print('automatic import recorded')",
-            )
-            inspection = client.send(requirements={"action": "get"})[
-                "structuredContent"
-            ]
-            assert inspection["requirements"]["python"] == ["six"], inspection
-            client.finish()
-        (session,) = (workspace / ".agents/console/sessions").iterdir()
-        events = [
-            json.loads(line)
-            for line in (session / "internal/events.jsonl").read_text().splitlines()
-        ]
-        known = [
-            event for event in events if event.get("python_preparation") is not None
-        ]
-        assert known and all(event["python_preparation"] for event in known), known
-        assert any(
-            event["event"] == "python_environment_accepted"
-            and event["packages"] == ["six"]
-            for event in events
-        ), events
-        quarto = (session / "transcript.qmd").read_text()
-        assert "  python-packages:\n    - six\n" in quarto, quarto
-    return [
-        {
-            "managed_python_bootstrap": "preparation and automatic imports retained in recordings"
-        }
-    ]
-
-
-@requires(POSIX, command("R"), command("ir"), command("uv"))
-@executions(DIRECT, SANDBOXED)
-def test_records_configured_startup_requirements(
-    binary: Path, execution: Execution
-) -> TranscriptWithCompanions:
-    with tempfile.TemporaryDirectory() as temporary:
-        workspace = Path(temporary).resolve()
-        environment, _ = r_test_environment()
-        environment.pop("RETICULATE_PYTHON", None)
-        with McpClient(
-            binary,
-            execution.serve(
-                "-c",
-                "r.packages=[]",
-                "-c",
-                "r.resolution=explicit",
-                "-c",
-                "python.managed.packages=[six]",
-                "-c",
-                "python.managed.resolution=explicit",
-            ),
-            environment,
-            workspace,
-        ) as client:
-            client.initialize_and_list_tools()
-            # fmt: python
-            source = code("""
-                import six
-
-                print("configured")
-                """)
-            client.expect("configured\n", python=source)
-            inspection = client.send(requirements={"action": "get"})[
-                "structuredContent"
-            ]
-            declaration = inspection["requirements"]
-            assert declaration["r"] == [] and declaration["python"] == ["six"], (
-                declaration
-            )
-            transcript = client.finish()
-        session = next((workspace / ".agents/console/sessions").iterdir())
-        events = [
-            json.loads(line)
-            for line in (session / "internal/events.jsonl").read_text().splitlines()
-        ]
-        recorded = [
-            event["startup_requirements"]
-            for event in events
-            if event.get("startup_requirements") is not None
-        ]
-        assert recorded and all(
-            declaration == inspection["requirements"] for declaration in recorded
-        ), recorded
-        quarto = (session / "transcript.qmd").read_text()
-        assert "  packages: []\n  python-packages:\n    - six\n---\n" in quarto, quarto
-        return TranscriptWithCompanions(
-            transcript=transcript,
-            companions={"qmd": quarto.replace(str(workspace), "<workspace>")},
-        )
 
 
 @requires(R, SQL)

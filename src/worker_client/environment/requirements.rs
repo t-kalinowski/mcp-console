@@ -1,7 +1,7 @@
 use rmcp::schemars;
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::state::{Environment, PythonEnvironment, ensure_managed_python_available};
+use super::state::{Environment, ensure_managed_python_available};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -14,7 +14,7 @@ pub(crate) enum RequirementsAction {
     Reset,
 }
 
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct Requirements {
     pub(crate) call_id: Option<u64>,
     pub(crate) action: RequirementsAction,
@@ -97,72 +97,6 @@ pub(crate) fn validate_r_requirements(requirements: &[String]) -> Result<(), Str
     Ok(())
 }
 
-pub(in crate::worker_client) fn validate_policies(
-    current: &super::inspection::Declaration,
-    startup: &super::inspection::Declaration,
-    r_policy: crate::settings::Resolution,
-    python_policy: crate::settings::Resolution,
-    has_r: bool,
-    requested: &Requirements,
-) -> Result<(), String> {
-    if requested.action == RequirementsAction::Get {
-        return Ok(());
-    }
-    let reset;
-    let requested = if requested.action == RequirementsAction::Reset {
-        reset = Requirements {
-            action: RequirementsAction::Set,
-            r: startup.r.clone(),
-            python: startup.python.clone(),
-            duckdb: startup.duckdb.clone(),
-            python_version: startup.python_version.clone(),
-            exclude_newer: Some(startup.exclude_newer.clone()),
-            ..Default::default()
-        };
-        &reset
-    } else {
-        requested
-    };
-    let replacing = requested.action == RequirementsAction::Set;
-    let changed = |before: &[String], after: &[String]| {
-        let before = before.iter().collect::<BTreeSet<_>>();
-        let after = after.iter().collect::<BTreeSet<_>>();
-        if replacing {
-            before != after
-        } else {
-            !after.is_subset(&before)
-        }
-    };
-    if changed(&current.r, &requested.r) {
-        if !r_policy.changes() {
-            return Err(r_policy.reject("R"));
-        }
-        if !has_r {
-            return Err("R requirements are unavailable in Python sessions without R".into());
-        }
-    }
-    let python_changed = changed(&current.python, &requested.python)
-        || changed(&current.python_version, &requested.python_version)
-        || if replacing {
-            requested.exclude_newer.clone().flatten() != current.exclude_newer
-        } else {
-            requested
-                .exclude_newer
-                .as_ref()
-                .is_some_and(|cutoff| cutoff != &current.exclude_newer)
-        };
-    if python_changed && !python_policy.changes() {
-        return Err(python_policy.reject("Python"));
-    }
-    if changed(&current.duckdb, &requested.duckdb) {
-        let policy = if has_r { r_policy } else { python_policy };
-        if !policy.changes() {
-            return Err(policy.reject("DuckDB provider"));
-        }
-    }
-    Ok(())
-}
-
 pub(in crate::worker_client) struct RequirementDelta {
     pub(super) restart_required: bool,
     pub(super) duckdb_extensions: BTreeSet<String>,
@@ -178,18 +112,7 @@ impl RequirementDelta {
         environment: &Environment,
         requirements: Requirements,
     ) -> Result<Self, String> {
-        validate_policies(
-            &environment.declaration(),
-            &environment.startup_declaration(),
-            environment.r_policy(),
-            environment.python_policy(),
-            environment
-                .local_runtime
-                .as_ref()
-                .is_none_or(|runtime| !runtime.python_only()),
-            &requirements,
-        )?;
-        environment.validate_r_selection()?;
+        let action = requirements.action;
         if matches!(
             requirements.action,
             RequirementsAction::Set | RequirementsAction::Reset
@@ -197,41 +120,36 @@ impl RequirementDelta {
             return Self::replacement(environment, requirements);
         }
         let Requirements {
-            duckdb,
+            mut duckdb,
             python,
             r,
             python_version,
             exclude_newer,
             ..
         } = requirements;
-        let pending = matches!(environment.r_resolver, super::super::RResolver::Pending(_));
-        let current = environment.declaration();
-        let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
-        let mut duckdb_extensions = current.duckdb.iter().cloned().collect::<BTreeSet<_>>();
-        duckdb_extensions.extend(duckdb_additions);
-        let duckdb_changed = duckdb_extensions != environment.duckdb_extensions;
-        let python_additions = python.into_iter().collect::<BTreeSet<_>>();
-        let mut candidate = current.python_manifest();
-        candidate.packages.extend(python_additions.iter().cloned());
-        let candidate = candidate.normalized();
-        let python_changed = candidate != current.python_manifest();
-        if python_changed {
+        if !python.is_empty() {
             ensure_managed_python_available(environment)?;
         }
-        let mut python_candidate = (python_changed
-            || (pending
-                && environment
-                    .python
-                    .as_ref()
-                    .and_then(PythonEnvironment::managed)
-                    .is_none()
-                && environment.manages_python()))
-        .then_some(candidate);
+        let pending = match &environment.r_resolver {
+            super::super::RResolver::Pending(setup) => Some(setup),
+            _ => None,
+        };
+        if pending.is_some() {
+            duckdb.extend(environment.startup_declaration().duckdb);
+        }
 
+        let duckdb_additions = duckdb.into_iter().collect::<BTreeSet<_>>();
+        let duckdb_changed = !duckdb_additions.is_subset(&environment.duckdb_extensions);
+        let duckdb_extensions = environment
+            .duckdb_extensions
+            .union(&duckdb_additions)
+            .cloned()
+            .collect();
+
+        let python_additions = python.into_iter().collect::<BTreeSet<_>>();
         let current_python = environment.declaration().python_manifest();
-        let mut candidate = python_candidate
-            .clone()
-            .unwrap_or_else(|| current_python.clone());
+        let mut candidate = current_python.clone();
+        candidate.packages.extend(python_additions.iter().cloned());
         candidate.python_version.extend(python_version);
         if let Some(cutoff) = exclude_newer {
             if current_python.exclude_newer.is_some() && cutoff != current_python.exclude_newer {
@@ -242,13 +160,15 @@ impl RequirementDelta {
         let candidate = candidate.normalized();
         let restart_required = candidate.python_version != current_python.python_version
             || candidate.exclude_newer != current_python.exclude_newer;
+        let python_candidate = (candidate != current_python
+            || (pending.is_some() && environment.manages_python()))
+        .then_some(candidate);
         if restart_required {
             ensure_managed_python_available(environment)?;
-            python_candidate = Some(candidate);
         }
         let (r_requirements, r_changed) = merge_r_requirements(environment, r);
 
-        Ok(Self {
+        let delta = Self {
             restart_required,
             duckdb_extensions,
             duckdb_changed,
@@ -256,7 +176,9 @@ impl RequirementDelta {
             python_candidate,
             r_requirements,
             r_changed,
-        })
+        };
+        delta.validate_policy(environment, action)?;
+        Ok(delta)
     }
 
     fn replacement(environment: &Environment, requirements: Requirements) -> Result<Self, String> {
@@ -280,8 +202,9 @@ impl RequirementDelta {
         if python != current.python_manifest() && !manages_python {
             ensure_managed_python_available(environment)?;
         }
-        Ok(Self {
-            restart_required: changed,
+        let action = requirements.action;
+        let delta = Self {
+            restart_required: true,
             duckdb_changed: changed && (candidate.duckdb != current.duckdb || pending),
             duckdb_extensions: candidate.duckdb.into_iter().collect(),
             python_additions: Default::default(),
@@ -294,7 +217,52 @@ impl RequirementDelta {
                     || candidate.r != current.r
                     || (environment.custom_worker && environment.r.is_none())),
             r_requirements: candidate.r,
-        })
+        };
+        delta.validate_policy(environment, action)?;
+        Ok(delta)
+    }
+
+    fn validate_policy(
+        &self,
+        environment: &Environment,
+        action: RequirementsAction,
+    ) -> Result<(), String> {
+        let current = environment.declaration();
+        let operation = match action {
+            RequirementsAction::Add => "requirements.action=add",
+            RequirementsAction::Set => "requirements.action=set",
+            RequirementsAction::Reset => "requirements.action=reset",
+            RequirementsAction::Get => unreachable!("inspection does not calculate candidates"),
+        };
+        // Bootstrap/materialization flags are not logical declaration changes.
+        let r_changed = self.r_requirements != current.r;
+        let python_changed = self
+            .python_candidate
+            .as_ref()
+            .is_some_and(|candidate| *candidate != current.python_manifest());
+        let extensions_changed =
+            self.duckdb_extensions.iter().cloned().collect::<Vec<_>>() != current.duckdb;
+        let python_provider = environment
+            .local_runtime
+            .as_ref()
+            .is_some_and(crate::local_runtime::Selection::python_only);
+        for (changed, policy, language) in [
+            (
+                r_changed || (extensions_changed && !python_provider),
+                environment.startup.r_resolution,
+                "R",
+            ),
+            (
+                python_changed || (extensions_changed && python_provider),
+                environment.startup.python.resolution,
+                "Python",
+            ),
+        ] {
+            if changed && !policy.permits_deliberate_changes() {
+                return Err(policy.denial(language, operation));
+            }
+        }
+        Ok(())
     }
 
     pub(in crate::worker_client) fn is_empty(&self) -> bool {
@@ -346,14 +314,18 @@ pub(super) fn merge_r_requirements(
     environment: &Environment,
     additions: Vec<String>,
 ) -> (Vec<String>, bool) {
-    let additions = additions.into_iter().collect::<BTreeSet<_>>();
+    let mut additions = additions.into_iter().collect::<BTreeSet<_>>();
+    let pending = matches!(environment.r_resolver, super::super::RResolver::Pending(_));
+    if pending {
+        additions.extend(environment.startup_declaration().r);
+    }
     let current = environment
-        .declaration()
         .r
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    let changed = !additions.is_subset(&current)
-        || matches!(environment.r_resolver, super::super::RResolver::Pending(_))
+        .as_ref()
+        .map(|managed| managed.requirements().iter().cloned().collect())
+        .unwrap_or_default();
+    let changed = pending
+        || !additions.is_subset(&current)
         || (environment.custom_worker && environment.r.is_none());
     (current.union(&additions).cloned().collect(), changed)
 }

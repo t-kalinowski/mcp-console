@@ -37,6 +37,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -50,17 +51,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -86,6 +77,7 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -98,14 +90,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -175,6 +159,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -188,17 +173,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -224,6 +199,7 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -236,14 +212,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -291,6 +259,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -304,17 +273,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -340,6 +299,7 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -352,14 +312,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -387,6 +339,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -400,17 +353,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -419,6 +362,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -431,14 +375,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -484,6 +420,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -497,17 +434,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -516,6 +443,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -528,14 +456,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -552,6 +472,7 @@ result:
 ---
 send:
   sql: SELECT 42 AS answer
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -578,6 +499,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -591,17 +513,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -610,6 +522,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -622,14 +535,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -686,6 +591,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -699,17 +605,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -718,6 +614,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -730,14 +627,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -785,6 +674,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -798,17 +688,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -817,6 +697,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -829,14 +710,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -883,6 +756,7 @@ result:
             ],
             "exclude_newer": "2026-01-01"
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -896,17 +770,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -918,6 +782,7 @@ result:
         - <3.14
         - ">=3.11"
       exclude_newer: 2026-01-01
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -930,14 +795,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -1022,6 +879,7 @@ result:
             ],
             "exclude_newer": "2026-01-01"
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -1035,17 +893,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -1057,6 +905,7 @@ result:
         - <3.14
         - ">=3.11"
       exclude_newer: 2026-01-01
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -1069,14 +918,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -1111,6 +952,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -1124,17 +966,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -1143,6 +975,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -1155,14 +988,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -1193,6 +1018,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -1206,17 +1032,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -1226,6 +1042,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -1238,14 +1055,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -1278,6 +1087,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -1291,17 +1101,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -1311,6 +1111,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -1323,14 +1124,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -1362,6 +1155,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -1375,17 +1169,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -1395,6 +1179,7 @@ result:
       duckdb: []
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -1407,14 +1192,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -1452,6 +1229,7 @@ result:
             ],
             "exclude_newer": "2026-01-01"
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -1465,17 +1243,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -1486,6 +1254,7 @@ result:
       python_version:
         - ">=3.11"
       exclude_newer: 2026-01-01
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -1498,14 +1267,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:
@@ -1557,6 +1318,7 @@ result:
             "python_version": [],
             "exclude_newer": null
           },
+          "prepared": true,
           "runtime_requirements": {
             "r": [
               "DBI",
@@ -1570,17 +1332,7 @@ result:
               "utf8"
             ],
             "python": []
-          },
-          "resolution": {
-            "r": "automatic",
-            "python": "automatic"
-          },
-          "selection": {
-            "r": "<selected R home>",
-            "python": "<selected Python>",
-            "python_source": "default managed"
-          },
-          "prepared": true
+          }
         }
   structuredContent:
     requirements:
@@ -1606,6 +1358,7 @@ result:
         - sqlite
       python_version: []
       exclude_newer: ~
+    prepared: true
     runtime_requirements:
       r:
         - DBI
@@ -1618,14 +1371,6 @@ result:
         - tibble
         - utf8
       python: []
-    resolution:
-      r: automatic
-      python: automatic
-    selection:
-      r: <selected R home>
-      python: <selected Python>
-      python_source: default managed
-    prepared: true
   isError: false
 ---
 send:

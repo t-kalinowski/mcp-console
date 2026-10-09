@@ -93,7 +93,6 @@ def deferred_selection_client(
             environment,
             # fmt: r
             code(f"""
-                Sys.setenv(RETICULATE_PYTHON = {json.dumps(sys.executable)})
                 if (!file.exists({json.dumps(str(directory / "interrupted"))})) {{
                   options(reticulate.python.beforeInitialized = function() {{
                     options(reticulate.python.beforeInitialized = NULL)
@@ -107,7 +106,6 @@ def deferred_selection_client(
                 """),
         )
         environment = bare_runtime_environment(environment, library)
-        environment.pop("RETICULATE_PYTHON", None)
         if os.name == "nt":
             # Windows eagerly inspects a PATH Python in bare R sessions. This
             # fixture specifically arranges unresolved R-side selection.
@@ -327,7 +325,6 @@ def test_retries_failed_native_inspection(
             r=code("""
                 retained_pid <- Sys.getpid()
                 retained_value <- 41L
-                Sys.unsetenv("RETICULATE_PYTHON")
                 invisible(asNamespace("reticulate"))
                 return_missing <- TRUE
                 assignInNamespace(
@@ -906,7 +903,6 @@ def test_restores_virtualenv_after_selection_interrupt(
     with deferred_selection_client(binary, execution.serve()) as client:
         # fmt: r
         r = code("""
-            Sys.unsetenv("RETICULATE_PYTHON")
             reticulate::use_python(
               normalizePath(
                 if (.Platform$OS.type == "windows") {

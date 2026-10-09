@@ -1113,14 +1113,15 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
                 sessions = root / ".agents/console/sessions"
                 assert not list(sessions.glob("*/artifacts/*"))
                 release.release()
-                ready = client.send(requirements={"action": "get"})
-                assert not ready.get("isError"), ready
+                # Discovery release still leaves host dependency preparation
+                # before startup can render its image.
                 image = wait_for_checkpoint(
                     lambda: next(sessions.glob("*/artifacts/*.png"), None),
                     "startup image retained after discovery",
                     root=sessions,
                     recursive=True,
                     client=client,
+                    timeout=client.response_timeout,
                 )
                 client.finish()
             session = image.parent.parent
@@ -1201,7 +1202,7 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
                 event for event in events if event["event"] == "session_output"
             ]
             raw = (session / "outputs/session.log").read_bytes()
-            assert raw == b"preparation detail\n", raw
+            assert raw == b"preparation detail\n"
             assert session_output["retained_bytes"] == len(raw), session_output
             assert session_output["discarded_bytes"] == 0, session_output
             assert events[0]["dynamic_resolution"] is None, events[0]

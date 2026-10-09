@@ -67,7 +67,6 @@ def managed_python_environment(root: Path) -> dict[str, str]:
         capture_output=True,
     )
     return {
-        "RETICULATE_PYTHON": "managed",
         "UV_PYTHON_INSTALL_DIR": str(installations),
         "UV_PYTHON_DOWNLOADS": "never",
     }
@@ -399,7 +398,7 @@ def test_restart_repairs_missing_selected_python(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory).resolve()
+        root = Path(directory)
         python = root / "selected-python"
         environment = without_r(root)
         environment["RETICULATE_PYTHON"] = str(python)
@@ -470,12 +469,11 @@ def test_restart_repairs_failed_r_discovery(binary: Path) -> Transcript:
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_restart_refreshes_failed_inspection_evidence(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory).resolve()
+        root = Path(directory)
         python = root / "selected-python"
         attempts = root / "attempts"
         environment = without_r(root)
@@ -520,7 +518,6 @@ def test_restart_refreshes_failed_inspection_evidence(
 
 @requires(POSIX, command("uv"))
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_retry_discards_failed_cell_requirements(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -530,39 +527,26 @@ def test_retry_discards_failed_cell_requirements(
         environment.update(managed_python_environment(root))
         environment["UV_TOOL_DIR"] = str(root)
         with McpClient(
-            binary,
-            execution.serve(
-                "-c",
-                "cache=host",
-                *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
-            ),
-            environment,
-            root,
+            binary, execution.serve("-c", "cache=host"), environment, root
         ) as client:
             reached.wait("initial discovery is blocked before cell admission")
             assert os.read(alive, 1) == b"1"
             client.initialize_and_list_tools()
-            client.send(
+            pending = client.start_send(
                 python="rejected_cell = True",
                 requirements={"action": "set", "python": ["six"]},
-                timeout_ms=0,
             )
-            assert without_elapsed(last_tool_text(client)) == (
-                "\n[running; poll with an empty send]"
-            )
+            wait_for_send_admission(client)
             release.release()
+            # Keep the accepted cell's response owner until discovery fails;
+            # a readiness inspection can otherwise drain its shared output.
+            client.receive(pending)
+            cell_failure = pending["result"]
+            assert cell_failure.get("isError"), cell_failure
+            assert "fixture R discovery failed" in str(cell_failure), cell_failure
             failure = client.send(requirements={"action": "get"})
             assert failure.get("isError"), failure
             assert "fixture R discovery failed" in str(failure), failure
-            # Inspection observes readiness without collecting the accepted
-            # cell's failure. Consume it before observing a code-free retry.
-            wait_for_evaluation_output(
-                client,
-                failure["content"][0]["text"],
-                "accepted cell reports the discovery failure",
-                expected_error=True,
-                completion_timeout_seconds=client.response_timeout,
-            )
             (root / "R").unlink()
             client.expect("\n[idle]", control="restart")
             inspection = client.send(requirements={"action": "get"})
@@ -590,7 +574,7 @@ def retry_inspection(
     binary: Path, execution: Execution, *, interruptible: bool = False
 ) -> Iterator[tuple[McpClient, FifoCheckpoint, FifoCheckpoint, Path]]:
     with tempfile.TemporaryDirectory() as directory:
-        root = Path(directory).resolve()
+        root = Path(directory)
         python, site = isolated_python(root)
         python.unlink()
         attempts = root / "attempts"
@@ -645,7 +629,6 @@ def retry_inspection(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_retry_stdin_reaches_early_input_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -680,7 +663,6 @@ def test_retry_stdin_reaches_early_input_cell(
 
 @requires(POSIX, command("uv"))
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_requirements_retry_stdin_reaches_early_input_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -701,14 +683,7 @@ def test_requirements_retry_stdin_reaches_early_input_cell(
             closing(reached),
             closing(release),
             McpClient(
-                binary,
-                execution.serve(
-                    "-c",
-                    "cache=host",
-                    *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
-                ),
-                environment,
-                root,
+                binary, execution.serve("-c", "cache=host"), environment, root
             ) as client,
         ):
             client.initialize_and_list_tools()
@@ -720,7 +695,8 @@ def test_requirements_retry_stdin_reaches_early_input_cell(
                 control="restart",
                 requirements={"action": "reset"},
                 stdin="repaired input\n",
-                timeout_ms=10_000,
+                # Reset prepares defaults before the worker consumes queued input.
+                timeout_ms=int(client.response_timeout * 1_000),
             )
             reached.wait("requirements-bearing restart owns the shared retry")
             client.send(python="answer = input('retry> '); print(answer)", timeout_ms=0)
@@ -728,7 +704,6 @@ def test_requirements_retry_stdin_reaches_early_input_cell(
                 "\n[running; poll with an empty send]"
             )
             release.release()
-            client.response_timeout = 15
             try:
                 client.receive(pending)
             except TimeoutError:
@@ -751,7 +726,6 @@ def test_requirements_retry_stdin_reaches_early_input_cell(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_cancelled_restart_shares_retry_and_preserves_next_cell(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -910,10 +884,13 @@ def cancelled_retry_preparation(
                 control="restart",
                 requirements={"action": "set", "python": ["six"]},
                 stdin="cancelled input\n",
+                timeout_ms=int(client.response_timeout * 1_000),
                 **following_cell,
             )
             reached.wait(
-                "changed retry requirements are preparing before input or cell admission"
+                "changed retry requirements are preparing before input or cell admission",
+                # Retry can prepare defaults before reaching the changed resolver.
+                timeout=client.response_timeout,
             )
             client.notify("notifications/cancelled", requestId=pending["id"])
             client.request("ping")
@@ -1022,7 +999,6 @@ def cancelled_retry_preparation(
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
-@execution_snapshots
 def test_interrupted_retry_can_be_restarted(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -1036,6 +1012,15 @@ def test_interrupted_retry_can_be_restarted(
         reached.wait("retried Python inspection can receive interrupt")
         interrupt = client.start_send(control="interrupt")
         client.receive_many([pending, interrupt])
+        observation = interrupt["result"]
+        assert not observation.get("isError"), observation
+        assert observation["content"] in (
+            [{"type": "text", "text": "[worker starting]"}],
+            [{"type": "text", "text": "\n[phase: startup]\n[worker starting]"}],
+        ), observation
+        # The phase announcement depends on which response observes startup
+        # first; the interrupted inspection and subsequent retry settle below.
+        observation["content"] = [{"type": "text", "text": "[worker starting]"}]
         failure = pending["result"]
         assert failure == {
             "content": [

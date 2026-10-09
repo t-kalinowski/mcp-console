@@ -7,10 +7,11 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 mod python;
-mod runtime;
+mod resolution;
 mod sandbox;
+pub(crate) use python::Managed as ManagedPythonSettings;
 pub(crate) use python::PythonChoice;
-pub(crate) use runtime::{ManagedPython, R, Resolution};
+pub(crate) use resolution::Resolution;
 pub(crate) mod startup;
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
@@ -95,7 +96,7 @@ struct Project {
     startup: Option<startup::Startup>,
     cache: Option<Cache>,
     python: Option<python::Python>,
-    #[serde(deserialize_with = "runtime::r")]
+    #[serde(deserialize_with = "r_settings")]
     r: Option<R>,
     languages: Option<Vec<crate::cell::Language>>,
     #[serde(default = "inherit_by_default")]
@@ -106,6 +107,29 @@ struct Project {
     sandbox: Option<sandbox::Sandbox>,
     #[serde(deserialize_with = "sandbox::mapping")]
     resolver: Resolver,
+}
+
+#[derive(Clone, Default, serde::Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct R {
+    // Workers receive the accepted installation; only the controller selects a launcher.
+    #[serde(deserialize_with = "sandbox::supplied", skip_serializing)]
+    pub executable: Option<PathBuf>,
+    #[serde(deserialize_with = "sandbox::supplied", skip_serializing)]
+    pub packages: Option<Vec<String>>,
+    #[serde(skip_serializing)]
+    pub resolution: Resolution,
+    pub vanilla: bool,
+}
+
+fn r_settings<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<R>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    sandbox::mapping(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 fn inherit_by_default() -> bool {
@@ -198,13 +222,32 @@ pub fn discover(
         value.unwrap_or_else(|| serde_json::json!({})),
     )
     .map_err(|error| format!("{name}: {error}; see docs/CONFIGURATION.md for the public format"))?;
+    if let Some(packages) = project.r.as_ref().and_then(|r| r.packages.as_ref()) {
+        crate::worker_client::validate_r_requirements(packages)
+            .map_err(|error| format!("{name}: r.packages: {error}"))?;
+        if !packages.is_empty() && project.r.as_ref().unwrap().resolution == Resolution::Disabled {
+            return Err(format!(
+                "{name}: r.packages must be empty under r.resolution=disabled; use startup_only to prepare configured packages"
+            ));
+        }
+    }
     if let Some(r) = &mut project.r
         && let Some(path) = &mut r.executable
-        && path.as_os_str().is_empty()
     {
-        return Err(format!(
-            "{name}: r.executable must name an R executable or launcher"
-        ));
+        if path.as_os_str().is_empty() {
+            return Err(format!(
+                "{name}: r.executable must name an R executable or launcher"
+            ));
+        }
+        if let Ok(relative) = path.strip_prefix("~") {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|home| home.is_absolute())
+                .ok_or("r.executable home expansion requires an absolute HOME")?;
+            *path = home.join(relative);
+        }
+        *path = std::path::absolute(&*path)
+            .map_err(|error| format!("{name}: cannot locate r.executable: {error}"))?;
     }
     if let Some(startup) = &project.startup {
         startup
@@ -230,9 +273,6 @@ pub fn discover(
             Ok(languages)
         })
         .transpose()?;
-    if let Some(r) = &mut project.r {
-        r.capture()?;
-    }
     let sandbox_requested = project.sandbox.is_some();
     let resolver_sandbox_requested = project.resolver.sandbox.is_some();
     if cfg!(windows) && resolver_sandbox_requested {

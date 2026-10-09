@@ -259,8 +259,8 @@ def test_resolver_defaults_and_replacement(binary: Path) -> TranscriptWithCompan
                     client.finish_with_standard_error(expected_exit_status=1)
                 else:
                     client.finish()
-            # Trusted preparation supplies its extension cache marker. Existing
-            # Python inspection uses the same transport with worker permissions.
+            # Discovery owns the first resolver launch. Later explicit Python
+            # inspection has the same private transport with worker permissions.
             native = json.loads(captures["resolver"].read_text().splitlines()[0])
             proxy = native.get("proxy")
             if name in {

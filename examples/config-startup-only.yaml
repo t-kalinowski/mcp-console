@@ -1,9 +1,0 @@
-# Save as .agents/console/config.yaml. Paths must select installed runtimes.
-r:
-  packages: [dplyr, dbplyr, ggplot2]
-  resolution: startup_only
-python:
-  managed:
-    version: "3.13"
-    packages: [numpy, pandas, matplotlib]
-    resolution: startup_only

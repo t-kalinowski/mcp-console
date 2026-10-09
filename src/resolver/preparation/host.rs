@@ -32,13 +32,9 @@ impl Context {
             installation.configure_environment();
             unsafe { std::env::set_var("RHOME", &installation.home) };
         }
-        let mode = if matches!(mode, Mode::Auto | Mode::AutoBareR) {
+        let mode = if matches!(mode, Mode::Auto) {
             if crate::local_runtime::Selection::r_is_present() {
-                if matches!(mode, Mode::AutoBareR) {
-                    Mode::BareR
-                } else {
-                    Mode::R
-                }
+                Mode::R
             } else {
                 Mode::PythonOnly
             }
@@ -50,7 +46,7 @@ impl Context {
             .as_deref()
             .is_some_and(|python| !python.is_empty() && python != OsStr::new("managed"));
         let configured_python = configured_python.and_then(|python| python.into_string().ok());
-        if !matches!(mode, Mode::R | Mode::BareR) {
+        if !matches!(mode, Mode::R) {
             let python =
                 resolver::ManagedPythonResolverConfiguration::capture().without_r_bootstrap();
             let has_uv = python.has_uv();
@@ -76,11 +72,7 @@ impl Context {
             ));
         }
         let python = resolver::ManagedPythonResolverConfiguration::capture();
-        let (bootstrap, rscript) = if matches!(mode, Mode::BareR) {
-            (None, resolver::selected_rscript(on_started)?)
-        } else {
-            resolver::discover(&python, on_started)?
-        };
+        let (bootstrap, rscript) = resolver::discover(&python, on_started)?;
         let home = rscript
             .parent()
             .and_then(std::path::Path::parent)

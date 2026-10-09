@@ -105,12 +105,6 @@ pub(crate) fn inspect_native(
     let description: Description = serde_json::from_slice(&result.read(64 * 1024)?)
         .map_err(|error| format!("invalid selected Python configuration: {error}"))?;
     description.validate(executable)?;
-    if description.metadata.conda {
-        return Err(format!(
-            "selected Python {} is a Conda environment; Conda environments are unsupported",
-            executable.display()
-        ));
-    }
     let python_home = if description.base_prefix == description.base_exec_prefix {
         description.base_prefix.clone()
     } else {

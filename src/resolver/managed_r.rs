@@ -236,12 +236,6 @@ fn select_ir_command(python: &super::ManagedPythonResolverConfiguration) -> Opti
     }
 }
 
-pub(crate) fn selected_rscript(
-    on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
-) -> Result<PathBuf, String> {
-    discover_rscript(&ResolverProcess::new(), &mut Some(on_started))
-}
-
 fn discover_rscript(
     resolver: &ResolverProcess,
     on_started: &mut Option<impl FnOnce(ResolverStopHandle) -> Result<(), String>>,
