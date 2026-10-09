@@ -27,12 +27,20 @@ reference:
   - title: Use Console with ellmer
     contents:
     - console_tool
+    - ConsoleConfig
+    - ConfigDiscovery
+  - title: Runtime selection and dependency preparation
+    contents:
+    - RConfig
+    - ExistingPython
+    - ManagedPython
+    - ResolverConfig
   - title: Sandbox configuration and commands
     contents:
-    - sandbox_config
-    - sandbox_filesystem
-    - sandbox_domains
-    - sandbox_proxy
-    - sandbox_sockets
-    - sandbox_network
+    - SandboxPolicy
+    - Filesystem
+    - Domains
+    - Proxy
+    - Sockets
+    - Network
     - sandboxed_system2

@@ -20,8 +20,10 @@ For `chat$chat_async()`, select `tool_mode = "sequential"` when calls depend on 
 Named `path=` selects an executable; named `version=` selects a published release regardless of `PATH`.
 They are mutually exclusive, and `...` must be empty.
 
-Sandboxing is enabled by default.
-`no_sandbox = TRUE` skips inner native enforcement and its descendant-cleanup guarantee; an explicitly selected compute target retains its outer boundary.
+By default, `console_tool()` skips global and project configuration files.
+Workers can read host files, write private temporary storage, and cannot use the network.
+Dependency preparation uses its independent built-in permissions and may download packages.
+`ConsoleConfig(sandbox = FALSE)` runs workers and preparation with host permissions, without the native runner's descendant-cleanup guarantee.
 See [configuration and safety](https://github.com/t-kalinowski/mcp-console#limits-and-trust-boundaries).
 Garbage collection closes server input and waits up to 15 seconds before forcibly stopping the server process; that fallback is not proof of descendant cleanup.
 
@@ -30,32 +32,94 @@ Use `character()` for explicitly empty lists.
 Inspection returns the complete declaration as JSON; changed live replacements normally need `control = "restart"`.
 See [requirements](https://t-kalinowski.github.io/mcp-console/REQUIREMENTS.html) for replacement semantics and target limits.
 
-## Typed sandbox configuration
+## Session configuration
 
 The development interface uses S7 from `RConsortium/S7`, pinned in `DESCRIPTION`.
 Install the declared GitHub dependency with pak/remotes before building the package; `R CMD INSTALL` alone does not process `Remotes`.
 During development, use `path=` to select the current checkout's Console binary.
 Older published binaries may not understand this schema or `--no-config`.
 
+`ConsoleConfig()` combines runtime selection, package preparation, permissions, and configuration discovery.
+The class constructors have explicit named arguments matching the application schema.
+
 ```r
-policy <- sandbox_config(
-  filesystem = sandbox_filesystem(
-    read_only = "./data",
-    read_write = "./output",
-    deny = "./secrets"
+config <- ConsoleConfig(
+  r = RConfig(
+    executable = "/opt/R/bin/R",
+    packages = c("dplyr", "ggplot2"),
+    resolution = "startup_only"
   ),
-  network = sandbox_network(
-    proxy = sandbox_proxy(
-      domains = sandbox_domains(allow = "api.example.com")
+  python = ManagedPython(
+    version = "3.13",
+    packages = "pandas",
+    resolution = "explicit"
+  ),
+  sandbox = SandboxPolicy(
+    filesystem = Filesystem(read_write = "./output", deny = "./secrets"),
+    network = Network(
+      proxy = Proxy(domains = Domains(allow = "api.example.com"))
     )
+  ),
+  resolver = ResolverConfig(
+    environment = c(UV_INDEX_URL = "https://pypi.org/simple")
   )
 )
 
-# Same shape and names as config.yaml's sandbox node:
-as.list(policy)
+tool <- console_tool(config = config, project = "/path/to/project")
+```
 
-# Reuse the object for a persistent tool or a one-off command:
-tool <- console_tool(sandbox = policy, path = Sys.which("mcp-console"))
+`project` sets the child's working directory without changing the caller's directory.
+Relative paths use that launch directory.
+`ExistingPython(".venv")` selects a preinstalled interpreter or standard virtual environment; it accepts no preparation options.
+`ManagedPython()` prepares a uv-managed environment.
+R and managed Python independently support `automatic`, `explicit`, and `startup_only` resolution.
+R also supports `disabled` for preinstalled packages.
+Worker restart retains the captured runtime and configuration.
+See `?RConfig`, `?ExistingPython`, and `?ResolverConfig`.
+
+The common launch choices are short:
+
+```r
+console_tool() # Built-in defaults; no config files
+console_tool(config = ConsoleConfig(sandbox = FALSE))
+console_tool(config = ConsoleConfig(discovery = ConfigDiscovery()))
+console_tool(
+  config = ConsoleConfig(
+    discovery = ConfigDiscovery(global = FALSE)
+  ),
+  project = "/path/to/project"
+)
+```
+
+Discovery loads global configuration first, then project `.agents/console/config.yaml`, then settings supplied in `ConsoleConfig`.
+No ancestors are searched.
+`ConfigDiscovery(project = FALSE)` uses global configuration alone.
+Setting both discovery flags to `FALSE` reads neither file.
+Discovery trusts the whole application configuration, including executable selection, environments, and permissions.
+
+`NULL` fields are omitted and inherit selected file settings before native defaults apply.
+An explicit package list replaces the inherited list; `character()` requests no optional startup packages.
+Runtime and environment mappings merge recursively.
+Python selections replace the whole Python node so managed and existing choices cannot mix.
+An explicit `SandboxPolicy()` replaces its entire worker or resolver permission node, removing inherited grants.
+`sandbox = FALSE` clears both permission nodes and disables enforcement while retaining other discovered settings.
+It cannot be combined with an explicit resolver policy.
+
+`as.list(config)` returns JSON-ready application settings, excluding discovery and the disabled-sandbox launch control.
+Those choices remain available as `config@discovery` and `config@sandbox`.
+The native CLI owns final validation, defaults, supported paths, and platform capabilities.
+
+## Sandbox policies and commands
+
+A `SandboxPolicy()` can be reused for the worker, resolver, or a one-off command.
+Its nested classes are `Filesystem`, `Network`, `Proxy`, `Domains`, and `Sockets`.
+An empty worker policy grants no workspace writes or networking.
+This is a host-read/private-write baseline, not filesystem secrecy: sensitive readable locations need explicit denial.
+Create required output directories on the host before granting them; R does not create or normalize configured paths.
+
+```r
+policy <- SandboxPolicy(filesystem = Filesystem(read_write = "./output"))
+tool <- console_tool(config = ConsoleConfig(sandbox = policy))
 sandboxed_system2(
   file.path(R.home("bin"), "Rscript"),
   c("--vanilla", "-e", shQuote("cat(1 + 1, '\\n')")),
@@ -65,24 +129,15 @@ sandboxed_system2(
 )
 ```
 
-A bare `sandbox_config()` omits all options.
-It does not grant workspace writes or networking.
-This is a host-read/private-write baseline, not filesystem secrecy: sensitive readable locations need explicit denial.
-Create required output directories on the host before granting them; R does not create or normalize configured paths.
+`NULL` policy properties are omitted, `Filesystem()` is an explicit empty mapping, and `read_write = character()` is an explicit empty sequence.
+Serialization preserves these distinctions.
+Worker and resolver policies are independent; an omitted resolver filesystem retains its native cache grants, while an explicit mapping replaces them.
+Explicit resolver sandbox policies are unsupported on Windows, where preparation runs with host permissions.
 
-`console_tool(sandbox = NULL)` preserves normal global/project discovery.
-Supplying an object replaces the complete worker sandbox node, while retaining other application settings, including independent resolver settings.
-This still trusts the discovered application configuration; the object is not a security ceiling over executables, environment, or dependency preparation.
-`sandboxed_system2()` instead uses `--no-config`, so ambient configuration cannot supply additional grants.
-It accepts neither `sandbox = NULL` nor an unsandboxed fallback.
-
-`NULL` means omitted, `sandbox_filesystem()` is an explicit empty mapping, and `read_write = character()` is an explicit empty sequence.
-Serialization keeps these distinct.
-The resulting node can also be placed under `resolver.sandbox`; no resolver API or resolver defaults are added by this R interface.
-
-The command wrapper retains `system2()`'s already-quoted argument convention.
+`sandboxed_system2()` always disables config-file discovery and requires a `SandboxPolicy()`.
+It retains `system2()`'s already-quoted argument convention.
 On Unix, shell fragments execute inside the sandbox.
 On Windows, there is no added shell; `env` has base R's command-line-assignment limitations.
 R opens `stdin`/`stdout`/`stderr` files on the host and passes those authorized streams across the boundary.
-Native policy support, setup, and process retirement are still Console's responsibility.
-See `?sandbox_config` and `?sandboxed_system2`.
+Native policy support, setup, and process retirement remain Console's responsibility.
+See `?ConsoleConfig`, `?SandboxPolicy`, and `?sandboxed_system2`.

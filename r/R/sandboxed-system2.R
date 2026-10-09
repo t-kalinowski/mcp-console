@@ -1,6 +1,6 @@
 #' Run a system command in a Console sandbox
 #'
-#' Calls `mcp-console sandbox` with a [sandbox_config()], using [base::system2()]
+#' Calls `mcp-console sandbox` with a [SandboxPolicy()], using [base::system2()]
 #' for the launch, streams, output capture, status, and timeout. Automatic
 #' global and project configuration discovery is disabled. The supplied object
 #' is interpreted against Console's built-in standalone-sandbox defaults.
@@ -38,7 +38,7 @@
 #'
 #' @inheritParams base::system2
 #' @param ... Must be empty. Reserved for future use.
-#' @param sandbox A [sandbox_config()]. The default requests Console's
+#' @param sandbox A [SandboxPolicy()]. The default requests Console's
 #'   built-in policy; `NULL` and `FALSE` are not accepted.
 #' @inheritParams console_tool
 #' @return The result of [base::system2()]: captured character output, or an
@@ -49,7 +49,7 @@
 #'   file.path(R.home("bin"), "Rscript"),
 #'   c("--vanilla", "-e", shQuote("cat(1 + 1, '\\n')")),
 #'   stdout = TRUE,
-#'   sandbox = sandbox_config()
+#'   sandbox = SandboxPolicy()
 #' )
 #' }
 #' @export
@@ -67,14 +67,14 @@ sandboxed_system2 <- function(
   timeout = 0,
   receive.console.signals = wait,
   ...,
-  sandbox = sandbox_config(),
+  sandbox = SandboxPolicy(),
   path = NULL,
   version = NULL
 ) {
   if (...length() != 0L) {
     stop("`...` must be empty.", call. = FALSE)
   }
-  check_sandbox_config(sandbox)
+  check_sandbox_policy(sandbox)
   if (!is.null(input) && identical(wait, FALSE)) {
     stop("`input` requires `wait = TRUE`.", call. = FALSE)
   }

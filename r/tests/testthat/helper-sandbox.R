@@ -4,6 +4,17 @@ sandbox_test_binary <- function() {
   normalizePath(binary, mustWork = TRUE)
 }
 
+sandbox_test_python <- function() {
+  command <- if (.Platform$OS.type == "windows") "python" else "python3"
+  path <- Sys.which(command)
+  skip_if(!nzchar(path), "Existing Python test requires a Python interpreter")
+  unname(path)
+}
+
+sandbox_test_r <- function() {
+  file.path(R.home("bin"), if (.Platform$OS.type == "windows") "R.exe" else "R")
+}
+
 with_sandbox_directory <- function(code) {
   directory <- tempfile("mcp-console-sandbox-test-")
   stopifnot(dir.create(directory))
@@ -25,7 +36,7 @@ with_sandbox_directory <- function(code) {
   force(code)
 }
 
-sandbox_rscript <- function(code, ..., sandbox = sandbox_config()) {
+sandbox_rscript <- function(code, ..., sandbox = SandboxPolicy()) {
   sandboxed_system2(
     file.path(R.home("bin"), "Rscript"),
     c("--vanilla", "-e", shQuote(code)),

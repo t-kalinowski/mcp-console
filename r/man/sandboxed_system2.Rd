@@ -18,7 +18,7 @@ sandboxed_system2(
   timeout = 0,
   receive.console.signals = wait,
   ...,
-  sandbox = sandbox_config(),
+  sandbox = SandboxPolicy(),
   path = NULL,
   version = NULL
 )
@@ -71,7 +71,7 @@ sandboxed_system2(
 
 \item{...}{Must be empty. Reserved for future use.}
 
-\item{sandbox}{A \code{\link[=sandbox_config]{sandbox_config()}}. The default requests Console's
+\item{sandbox}{A \code{\link[=SandboxPolicy]{SandboxPolicy()}}. The default requests Console's
 built-in policy; \code{NULL} and \code{FALSE} are not accepted.}
 
 \item{path}{\code{NULL}, or a path to an \code{mcp-console} executable.}
@@ -84,7 +84,7 @@ The result of \code{\link[base:system2]{base::system2()}}: captured character ou
 invisible status code, with its usual warnings and status attributes.
 }
 \description{
-Calls \verb{mcp-console sandbox} with a \code{\link[=sandbox_config]{sandbox_config()}}, using \code{\link[base:system2]{base::system2()}}
+Calls \verb{mcp-console sandbox} with a \code{\link[=SandboxPolicy]{SandboxPolicy()}}, using \code{\link[base:system2]{base::system2()}}
 for the launch, streams, output capture, status, and timeout. Automatic
 global and project configuration discovery is disabled. The supplied object
 is interpreted against Console's built-in standalone-sandbox defaults.
@@ -128,7 +128,7 @@ sandboxed_system2(
   file.path(R.home("bin"), "Rscript"),
   c("--vanilla", "-e", shQuote("cat(1 + 1, '\\\\n')")),
   stdout = TRUE,
-  sandbox = sandbox_config()
+  sandbox = SandboxPolicy()
 )
 }
 }

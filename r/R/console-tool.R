@@ -8,7 +8,8 @@
 #' shutdown and waits up to 15 seconds before forcibly stopping the server.
 #' With sandboxing enabled, the sandbox manager owns cleanup of worker
 #' descendants; the R wrapper's fallback targets only the server process.
-#' With `no_sandbox = TRUE`, worker descendants may survive server shutdown.
+#' With `ConsoleConfig(sandbox = FALSE)`, worker descendants may survive
+#' server shutdown.
 #'
 #' @section Executable resolution:
 #'
@@ -24,13 +25,14 @@
 #' @param path `NULL`, or a path to an `mcp-console` executable.
 #' @param version `NULL`, or one published `mcp-console` version, such as
 #'   `"0.0.2"`.
-#' @param sandbox `NULL` (the default), to retain normal configuration-file
-#'   discovery, or a [sandbox_config()] that replaces the entire worker
-#'   `sandbox:` node after file loading. Other configuration, including
-#'   `resolver.sandbox`, is unchanged. Relative paths use the launch directory.
-#'   Cannot be combined with `no_sandbox = TRUE`.
-#' @param no_sandbox Run evaluated code with the server's filesystem and
-#'   network permissions.
+#' @param config `NULL` (equivalent to an empty [ConsoleConfig()]), or a
+#'   `ConsoleConfig()` combining runtimes, package preparation, permissions,
+#'   and optional discovery. The default skips global and project config files
+#'   and uses built-in permissions: host reads, private temporary writes, and
+#'   no worker networking. Resolver defaults remain independent.
+#' @param project Existing directory to use as the child process's working
+#'   directory, defaulting to `getwd()`. Relative config and runtime paths use
+#'   this directory; the caller's working directory is unchanged.
 #' @return An [ellmer::ToolDef] to pass to an ellmer chat's
 #'   `$register_tool()` method.
 #' @examples
@@ -49,29 +51,34 @@ console_tool <- function(
   ...,
   path = NULL,
   version = NULL,
-  no_sandbox = FALSE,
-  sandbox = NULL
+  config = NULL,
+  project = getwd()
 ) {
-  stopifnot(
-    is.logical(no_sandbox),
-    length(no_sandbox) == 1L,
-    !is.na(no_sandbox)
-  )
   if (...length() != 0L) {
     stop("`...` must be empty.", call. = FALSE)
   }
-  check_sandbox_config(sandbox, allow_null = TRUE)
-  if (no_sandbox && !is.null(sandbox)) {
-    stop(
-      "`sandbox` cannot be combined with `no_sandbox = TRUE`.",
-      call. = FALSE
-    )
+  if (is.null(config)) {
+    config <- ConsoleConfig()
   }
+  if (!S7::S7_inherits(config, ConsoleConfig)) {
+    stop("`config` must be NULL or a ConsoleConfig() object.", call. = FALSE)
+  }
+  S7::validate(config)
+  if (
+    !is.character(project) ||
+      length(project) != 1L ||
+      is.na(project) ||
+      !nzchar(project) ||
+      !dir.exists(project)
+  ) {
+    stop("`project` must identify an existing directory.", call. = FALSE)
+  }
+  project <- normalizePath(project, mustWork = TRUE)
 
   client <- new_mcp_client(
     resolve_mcp_console(path, version),
-    no_sandbox,
-    sandbox
+    console_cli_arguments(config),
+    project
   )
   ready <- FALSE
   on.exit(if (!ready) close_mcp_client(client), add = TRUE)
@@ -246,16 +253,13 @@ resolve_mcp_console_uv <- function(from) {
   normalizePath(utils::tail(output, 1L), mustWork = TRUE)
 }
 
-new_mcp_client <- function(binary, no_sandbox, sandbox = NULL) {
+new_mcp_client <- function(binary, arguments, project) {
   client <- new.env(parent = emptyenv())
   client$errors <- tempfile("mcp-console-", fileext = ".log")
   client$process <- processx::process$new(
     binary,
-    c(
-      "serve",
-      if (no_sandbox) "--no-sandbox",
-      sandbox_cli_arguments(sandbox)
-    ),
+    c("serve", arguments),
+    wd = project,
     stdin = "|",
     stdout = "|",
     stderr = client$errors,

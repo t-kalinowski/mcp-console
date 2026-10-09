@@ -1,6 +1,7 @@
 # Minimal MCP transport fixture. It records the public CLI arguments only.
 args <- commandArgs(TRUE)
 writeLines(args[-1L], args[[1L]])
+writeLines(getwd(), paste0(args[[1L]], ".cwd"))
 input <- file("stdin", open = "r")
 repeat {
   line <- readLines(input, n = 1L, warn = FALSE)

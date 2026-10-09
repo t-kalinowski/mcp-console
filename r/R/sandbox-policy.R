@@ -1,22 +1,22 @@
 # One internal parent gives the public configuration nodes a shared serializer.
 # It has no state, defaults, or policy of its own.
-sandbox_node <- S7::new_class(
-  "sandbox_node",
+ConfigNode <- S7::new_class(
+  "ConfigNode",
   package = "mcp.console",
   abstract = TRUE
 )
 
-sandbox_strings <- function(value) {
+config_strings <- function(value) {
   if (!is.null(value) && (anyNA(value) || any(!nzchar(value)))) {
     "must contain non-empty strings, without missing values"
   }
 }
 
-sandbox_string_list <- function() {
-  S7::new_property(NULL | S7::class_character, validator = sandbox_strings)
+config_string_list <- function() {
+  S7::new_property(NULL | S7::class_character, validator = config_strings)
 }
 
-sandbox_choice <- function(choices) {
+config_choice <- function(choices) {
   force(choices)
   S7::new_property(
     NULL | S7::class_character,
@@ -31,7 +31,7 @@ sandbox_choice <- function(choices) {
   )
 }
 
-sandbox_flag <- function() {
+config_flag <- function() {
   S7::new_property(
     NULL | S7::class_logical,
     validator = function(value) {
@@ -46,7 +46,7 @@ sandbox_flag <- function() {
 #'
 #' These S7 class constructors represent the public `sandbox:` node in
 #' Console's `config.yaml`, not the native runner's complete-policy protocol.
-#' Pass a `sandbox_config()` to [console_tool()] or [sandboxed_system2()].
+#' Use a `SandboxPolicy()` in [ConsoleConfig()] or [sandboxed_system2()].
 #'
 #' `NULL` properties are omitted. A constructed child with no properties is an
 #' explicit empty mapping, and `character()` is an explicit empty sequence.
@@ -72,59 +72,59 @@ sandbox_flag <- function() {
 #' `tcp_udp` is representable but rejected by the currently pinned runner.
 #'
 #' @param read_only,read_write,deny Character vectors of literal filesystem
-#'   paths. For `sandbox_domains()`, `deny` instead contains domain patterns.
+#'   paths. For `Domains()`, `deny` instead contains domain patterns.
 #' @return An S7 configuration object. The constructor is also its S7 class.
 #' @examples
-#' policy <- sandbox_config(
-#'   filesystem = sandbox_filesystem(read_write = ".", deny = "./secrets"),
-#'   network = sandbox_network(
-#'     proxy = sandbox_proxy(domains = sandbox_domains(allow = "api.example.com"))
+#' policy <- SandboxPolicy(
+#'   filesystem = Filesystem(read_write = ".", deny = "./secrets"),
+#'   network = Network(
+#'     proxy = Proxy(domains = Domains(allow = "api.example.com"))
 #'   )
 #' )
 #' as.list(policy)
-#' sandbox_config(network = "restricted")
-#' sandbox_config(filesystem = sandbox_filesystem(read_write = character()))
-#' @name sandbox_config
+#' SandboxPolicy(network = "restricted")
+#' SandboxPolicy(filesystem = Filesystem(read_write = character()))
+#' @name SandboxPolicy
 #' @export
-sandbox_filesystem <- S7::new_class(
-  "sandbox_filesystem",
+Filesystem <- S7::new_class(
+  "Filesystem",
   package = "mcp.console",
-  parent = sandbox_node,
+  parent = ConfigNode,
   properties = list(
-    read_only = sandbox_string_list(),
-    read_write = sandbox_string_list(),
-    deny = sandbox_string_list()
+    read_only = config_string_list(),
+    read_write = config_string_list(),
+    deny = config_string_list()
   )
 )
 
-#' @rdname sandbox_config
+#' @rdname SandboxPolicy
 #' @param allow Character vector of domain patterns allowed by the proxy.
 #' @export
-sandbox_domains <- S7::new_class(
-  "sandbox_domains",
+Domains <- S7::new_class(
+  "Domains",
   package = "mcp.console",
-  parent = sandbox_node,
-  properties = list(allow = sandbox_string_list(), deny = sandbox_string_list())
+  parent = ConfigNode,
+  properties = list(allow = config_string_list(), deny = config_string_list())
 )
 
-#' @rdname sandbox_config
+#' @rdname SandboxPolicy
 #' @param mode `NULL`, `"full"`, or `"limited"`. Omission uses Console's default.
-#' @param domains `NULL` or a `sandbox_domains()`. An explicit empty object
+#' @param domains `NULL` or a `Domains()`. An explicit empty object
 #'   clears generated domain defaults; `NULL` preserves them.
 #' @param socks5 `NULL`, `"disabled"`, `"tcp"`, or `"tcp_udp"`. Any explicit
 #'   value is invalid with `mode = "limited"`, including `"disabled"`.
 #' @param allow_upstream_proxy `NULL`, `TRUE`, or `FALSE`; controls use of an
 #'   upstream proxy from the trusted launch environment.
 #' @export
-sandbox_proxy <- S7::new_class(
-  "sandbox_proxy",
+Proxy <- S7::new_class(
+  "Proxy",
   package = "mcp.console",
-  parent = sandbox_node,
+  parent = ConfigNode,
   properties = list(
-    mode = sandbox_choice(c("full", "limited")),
-    domains = NULL | sandbox_domains,
-    socks5 = sandbox_choice(c("disabled", "tcp", "tcp_udp")),
-    allow_upstream_proxy = sandbox_flag()
+    mode = config_choice(c("full", "limited")),
+    domains = NULL | Domains,
+    socks5 = config_choice(c("disabled", "tcp", "tcp_udp")),
+    allow_upstream_proxy = config_flag()
   ),
   validator = function(self) {
     if (identical(self@mode, "limited") && !is.null(self@socks5)) {
@@ -133,51 +133,51 @@ sandbox_proxy <- S7::new_class(
   }
 )
 
-#' @rdname sandbox_config
+#' @rdname SandboxPolicy
 #' @param unix_sockets `NULL`, a character vector of literal absolute Unix
 #'   socket paths (possibly empty), or the string `"dangerously_allow_all"`.
 #'   The CLI validates native path and platform restrictions.
 #' @export
-sandbox_sockets <- S7::new_class(
-  "sandbox_sockets",
+Sockets <- S7::new_class(
+  "Sockets",
   package = "mcp.console",
-  parent = sandbox_node,
-  properties = list(unix_sockets = sandbox_string_list())
+  parent = ConfigNode,
+  properties = list(unix_sockets = config_string_list())
 )
 
-#' @rdname sandbox_config
-#' @param proxy A `sandbox_proxy()`; defaults to an explicit empty proxy
+#' @rdname SandboxPolicy
+#' @param proxy A `Proxy()`; defaults to an explicit empty proxy
 #'   mapping. A network mapping always enables a managed proxy. Use a scalar
-#'   network choice in `sandbox_config()` for proxy-free networking.
-#' @param sockets `NULL` or a `sandbox_sockets()`.
+#'   network choice in `SandboxPolicy()` for proxy-free networking.
+#' @param sockets `NULL` or a `Sockets()`.
 #' @param allow_local_binding `NULL`, `TRUE`, or `FALSE`. This does not promise
 #'   access from a host browser to a Linux network namespace.
 #' @export
-sandbox_network <- S7::new_class(
-  "sandbox_network",
+Network <- S7::new_class(
+  "Network",
   package = "mcp.console",
-  parent = sandbox_node,
+  parent = ConfigNode,
   properties = list(
-    proxy = S7::new_property(sandbox_proxy, default = quote(sandbox_proxy())),
-    sockets = NULL | sandbox_sockets,
-    allow_local_binding = sandbox_flag()
+    proxy = S7::new_property(Proxy, default = quote(Proxy())),
+    sockets = NULL | Sockets,
+    allow_local_binding = config_flag()
   )
 )
 
-#' @rdname sandbox_config
-#' @param filesystem `NULL` or a `sandbox_filesystem()`.
+#' @rdname SandboxPolicy
+#' @param filesystem `NULL` or a `Filesystem()`.
 #' @param network `NULL`, `"restricted"`, `"enabled"`, or a
-#'   `sandbox_network()`. Enabling networking does not disable filesystem
+#'   `Network()`. Enabling networking does not disable filesystem
 #'   enforcement. `NULL` preserves the context's default networking.
 #' @export
-sandbox_config <- S7::new_class(
-  "sandbox_config",
+SandboxPolicy <- S7::new_class(
+  "SandboxPolicy",
   package = "mcp.console",
-  parent = sandbox_node,
+  parent = ConfigNode,
   properties = list(
-    filesystem = NULL | sandbox_filesystem,
+    filesystem = NULL | Filesystem,
     network = S7::new_property(
-      NULL | S7::class_character | sandbox_network,
+      NULL | S7::class_character | Network,
       validator = function(value) {
         if (
           is.character(value) &&
@@ -185,24 +185,32 @@ sandbox_config <- S7::new_class(
               is.na(value) ||
               !value %in% c("restricted", "enabled"))
         ) {
-          "must be NULL, restricted, enabled, or a sandbox_network()"
+          "must be NULL, restricted, enabled, or a Network()"
         }
       }
     )
   )
 )
 
-# as.list() is deliberately a wire-shape conversion, not a defaults resolver.
-# The native CLI remains the final authority on policy validity.
-S7::method(as.list, sandbox_node) <- function(x, ...) {
-  S7::validate(x)
-  fields <- S7::props(x)
+# Wire conversion preserves omissions, mappings, and arrays; native validation
+# and defaults remain the CLI's responsibility.
+config_mapping <- function(fields) {
   fields <- fields[!vapply(fields, is.null, logical(1))]
-  arrays <- c("read_only", "read_write", "deny", "allow", "unix_sockets")
+  arrays <- c(
+    "read_only",
+    "read_write",
+    "deny",
+    "allow",
+    "unix_sockets",
+    "packages",
+    "languages"
+  )
   for (name in names(fields)) {
     value <- fields[[name]]
-    if (S7::S7_inherits(value, sandbox_node)) {
+    if (S7::S7_inherits(value, ConfigNode)) {
       fields[[name]] <- as.list(value)
+    } else if (name == "environment") {
+      fields[[name]] <- json_object(as.list(value))
     } else if (
       name %in%
         arrays &&
@@ -217,25 +225,24 @@ S7::method(as.list, sandbox_node) <- function(x, ...) {
   json_object(fields)
 }
 
-check_sandbox_config <- function(sandbox, allow_null = FALSE) {
-  if (allow_null && is.null(sandbox)) {
-    return(invisible(NULL))
-  }
-  if (!S7::S7_inherits(sandbox, sandbox_config)) {
-    stop("`sandbox` must be a sandbox_config() object.", call. = FALSE)
+S7::method(as.list, ConfigNode) <- function(x, ...) {
+  S7::validate(x)
+  config_mapping(S7::props(x))
+}
+
+check_sandbox_policy <- function(sandbox) {
+  if (!S7::S7_inherits(sandbox, SandboxPolicy)) {
+    stop("`sandbox` must be a SandboxPolicy() object.", call. = FALSE)
   }
   S7::validate(sandbox)
   invisible(NULL)
 }
 
+config_override <- function(key, value) {
+  c("-c", paste0(key, "=", jsonlite::toJSON(value, auto_unbox = TRUE)))
+}
+
 sandbox_cli_arguments <- function(sandbox) {
-  if (is.null(sandbox)) {
-    return(character())
-  }
-  check_sandbox_config(sandbox)
-  value <- as.character(jsonlite::toJSON(as.list(sandbox), auto_unbox = TRUE))
-  # Configuration maps merge recursively. Clear this node before assigning it,
-  # so an explicitly supplied object replaces, rather than widens, a policy
-  # read from global/project configuration. Validation follows all overrides.
-  c("-c", "sandbox=null", "-c", paste0("sandbox=", value))
+  check_sandbox_policy(sandbox)
+  c("-c", "sandbox=null", config_override("sandbox", as.list(sandbox)))
 }
