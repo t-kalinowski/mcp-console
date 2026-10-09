@@ -73,6 +73,8 @@ The procfs fixtures use disposable same-user processes, synthetic data, an expli
 The matrix combines fresh/inherited procfs with readable/denied sentinel paths and restricted/enabled networking.
 It checks direct policy behavior and attempts through host environ/root/cwd/fds/memory, signals, ptrace, process-memory syscalls, and network-namespace entry.
 Host restrictions must not substitute for the sandbox property under test.
+The inherited-procfs fixture uses an outer namespace and a libseccomp mount filter to deny fresh procfs mounts deterministically; it excludes WSL bridges so it exercises the generic Linux inherited view.
+Root-write fixtures reconstruct the host's top-level view on a disposable namespace root, allowing protected metadata mount targets without creating host root directories.
 
 Runner contracts additionally deny pidfd/subreaper syscalls, withhold native wait status, stop namespace init, and reject unsupported policies/backends.
 These establish specific interfaces and failure behavior, not a general proof against all kernel attacks.

@@ -7,10 +7,12 @@ send:
     activation_ready <- tempfile("mcp-console-activation-ready-")
     activation_release <- tempfile("mcp-console-activation-release-")
     activation_sent <- tempfile("mcp-console-activation-sent-")
+    import_release <- tempfile("mcp-console-import-release-")
     cat(
       activation_ready,
       activation_release,
       activation_sent,
+      import_release,
       config$python,
       sep = "\n"
     )
@@ -21,6 +23,7 @@ result:
         <activation ready>
         <activation release>
         <activation sent>
+        <import release>
   isError: false
 ---
 send:
@@ -50,7 +53,10 @@ result:
   isError: false
 ---
 send:
-  python: import yaml12
+  python: |
+    with open(r.import_release, "rb", buffering=0) as gate:
+        assert gate.read(1) == b"1"
+    import yaml12
   timeout_ms: 0
 result:
   content:

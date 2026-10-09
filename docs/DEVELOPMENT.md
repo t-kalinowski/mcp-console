@@ -50,7 +50,7 @@ The following system prerequisites were exercised on Ubuntu 26.04 and Fedora 44 
 sudo apt-get update
 sudo apt-get install -y \
     build-essential git curl ca-certificates pkg-config libcap-dev tar xz-utils \
-    libcurl4-openssl-dev binutils python3 python3-dev python3-venv bubblewrap \
+    libcurl4-openssl-dev binutils python3 python3-dev python3-venv bubblewrap libseccomp2 \
     ripgrep r-base-dev libuv1-dev libxml2-dev libssl-dev libcairo2-dev \
     libfontconfig1-dev libharfbuzz-dev libfribidi-dev \
     libjpeg-dev libpng-dev libtiff-dev
@@ -58,7 +58,7 @@ sudo apt-get install -y \
 # Fedora
 sudo dnf install -y \
     gcc gcc-c++ make git gawk tar xz ca-certificates pkgconf-pkg-config \
-    libcap-devel libcurl-devel binutils python3 python3-devel bubblewrap \
+    libcap-devel libcurl-devel binutils python3 python3-devel bubblewrap libseccomp \
     ripgrep R-devel libuv-devel libxml2-devel openssl-devel cairo-devel \
     fontconfig-devel harfbuzz-devel fribidi-devel \
     libjpeg-turbo-devel libpng-devel libtiff-devel

@@ -69,6 +69,7 @@ send:
     duckdb:
       - fts
   sql: SET autoinstall_known_extensions = false; LOAD fts
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -140,6 +141,7 @@ send:
       - six
     duckdb: []
   python: sentinel = object(); original = sentinel
+  timeout_ms: 600000
 result:
   content:
     - type: text
@@ -156,6 +158,7 @@ send:
     duckdb:
       - fts
   sql: SET autoinstall_known_extensions = false; LOAD fts
+  timeout_ms: 600000
 result:
   content:
     - type: text

@@ -18,6 +18,7 @@ send:
       - six
   stdin: |
     cancelled input
+  timeout_ms: 600000
   python: |
     from pathlib import Path
 
