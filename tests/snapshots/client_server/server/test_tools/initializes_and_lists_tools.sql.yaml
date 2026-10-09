@@ -15,9 +15,9 @@ result:
     name: mcp-console
     version: 0.0.4
   instructions: >-
-    Persistent SQL sessions (REPLs) for calculations, data exploration and
-    analysis, database queries, debugging, simulations, and plots. Reuse
-    objects across calls to inspect results, test hypotheses, and compare
+    Persistent SQL REPL for calculations, data exploration and analysis,
+    database queries, debugging, simulations, and plots. Reuse objects
+    across calls to inspect results, test hypotheses, and compare
     approaches.
 ---
 input:
@@ -29,9 +29,9 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent SQL sessions (REPLs) for calculations, data exploration and
-        analysis, database queries, debugging, simulations, and plots. Reuse
-        objects across calls to inspect results, test hypotheses, and compare
+        Persistent SQL REPL for calculations, data exploration and analysis,
+        database queries, debugging, simulations, and plots. Reuse objects
+        across calls to inspect results, test hypotheses, and compare
         approaches.
 
 

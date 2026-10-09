@@ -1210,7 +1210,7 @@ class WindowsConsole(unittest.TestCase):
                             )
                         else:
                             self.assertIn(
-                                "Persistent R, Python, and SQL sessions (REPLs)",
+                                "Persistent R, Python, and SQL REPL",
                                 tool["description"],
                             )
                             self.assertEqual(

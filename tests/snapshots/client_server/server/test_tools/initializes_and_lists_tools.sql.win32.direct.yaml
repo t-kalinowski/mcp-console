@@ -15,10 +15,10 @@ result:
     name: mcp-console
     version: 0.0.4
   instructions: >-
-    Persistent SQL sessions (REPLs) on Windows for calculations, data
-    exploration and analysis, database queries, debugging, simulations, and
-    plots. Reuse objects across calls to inspect results, test hypotheses,
-    and compare approaches.
+    Persistent SQL REPL on Windows for calculations, data exploration and
+    analysis, database queries, debugging, simulations, and plots. Reuse
+    objects across calls to inspect results, test hypotheses, and compare
+    approaches.
 ---
 input:
   method: notifications/initialized
@@ -29,10 +29,10 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent SQL sessions (REPLs) on Windows for calculations, data
-        exploration and analysis, database queries, debugging, simulations, and
-        plots. Reuse objects across calls to inspect results, test hypotheses,
-        and compare approaches.
+        Persistent SQL REPL on Windows for calculations, data exploration and
+        analysis, database queries, debugging, simulations, and plots. Reuse
+        objects across calls to inspect results, test hypotheses, and compare
+        approaches.
 
 
         Send one complete `sql` cell per call. Results display automatically;

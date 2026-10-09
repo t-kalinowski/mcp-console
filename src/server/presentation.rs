@@ -123,14 +123,11 @@ impl Profile {
                     .join(" and ")
             };
         if !self.builtin {
-            return format!(
-                "Persistent custom-worker {names} sessions (REPLs). {}",
-                sections::REUSE
-            );
+            return format!("Persistent custom-worker {names} REPL. {}", sections::REUSE);
         }
         let location = if cfg!(windows) { " on Windows" } else { "" };
         format!(
-            "Persistent {names} sessions (REPLs){location} {} {}",
+            "Persistent {names} REPL{location} {} {}",
             sections::BUILTIN_SCOPE,
             sections::REUSE
         )

@@ -42,10 +42,10 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent R, Python, and SQL sessions (REPLs) for calculations, data
-        exploration and analysis, database queries, debugging, simulations, and
-        plots. Reuse objects across calls to inspect results, test hypotheses,
-        and compare approaches.
+        Persistent R, Python, and SQL REPL for calculations, data exploration
+        and analysis, database queries, debugging, simulations, and plots. Reuse
+        objects across calls to inspect results, test hypotheses, and compare
+        approaches.
 
 
         Send one complete `r`, `python`, or `sql` cell per call. Results display

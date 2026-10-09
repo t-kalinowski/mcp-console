@@ -15,8 +15,8 @@ result:
     name: mcp-console
     version: 0.0.4
   instructions: >-
-    Persistent custom-worker SQL sessions (REPLs). Reuse objects across
-    calls to inspect results, test hypotheses, and compare approaches.
+    Persistent custom-worker SQL REPL. Reuse objects across calls to inspect
+    results, test hypotheses, and compare approaches.
 ---
 input:
   method: notifications/initialized
@@ -27,8 +27,8 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent custom-worker SQL sessions (REPLs). Reuse objects across
-        calls to inspect results, test hypotheses, and compare approaches.
+        Persistent custom-worker SQL REPL. Reuse objects across calls to inspect
+        results, test hypotheses, and compare approaches.
 
 
         Send one complete `sql` cell per call.

@@ -1,8 +1,8 @@
 ---
 configuration: restricted
 description: >-
-  Persistent custom-worker R, Python, and SQL sessions (REPLs). Reuse objects
-  across calls to inspect results, test hypotheses, and compare approaches.
+  Persistent custom-worker R, Python, and SQL REPL. Reuse objects across calls
+  to inspect results, test hypotheses, and compare approaches.
 
 
   Send one complete `r`, `python`, or `sql` cell per call.
@@ -37,8 +37,8 @@ description: >-
 ---
 configuration: enabled
 description: >-
-  Persistent custom-worker R, Python, and SQL sessions (REPLs). Reuse objects
-  across calls to inspect results, test hypotheses, and compare approaches.
+  Persistent custom-worker R, Python, and SQL REPL. Reuse objects across calls
+  to inspect results, test hypotheses, and compare approaches.
 
 
   Send one complete `r`, `python`, or `sql` cell per call.
@@ -73,8 +73,8 @@ description: >-
 ---
 configuration: proxy
 description: >-
-  Persistent custom-worker R, Python, and SQL sessions (REPLs). Reuse objects
-  across calls to inspect results, test hypotheses, and compare approaches.
+  Persistent custom-worker R, Python, and SQL REPL. Reuse objects across calls
+  to inspect results, test hypotheses, and compare approaches.
 
 
   Send one complete `r`, `python`, or `sql` cell per call.
@@ -109,8 +109,8 @@ description: >-
 ---
 configuration: proxy with local binding
 description: >-
-  Persistent custom-worker R, Python, and SQL sessions (REPLs). Reuse objects
-  across calls to inspect results, test hypotheses, and compare approaches.
+  Persistent custom-worker R, Python, and SQL REPL. Reuse objects across calls
+  to inspect results, test hypotheses, and compare approaches.
 
 
   Send one complete `r`, `python`, or `sql` cell per call.
@@ -145,8 +145,8 @@ description: >-
 ---
 configuration: no sandbox
 description: >-
-  Persistent custom-worker R, Python, and SQL sessions (REPLs). Reuse objects
-  across calls to inspect results, test hypotheses, and compare approaches.
+  Persistent custom-worker R, Python, and SQL REPL. Reuse objects across calls
+  to inspect results, test hypotheses, and compare approaches.
 
 
   Send one complete `r`, `python`, or `sql` cell per call.

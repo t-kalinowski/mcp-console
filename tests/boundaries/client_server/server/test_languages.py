@@ -147,7 +147,7 @@ def test_builtin_guidance_matches_visible_languages(
                         for name in ("R", "Python", "SQL")
                         if name.lower() in languages
                     )
-                    + " sessions (REPLs)"
+                    + " REPL"
                     in tool["description"]
                 )
                 assert "CSV, Parquet, JSON, and JSONL directly" in tool["description"]
