@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import os
 import shutil
 import subprocess
@@ -22,7 +23,9 @@ from support.native import LOADER_VARIABLE, build_interposer
 from support.processes import host_process_id, process_exists
 from support.r import r_test_environment
 from support.suites import run_this_suite
-from support.requirements import NATIVE_FIXTURES, POSIX, R, SQL, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, R, SQL, command, requires
+from support.python import write_test_wheel
+from boundaries.client_server.server.test_no_r import no_r_environment
 
 
 def managed_environments(root: Path, *, interrupt_site: bool = False) -> dict[str, str]:
@@ -146,6 +149,123 @@ def write_distribution(root: Path, name: str, module: str, version: str) -> None
     (metadata / "METADATA").write_text(f"Name: {name}\nVersion: {version}\n")
     (metadata / "top_level.txt").write_text(module.partition(".")[0] + "\n")
     (metadata / "RECORD").write_text(f"{source.as_posix()},,\n")
+
+
+@requires(SQL, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_unchanged_distribution_needs_no_file_inventory(
+    binary: Path, execution: Execution
+) -> list:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        package = "mcp_console_test_loaded"
+        addition = "mcp_console_test_compatible_addition"
+        incompatible = "mcp_console_test_incompatible_addition"
+        index = write_test_wheel(
+            root, package, "version = '1.0.0'\nmarker = object()\n"
+        )
+        write_test_wheel(
+            root, addition, "answer = 42\n", requires=(f"{package}==1.0.0",)
+        )
+        environment = no_r_environment(root)
+        environment.update(UV_INDEX=index.as_uri(), UV_INDEX_STRATEGY="first-index")
+        with McpClient(
+            binary,
+            execution.serve("-c", f"python.managed.packages=[duckdb,{package}]"),
+            environment,
+            root,
+        ) as client:
+            client.initialize_and_list_tools()
+
+            def accepted_requirements() -> dict:
+                result = client.send(requirements={"action": "get"})
+                assert (
+                    json.loads(last_result_text(client)) == result["structuredContent"]
+                )
+                declaration = result["structuredContent"]["requirements"]
+                # Provider inventories have separate coverage; compare the full
+                # declaration before recording this case's Python requirements.
+                result.clear()
+                result["accepted_python_requirements"] = declaration["python"]
+                return declaration
+
+            client.expect(
+                # fmt: python
+                python=code("""
+                    import importlib.metadata
+                    import os
+                    from pathlib import Path
+                    import sys
+                    import mcp_console_test_loaded as loaded
+
+                    marker = loaded.marker
+                    worker_pid = os.getpid()
+                    record = Path(
+                        importlib.metadata.distribution("mcp-console-test-loaded").locate_file(
+                            "mcp_console_test_loaded-1.0.0.dist-info/RECORD"
+                        )
+                    )
+                    block_record = False
+
+
+                    def guard_inventory(event, arguments):
+                        if (
+                            block_record
+                            and event == "open"
+                            and isinstance(arguments[0], (str, bytes, os.PathLike))
+                            and Path(os.fsdecode(arguments[0])) == record
+                        ):
+                            raise RuntimeError("unchanged distribution file inventory was read")
+
+
+                    sys.addaudithook(guard_inventory)
+                    """),
+            )
+            accepted = accepted_requirements()
+            # An additive declaration can upgrade a transitive dependency. Keep
+            # real resolution and reach the worker's loaded-version protection.
+            write_test_wheel(
+                root, package, "version = '2.0.0'\nmarker = object()\n", version="2.0.0"
+            )
+            write_test_wheel(
+                root, incompatible, "answer = 7\n", requires=(f"{package}>=2.0.0",)
+            )
+            result = client.send(
+                python="rejected_cell_ran = True",
+                requirements={"python": [incompatible]},
+            )
+            assert result["isError"] is True, result
+            assert last_result_text(client) == (
+                "Cannot replace loaded mcp-console-test-loaded 1.0.0 with 2.0.0. "
+                "Restart with compatible requirements; the running interpreter and objects are unchanged."
+            ), result
+            assert accepted_requirements() == accepted
+            client.expect(
+                "incompatible changes rejected without mutation\n",
+                # fmt: python
+                python=code("""
+                    assert "rejected_cell_ran" not in globals()
+                    assert os.getpid() == worker_pid and loaded.marker is marker
+                    assert loaded.version == "1.0.0"
+                    block_record = True
+                    print("incompatible changes rejected without mutation")
+                    """),
+            )
+            client.expect("[prepared]", requirements={"python": [addition]})
+            client.expect(
+                "unchanged loaded distribution retained\n",
+                # fmt: python
+                python=code("""
+                    block_record = False
+                    import mcp_console_test_compatible_addition as addition
+
+                    assert addition.answer == 42
+                    assert loaded.version == "1.0.0" and loaded.marker is marker
+                    assert os.getpid() == worker_pid
+                    print("unchanged loaded distribution retained")
+                    """),
+            )
+            return client.finish()
 
 
 @requires(POSIX)

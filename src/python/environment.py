@@ -82,17 +82,22 @@ def _check_compatible(candidate: dict) -> None:
         if (path := getattr(module, "__file__", None)) is not None
     }
     for distribution in importlib.metadata.distributions(path=_site_paths):
+        name = distribution.metadata["Name"]
+        version = distribution.version
+        # File ownership only matters when this candidate changes a version.
+        # Avoid canonicalizing every installed file for unchanged dependencies.
+        if name is not None and versions.get(_name(name)) == version:
+            continue
         # A namespace alone does not load all distributions contributing to it.
         if not any(
             os.path.realpath(distribution.locate_file(path)) in loaded
             for path in distribution.files or ()
         ):
             continue
-        name = distribution.metadata["Name"]
         selected = versions.get(_name(name))
-        if selected != distribution.version:
+        if selected != version:
             raise RuntimeError(
-                f"Cannot replace loaded {name} {distribution.version} with {selected or 'an absent distribution'}. "
+                f"Cannot replace loaded {name} {version} with {selected or 'an absent distribution'}. "
                 "Restart with compatible requirements; the running interpreter and objects are unchanged."
             )
 
