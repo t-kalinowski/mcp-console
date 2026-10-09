@@ -7,9 +7,11 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 mod python;
+mod resolution;
 mod sandbox;
 pub(crate) use python::Managed as ManagedPythonSettings;
 pub(crate) use python::PythonChoice;
+pub(crate) use resolution::Resolution;
 pub(crate) mod startup;
 
 pub const ENVIRONMENT: &str = "MCP_CONSOLE_SANDBOX_SETTINGS";
@@ -115,6 +117,8 @@ pub(crate) struct R {
     pub executable: Option<PathBuf>,
     #[serde(deserialize_with = "sandbox::supplied", skip_serializing)]
     pub packages: Option<Vec<String>>,
+    #[serde(skip_serializing)]
+    pub resolution: Resolution,
     pub vanilla: bool,
 }
 
@@ -221,6 +225,11 @@ pub fn discover(
     if let Some(packages) = project.r.as_ref().and_then(|r| r.packages.as_ref()) {
         crate::worker_client::validate_r_requirements(packages)
             .map_err(|error| format!("{name}: r.packages: {error}"))?;
+        if !packages.is_empty() && project.r.as_ref().unwrap().resolution == Resolution::Disabled {
+            return Err(format!(
+                "{name}: r.packages must be empty under r.resolution=disabled; use startup_only to prepare configured packages"
+            ));
+        }
     }
     if let Some(r) = &mut project.r
         && let Some(path) = &mut r.executable

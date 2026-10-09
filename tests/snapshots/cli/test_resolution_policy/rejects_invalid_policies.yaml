@@ -1,0 +1,69 @@
+---
+setting: r.resolution=true
+stderr: >
+  configuration with CLI overrides: r: resolution: invalid type: boolean
+  `true`, expected a string; see docs/CONFIGURATION.md for the public
+  format
+---
+setting: r.resolution=null
+stderr: >
+  configuration with CLI overrides: r: resolution: invalid type: null,
+  expected a string; see docs/CONFIGURATION.md for the public format
+---
+setting: r.resolution=unknown
+stderr: >
+  configuration with CLI overrides: r: resolution: unknown resolution
+  policy `unknown`; expected automatic, explicit, startup_only, or
+  disabled; see docs/CONFIGURATION.md for the public format
+---
+setting: "r.resolution={automatic: null}"
+stderr: >
+  configuration with CLI overrides: r: resolution: invalid type: map,
+  expected a string; see docs/CONFIGURATION.md for the public format
+---
+setting: r.resolution=[]
+stderr: >
+  configuration with CLI overrides: r: resolution: invalid type: sequence,
+  expected a string; see docs/CONFIGURATION.md for the public format
+---
+setting: python.managed.resolution=false
+stderr: |
+  python: managed.resolution: invalid type: boolean `false`, expected a string
+---
+setting: python.managed.resolution=null
+stderr: |
+  python: managed.resolution: invalid type: null, expected a string
+---
+setting: python.managed.resolution=unknown
+stderr: >
+  python: managed.resolution: unknown resolution policy `unknown`;
+  expected automatic, explicit, startup_only, or disabled
+---
+setting: python.managed.resolution=disabled
+stderr: >
+  python: managed.resolution: managed Python resolution cannot be
+  disabled; use an existing Python environment or startup_only
+---
+setting: python.resolution=explicit
+stderr: >
+  python: unknown variant `resolution`, expected one of `existing`,
+  `managed`, `first_available`
+---
+setting: resolution=automatic
+stderr: >
+  configuration with CLI overrides: resolution: unknown field
+  `resolution`, expected one of `startup`, `cache`, `python`, `r`,
+  `languages`, `inherit_environment`, `environment`, `sandbox`,
+  `resolver`; see docs/CONFIGURATION.md for the public format
+---
+setting: >-
+  python.first_available=[{existing: unused}, {managed: {resolution:
+  disabled}}]
+stderr: >
+  python.first_available[1]: python: managed.resolution: managed Python
+  resolution cannot be disabled; use an existing Python environment or
+  startup_only
+---
+nonempty_disabled_r: >
+  configuration with CLI overrides: r.packages must be empty under
+  r.resolution=disabled; use startup_only to prepare configured packages
