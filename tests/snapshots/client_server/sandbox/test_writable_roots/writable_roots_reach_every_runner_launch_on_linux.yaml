@@ -14,6 +14,11 @@ result:
   serverInfo:
     name: mcp-console
     version: 0.0.4
+  instructions: >-
+    Persistent R, Python, and SQL REPL for calculations, data exploration
+    and analysis, database queries, debugging, simulations, and plots. Reuse
+    objects across calls to inspect results, test hypotheses, and compare
+    approaches.
 ---
 input:
   method: notifications/initialized
@@ -24,9 +29,13 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent R, Python, and SQL workbench for calculations, data analysis,
-        and plots. Send one complete `r`, `python`, or `sql` cell per call.
-        Inspect its output and reuse persistent objects. Results display
+        Persistent R, Python, and SQL REPL for calculations, data exploration
+        and analysis, database queries, debugging, simulations, and plots. Reuse
+        objects across calls to inspect results, test hypotheses, and compare
+        approaches.
+
+
+        Send one complete `r`, `python`, or `sql` cell per call. Results display
         automatically; supported plots return as images.
 
 

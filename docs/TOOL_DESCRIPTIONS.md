@@ -9,16 +9,17 @@ Include information that changes tool choice, call construction, or result inter
 The [canonical handshake snapshot](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records it.
 Regenerate that snapshot deliberately through the [boundary tests](../tests/boundaries/README.md), never by editing expected output.
 Writable-root companions capture the extra grant; affected fixtures use separate direct/sandbox snapshots because their advertised policies differ.
+Direct-handshake snapshots are shared across supported platforms; the discovery summary does not name the operating system.
 
 Descriptions depend on captured configuration, not completed runtime discovery.
 The presentation profile selects sections from configured languages, built-in or custom worker selection, and host preparation.
-Platform conditionals select Windows language and temporary-directory guidance without matching or removing sentences.
+Platform conditionals select temporary-directory guidance without matching or removing sentences.
 For the same configuration, they stay stable as background startup finishes or fails.
 The captured `languages` list selects direct code fields, field guidance, and language-sharing sections together.
-Omission retains the legacy `MCP_CONSOLE_LANGUAGES` filter; neither discovery nor interpreter initialization changes the advertised schema.
+Omission uses the `MCP_CONSOLE_LANGUAGES` filter; neither discovery nor interpreter initialization changes the advertised schema.
 Hidden source keys, including null values, are rejected before same-call effects.
 Requirements remain visible for hidden SQL providers, and execution still checks actual runtime availability.
-For an explicit `languages` configuration, tool and exposed-field descriptions mention only visible languages, including requirements, control, and timeout guidance.
+For both `languages` configuration and the environment filter, tool and exposed-field descriptions mention only visible languages, including requirements, control, and timeout guidance.
 Tool-level SQL guidance describes file queries directly; runtime diagnostics identify any missing dependencies and preparation needed.
 Requirement keys remain available even when their language is hidden; their descriptions then explain host-provider preparation without advertising a direct code field.
 Visibility selects direct code fields and applicable examples, not SQL ownership: managed DuckDB still uses R when available and Python otherwise.
@@ -29,9 +30,49 @@ Advertising an unavailable language lets an agent identify the missing prerequis
 It neither proves availability nor authorizes installation.
 Installing a runtime requires a new server session; worker restart retains captured selection.
 
+## Deferred tool discovery
+
+Client behavior checked on 2026-10-09.
+These are client presentation limits; recheck the linked sources when changing discovery guidance.
+
+The `send` description returned by `tools/list` and the server `instructions` returned by MCP initialization serve different purposes.
+Console publishes the same profile-specific summary in server instructions and at the start of the tool description, as the [canonical handshake](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records.
+The summary names the configured languages, describes when to choose Console, and explains why retained state helps.
+Custom-worker summaries leave runtime capabilities to the worker.
+Call construction begins in the next paragraph, so lazy-loading clients can choose the server without first loading the tool definition.
+
+### Codex
+
+For regular MCP servers, Codex uses initialization `instructions` as the namespace description ([source](https://github.com/openai/codex/blob/36ae1561b9324c93d5638b45eb19fe2cc070a581/codex-rs/codex-mcp/src/rmcp_client.rs#L839-L854)).
+The optional `deferred_tool_world_state` feature is [disabled by default upstream](https://github.com/openai/codex/blob/36ae1561b9324c93d5638b45eb19fe2cc070a581/codex-rs/features/src/lib.rs#L1551-L1555).
+When enabled, its [namespace preview](https://github.com/openai/codex/blob/36ae1561b9324c93d5638b45eb19fe2cc070a581/codex-rs/core/src/context/world_state/tools.rs#L25-L75) takes only the first line, trims surrounding whitespace, and retains at most 250 Unicode characters.
+A longer line becomes its first 247 characters followed by `...`; truncation can split a word or sentence.
+This is a namespace-preview limit, not a universal limit on tool descriptions.
+
+The rendered namespace block has a shared 4 KiB UTF-8 budget, including tags and formatting.
+The [budget allocator](https://github.com/openai/codex/blob/36ae1561b9324c93d5638b45eb19fe2cc070a581/codex-rs/core/src/context/world_state/tools_budget.rs#L46-L115) reserves namespace names first, then shares remaining description space one character per namespace at a time.
+Descriptions can therefore be shortened further or omitted; names can also be omitted if the names alone exceed the budget.
+
+### Claude Code
+
+With tool search enabled, Claude Code initially loads tool names and server instructions.
+Discovery loads the selected tool definitions, including their descriptions and input schemas; the [documented behavior](https://code.claude.com/docs/en/mcp#scale-with-mcp-tool-search) does not define a separate short preview extracted from each tool description.
+Tool search is enabled by default on supported configurations.
+
+Claude Code [truncates each tool description and each server's instructions at 2,048 characters by default](https://code.claude.com/docs/en/mcp#for-mcp-server-authors).
+This cap applies to the whole text, with no documented first-line or sentence-count rule.
+Users can change it for every MCP server in a session with [`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`](https://code.claude.com/docs/en/env-vars#variables), available since v2.1.280; it accepts a positive whole number of characters.
+
+For server discovery instructions, describe the tasks, when to select Console, and its key capabilities first.
+Keep the first line within 250 characters for the Codex preview, with any further guidance before Claude Code's default 2,048-character cap.
+Keep full call construction and result interpretation guidance in the tool definition.
+
 ## Editorial rules
 
-Start with a complete cell, automatic display, inspecting its output, and reusing persistent objects.
+Start with a discovery summary within 250 characters on one line.
+Include debugging, simulations, and comparing approaches alongside calculations, data analysis, queries, and plots; Console also supports iterative development work.
+Follow it with complete-cell and automatic-display guidance.
+Keep ordinary tool descriptions within Claude Code's default 2,048-character cap; configured writable paths can expand the launch-policy prose.
 Ordinary use does not require declaration inspection, preparation, language switching, or restart.
 Put concise language-selection guidance, sequential execution, polling, and the security boundary at tool level.
 Lead the arguments with `r`, `python`, `sql`, `timeout_ms`, `control`, `stdin`, and `requirements`, omitting hidden fields.

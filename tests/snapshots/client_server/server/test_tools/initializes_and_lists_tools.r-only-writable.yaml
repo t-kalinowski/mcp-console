@@ -14,6 +14,11 @@ result:
   serverInfo:
     name: mcp-console
     version: 0.0.4
+  instructions: >-
+    Persistent R REPL for calculations, data exploration and analysis,
+    database queries, debugging, simulations, and plots. Reuse objects
+    across calls to inspect results, test hypotheses, and compare
+    approaches.
 ---
 input:
   method: notifications/initialized
@@ -24,10 +29,14 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent R, Python, and SQL workbench for calculations, data analysis,
-        and plots. Send one complete `r`, `python`, or `sql` cell per call.
-        Inspect its output and reuse persistent objects. Results display
-        automatically; supported plots return as images.
+        Persistent R REPL for calculations, data exploration and analysis,
+        database queries, debugging, simulations, and plots. Reuse objects
+        across calls to inspect results, test hypotheses, and compare
+        approaches.
+
+
+        Send one complete `r` cell per call. Results display automatically;
+        supported plots return as images.
 
 
         Use R for vectorized data and string operations, statistics, and plots.
@@ -68,17 +77,11 @@ result:
               CRAN packages normally through `library()`, `require()`,
               `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; managed
               sessions prepare missing packages on first use. Avoid availability
-              probes or `install.packages()`. Access Python globals through `py$name`.
-              `.console$sql_connection()` returns the active native DBI connection for
-              DBI/dplyr, or errors if another runtime owns SQL. Select a user-owned
-              DBI connection for SQL cells with `.console$sql_connection(connection)`;
-              restore managed DuckDB with `.console$sql_connection(NULL)`. Never
-              disconnect the managed connection; restore it before disconnecting a
-              selection. Default-device plots return as PNGs and finalize at cell end,
-              including after errors; draw each plot in one cell. Explicit devices are
-              not captured. Set persistent dimensions in inches and DPI with
-              `options(console.plot.width_in = ..., console.plot.height_in = ...,
-              console.plot.dpi = ...)`.
+              probes or `install.packages()`. Default-device plots return as PNGs and
+              finalize at cell end, including after errors; draw each plot in one
+              cell. Explicit devices are not captured. Set persistent dimensions in
+              inches and DPI with `options(console.plot.width_in = ...,
+              console.plot.height_in = ..., console.plot.dpi = ...)`.
             type:
               - string
               - "null"
@@ -100,8 +103,8 @@ result:
               Apply control before same-call stdin/code. `interrupt` requests a
               cooperative interrupt and cancellation of dependency preparation,
               preserving live state. A following cell runs only if prior work stops.
-              `restart` discards live interpreter, database, debugger, and
-              unread-input state; same-call stdin/code go only to the replacement.
+              `restart` discards live state, including debugger and unread input;
+              same-call stdin/code go only to the replacement.
             type: string
             enum:
               - interrupt
@@ -137,15 +140,17 @@ result:
               - "null"
             properties:
               action:
-                description: |-
-                  get reads the retained declaration, not an installed-package inventory, without starting a
-                  worker or consuming output; use it alone, without code, stdin, control, or payload fields.
-                  The complete declaration is in structuredContent.requirements.
-                  add (default) accumulates up to 64 entries per language per call; bare {} is invalid.
-                  set replaces the whole declaration without defaults; omitted lists/constraints are empty,
-                  even with only action supplied. reset restores startup defaults and rejects payload fields.
-                  Changed set/reset with a live worker require control="restart"; unchanged declarations are
-                  no-ops. set accepts the complete accumulated manifest without add's per-list limit.
+                description: >-
+                  get reads the retained declaration, not an installed-package inventory,
+                  without starting a worker or consuming output; use it alone, without
+                  code, stdin, control, or payload fields. The complete declaration is in
+                  structuredContent.requirements. add (default) accumulates up to 64
+                  entries per language per call; bare {} is invalid. set replaces the
+                  whole declaration without defaults; omitted lists/constraints are empty,
+                  even with only action supplied. reset restores startup defaults and
+                  rejects payload fields. Changed set/reset with a live worker require
+                  control="restart"; unchanged declarations are no-ops. set accepts the
+                  complete accumulated manifest without add's per-list limit.
                 type: string
                 enum:
                   - get
@@ -153,16 +158,18 @@ result:
                   - set
                   - reset
               python_version:
-                description: |-
-                  Python version numbers or ==, !=, <, <=, >, >= constraints (e.g. >=3.11).
-                  add appends; changes with a live worker require control="restart".
+                description: >-
+                  Runtime version numbers or ==, !=, <, <=, >, >= constraints (e.g.
+                  >=3.11). add appends; changes with a live worker require
+                  control="restart".
                 type: array
                 items:
                   type: string
               exclude_newer:
-                description: |-
-                  Package publication cutoff accepted by uv, e.g. "2026-01-01".
-                  set clears an omitted/null cutoff; add preserves omission and cannot replace an existing one.
+                description: >-
+                  Package publication cutoff accepted by uv, e.g. "2026-01-01". set clears
+                  an omitted/null cutoff; add preserves omission and cannot replace an
+                  existing one.
                 type:
                   - string
                   - "null"
@@ -186,11 +193,12 @@ result:
                   type: string
                   minLength: 1
               python:
-                description: |-
-                  Named PEP 508 registry requirements with versions, extras, or markers, e.g. polars>=1 or
-                  requests[socks]. Paths, URLs, editable requirements, direct references, and local sources
-                  are rejected. Bare or explicitly selected Python environments and custom workers disable
-                  managed Python requirements.
+                description: >-
+                  Named PEP 508 registry requirements for dependency preparation, e.g.
+                  duckdb>=1, with versions, extras, or markers. Paths, URLs, editable
+                  requirements, direct references, and local sources are rejected. Bare or
+                  user-selected environments and custom workers disable managed registry
+                  requirements.
                 type: array
                 items:
                   type: string

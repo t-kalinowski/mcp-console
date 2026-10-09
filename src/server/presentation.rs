@@ -1,4 +1,5 @@
 //! Tool prose derived only from captured launch configuration.
+//! Client discovery and truncation rules: docs/TOOL_DESCRIPTIONS.md#deferred-tool-discovery.
 mod requirements;
 mod sections;
 
@@ -14,29 +15,28 @@ use crate::settings::SandboxSettings;
 /// Requested interface and preparation mode, never discovered runtime availability.
 struct Profile {
     languages: Languages,
-    configured_visibility: bool,
     builtin: bool,
 }
 
 impl ConsoleServer {
-    pub(super) fn configured_tool_router(
+    pub(super) fn configured_presentation(
         languages: Languages,
-        configured_visibility: bool,
         builtin: bool,
         policy: &SandboxSettings,
         no_sandbox: bool,
-    ) -> ToolRouter<Self> {
-        let profile = Profile {
-            languages,
-            configured_visibility,
-            builtin,
-        };
+    ) -> (ToolRouter<Self>, String) {
+        let profile = Profile { languages, builtin };
+        let instructions = profile.summary();
         let mut router = Self::tool_router();
         let send = router
             .map
             .get_mut("send")
             .expect("send tool must be registered");
-        send.attr.description = Some(profile.description(policy, no_sandbox).into());
+        send.attr.description = Some(
+            profile
+                .description(&instructions, policy, no_sandbox)
+                .into(),
+        );
         let schema = Arc::make_mut(&mut send.attr.input_schema);
         let properties = schema
             .get_mut("properties")
@@ -74,14 +74,13 @@ impl ConsoleServer {
             }
         }
         profile.configure_fields(properties);
-        router
+        (router, instructions)
     }
 }
 
 impl Profile {
     fn restricted_guidance(&self) -> bool {
-        self.configured_visibility
-            && !(self.languages.r && self.languages.python && self.languages.sql)
+        !(self.languages.r && self.languages.python && self.languages.sql)
     }
 
     fn multiple_languages(&self) -> bool {
@@ -92,50 +91,36 @@ impl Profile {
             > 1
     }
 
-    fn description(&self, policy: &SandboxSettings, no_sandbox: bool) -> String {
-        // The internal environment filter retains its legacy presentation.
-        // Only the public setting selects the new language-specific guidance.
-        let described_languages = if self.configured_visibility {
+    fn summary(&self) -> String {
+        let names = if self.languages.r && self.languages.python && self.languages.sql {
+            "R, Python, and SQL".to_string()
+        } else {
             self.languages
-        } else {
-            Languages::all()
+                .fields()
+                .iter()
+                .map(|field| match *field {
+                    "r" => "R",
+                    "python" => "Python",
+                    "sql" => "SQL",
+                    _ => unreachable!(),
+                })
+                .collect::<Vec<_>>()
+                .join(" and ")
         };
-        let mut description = if !self.builtin {
-            sections::CUSTOM_SCOPE.to_string()
-        } else if cfg!(windows) && !self.configured_visibility {
-            sections::WINDOWS_SCOPE.to_string()
-        } else {
-            if described_languages.r && described_languages.python && described_languages.sql {
-                sections::BUILTIN_SCOPE.to_string()
-            } else {
-                let names = self
-                    .languages
-                    .fields()
-                    .iter()
-                    .map(|field| match *field {
-                        "r" => "R",
-                        "python" => "Python",
-                        "sql" => "SQL",
-                        _ => unreachable!(),
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" and ");
-                let location = if cfg!(windows) {
-                    " for local execution on Windows"
-                } else {
-                    ""
-                };
-                format!(
-                    "Persistent {names} workbench{location} for calculations, data analysis, and plots."
-                )
-            }
-        };
-        description.push_str(" Send one complete ");
-        if self.configured_visibility {
-            description.push_str(&self.languages.cell_fields());
-        } else {
-            description.push_str("`r`, `python`, or `sql`");
+        if !self.builtin {
+            return format!("Persistent custom-worker {names} REPL. {}", sections::REUSE);
         }
+        format!(
+            "Persistent {names} REPL {} {}",
+            sections::BUILTIN_SCOPE,
+            sections::REUSE
+        )
+    }
+
+    fn description(&self, summary: &str, policy: &SandboxSettings, no_sandbox: bool) -> String {
+        let mut description = summary.to_string();
+        description.push_str("\n\nSend one complete ");
+        description.push_str(&self.languages.cell_fields());
         description.push_str(sections::SEND_WORKFLOW);
         if self.builtin {
             description.push_str(sections::DISPLAY);
@@ -189,7 +174,7 @@ impl Profile {
     }
 
     fn configure_fields(&self, properties: &mut Map<String, Value>) {
-        if self.builtin && self.configured_visibility {
+        if self.builtin {
             for (field, description) in [
                 ("r", r_description_for(self.languages)),
                 ("python", python_description_for(self.languages)),
@@ -199,7 +184,7 @@ impl Profile {
                     property["description"] = description.into();
                 }
             }
-        } else if !self.builtin {
+        } else {
             for (field, section) in [
                 ("r", sections::CUSTOM_R),
                 ("python", sections::CUSTOM_PYTHON),
@@ -215,15 +200,7 @@ impl Profile {
                 format!("{}{}", sections::STDIN_SELECTED, sections::STDIN_ORDERING).into();
             properties["control"]["description"] = control_description_for(false).into();
         }
-        requirements::configure(
-            properties,
-            if self.configured_visibility {
-                self.languages
-            } else {
-                Languages::all()
-            },
-            self.builtin,
-        );
+        requirements::configure(properties, self.languages, self.builtin);
     }
 }
 

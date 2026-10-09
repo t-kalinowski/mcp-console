@@ -28,6 +28,12 @@ class DevelopmentTests(unittest.TestCase):
             "      - name: Prepare native Windows sandbox source archive\n", 1
         )[1].split("\n      - name:", 1)[0]
         program = code(step.split("        run: |\n", 1)[1])
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(
+            ROOT / "scripts/restore-source-timestamps",
+            scripts / "restore-source-timestamps",
+        )
         source = self.root / ".sandbox-runner-source"
         source.mkdir()
         subprocess.run(["git", "init", "-q", source], check=True)
@@ -68,7 +74,7 @@ class DevelopmentTests(unittest.TestCase):
         for cache in ("miss", "hit"):
             self.assertEqual(archive.exists(), cache == "hit")
             if cache == "hit":
-                tracked.unlink()
+                os.utime(tracked, (timestamp + 1, timestamp + 1))
             result = subprocess.run(
                 [
                     "pwsh",

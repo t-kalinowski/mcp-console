@@ -18,6 +18,9 @@ result:
   serverInfo:
     name: mcp-console
     version: 0.0.4
+  instructions: >-
+    Persistent custom-worker R and SQL REPL. Reuse objects across calls to
+    inspect results, test hypotheses, and compare approaches.
 ---
 input:
   method: notifications/initialized
@@ -28,8 +31,11 @@ result:
   tools:
     - name: send
       description: >-
-        Persistent custom-worker workbench. Send one complete `r` or `sql` cell
-        per call. Inspect its output and reuse persistent objects.
+        Persistent custom-worker R and SQL REPL. Reuse objects across calls to
+        inspect results, test hypotheses, and compare approaches.
+
+
+        Send one complete `r` or `sql` cell per call.
 
 
         Language fields describe the configured interface; evaluation, display,
