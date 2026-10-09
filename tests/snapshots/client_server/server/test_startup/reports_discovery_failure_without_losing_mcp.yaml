@@ -64,8 +64,11 @@ result:
         Run one cell at a time. Wait for its `send` to return before another
         call with code. You can interrupt a pending call with
         `send(control="interrupt")`. An error can leave earlier changes in
-        place. If work is still running, poll with an empty `send` until it
-        finishes; do not resubmit the cell.
+        place. If work is still running, poll with an empty `send`; do not
+        resubmit the cell. When waiting for completion, use `timeout_ms=300000`
+        for a long poll; it returns early when work finishes or needs input.
+        Avoid repeated short polls such as `timeout_ms=1000`. Defaults:
+        `timeout_ms=60000` (60 seconds), `requirements.action="add"`.
 
 
         Text results, including notices, have an 8 KiB limit, retaining the
@@ -141,11 +144,14 @@ result:
               - string
               - "null"
           timeout_ms:
-            description: |-
-              Wait for output for up to this many milliseconds (default 60,000). `0` returns without
-              waiting for completion. Expiry returns available output while work continues. This is a wait
-              budget, not cancellation or a whole-call deadline: preparation and control can exceed it;
-              standalone preparation has no timeout.
+            description: >-
+              Wait for output for up to this many milliseconds (default 60,000). When
+              waiting for completion, use `timeout_ms=300000` for a long poll; it
+              returns early when work finishes or needs input. Avoid repeated short
+              polls such as `timeout_ms=1000`. `0` returns without waiting for
+              completion. Expiry returns available output while work continues. This
+              is a wait budget, not cancellation or a whole-call deadline: preparation
+              and control can exceed it; standalone preparation has no timeout.
             type: integer
             format: uint64
             minimum: 0
