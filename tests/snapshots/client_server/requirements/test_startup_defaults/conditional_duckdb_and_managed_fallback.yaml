@@ -31,6 +31,7 @@ result:
             "r": [],
             "python": [
               "duckdb; python_version < '2'",
+              "duckdb; sys_platform == 'win32'",
               "packaging"
             ],
             "duckdb": [],
@@ -50,6 +51,7 @@ result:
       r: []
       python:
         - duckdb; python_version < '2'
+        - duckdb; sys_platform == 'win32'
         - packaging
       duckdb: []
       python_version:
@@ -87,6 +89,7 @@ result:
             "r": [],
             "python": [
               "duckdb; python_version < '2'",
+              "duckdb; sys_platform == 'win32'",
               "packaging"
             ],
             "duckdb": [],
@@ -106,6 +109,7 @@ result:
       r: []
       python:
         - duckdb; python_version < '2'
+        - duckdb; sys_platform == 'win32'
         - packaging
       duckdb: []
       python_version:
@@ -173,6 +177,7 @@ result:
             "r": [],
             "python": [
               "duckdb; python_version < '2'",
+              "duckdb; sys_platform == 'win32'",
               "packaging"
             ],
             "duckdb": [],
@@ -192,6 +197,7 @@ result:
       r: []
       python:
         - duckdb; python_version < '2'
+        - duckdb; sys_platform == 'win32'
         - packaging
       duckdb: []
       python_version:

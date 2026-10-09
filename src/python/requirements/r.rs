@@ -477,6 +477,7 @@ fn base_call(function: &str, arguments: &[&Value]) -> super::RResult<Value> {
 
 fn call(environment: SEXP, function: &str, arguments: &[&Value]) -> super::RResult<Value> {
     use harp::exec::{RFunction, RFunctionExt};
+    let interrupts_suspended = unsafe { libr::get(libr::R_interrupts_suspended) };
     let call = harp::exec::r_sandbox(|| {
         let mut call = RFunction::new("", function);
         for argument in arguments {
@@ -486,6 +487,14 @@ fn call(environment: SEXP, function: &str, arguments: &[&Value]) -> super::RResu
             .param("value", call.call.build())
             .call
             .build();
+        let value = if interrupts_suspended == libr::Rboolean_FALSE {
+            RFunction::new("base", "allowInterrupts")
+                .add(value)
+                .call
+                .build()
+        } else {
+            value
+        };
         // Catch an interrupt before harp's top-level boundary turns its
         // longjump into an error. Keep the original condition until Rust has
         // unwound, then let the R-facing wrapper signal it to its caller.
@@ -502,9 +511,12 @@ fn call(environment: SEXP, function: &str, arguments: &[&Value]) -> super::RResu
             .build()
     })
     .map_err(from_r_error)?;
-    // Protect allocation separately: R/Python execution and resolver callbacks
-    // run in the caller's interrupt context, without a native state borrow.
-    let result = harp::exec::try_eval(call.sexp, environment).map_err(from_r_error)?;
+    // Install the handler with interrupts suspended, then restore the caller's
+    // interrupt context inside its protected expression. A pending interrupt
+    // must not escape before tryCatch has installed its handler.
+    let result = harp::exec::r_sandbox(|| harp::exec::try_eval(call.sexp, environment))
+        .map_err(from_r_error)?
+        .map_err(from_r_error)?;
     harp::exec::r_sandbox(|| {
         if unsafe { libr::Rf_inherits(result.sexp, c"interrupt".as_ptr()) } != 0 {
             Err(Error::Interrupt(Value(result)))

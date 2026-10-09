@@ -861,6 +861,18 @@ def test_drains_background_stderr_while_idle(
             client,
         )
 
+        # The sideband round trip does not order the independent stderr stream.
+        # Wait for all known bytes to reach the public log before observing it.
+        expected = large_output("zod background stderr\n") + ("y" * LARGE_OUTPUT_SIZE)
+        log = session_directory(client) / "outputs/session.log"
+        wait_for_checkpoint(
+            lambda: (
+                log if log.exists() and log.stat().st_size == len(expected) else None
+            ),
+            "complete background stderr log",
+            root=log,
+            client=client,
+        )
         client.send(timeout_ms=0)
         output = last_tool_text(client)
         assert output.endswith("\n[idle]"), output[-100:]
@@ -875,12 +887,9 @@ def test_drains_background_stderr_while_idle(
             + int(marker[1])
             + len(preview[marker.end() :].encode())
         )
-        expected = large_output("zod background stderr\n")
-        assert len(expected) <= observed <= len(expected) + LARGE_OUTPUT_SIZE, observed
-        assert (
-            session_directory(client) / "outputs/session.log"
-        ).read_text() == expected + ("y" * (observed - len(expected)))
-        assert_preview(preview, expected + ("y" * (observed - len(expected))))
+        assert observed == len(expected), observed
+        assert log.read_text() == expected
+        assert_preview(preview, expected)
         normalize_pipe_counts(client)
         compact_previews(client, "x", "y", "z", "s", "p", "ab")
         return client.finish()

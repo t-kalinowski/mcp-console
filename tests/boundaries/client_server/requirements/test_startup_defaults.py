@@ -126,7 +126,11 @@ def test_conditional_duckdb_and_managed_fallback(
         tools = root / "tools"
         tools.mkdir()
         expose_uv(tools)
-        packages = ["packaging", "duckdb; python_version < '2'"]
+        packages = [
+            "packaging",
+            "duckdb; python_version < '2'",
+            "duckdb; sys_platform == 'win32'",
+        ]
         configure(
             root,
             {
