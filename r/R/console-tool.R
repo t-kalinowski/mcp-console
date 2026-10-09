@@ -24,6 +24,11 @@
 #' @param path `NULL`, or a path to an `mcp-console` executable.
 #' @param version `NULL`, or one published `mcp-console` version, such as
 #'   `"0.0.2"`.
+#' @param sandbox `NULL` (the default), to retain normal configuration-file
+#'   discovery, or a [sandbox_config()] that replaces the entire worker
+#'   `sandbox:` node after file loading. Other configuration, including
+#'   `resolver.sandbox`, is unchanged. Relative paths use the launch directory.
+#'   Cannot be combined with `no_sandbox = TRUE`.
 #' @param no_sandbox Run evaluated code with the server's filesystem and
 #'   network permissions.
 #' @return An [ellmer::ToolDef] to pass to an ellmer chat's
@@ -40,7 +45,13 @@
 #' console_tool(version = "0.0.2")
 #' }
 #' @export
-console_tool <- function(..., path = NULL, version = NULL, no_sandbox = FALSE) {
+console_tool <- function(
+  ...,
+  path = NULL,
+  version = NULL,
+  no_sandbox = FALSE,
+  sandbox = NULL
+) {
   stopifnot(
     is.logical(no_sandbox),
     length(no_sandbox) == 1L,
@@ -49,11 +60,19 @@ console_tool <- function(..., path = NULL, version = NULL, no_sandbox = FALSE) {
   if (...length() != 0L) {
     stop("`...` must be empty.", call. = FALSE)
   }
-  if (!is.null(path) && !is.null(version)) {
-    stop("Only one of `path` and `version` may be supplied.", call. = FALSE)
+  check_sandbox_config(sandbox, allow_null = TRUE)
+  if (no_sandbox && !is.null(sandbox)) {
+    stop(
+      "`sandbox` cannot be combined with `no_sandbox = TRUE`.",
+      call. = FALSE
+    )
   }
 
-  client <- new_mcp_client(resolve_mcp_console(path, version), no_sandbox)
+  client <- new_mcp_client(
+    resolve_mcp_console(path, version),
+    no_sandbox,
+    sandbox
+  )
   ready <- FALSE
   on.exit(if (!ready) close_mcp_client(client), add = TRUE)
 
@@ -152,6 +171,9 @@ ellmer_argument_schema <- function(schema) {
 }
 
 resolve_mcp_console <- function(path, version) {
+  if (!is.null(path) && !is.null(version)) {
+    stop("Only one of `path` and `version` may be supplied.", call. = FALSE)
+  }
   if (!is.null(path)) {
     if (
       !is.character(path) || length(path) != 1L || is.na(path) || !nzchar(path)
@@ -224,12 +246,16 @@ resolve_mcp_console_uv <- function(from) {
   normalizePath(utils::tail(output, 1L), mustWork = TRUE)
 }
 
-new_mcp_client <- function(binary, no_sandbox) {
+new_mcp_client <- function(binary, no_sandbox, sandbox = NULL) {
   client <- new.env(parent = emptyenv())
   client$errors <- tempfile("mcp-console-", fileext = ".log")
   client$process <- processx::process$new(
     binary,
-    c("serve", if (no_sandbox) "--no-sandbox"),
+    c(
+      "serve",
+      if (no_sandbox) "--no-sandbox",
+      sandbox_cli_arguments(sandbox)
+    ),
     stdin = "|",
     stdout = "|",
     stderr = client$errors,

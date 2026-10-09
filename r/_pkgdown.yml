@@ -27,3 +27,12 @@ reference:
   - title: Use Console with ellmer
     contents:
     - console_tool
+  - title: Sandbox configuration and commands
+    contents:
+    - sandbox_config
+    - sandbox_filesystem
+    - sandbox_domains
+    - sandbox_proxy
+    - sandbox_sockets
+    - sandbox_network
+    - sandboxed_system2

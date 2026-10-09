@@ -4,7 +4,13 @@
 \alias{console_tool}
 \title{Use MCP Console as an ellmer tool}
 \usage{
-console_tool(..., path = NULL, version = NULL, no_sandbox = FALSE)
+console_tool(
+  ...,
+  path = NULL,
+  version = NULL,
+  no_sandbox = FALSE,
+  sandbox = NULL
+)
 }
 \arguments{
 \item{...}{Must be empty. Reserved for future use.}
@@ -16,6 +22,12 @@ console_tool(..., path = NULL, version = NULL, no_sandbox = FALSE)
 
 \item{no_sandbox}{Run evaluated code with the server's filesystem and
 network permissions.}
+
+\item{sandbox}{\code{NULL} (the default), to retain normal configuration-file
+discovery, or a \code{\link[=sandbox_config]{sandbox_config()}} that replaces the entire worker
+\verb{sandbox:} node after file loading. Other configuration, including
+\code{resolver.sandbox}, is unchanged. Relative paths use the launch directory.
+Cannot be combined with \code{no_sandbox = TRUE}.}
 }
 \value{
 An \link[ellmer:ToolDef]{ellmer::ToolDef} to pass to an ellmer chat's
