@@ -22,6 +22,8 @@ env:
   # flags or native dependency setup. Cargo and Maturin do not read this value.
   CI_BUILD_CACHE_VERSION: "3"
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
+  # The Python inventory determines defaults recorded in transcript snapshots.
+  UV_VERSION: "0.12.24"
 
 jobs:
   windows:
@@ -51,7 +53,7 @@ jobs:
           components: clippy, rustfmt
       - uses: astral-sh/setup-uv@v10.0.1
         with:
-          version: latest
+          version: ${{ env.UV_VERSION }}
           enable-cache: false
       - name: Select weekly cache identity
         id: epoch
@@ -121,13 +123,14 @@ jobs:
             cargo-downloads-v1-${{ steps.epoch.outputs.week }}-${{ runner.os }}-${{ runner.arch }}-
       - name: Install Windows runtime packages
         run: |
-          uv python install 3.13 3.9
+          # Keep the transcript interpreter available alongside development and rejection fixtures.
+          uv python install 3.13 3.12 3.9
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $oldPython = uv python find 3.9 --python-preference only-managed
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           "MCP_CONSOLE_TEST_OLD_PYTHON=$oldPython" >> $env:GITHUB_ENV
           $consolePython = Join-Path $env:LOCALAPPDATA "mcp-console/cache/dependencies/uv/python"
-          uv python install 3.13 --install-dir $consolePython
+          uv python install 3.13 3.12 --install-dir $consolePython
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $ciPython = (Get-Command python).Source
           uv pip install --python $ciPython packaging matplotlib
@@ -331,7 +334,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v10.0.1
         with:
-          version: latest
+          version: ${{ env.UV_VERSION }}
           cache-local-path: ${{ runner.temp }}/mcp-console-cache
           cache-suffix: runtime-v2-${{ steps.cache-epoch.outputs.value }}
           prune-cache: false

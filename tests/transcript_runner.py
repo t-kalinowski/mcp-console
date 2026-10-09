@@ -2035,6 +2035,41 @@ runner: orphan
 
 
 class TranscriptDiscoveryTests(TranscriptRunnerFixture):
+    def test_shared_direct_handshake_precedes_equal_variants(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.execution import DIRECT, executions
+                from support.records import TranscriptWithCompanions
+
+
+                def handshake():
+                    return [
+                        {"input": {"method": "initialize"}, "result": {"protocolVersion": "test"}},
+                        {"notification": {"method": "notifications/initialized"}},
+                        {"input": {"method": "tools/list"}, "result": {"tools": ["direct"]}},
+                    ]
+
+
+                @executions(DIRECT)
+                def test_initializes_and_lists_tools(binary, execution):
+                    return TranscriptWithCompanions(handshake(), {"bare.yaml": handshake()})
+
+
+                @executions(DIRECT)
+                def test_selected(binary, execution):
+                    return handshake() + [{"runner": "selected"}]
+                """),
+            encoding="utf-8",
+        )
+        updated = self.run_runner("--full", "--update", "--jobs", "1")
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        snapshot = (self.snapshots / "selected.yaml").read_text()
+        self.assertIn("!same-as MCP initialization for this execution mode", snapshot)
+        strict = self.run_runner("--full", "--jobs", "1")
+        self.assertEqual(strict.returncode, 0, strict.stderr)
+
     def test_shared_sessions_canonicalize_fixture_writable_roots(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE
