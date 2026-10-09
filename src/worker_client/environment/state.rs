@@ -39,6 +39,7 @@ pub(in crate::worker_client) struct Environment {
 #[derive(Clone, Default)]
 pub(in crate::worker_client) struct StartupRequirements {
     pub(in crate::worker_client) r: Option<Vec<String>>,
+    pub(in crate::worker_client) r_resolution: crate::settings::Resolution,
     pub(in crate::worker_client) python: crate::settings::ManagedPythonSettings,
     pub(in crate::worker_client) native_duckdb: BTreeSet<String>,
 }

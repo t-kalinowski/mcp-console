@@ -112,6 +112,7 @@ impl RequirementDelta {
         environment: &Environment,
         requirements: Requirements,
     ) -> Result<Self, String> {
+        let action = requirements.action;
         if matches!(
             requirements.action,
             RequirementsAction::Set | RequirementsAction::Reset
@@ -167,7 +168,7 @@ impl RequirementDelta {
         }
         let (r_requirements, r_changed) = merge_r_requirements(environment, r);
 
-        Ok(Self {
+        let delta = Self {
             restart_required,
             duckdb_extensions,
             duckdb_changed,
@@ -175,7 +176,9 @@ impl RequirementDelta {
             python_candidate,
             r_requirements,
             r_changed,
-        })
+        };
+        delta.validate_policy(environment, action)?;
+        Ok(delta)
     }
 
     fn replacement(environment: &Environment, requirements: Requirements) -> Result<Self, String> {
@@ -199,7 +202,8 @@ impl RequirementDelta {
         if python != current.python_manifest() && !manages_python {
             ensure_managed_python_available(environment)?;
         }
-        Ok(Self {
+        let action = requirements.action;
+        let delta = Self {
             restart_required: true,
             duckdb_changed: changed && (candidate.duckdb != current.duckdb || pending),
             duckdb_extensions: candidate.duckdb.into_iter().collect(),
@@ -213,7 +217,52 @@ impl RequirementDelta {
                     || candidate.r != current.r
                     || (environment.custom_worker && environment.r.is_none())),
             r_requirements: candidate.r,
-        })
+        };
+        delta.validate_policy(environment, action)?;
+        Ok(delta)
+    }
+
+    fn validate_policy(
+        &self,
+        environment: &Environment,
+        action: RequirementsAction,
+    ) -> Result<(), String> {
+        let current = environment.declaration();
+        let operation = match action {
+            RequirementsAction::Add => "requirements.action=add",
+            RequirementsAction::Set => "requirements.action=set",
+            RequirementsAction::Reset => "requirements.action=reset",
+            RequirementsAction::Get => unreachable!("inspection does not calculate candidates"),
+        };
+        // Bootstrap/materialization flags are not logical declaration changes.
+        let r_changed = self.r_requirements != current.r;
+        let python_changed = self
+            .python_candidate
+            .as_ref()
+            .is_some_and(|candidate| *candidate != current.python_manifest());
+        let extensions_changed =
+            self.duckdb_extensions.iter().cloned().collect::<Vec<_>>() != current.duckdb;
+        let python_provider = environment
+            .local_runtime
+            .as_ref()
+            .is_some_and(crate::local_runtime::Selection::python_only);
+        for (changed, policy, language) in [
+            (
+                r_changed || (extensions_changed && !python_provider),
+                environment.startup.r_resolution,
+                "R",
+            ),
+            (
+                python_changed || (extensions_changed && python_provider),
+                environment.startup.python.resolution,
+                "Python",
+            ),
+        ] {
+            if changed && !policy.permits_deliberate_changes() {
+                return Err(policy.denial(language, operation));
+            }
+        }
+        Ok(())
     }
 
     pub(in crate::worker_client) fn is_empty(&self) -> bool {

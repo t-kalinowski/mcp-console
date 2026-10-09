@@ -56,6 +56,18 @@ impl Client {
             self.ensure_runtime_r_generation(&generation)?;
             return Ok(managed);
         }
+        if !environment
+            .startup
+            .r_resolution
+            .permits_automatic_additions()
+        {
+            return Err(RuntimeRResolutionFailure::Ordinary(
+                environment
+                    .startup
+                    .r_resolution
+                    .denial("R", "runtime package request"),
+            ));
+        }
         match self
             .requirement_change_state(&generation)
             .map_err(RuntimeRResolutionFailure::Infrastructure)?

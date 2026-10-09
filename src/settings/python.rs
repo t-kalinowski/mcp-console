@@ -25,6 +25,8 @@ pub(crate) struct Managed {
     pub(crate) packages: Option<Vec<String>>,
     #[serde(deserialize_with = "super::sandbox::supplied")]
     pub(crate) version: Option<String>,
+    #[serde(deserialize_with = "super::resolution::managed")]
+    pub(crate) resolution: super::Resolution,
 }
 
 impl Managed {

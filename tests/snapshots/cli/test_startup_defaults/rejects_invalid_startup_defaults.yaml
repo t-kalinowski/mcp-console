@@ -61,7 +61,7 @@ stderr: >
 setting: python.managed.extra_packages=[]
 stderr: >
   python: managed.extra_packages: unknown field `extra_packages`, expected
-  `packages` or `version`
+  one of `packages`, `version`, `resolution`
 ---
 setting: "python.existing={executable: .venv, packages: []}"
 stderr: |

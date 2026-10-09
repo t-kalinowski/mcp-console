@@ -21,6 +21,8 @@ pub(crate) struct ClientConfiguration {
     pub(super) requirements_snapshot: Mutex<serde_json::Value>,
     pub(super) runtime_r_requirements: Vec<String>,
     pub(super) dynamic_resolution: bool,
+    /// Immutable admission snapshot; preparation may hold the environment lock.
+    pub(super) r_resolution: crate::settings::Resolution,
     pub(super) python_only: bool,
     pub(super) python_preparation: bool,
     pub(super) resolver_preparation: Mutex<Option<crate::resolver::preparation::Preparation>>,
@@ -106,6 +108,7 @@ impl ClientConfiguration {
         let legacy_python = python.is_none();
         let mut startup = super::environment::StartupRequirements {
             r: r_settings.packages.clone(),
+            r_resolution: r_settings.resolution,
             python: python
                 .as_ref()
                 .map(|python| python.managed.clone())
@@ -156,6 +159,22 @@ impl ClientConfiguration {
             diagnostics.clone(),
             on_started,
         )?;
+        if discovery.selections.r_home.is_some()
+            && !discovery.managed
+            && matches!(
+                r_settings.resolution,
+                crate::settings::Resolution::Explicit | crate::settings::Resolution::StartupOnly
+            )
+        {
+            let error = format!(
+                "r.resolution={} requires R startup preparation support",
+                r_settings.resolution.name()
+            );
+            preparation
+                .close()
+                .map_err(|cleanup| format!("{error}; {cleanup}"))?;
+            return Err(error);
+        }
         if startup
             .r
             .as_ref()
@@ -170,7 +189,34 @@ impl ClientConfiguration {
             return Err(error.into());
         }
         #[cfg(any(unix, windows))]
-        let (r, duckdb_extensions, python, r_resolver) = if discovery.selections.r_home.is_none() {
+        let r_home = {
+            #[cfg(unix)]
+            {
+                use std::os::unix::ffi::OsStringExt;
+                if discovery.selections.r_home.is_some() {
+                    Some(PathBuf::from(OsString::from_vec(
+                        discovery
+                            .local_r_home_bytes
+                            .ok_or("local R discovery has no R home")?,
+                    )))
+                } else {
+                    None
+                }
+            }
+            #[cfg(windows)]
+            {
+                discovery.selections.r_home.clone().map(PathBuf::from)
+            }
+        };
+        let python_only = r_home.is_none();
+        // Disabled R keeps native startup and SQL routing, while managed Python
+        // uses the existing standalone uv path without R bootstrap.
+        #[cfg(any(unix, windows))]
+        let (r, duckdb_extensions, python, r_resolver) = if python_only
+            || (!r_settings.resolution.prepares_startup()
+                && PythonEnvironment::uses_managed(configured_python.as_deref())
+                && (explicit_managed || discovery.local_has_uv == Some(true)))
+        {
             let resolver = crate::resolver::execution::PythonConfiguration {
                 preparation: preparation.clone(),
                 has_uv: discovery
@@ -179,7 +225,7 @@ impl ClientConfiguration {
             };
             let selected = crate::local_runtime::Selection::python(
                 configured_python.clone(),
-                startup.python.manifest(true),
+                startup.python.manifest(python_only),
                 &resolver,
                 duckdb_extension_directory.clone(),
                 |executable, started| {
@@ -196,11 +242,15 @@ impl ClientConfiguration {
                 on_started,
             )
             .and_then(|(selection, managed)| {
-                let extensions = selection.prepare_default_duckdb_extensions(
-                    managed.as_ref(),
-                    &resolver,
-                    on_started,
-                )?;
+                let extensions = if python_only {
+                    selection.prepare_default_duckdb_extensions(
+                        managed.as_ref(),
+                        &resolver,
+                        on_started,
+                    )?
+                } else {
+                    Default::default()
+                };
                 Ok((selection, managed, extensions))
             });
             let (mut selection, managed, extensions) = match selected {
@@ -213,6 +263,8 @@ impl ClientConfiguration {
                 }
             };
             selection.r_settings = r_settings;
+            selection.r_home = r_home;
+            selection.installation = installation;
             startup.native_duckdb = extensions.clone();
             local_runtime = Some(selection);
             resolver_preparation = Some(preparation);
@@ -229,30 +281,15 @@ impl ClientConfiguration {
                     .map_err(|cleanup| format!("{error}; {cleanup}"))?;
                 return Err(error.into());
             }
-            #[cfg(unix)]
-            use std::os::unix::ffi::OsStringExt;
-            #[cfg(unix)]
-            let home = PathBuf::from(OsString::from_vec(
-                discovery
-                    .local_r_home_bytes
-                    .ok_or("local R discovery has no R home")?,
-            ));
-            #[cfg(windows)]
-            let home = PathBuf::from(
-                discovery
-                    .selections
-                    .r_home
-                    .clone()
-                    .ok_or("local R discovery has no R home")?,
-            );
+            let prepare_r = r_settings.resolution.prepares_startup();
             local_runtime = Some(crate::local_runtime::Selection {
-                r_home: Some(home),
+                r_home,
                 installation,
                 r_settings,
                 python: None,
             });
             resolver_preparation = Some(preparation.clone());
-            if discovery.managed {
+            if discovery.managed && prepare_r {
                 (
                     None,
                     Default::default(),
@@ -357,7 +394,7 @@ impl ClientConfiguration {
             .local_runtime
             .as_ref()
             .is_some_and(crate::local_runtime::Selection::python_only);
-        let python_preparation = python_only
+        let python_preparation = matches!(environment.r_resolver, RResolver::Disabled)
             && environment
                 .python
                 .as_ref()
@@ -381,6 +418,7 @@ impl ClientConfiguration {
                 .iter()
                 .map(|s| (*s).into())
                 .collect(),
+            r_resolution: environment.startup.r_resolution,
             environment: Some(Mutex::new(environment)),
             dynamic_resolution,
             python_only,

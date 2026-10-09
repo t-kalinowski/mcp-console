@@ -809,6 +809,7 @@ impl Worker {
     pub(super) fn prepare_python(
         &mut self,
         packages: Vec<String>,
+        requirements: crate::worker_protocol::PythonRequirementManifest,
         continue_environment_preparation: bool,
         duckdb_extensions: Option<std::collections::BTreeSet<String>>,
         commit: PythonPreparationCommit,
@@ -817,6 +818,7 @@ impl Worker {
             commit,
             continue_environment_preparation,
             duckdb_extensions,
+            requirements,
         )?;
         self.relay
             .commands

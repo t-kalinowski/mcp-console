@@ -40,6 +40,7 @@ The default declaration is the same even when the engine statically links some o
 
 Mixed-runtime R infrastructure is separate: reticulate, jsonlite, DBI, DuckDB, Arrow/nanoarrow, pillar, tibble, and utf8 support the bridge and SQL.
 Clearing optional requirements does not remove that infrastructure, ambient libraries, preinstalled packages, or caches.
+`r.resolution: disabled` skips Console's R infrastructure bootstrap and uses installed adapters only, while independently managed Python can still prepare through uv.
 Without R, an empty Python declaration omits DuckDB, but a user-selected DB-API connection can still provide SQL.
 
 Default preparation, built-in worker launch, and enabled R/Python initialization run in the background.
@@ -47,6 +48,47 @@ Transport readiness connects input and resolver services before startup hooks ru
 When SQL is enabled and its optional provider is installed, bootstrap opens the managed DuckDB connection; first-query work remains lazy.
 Discovery and first-use preparation are different stages.
 See [shared readiness](SEND_OPERATIONS.md#server-readiness), including early requirements and replacement of an unused prewarmed worker.
+
+## Resolution policy admission
+
+[Configuration](CONFIGURATION.md#dependency-resolution-policies) selects one policy independently for R and managed Python.
+Omission means `automatic`; existing Python uses preinstalled packages.
+
+| Policy                         | Configured startup preparation | Deliberate MCP changes | Runtime additions |
+| ------------------------------ | ------------------------------ | ---------------------- | ----------------- |
+| `automatic`                    | Yes                            | Yes                    | Yes               |
+| `explicit`                     | Yes                            | Yes                    | No                |
+| `startup_only`                 | Yes                            | No                     | No                |
+| R `disabled` / existing Python | No                             | No                     | No                |
+
+Checks compare normalized logical declarations, using the ordinary add, set, and reset rules.
+Unchanged declarations are no-ops even when startup materialization is pending.
+`set` replaces the complete declaration: omitting a nonempty locked language would clear it and is rejected.
+`reset` restores the captured configured baseline and follows the same per-language checks.
+Python version constraints and publication cutoffs belong to Python's policy.
+Inspection and ordinary execution remain usable in every mode.
+
+Console validates the whole mixed request before preparing any part, retiring the worker, or delivering bundled code/stdin.
+A denied R change cannot prepare an otherwise permitted Python addition; a Python-only change can proceed independently.
+For a supported interrupt-plus-cell, Console first delivers the interrupt and follows its existing stdin, grace, and settlement sequence, then checks the follow-up policy.
+A denied follow-up does not run, but delivered interrupt/input effects remain.
+Structural errors and unsupported Python-only interrupt-plus-requirements retain their earlier rejection order.
+
+`startup_only` authorizes the captured startup declaration, including required infrastructure, rather than an early request's replacement declaration.
+An unchanged early request can proceed; restart/reset cannot unlock a language.
+Explicit retry of failed initial preparation retries the same configured baseline.
+Plain restart after success reuses the accepted environment without resolving again.
+A policy change requires a new server connection with updated configuration.
+
+Runtime requests, including deferred `reticulate::py_require()` declarations, do not authorize new preparation in `explicit` or `startup_only`.
+Attaching the selected interpreter and activating/materializing an already authorized startup or MCP declaration remain allowed.
+Available R packages and ordinary imports retain their normal lookup behavior; missing dependencies fail without forbidden preparation.
+Resolver availability and policy permission are separate.
+
+DuckDB extension preparation follows its existing provider's policy: R-backed preparation uses R's mode, and Python-backed preparation uses Python's mode.
+Changing a user SQL connection does not grant preparation authority or change provider routing.
+Ordinary SQL and installed extensions remain usable.
+The settings govern Console preparation; they do not change worker network permissions or restrict arbitrary installation code in cells.
 
 ## Inspecting and replacing requirements
 
@@ -217,7 +259,8 @@ A successfully restored interrupted activation can retry; arbitrary site-hook ef
 Pre-mutation failures leave the accepted environment usable.
 
 A lazy `reticulate::py_require()` declaration is not yet server-retained.
-It is retained after successful initialization or explicit materialization.
+It is retained after successful initialization or explicit materialization when policy permits that declaration.
+It cannot join a later MCP request to bypass a runtime-addition denial.
 Successful activation is its own commit boundary: it survives later import/cell failure or a following live R failure in the same request.
 
 ### DuckDB extension preparation

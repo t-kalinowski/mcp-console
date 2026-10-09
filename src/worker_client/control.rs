@@ -268,7 +268,7 @@ impl Client {
         call_id: Option<u64>,
     ) -> Result<ControlledEvaluation, String> {
         let generation = control.generation();
-        if self.0.python_preparation && requirements.is_some() {
+        if self.0.python_only && requirements.is_some() {
             return Err("Python requirements cannot accompany control: interrupt; prepare before first use or with control: restart".into());
         }
         self.interrupt_blocking()?;
