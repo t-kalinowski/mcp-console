@@ -176,10 +176,6 @@ Use `McpClient` as a context manager, then `initialize_and_list_tools()`, `send(
 For overlapping calls, use `start_send()` and `receive()` / `receive_many()`; responses are matched by request ID.
 Use `finish_with_standard_error()` when diagnostics are part of the contract.
 
-Within one case, branches with identical launch configuration can reuse preparation when fresh workers provide the state isolation under test.
-The bridge getter case restarts between spellings and still checks attachment and state retention in six fresh worker generations.
-Keep separate Console sessions when configuration, discovery, preparation, or session isolation is the contract; independent cases always retain their own sessions and workspaces.
-
 Shared capability, execution, client, snapshot, checkpoint, and process helpers live in `tests/support/`.
 Each boundary's `_harness.py` owns its concrete launch and capture mechanics.
 Keep large fixture programs in searchable files under `tests/fixtures/`; see [authoring](AUTHORING.md) for examples and causal gates.
