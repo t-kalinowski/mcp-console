@@ -38,9 +38,9 @@ reference:
   - title: Sandbox configuration and commands
     contents:
     - SandboxPolicy
-    - Filesystem
-    - Domains
-    - Proxy
-    - Sockets
-    - Network
+    - SandboxFilesystem
+    - SandboxDomains
+    - SandboxProxy
+    - SandboxSockets
+    - SandboxNetwork
     - sandboxed_system2

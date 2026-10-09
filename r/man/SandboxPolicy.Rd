@@ -2,34 +2,43 @@
 % Please edit documentation in R/sandbox-policy.R
 \name{SandboxPolicy}
 \alias{SandboxPolicy}
-\alias{Filesystem}
-\alias{Domains}
-\alias{Proxy}
-\alias{Sockets}
-\alias{Network}
+\alias{SandboxFilesystem}
+\alias{SandboxDomains}
+\alias{SandboxProxy}
+\alias{SandboxSockets}
+\alias{SandboxNetwork}
 \title{Sandbox configuration}
 \usage{
-Filesystem(read_only = NULL, read_write = NULL, deny = NULL)
+SandboxFilesystem(read_only = NULL, read_write = NULL, deny = NULL)
 
-Domains(allow = NULL, deny = NULL)
+SandboxDomains(allow = NULL, deny = NULL)
 
-Proxy(mode = NULL, domains = NULL, socks5 = NULL, allow_upstream_proxy = NULL)
+SandboxProxy(
+  mode = NULL,
+  domains = NULL,
+  socks5 = NULL,
+  allow_upstream_proxy = NULL
+)
 
-Sockets(unix_sockets = NULL)
+SandboxSockets(unix_sockets = NULL)
 
-Network(proxy = Proxy(), sockets = NULL, allow_local_binding = NULL)
+SandboxNetwork(
+  proxy = SandboxProxy(),
+  sockets = NULL,
+  allow_local_binding = NULL
+)
 
 SandboxPolicy(filesystem = NULL, network = NULL)
 }
 \arguments{
 \item{read_only, read_write, deny}{Character vectors of literal filesystem
-paths. For \code{Domains()}, \code{deny} instead contains domain patterns.}
+paths. For \code{SandboxDomains()}, \code{deny} instead contains domain patterns.}
 
 \item{allow}{Character vector of domain patterns allowed by the proxy.}
 
 \item{mode}{\code{NULL}, \code{"full"}, or \code{"limited"}. Omission uses Console's default.}
 
-\item{domains}{\code{NULL} or a \code{Domains()}. An explicit empty object
+\item{domains}{\code{NULL} or a \code{SandboxDomains()}. An explicit empty object
 clears generated domain defaults; \code{NULL} preserves them.}
 
 \item{socks5}{\code{NULL}, \code{"disabled"}, \code{"tcp"}, or \code{"tcp_udp"}. Any explicit
@@ -42,19 +51,19 @@ upstream proxy from the trusted launch environment.}
 socket paths (possibly empty), or the string \code{"dangerously_allow_all"}.
 The CLI validates native path and platform restrictions.}
 
-\item{proxy}{A \code{Proxy()}; defaults to an explicit empty proxy
+\item{proxy}{A \code{SandboxProxy()}; defaults to an explicit empty proxy
 mapping. A network mapping always enables a managed proxy. Use a scalar
 network choice in \code{SandboxPolicy()} for proxy-free networking.}
 
-\item{sockets}{\code{NULL} or a \code{Sockets()}.}
+\item{sockets}{\code{NULL} or a \code{SandboxSockets()}.}
 
 \item{allow_local_binding}{\code{NULL}, \code{TRUE}, or \code{FALSE}. This does not promise
 access from a host browser to a Linux network namespace.}
 
-\item{filesystem}{\code{NULL} or a \code{Filesystem()}.}
+\item{filesystem}{\code{NULL} or a \code{SandboxFilesystem()}.}
 
 \item{network}{\code{NULL}, \code{"restricted"}, \code{"enabled"}, or a
-\code{Network()}. Enabling networking does not disable filesystem
+\code{SandboxNetwork()}. Enabling networking does not disable filesystem
 enforcement. \code{NULL} preserves the context's default networking.}
 }
 \value{
@@ -63,6 +72,7 @@ An S7 configuration object. The constructor is also its S7 class.
 \description{
 These S7 class constructors represent the public \verb{sandbox:} node in
 Console's \code{config.yaml}, not the native runner's complete-policy protocol.
+All sandbox constructors share the \code{Sandbox} prefix.
 Use a \code{SandboxPolicy()} in \code{\link[=ConsoleConfig]{ConsoleConfig()}} or \code{\link[=sandboxed_system2]{sandboxed_system2()}}.
 }
 \details{
@@ -92,12 +102,12 @@ guarantee. Socket and local-binding permissions can allow direct channels.
 
 \examples{
 policy <- SandboxPolicy(
-  filesystem = Filesystem(read_write = ".", deny = "./secrets"),
-  network = Network(
-    proxy = Proxy(domains = Domains(allow = "api.example.com"))
+  filesystem = SandboxFilesystem(read_write = ".", deny = "./secrets"),
+  network = SandboxNetwork(
+    proxy = SandboxProxy(domains = SandboxDomains(allow = "api.example.com"))
   )
 )
 as.list(policy)
 SandboxPolicy(network = "restricted")
-SandboxPolicy(filesystem = Filesystem(read_write = character()))
+SandboxPolicy(filesystem = SandboxFilesystem(read_write = character()))
 }

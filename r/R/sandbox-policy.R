@@ -45,6 +45,7 @@ config_flag <- function() {
 #'
 #' These S7 class constructors represent the public `sandbox:` node in
 #' Console's `config.yaml`, not the native runner's complete-policy protocol.
+#' All sandbox constructors share the `Sandbox` prefix.
 #' Use a `SandboxPolicy()` in [ConsoleConfig()] or [sandboxed_system2()].
 #'
 #' `NULL` properties are omitted. A constructed child with no properties is an
@@ -71,22 +72,22 @@ config_flag <- function() {
 #' `tcp_udp` is representable but rejected by the currently pinned runner.
 #'
 #' @param read_only,read_write,deny Character vectors of literal filesystem
-#'   paths. For `Domains()`, `deny` instead contains domain patterns.
+#'   paths. For `SandboxDomains()`, `deny` instead contains domain patterns.
 #' @return An S7 configuration object. The constructor is also its S7 class.
 #' @examples
 #' policy <- SandboxPolicy(
-#'   filesystem = Filesystem(read_write = ".", deny = "./secrets"),
-#'   network = Network(
-#'     proxy = Proxy(domains = Domains(allow = "api.example.com"))
+#'   filesystem = SandboxFilesystem(read_write = ".", deny = "./secrets"),
+#'   network = SandboxNetwork(
+#'     proxy = SandboxProxy(domains = SandboxDomains(allow = "api.example.com"))
 #'   )
 #' )
 #' as.list(policy)
 #' SandboxPolicy(network = "restricted")
-#' SandboxPolicy(filesystem = Filesystem(read_write = character()))
+#' SandboxPolicy(filesystem = SandboxFilesystem(read_write = character()))
 #' @name SandboxPolicy
 #' @export
-Filesystem <- S7::new_class(
-  "Filesystem",
+SandboxFilesystem <- S7::new_class(
+  "SandboxFilesystem",
   parent = ConfigNode,
   properties = list(
     read_only = config_string_list(),
@@ -98,27 +99,27 @@ Filesystem <- S7::new_class(
 #' @rdname SandboxPolicy
 #' @param allow Character vector of domain patterns allowed by the proxy.
 #' @export
-Domains <- S7::new_class(
-  "Domains",
+SandboxDomains <- S7::new_class(
+  "SandboxDomains",
   parent = ConfigNode,
   properties = list(allow = config_string_list(), deny = config_string_list())
 )
 
 #' @rdname SandboxPolicy
 #' @param mode `NULL`, `"full"`, or `"limited"`. Omission uses Console's default.
-#' @param domains `NULL` or a `Domains()`. An explicit empty object
+#' @param domains `NULL` or a `SandboxDomains()`. An explicit empty object
 #'   clears generated domain defaults; `NULL` preserves them.
 #' @param socks5 `NULL`, `"disabled"`, `"tcp"`, or `"tcp_udp"`. Any explicit
 #'   value is invalid with `mode = "limited"`, including `"disabled"`.
 #' @param allow_upstream_proxy `NULL`, `TRUE`, or `FALSE`; controls use of an
 #'   upstream proxy from the trusted launch environment.
 #' @export
-Proxy <- S7::new_class(
-  "Proxy",
+SandboxProxy <- S7::new_class(
+  "SandboxProxy",
   parent = ConfigNode,
   properties = list(
     mode = config_choice(c("full", "limited")),
-    domains = NULL | Domains,
+    domains = NULL | SandboxDomains,
     socks5 = config_choice(c("disabled", "tcp", "tcp_udp")),
     allow_upstream_proxy = config_flag()
   ),
@@ -134,43 +135,43 @@ Proxy <- S7::new_class(
 #'   socket paths (possibly empty), or the string `"dangerously_allow_all"`.
 #'   The CLI validates native path and platform restrictions.
 #' @export
-Sockets <- S7::new_class(
-  "Sockets",
+SandboxSockets <- S7::new_class(
+  "SandboxSockets",
   parent = ConfigNode,
   properties = list(unix_sockets = config_string_list())
 )
 
 #' @rdname SandboxPolicy
-#' @param proxy A `Proxy()`; defaults to an explicit empty proxy
+#' @param proxy A `SandboxProxy()`; defaults to an explicit empty proxy
 #'   mapping. A network mapping always enables a managed proxy. Use a scalar
 #'   network choice in `SandboxPolicy()` for proxy-free networking.
-#' @param sockets `NULL` or a `Sockets()`.
+#' @param sockets `NULL` or a `SandboxSockets()`.
 #' @param allow_local_binding `NULL`, `TRUE`, or `FALSE`. This does not promise
 #'   access from a host browser to a Linux network namespace.
 #' @export
-Network <- S7::new_class(
-  "Network",
+SandboxNetwork <- S7::new_class(
+  "SandboxNetwork",
   parent = ConfigNode,
   properties = list(
-    proxy = S7::new_property(Proxy, default = quote(Proxy())),
-    sockets = NULL | Sockets,
+    proxy = S7::new_property(SandboxProxy, default = quote(SandboxProxy())),
+    sockets = NULL | SandboxSockets,
     allow_local_binding = config_flag()
   )
 )
 
 #' @rdname SandboxPolicy
-#' @param filesystem `NULL` or a `Filesystem()`.
+#' @param filesystem `NULL` or a `SandboxFilesystem()`.
 #' @param network `NULL`, `"restricted"`, `"enabled"`, or a
-#'   `Network()`. Enabling networking does not disable filesystem
+#'   `SandboxNetwork()`. Enabling networking does not disable filesystem
 #'   enforcement. `NULL` preserves the context's default networking.
 #' @export
 SandboxPolicy <- S7::new_class(
   "SandboxPolicy",
   parent = ConfigNode,
   properties = list(
-    filesystem = NULL | Filesystem,
+    filesystem = NULL | SandboxFilesystem,
     network = S7::new_property(
-      NULL | S7::class_character | Network,
+      NULL | S7::class_character | SandboxNetwork,
       validator = function(value) {
         if (
           is.character(value) &&
@@ -178,7 +179,7 @@ SandboxPolicy <- S7::new_class(
               is.na(value) ||
               !value %in% c("restricted", "enabled"))
         ) {
-          "must be NULL, restricted, enabled, or a Network()"
+          "must be NULL, restricted, enabled, or a SandboxNetwork()"
         }
       }
     )

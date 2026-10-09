@@ -55,9 +55,9 @@ config <- ConsoleConfig(
     resolution = "explicit"
   ),
   sandbox = SandboxPolicy(
-    filesystem = Filesystem(read_write = "./output", deny = "./secrets"),
-    network = Network(
-      proxy = Proxy(domains = Domains(allow = "api.example.com"))
+    filesystem = SandboxFilesystem(read_write = "./output", deny = "./secrets"),
+    network = SandboxNetwork(
+      proxy = SandboxProxy(domains = SandboxDomains(allow = "api.example.com"))
     )
   ),
   resolver = ResolverConfig(
@@ -112,13 +112,13 @@ The native CLI owns final validation, defaults, supported paths, and platform ca
 ## Sandbox policies and commands
 
 A `SandboxPolicy()` can be reused for the worker, resolver, or a one-off command.
-Its nested classes are `Filesystem`, `Network`, `Proxy`, `Domains`, and `Sockets`.
+Its nested classes are `SandboxFilesystem`, `SandboxNetwork`, `SandboxProxy`, `SandboxDomains`, and `SandboxSockets`.
 An empty worker policy grants no workspace writes or networking.
 This is a host-read/private-write baseline, not filesystem secrecy: sensitive readable locations need explicit denial.
 Create required output directories on the host before granting them; R does not create or normalize configured paths.
 
 ```r
-policy <- SandboxPolicy(filesystem = Filesystem(read_write = "./output"))
+policy <- SandboxPolicy(filesystem = SandboxFilesystem(read_write = "./output"))
 tool <- console_tool(config = ConsoleConfig(sandbox = policy))
 sandboxed_system2(
   file.path(R.home("bin"), "Rscript"),
@@ -129,7 +129,7 @@ sandboxed_system2(
 )
 ```
 
-`NULL` policy properties are omitted, `Filesystem()` is an explicit empty mapping, and `read_write = character()` is an explicit empty sequence.
+`NULL` policy properties are omitted, `SandboxFilesystem()` is an explicit empty mapping, and `read_write = character()` is an explicit empty sequence.
 Serialization preserves these distinctions.
 Worker and resolver policies are independent; an omitted resolver filesystem retains its native cache grants, while an explicit mapping replaces them.
 Explicit resolver sandbox policies are unsupported on Windows, where preparation runs with host permissions.

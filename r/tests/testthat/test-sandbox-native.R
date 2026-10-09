@@ -36,7 +36,7 @@ test_that("default policy ignores global and project configuration and denies wr
       'writeLines("allowed", "allowed"); cat("wrote\\n")',
       stdout = TRUE,
       sandbox = SandboxPolicy(
-        filesystem = Filesystem(read_write = ".")
+        filesystem = SandboxFilesystem(read_write = ".")
       )
     )
     expect_identical(out, "wrote")
@@ -110,7 +110,7 @@ test_that("native launch supports asynchronous policy handoff without policy fil
       stderr = "async-errors.txt",
       wait = FALSE,
       sandbox = SandboxPolicy(
-        filesystem = Filesystem(read_write = ".")
+        filesystem = SandboxFilesystem(read_write = ".")
       ),
       path = binary
     )
@@ -133,8 +133,8 @@ test_that("unsupported managed policies fail before executing the target", {
       stdout = TRUE,
       stderr = TRUE,
       sandbox = SandboxPolicy(
-        filesystem = Filesystem(read_write = "."),
-        network = Network(proxy = Proxy(socks5 = "tcp_udp"))
+        filesystem = SandboxFilesystem(read_write = "."),
+        network = SandboxNetwork(proxy = SandboxProxy(socks5 = "tcp_udp"))
       )
     ))
     expect_false(is.null(attr(out, "status")))

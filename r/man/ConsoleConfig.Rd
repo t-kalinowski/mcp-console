@@ -92,7 +92,7 @@ ConsoleConfig(discovery = ConfigDiscovery(global = FALSE))
 config <- ConsoleConfig(
   r = RConfig(packages = c("dplyr", "ggplot2"), resolution = "startup_only"),
   python = ManagedPython(version = "3.13", packages = "pandas"),
-  sandbox = SandboxPolicy(filesystem = Filesystem(read_write = "./output"))
+  sandbox = SandboxPolicy(filesystem = SandboxFilesystem(read_write = "./output"))
 )
 as.list(config)
 }

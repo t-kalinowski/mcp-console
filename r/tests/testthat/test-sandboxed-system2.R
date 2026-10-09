@@ -8,7 +8,7 @@ test_that("system2 arguments keep their names, order, and defaults", {
 test_that("the launcher receives one JSON node with safely quoted arguments", {
   with_fake_sandbox(function(path, record) {
     policy <- SandboxPolicy(
-      filesystem = Filesystem(
+      filesystem = SandboxFilesystem(
         read_write = c("./spaces here", "./a'b\"c;$HOME", "./café 雪")
       )
     )

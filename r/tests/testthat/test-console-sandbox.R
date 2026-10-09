@@ -1,7 +1,7 @@
 test_that("console_tool transmits the same application policy object", {
   with_console_config_probe(function(path, record) {
     policy <- SandboxPolicy(
-      filesystem = Filesystem(read_write = "./space here"),
+      filesystem = SandboxFilesystem(read_write = "./space here"),
       network = "restricted"
     )
     tool <- console_tool(path = path, config = ConsoleConfig(sandbox = policy))
@@ -188,7 +188,7 @@ test_that("console_tool replaces ambient grants and retains other settings", {
       config = ConsoleConfig(
         discovery = ConfigDiscovery(),
         sandbox = SandboxPolicy(
-          filesystem = Filesystem(read_write = "./allowed")
+          filesystem = SandboxFilesystem(read_write = "./allowed")
         )
       )
     )

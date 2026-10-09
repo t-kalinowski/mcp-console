@@ -5,47 +5,47 @@ policy_json <- function(x) {
 test_that("omitted mappings and explicit empties stay distinct", {
   expect_identical(policy_json(SandboxPolicy()), "{}")
   expect_identical(
-    policy_json(SandboxPolicy(filesystem = Filesystem())),
+    policy_json(SandboxPolicy(filesystem = SandboxFilesystem())),
     '{"filesystem":{}}'
   )
   expect_identical(
     policy_json(SandboxPolicy(
-      filesystem = Filesystem(read_write = character())
+      filesystem = SandboxFilesystem(read_write = character())
     )),
     '{"filesystem":{"read_write":[]}}'
   )
   expect_identical(
-    policy_json(SandboxPolicy(network = Network())),
+    policy_json(SandboxPolicy(network = SandboxNetwork())),
     '{"network":{"proxy":{}}}'
   )
   expect_identical(
-    policy_json(Proxy(domains = Domains())),
+    policy_json(SandboxProxy(domains = SandboxDomains())),
     '{"domains":{}}'
   )
   expect_identical(
-    policy_json(Proxy(domains = Domains(allow = character()))),
+    policy_json(SandboxProxy(domains = SandboxDomains(allow = character()))),
     '{"domains":{"allow":[]}}'
   )
 })
 
 test_that("all public fields have the config.yaml wire shape", {
   x <- SandboxPolicy(
-    filesystem = Filesystem(
+    filesystem = SandboxFilesystem(
       read_only = c("./data", "./.claude"),
       read_write = ".",
       deny = "./secrets"
     ),
-    network = Network(
-      proxy = Proxy(
+    network = SandboxNetwork(
+      proxy = SandboxProxy(
         mode = "full",
-        domains = Domains(
+        domains = SandboxDomains(
           allow = "*.example.org",
           deny = "bad.example.org"
         ),
         socks5 = "tcp",
         allow_upstream_proxy = FALSE
       ),
-      sockets = Sockets(unix_sockets = "/tmp/a.sock"),
+      sockets = SandboxSockets(unix_sockets = "/tmp/a.sock"),
       allow_local_binding = FALSE
     )
   )
@@ -85,11 +85,11 @@ test_that("scalars, lists, and special socket selectors are not conflated", {
     )
   }
   expect_identical(
-    policy_json(Sockets(unix_sockets = character())),
+    policy_json(SandboxSockets(unix_sockets = character())),
     '{"unix_sockets":[]}'
   )
   expect_identical(
-    policy_json(Sockets(unix_sockets = "dangerously_allow_all")),
+    policy_json(SandboxSockets(unix_sockets = "dangerously_allow_all")),
     '{"unix_sockets":"dangerously_allow_all"}'
   )
   paths <- c(
@@ -99,27 +99,27 @@ test_that("scalars, lists, and special socket selectors are not conflated", {
     "$HOME/literal"
   )
   expect_identical(
-    as.list(Filesystem(read_write = paths))$read_write,
+    as.list(SandboxFilesystem(read_write = paths))$read_write,
     unname(as.list(paths))
   )
 })
 
 test_that("S7 validates both construction and property updates", {
-  expect_error(Filesystem(read_write = NA_character_), "read_write")
-  expect_error(Filesystem(read_write = ""), "read_write")
-  expect_error(Filesystem(read_write = TRUE), "read_write")
+  expect_error(SandboxFilesystem(read_write = NA_character_), "read_write")
+  expect_error(SandboxFilesystem(read_write = ""), "read_write")
+  expect_error(SandboxFilesystem(read_write = TRUE), "read_write")
   expect_error(SandboxPolicy(filesystem = list()), "filesystem")
   expect_error(SandboxPolicy(network = FALSE), "network")
   expect_error(SandboxPolicy(network = character()), "network")
   expect_error(SandboxPolicy(network = "enable"), "network")
-  expect_error(Network(proxy = NULL), "proxy")
+  expect_error(SandboxNetwork(proxy = NULL), "proxy")
   expect_error(
-    Network(allow_local_binding = c(TRUE, FALSE)),
+    SandboxNetwork(allow_local_binding = c(TRUE, FALSE)),
     "allow_local_binding"
   )
-  expect_error(Proxy(mode = "limited", socks5 = "disabled"), "socks5")
+  expect_error(SandboxProxy(mode = "limited", socks5 = "disabled"), "socks5")
   expect_error(SandboxPolicy(unknown = TRUE), "unused argument")
-  x <- Proxy(mode = "full", socks5 = "tcp")
+  x <- SandboxProxy(mode = "full", socks5 = "tcp")
   expect_error(x@mode <- "limited", "socks5")
   expect_error(x@socks5 <- "udp", "socks5")
 })

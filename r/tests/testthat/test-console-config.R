@@ -16,7 +16,9 @@ test_that("ConsoleConfig preserves schema shapes and separates launch choices", 
       environment = c(INDEX = "", LABEL = "resolver"),
       sandbox = SandboxPolicy(network = "enabled")
     ),
-    sandbox = SandboxPolicy(filesystem = Filesystem(read_write = "./output")),
+    sandbox = SandboxPolicy(
+      filesystem = SandboxFilesystem(read_write = "./output")
+    ),
     languages = "r",
     cache = "host",
     environment = c(LABEL = "worker"),
@@ -73,6 +75,10 @@ test_that("ConsoleConfig preserves schema shapes and separates launch choices", 
 })
 
 test_that("configuration classes have matching uppercase CamelCase names", {
+  expect_false(any(
+    c("Filesystem", "Network", "Proxy", "Domains", "Sockets") %in%
+      getNamespaceExports("mcp.console")
+  ))
   for (name in c(
     "ConsoleConfig",
     "ConfigDiscovery",
@@ -81,11 +87,11 @@ test_that("configuration classes have matching uppercase CamelCase names", {
     "ExistingPython",
     "ResolverConfig",
     "SandboxPolicy",
-    "Filesystem",
-    "Network",
-    "Proxy",
-    "Domains",
-    "Sockets"
+    "SandboxFilesystem",
+    "SandboxNetwork",
+    "SandboxProxy",
+    "SandboxDomains",
+    "SandboxSockets"
   )) {
     class <- getExportedValue("mcp.console", name)
     expect_identical(class@name, name)
