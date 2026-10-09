@@ -85,6 +85,7 @@ Omitted resolver settings retain existing host preparation with environment/cach
 The native runner owns a non-breakaway Job for each workload.
 It terminates remaining descendants and confirms zero active processes before reporting exit.
 Only that receipt permits a replacement generation and private-storage removal.
+After confirmed Job retirement, private-storage removal retries sharing violations for up to five seconds while Windows releases file or image mappings.
 Cleanup failure retains storage and blocks replacement.
 The Windows frontend waits for the runner; forced frontend termination does not confirm cleanup.
 Process handles monitor both the frontend and session owner.
