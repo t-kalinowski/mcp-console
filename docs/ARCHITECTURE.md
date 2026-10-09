@@ -61,6 +61,7 @@ One connection-owned background task discovers capabilities, prepares defaults, 
 The worker then initializes enabled R and Python on its serialized interpreter thread, after input, resolver, and output services are connected.
 MCP initialization, tool discovery, and pings do not wait for it.
 Failed initial discovery/preparation can be retried only by explicit restart, under that same connection owner and after confirmed preparation cleanup.
+The connection retains cleanup evidence for every stage of an attempt: a completed inspection cannot supersede unconfirmed retirement of retained dependency preparation.
 That confirmation includes closing the preparation connection and reaping its child; a completed resolver operation alone cannot authorize another attempt.
 The owner retains its captured initializer, replaces only the failed readiness attempt, and shares the new attempt among concurrent restart callers.
 Cells capture readiness at admission, so replacing a failed attempt cannot revive a rejected cell.

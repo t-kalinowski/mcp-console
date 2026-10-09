@@ -121,8 +121,11 @@ jobs:
             cargo-downloads-v1-${{ steps.epoch.outputs.week }}-${{ runner.os }}-${{ runner.arch }}-
       - name: Install Windows runtime packages
         run: |
-          uv python install 3.13
+          uv python install 3.13 3.9
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $oldPython = uv python find 3.9 --python-preference only-managed
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "MCP_CONSOLE_TEST_OLD_PYTHON=$oldPython" >> $env:GITHUB_ENV
           $consolePython = Join-Path $env:LOCALAPPDATA "mcp-console/cache/dependencies/uv/python"
           uv python install 3.13 --install-dir $consolePython
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -138,7 +141,7 @@ jobs:
           }
           uv tool dir --bin >> $env:GITHUB_PATH
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Install Windows R bridge
+      - name: Install Windows R bridge and package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
           cache-version: windows-runtime-v2-${{ steps.epoch.outputs.week }}
@@ -147,6 +150,11 @@ jobs:
           packages: |
             any::reticulate
             any::jsonlite
+            any::ellmer
+            any::processx
+            any::ps
+            any::httr2
+            any::testthat
       - name: Inventory Windows development prerequisites
         run: |
           scripts/preflight.cmd --json
@@ -231,6 +239,16 @@ jobs:
       - name: Run native Windows development and installation checks
         run: |
           scripts/check.cmd --full
+      - name: Check R package on Windows
+        env:
+          MCP_CONSOLE_TEST_BINARY: ${{ github.workspace }}/target/release/mcp-console.exe
+          _R_CHECK_TESTS_NLINES_: "0"
+        run: |
+          scripts/with-checkout.cmd R CMD build r
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $package = Get-Item mcp.console_*.tar.gz
+          scripts/with-checkout.cmd R CMD check --no-manual $package.FullName
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Save Windows caches
         if: >-
           github.ref == 'refs/heads/main' && steps.cache.outputs.cache-hit !=
@@ -666,6 +684,8 @@ jobs:
           prewarm_r -e 'cat("MCP_CONSOLE_TEST_SSH_R_LIBS=", paste(.libPaths(), collapse = .Platform$path.sep), "\n", sep = "", file = Sys.getenv("GITHUB_ENV"), append = TRUE)'
           prewarm_r --with praise
           prewarm_r --with praise --with zeallot
+          # Build optional Ragnar dependencies before the bounded sandbox case.
+          prewarm_r --with ragnar
 
       - name: Run transcripts
         id: transcripts

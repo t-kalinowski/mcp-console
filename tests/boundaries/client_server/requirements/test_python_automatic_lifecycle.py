@@ -395,10 +395,12 @@ def test_restart_discards_unactivated_automatic_python_candidate(
                 activation_ready <- tempfile("mcp-console-activation-ready-")
                 activation_release <- tempfile("mcp-console-activation-release-")
                 activation_sent <- tempfile("mcp-console-activation-sent-")
+                import_release <- tempfile("mcp-console-import-release-")
                 cat(
                   activation_ready,
                   activation_release,
                   activation_sent,
+                  import_release,
                   config$python,
                   sep = "\n"
                 )
@@ -406,7 +408,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             client.send(r=r)
             setup = client.transcript[-1]["result"]
             paths = setup["content"][0]["text"].splitlines()
-            assert len(paths) == 4, setup
+            assert len(paths) == 5, setup
             resolved_python = paths.pop()
             assert Path(resolved_python).is_file(), resolved_python
             Path(environment["MCP_CONSOLE_TEST_UV_REUSE_PYTHON"]).write_text(
@@ -414,13 +416,13 @@ def test_restart_discards_unactivated_automatic_python_candidate(
                 encoding="utf-8",
             )
             setup["content"][0]["text"] = (
-                "<activation ready>\n<activation release>\n<activation sent>"
+                "<activation ready>\n<activation release>\n<activation sent>\n<import release>"
             )
-            activation_ready, activation_release, activation_sent = [
+            activation_ready, activation_release, activation_sent, import_release = [
                 FifoCheckpoint.create(Path(path)) for path in paths
             ]
             worker_checkpoints.extend(
-                (activation_ready, activation_release, activation_sent)
+                (activation_ready, activation_release, activation_sent, import_release)
             )
 
             # Pause after resolution and immediately before PythonActivated.
@@ -449,10 +451,14 @@ def test_restart_discards_unactivated_automatic_python_candidate(
             assert last_result_text(client) == "[done]"
 
             evaluation = client.start_send(
-                python="import yaml12",
+                # fmt: python
+                python=code("""
+                    with open(r.import_release, "rb", buffering=0) as gate:
+                        assert gate.read(1) == b"1"
+                    import yaml12
+                    """),
                 timeout_ms=0,
             )
-            activation_ready.wait("automatic managed Python activation")
             client.receive(evaluation)
             evaluation_result = evaluation["result"]
             assert without_elapsed_result(evaluation_result) == {
@@ -464,6 +470,8 @@ def test_restart_discards_unactivated_automatic_python_candidate(
                 ],
                 "isError": False,
             }, evaluation_result
+            import_release.release()
+            activation_ready.wait("automatic managed Python activation")
 
             restart = client.start_send(
                 control="restart",

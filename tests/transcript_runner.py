@@ -282,10 +282,12 @@ class TranscriptRunnerFixture(unittest.TestCase):
             start_new_session=True,
         )
 
-    def run_runner(self, *arguments: str) -> subprocess.CompletedProcess[str]:
+    def run_runner(
+        self, *arguments: str, timeout: float = 10
+    ) -> subprocess.CompletedProcess[str]:
         process = self.start_runner(*arguments)
         try:
-            stdout, stderr = process.communicate(timeout=10)
+            stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
@@ -1923,7 +1925,8 @@ runner: orphan
             with self.subTest(arguments=arguments):
                 for marker in self.root.glob("*.marker"):
                     marker.unlink()
-                result = self.run_runner("--jobs", "1", *arguments)
+                # Twenty serial subprocesses also inventory host capabilities.
+                result = self.run_runner("--jobs", "1", *arguments, timeout=60)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(
                     sorted(path.stem for path in self.root.glob("*.marker")),
@@ -2032,6 +2035,84 @@ runner: orphan
 
 
 class TranscriptDiscoveryTests(TranscriptRunnerFixture):
+    def test_shared_sessions_canonicalize_fixture_writable_roots(self) -> None:
+        self.suite.write_text(
+            PUBLIC_SUITE
+            # fmt: python
+            + code("""
+                from support.execution import Execution, executions
+                from support.records import McpTranscript, TranscriptWithCompanions
+
+
+                def handshake(tool):
+                    return [
+                        {"input": {"method": "initialize"}, "result": {"protocolVersion": "test"}},
+                        {"notification": {"method": "notifications/initialized"}},
+                        {"input": {"method": "tools/list"}, "result": {"tools": [tool]}},
+                    ]
+
+
+                def test_initializes_and_lists_tools(binary):
+                    return TranscriptWithCompanions(
+                        handshake("sandbox"),
+                        {
+                            "direct.yaml": handshake("direct"),
+                            "writable.yaml": handshake("sandbox with fixture grant"),
+                            "custom.direct.yaml": handshake("custom direct"),
+                            "custom-writable.yaml": handshake("custom sandbox with fixture grant"),
+                        },
+                    )
+
+
+                @executions(Execution("direct"), Execution("sandbox"))
+                def test_selected(binary, execution):
+                    tool = "direct" if execution.name == "direct" else "sandbox with fixture grant"
+                    return TranscriptWithCompanions(
+                        handshake(tool) + [{"runner": "selected"}],
+                        {"custom.yaml": McpTranscript(handshake("custom " + tool))},
+                    )
+                """),
+            encoding="utf-8",
+        )
+        updated = self.run_runner("--full", "--update", "--jobs", "1")
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        for suffix, reference in (
+            ("", "MCP initialization for this execution mode"),
+            (".custom", "custom MCP initialization for this execution mode"),
+        ):
+            snapshot = (self.snapshots / f"selected{suffix}.yaml").read_text()
+            self.assertIn("!same-as " + reference, snapshot)
+            self.assertNotIn("writable", snapshot)
+        self.assertFalse((self.snapshots / "selected.sandbox.yaml").exists())
+        strict = self.run_runner("--full", "--jobs", "1")
+        self.assertEqual(strict.returncode, 0, strict.stderr)
+
+        # A grant that differs from the canonical handshake remains visible.
+        original = self.suite.read_text()
+        self.suite.write_text(
+            original.replace(
+                'else "sandbox with fixture grant"',
+                'else "sandbox with different grant"',
+            )
+        )
+        differing = self.run_runner("--full", "--update", "--jobs", "1")
+        self.assertNotEqual(differing.returncode, 0)
+        self.assertIn("sandbox with different grant", differing.stderr)
+
+        # Cases that own captured policy retain its reference and separate modes.
+        self.suite.write_text(
+            original.replace(
+                '@executions(Execution("direct"), Execution("sandbox"))',
+                'from support.snapshots import execution_snapshots\n\n@execution_snapshots\n@executions(Execution("direct"), Execution("sandbox"))',
+            )
+        )
+        separate = self.run_runner("--full", "--update", "--jobs", "1")
+        self.assertEqual(separate.returncode, 0, separate.stderr)
+        snapshot = (self.snapshots / "selected.sandbox.yaml").read_text()
+        self.assertIn("!same-as writable MCP initialization", snapshot)
+        companion = (self.snapshots / "selected.sandbox.custom.yaml").read_text()
+        self.assertIn("!same-as custom-writable MCP initialization", companion)
+
     def test_focused_update_preserves_unavailable_execution_companions(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE

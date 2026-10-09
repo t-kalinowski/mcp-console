@@ -64,6 +64,15 @@ result:
       python: []
   isError: false
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+
+        [idle]
+  isError: false
+---
 send:
   requirements:
     action: reset

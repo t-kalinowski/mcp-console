@@ -12,6 +12,7 @@ from typing import TypeVar
 
 from support.linux_sandbox import (
     fresh_procfs_available,
+    inherited_procfs_available,
     nested_namespaces_available,
     process_events_available,
 )
@@ -61,8 +62,13 @@ LINUX_SANDBOX = Requirement(
 )
 NESTED_PROCFS = Requirement(
     "nested procfs fixture",
+    inherited_procfs_available(),
+    "requires bwrap, libseccomp, and permission for nested user and PID namespaces",
+)
+NESTED_NAMESPACES = Requirement(
+    "nested namespaces fixture",
     nested_namespaces_available(),
-    "requires an outer bwrap fixture and permission for nested user and PID namespaces",
+    "requires bwrap and permission for nested user and PID namespaces",
 )
 FRESH_PROCFS = Requirement(
     "fresh procfs fixture",

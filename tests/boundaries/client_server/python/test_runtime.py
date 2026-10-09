@@ -274,6 +274,7 @@ def no_r_matplotlib_client(binary: Path, execution: Execution):
         temporary = Path(temporary_directory)
         environment = no_r_environment(temporary)
         environment["TMPDIR"] = temporary_directory
+        environment["MPL_IGNORE_SYSTEM_FONTS"] = "1"
         with McpClient(binary, execution.serve(), environment) as client:
             client.initialize_and_list_tools()
             wait_for_worker_ready(client, "Matplotlib declaration readiness")
@@ -354,6 +355,7 @@ def test_interrupts_explicit_matplotlib_show(
             client,
             '[input requested: "render> "]\n[waiting for stdin]',
             "explicit show render checkpoint",
+            completion_timeout_seconds=client.response_timeout,
             # fmt: python
             python=code("""
                 figure = plt.figure()

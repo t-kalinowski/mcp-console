@@ -17,7 +17,7 @@ from support.requirements import (
     LINUX_NATIVE,
     LINUX_SANDBOX,
     MACOS_SANDBOX,
-    NESTED_PROCFS,
+    NESTED_NAMESPACES,
     POSIX,
     SANDBOX,
     command,
@@ -681,7 +681,7 @@ def test_supervised_linux_accepts_full_write_policies(binary: Path) -> Transcrip
     return transcript
 
 
-@requires(LINUX_SANDBOX, NESTED_PROCFS)
+@requires(LINUX_SANDBOX, NESTED_NAMESPACES)
 def test_bubblewrap_enforces_root_write_carveouts(binary: Path) -> Transcript:
     # fmt: python
     script = code(r"""

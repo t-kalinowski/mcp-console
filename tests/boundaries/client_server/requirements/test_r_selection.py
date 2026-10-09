@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory, gettempdir
@@ -357,11 +358,17 @@ def test_resource_directory_replacement_is_rejected(
 ) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
-        environment, _ = r_test_environment()
+        environment, rscript = r_test_environment()
+        original = Path(
+            subprocess.check_output(
+                [rscript, "--vanilla", "-e", 'cat(R.home("doc"))'],
+                env=environment,
+                text=True,
+            )
+        )
         installed = isolated_r_home(root, environment)
         resource = installed / "doc"
-        original = resource.resolve()
-        resource.unlink()
+        resource.unlink(missing_ok=True)
         resource.mkdir()
         for entry in original.iterdir():
             (resource / entry.name).symlink_to(entry)

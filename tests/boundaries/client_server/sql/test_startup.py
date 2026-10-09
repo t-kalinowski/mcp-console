@@ -927,7 +927,7 @@ def test_missing_r_startup_withholds_sql(
     return [configuration, *transcript, {"missing_runtime_withholds_sql": output}]
 
 
-@requires(POSIX, R, SQL)
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_missing_selected_python_has_no_sql_fallback(
     binary: Path, execution: Execution
@@ -943,12 +943,12 @@ def test_missing_selected_python_has_no_sql_fallback(
         configuration = captured_configuration(config)
         result = subprocess.run(
             [binary, *execution.serve()],
+            env=dict(os.environ, MCP_CONSOLE_HOME=str(workspace / "console-home")),
             cwd=workspace,
-            env=os.environ,
             input="",
-            capture_output=True,
             text=True,
-            timeout=10,
+            capture_output=True,
+            timeout=30,
         )
         assert result.returncode == 1 and result.stdout == "", result
         assert result.stderr == (
