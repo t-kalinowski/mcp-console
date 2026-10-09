@@ -423,6 +423,7 @@ def python_inventory_client(
     resolver_python: Path | None = None,
     resolver_record: Path | None = None,
     extra_environment: dict[str, str] | None = None,
+    retain_initialization: bool = False,
 ) -> tuple[McpClient, Path, Path]:
     real_uv = shutil.which("uv")
     assert real_uv is not None, "real uv is required"
@@ -457,7 +458,8 @@ def python_inventory_client(
         current_directory=directory,
     )
     client.initialize_and_list_tools()
-    client.transcript.clear()
+    if not retain_initialization:
+        client.transcript.clear()
     client.send(requirements={"r": ["DBI"]})
     assert last_result_text(client) == "[prepared]", client.transcript[-1]
     arguments.write_text("", encoding="utf-8")

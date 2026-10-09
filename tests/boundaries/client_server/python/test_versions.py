@@ -497,6 +497,34 @@ def test_resolves_python_version_inventory_semantics(
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 @requires(R)
+def test_skips_old_python_in_sparse_managed_inventory(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        client, inventories, arguments = python_inventory_client(
+            binary,
+            execution,
+            temporary,
+            resolver_python=Path(sys.executable),
+            retain_initialization=True,
+        )
+        # CI installs an old interpreter for explicit-selection rejection tests.
+        # The default must stay usable when only that and Python 3.13 are local.
+        write_uv_python_inventories(
+            inventories,
+            {"only-managed": [uv_python_row("3.13.16"), uv_python_row("3.9.25")]},
+        )
+        client.send(requirements={"python": ["py-yaml12"]})
+        assert last_result_text(client) == "[prepared]", last_result_text(client)
+        assert recorded_python_preferences(arguments) == ["only-managed"]
+        assert recorded_tool_run_pythons(arguments) == ["3.13.16"]
+        return client.finish()
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+@requires(R)
 def test_resolves_python_version_constraint_semantics(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -562,6 +590,7 @@ def test_rejects_system_fallback_after_filtering_unsupported_python_versions(
             inventories,
             {
                 "only-managed": [
+                    uv_python_row("3.9.25"),
                     uv_python_row(
                         "3.13.14",
                         variant="freethreaded",

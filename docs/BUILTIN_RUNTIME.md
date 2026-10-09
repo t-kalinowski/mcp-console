@@ -42,6 +42,7 @@ Managed defaults are NumPy, pandas, DuckDB, and the SQLite extension; Matplotlib
 Set `python: .venv/bin/python` to use an existing environment without uv or managed Python preparation.
 Paths and legacy selection precedence are described in [configuration](CONFIGURATION.md#python-environment-selection).
 CPython 3.10+ with a usable shared embedding library is required.
+Managed version selection excludes older interpreters before ranking available versions or applying version constraints.
 Selected virtualenv paths and prefixes are preserved for imports, subprocesses, and multiprocessing.
 
 Explicit Python selections use preinstalled packages and can run without NumPy, pandas, or DuckDB.
