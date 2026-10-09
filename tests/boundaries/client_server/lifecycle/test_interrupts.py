@@ -21,8 +21,15 @@ from support.processes import (
     stop_process,
     stop_process_group,
 )
-from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, R, requires
+from support.records import McpTranscript, Transcript, TranscriptWithCompanions
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    R,
+    command,
+    requires,
+)
 from support.normalization import code
 from support.resolvers import resolver_interrupt_permission_environment
 from support.suites import run_this_suite
@@ -88,12 +95,12 @@ def test_interrupt_with_requirements_in_mixed_managed_session(
         return client.finish()
 
 
-@requires(R)
+@requires(R, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_interrupt_precedes_follow_up_requirement_policy(
     binary: Path, execution: Execution
-) -> Transcript:
-    records = []
+) -> TranscriptWithCompanions:
+    transcripts = {}
     for policy in ("startup_only", "disabled"):
         with McpClient(
             binary,
@@ -112,9 +119,13 @@ def test_interrupt_precedes_follow_up_requirement_policy(
                 client,
                 '[input requested: "old> "]\n[waiting for stdin]',
                 "interruptible R input",
-                r=code(
-                    'tryCatch(readline("old> "), interrupt = function(e) cat("interrupted\\n"))'
-                ),
+                # fmt: r
+                r=code("""
+                    tryCatch(
+                      readline("old> "),
+                      interrupt = function(e) cat("interrupted\\n")
+                    )
+                    """),
             )
             result = client.send(
                 control="interrupt",
@@ -129,9 +140,11 @@ def test_interrupt_precedes_follow_up_requirement_policy(
                 "worker retained\n",
                 r='stopifnot(!exists("follow_up_ran")); cat("worker retained\\n")',
             )
-            records.append({"policy": policy, "interrupt": result})
-            client.finish()
-    return records
+            transcripts[policy] = client.finish()
+    return TranscriptWithCompanions(
+        transcripts["startup_only"],
+        {"disabled.yaml": McpTranscript(transcripts["disabled"])},
+    )
 
 
 @requires(POSIX)
