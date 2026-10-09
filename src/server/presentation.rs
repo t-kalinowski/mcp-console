@@ -156,6 +156,7 @@ impl Profile {
         description.push_str(sections::SEND_ORDERING);
         description.push(' ');
         description.push_str(sections::POLLING);
+        description.push_str(sections::DEFAULTS);
         description.push_str("\n\n");
         description.push_str(sections::OUTPUT);
         description.push_str("\n\n");
@@ -213,7 +214,6 @@ impl Profile {
             properties["stdin"]["description"] =
                 format!("{}{}", sections::STDIN_SELECTED, sections::STDIN_ORDERING).into();
             properties["control"]["description"] = control_description_for(false).into();
-            properties["timeout_ms"]["description"] = sections::TIMEOUT_SELECTED.into();
         }
         requirements::configure(
             properties,
@@ -228,6 +228,10 @@ impl Profile {
 }
 
 // Schemars uses the same named sections for the ordinary field metadata.
+pub(super) fn timeout_description() -> String {
+    sections::TIMEOUT.to_string()
+}
+
 pub(super) fn r_description() -> String {
     r_description_for(Languages::all())
 }

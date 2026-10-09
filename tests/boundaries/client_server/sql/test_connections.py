@@ -98,9 +98,8 @@ def test_gets_selects_and_resets_the_active_native_connection(
             stopifnot(identical(.console$sql_connection(), sqlite))
             writeLines("selected native DBI identity")
             """)
-        client.send(r=r, requirements={"r": ["RSQLite"]})
-        assert last_tool_text(client) == "selected native DBI identity\n", (
-            last_tool_text(client)
+        client.expect(
+            "selected native DBI identity\n", r=r, requirements={"r": ["RSQLite"]}
         )
         client.send(sql="CREATE TABLE chosen AS SELECT 11 AS value")
         assert last_tool_text(client) == "[done]"

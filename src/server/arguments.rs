@@ -55,11 +55,8 @@ pub(super) struct SendArguments {
     pub(super) python: Option<String>,
     #[schemars(description = super::presentation::sql_description())]
     pub(super) sql: Option<String>,
-    /// Wait for output for up to this many milliseconds (default 60,000). `0` returns without
-    /// waiting for completion. Expiry returns available output while work continues. This is a wait
-    /// budget, not cancellation or a whole-call deadline: preparation and control can exceed it;
-    /// standalone preparation has no timeout.
     #[serde(default = "default_timeout_ms")]
+    #[schemars(description = super::presentation::timeout_description())]
     pub(super) timeout_ms: u64,
     #[schemars(description = super::presentation::control_description())]
     pub(super) control: Option<SendControl>,
