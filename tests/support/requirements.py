@@ -3,6 +3,7 @@
 import os
 import platform
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -150,6 +151,18 @@ def command(name: str) -> Requirement:
     return Requirement(
         name, shutil.which(name) is not None, f"{name} is missing from PATH"
     )
+
+
+def gnu_tar() -> Requirement:
+    executable = shutil.which("tar")
+    version = (
+        subprocess.run(
+            [executable, "--version"], capture_output=True, text=True, timeout=10
+        ).stdout
+        if executable
+        else ""
+    )
+    return Requirement("GNU tar", "GNU tar" in version, "requires GNU tar on PATH")
 
 
 def joblib_processes() -> Requirement:

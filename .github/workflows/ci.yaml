@@ -86,10 +86,10 @@ jobs:
         id: sandbox-source
         run: |
           if (Test-Path "$env:RUNNER_TEMP/sandbox-source.tar") {
-            tar -xf "$env:RUNNER_TEMP/sandbox-source.tar" -C .sandbox-runner-source
+            tar --force-local -xf "$env:RUNNER_TEMP/sandbox-source.tar" -C .sandbox-runner-source
           } else {
             # Use the Unix timestamp archive convention; never cache .git.
-            tar -cf "$env:RUNNER_TEMP/sandbox-source.tar" --exclude=./.git --exclude=./codex-rs/target -C .sandbox-runner-source .
+            tar --force-local -cf "$env:RUNNER_TEMP/sandbox-source.tar" --exclude=./.git --exclude=./codex-rs/target -C .sandbox-runner-source .
           }
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $status = git -C .sandbox-runner-source status --porcelain --untracked-files=all
