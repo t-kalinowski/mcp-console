@@ -20,24 +20,29 @@ struct Profile {
 }
 
 impl ConsoleServer {
-    pub(super) fn configured_tool_router(
+    pub(super) fn configured_presentation(
         languages: Languages,
         configured_visibility: bool,
         builtin: bool,
         policy: &SandboxSettings,
         no_sandbox: bool,
-    ) -> ToolRouter<Self> {
+    ) -> (ToolRouter<Self>, String) {
         let profile = Profile {
             languages,
             configured_visibility,
             builtin,
         };
+        let instructions = profile.summary();
         let mut router = Self::tool_router();
         let send = router
             .map
             .get_mut("send")
             .expect("send tool must be registered");
-        send.attr.description = Some(profile.description(policy, no_sandbox).into());
+        send.attr.description = Some(
+            profile
+                .description(&instructions, policy, no_sandbox)
+                .into(),
+        );
         let schema = Arc::make_mut(&mut send.attr.input_schema);
         let properties = schema
             .get_mut("properties")
@@ -75,7 +80,7 @@ impl ConsoleServer {
             }
         }
         profile.configure_fields(properties);
-        router
+        (router, instructions)
     }
 }
 
@@ -93,7 +98,7 @@ impl Profile {
             > 1
     }
 
-    fn description(&self, policy: &SandboxSettings, no_sandbox: bool) -> String {
+    fn summary(&self) -> String {
         // The internal environment filter retains its legacy presentation.
         // Only the public setting selects the new language-specific guidance.
         let described_languages = if self.configured_visibility {
@@ -101,16 +106,11 @@ impl Profile {
         } else {
             Languages::all()
         };
-        let mut description = if !self.builtin {
-            sections::CUSTOM_SCOPE.to_string()
-        } else if cfg!(windows) && !self.configured_visibility {
-            sections::WINDOWS_SCOPE.to_string()
-        } else {
+        let names =
             if described_languages.r && described_languages.python && described_languages.sql {
-                sections::BUILTIN_SCOPE.to_string()
+                "R, Python, and SQL".to_string()
             } else {
-                let names = self
-                    .languages
+                described_languages
                     .fields()
                     .iter()
                     .map(|field| match *field {
@@ -120,18 +120,25 @@ impl Profile {
                         _ => unreachable!(),
                     })
                     .collect::<Vec<_>>()
-                    .join(" and ");
-                let location = if cfg!(windows) {
-                    " for local execution on Windows"
-                } else {
-                    ""
-                };
-                format!(
-                    "Persistent {names} workbench{location} for calculations, data analysis, and plots."
-                )
-            }
-        };
-        description.push_str(" Send one complete ");
+                    .join(" and ")
+            };
+        if !self.builtin {
+            return format!(
+                "Persistent custom-worker {names} sessions (REPLs). {}",
+                sections::REUSE
+            );
+        }
+        let location = if cfg!(windows) { " on Windows" } else { "" };
+        format!(
+            "Persistent {names} sessions (REPLs){location} {} {}",
+            sections::BUILTIN_SCOPE,
+            sections::REUSE
+        )
+    }
+
+    fn description(&self, summary: &str, policy: &SandboxSettings, no_sandbox: bool) -> String {
+        let mut description = summary.to_string();
+        description.push_str("\n\nSend one complete ");
         if self.configured_visibility {
             description.push_str(&self.languages.cell_fields());
         } else {

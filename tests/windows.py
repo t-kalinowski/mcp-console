@@ -158,7 +158,7 @@ class Session:
                 return response["result"]
 
     def initialize(self):
-        self.request(
+        self.server_info = self.request(
             "initialize",
             {
                 "protocolVersion": "2025-03-26",
@@ -1160,6 +1160,13 @@ class WindowsConsole(unittest.TestCase):
                     try:
                         session.initialize()
                         tool = session.request("tools/list", {})["tools"][0]
+                        instructions = session.server_info["instructions"]
+                        self.assertEqual(
+                            instructions, tool["description"].split("\n\n", 1)[0]
+                        )
+                        self.assertNotIn("\n", instructions)
+                        self.assertLessEqual(len(instructions), 250)
+                        self.assertLessEqual(len(tool["description"]), 2048)
                         self.assertEqual(session.request("ping", {}), {})
                         properties = tool["inputSchema"]["properties"]
                         fields = set(languages.split(","))
@@ -1194,7 +1201,7 @@ class WindowsConsole(unittest.TestCase):
                             self.assertEqual(properties, expected)
                         if custom:
                             self.assertIn(
-                                "Persistent custom-worker workbench.",
+                                "Persistent custom-worker",
                                 tool["description"],
                             )
                             self.assertEqual(
@@ -1203,7 +1210,7 @@ class WindowsConsole(unittest.TestCase):
                             )
                         else:
                             self.assertIn(
-                                "Persistent R, Python, and SQL workbench",
+                                "Persistent R, Python, and SQL sessions (REPLs)",
                                 tool["description"],
                             )
                             self.assertEqual(
@@ -1241,7 +1248,7 @@ class WindowsConsole(unittest.TestCase):
             "Requires host preparation support",
             properties["requirements"]["description"],
         )
-        self.assertIn("local execution on Windows", tool["description"])
+        self.assertIn("on Windows", tool["description"])
         for language in ("r", "python"):
             with self.subTest(language=language):
                 description = properties[language]["description"].lower()

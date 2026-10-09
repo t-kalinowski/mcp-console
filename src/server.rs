@@ -16,7 +16,10 @@ use rmcp::{
     handler::server::{
         common::Extension, router::tool::ToolRouter, tool::ToolCallContext, wrapper::Parameters,
     },
-    model::{CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode},
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode,
+        Implementation, ServerCapabilities, ServerInfo,
+    },
     service::RequestContext,
     tool, tool_handler, tool_router,
 };
@@ -34,6 +37,7 @@ struct ConsoleServer {
     languages: Languages,
     language_setting: &'static str,
     tool_router: ToolRouter<Self>,
+    instructions: String,
 }
 
 impl ConsoleServer {
@@ -59,7 +63,7 @@ impl ConsoleServer {
             return Err("a custom relay requires a custom worker".into());
         }
         // Presentation has no dependency on the client or its discovered capabilities.
-        let tool_router = Self::configured_tool_router(
+        let (tool_router, instructions) = Self::configured_presentation(
             languages,
             visibility.is_some(),
             worker.is_none(),
@@ -123,6 +127,7 @@ impl ConsoleServer {
             languages,
             language_setting,
             tool_router,
+            instructions,
         })
     }
 }
@@ -330,8 +335,17 @@ fn response_to_tool_result(
     }
 }
 
-#[tool_handler(name = "mcp-console", router = self.tool_router)]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for ConsoleServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new(
+                "mcp-console",
+                env!("CARGO_PKG_VERSION"),
+            ))
+            .with_instructions(self.instructions.clone())
+    }
+
     async fn call_tool(
         &self,
         request: CallToolRequestParams,

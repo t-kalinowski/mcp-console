@@ -35,8 +35,10 @@ Client behavior checked on 2026-10-09.
 These are client presentation limits; recheck the linked sources when changing discovery guidance.
 
 The `send` description returned by `tools/list` and the server `instructions` returned by MCP initialization serve different purposes.
-Console currently publishes the tool description and omits server instructions, as the [canonical handshake](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records.
-An opening paragraph in the tool description does not automatically become a server discovery summary.
+Console publishes the same profile-specific summary in server instructions and at the start of the tool description, as the [canonical handshake](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records.
+The summary names the configured languages, describes when to choose Console, and explains why retained state helps.
+Custom-worker summaries leave runtime capabilities to the worker.
+Call construction begins in the next paragraph, so lazy-loading clients can choose the server without first loading the tool definition.
 
 ### Codex
 
@@ -66,7 +68,10 @@ Keep full call construction and result interpretation guidance in the tool defin
 
 ## Editorial rules
 
-Start with a complete cell, automatic display, inspecting its output, and reusing persistent objects.
+Start with a discovery summary within 250 characters on one line.
+Include debugging, simulations, and comparing approaches alongside calculations, data analysis, queries, and plots; Console also supports iterative development work.
+Follow it with complete-cell and automatic-display guidance.
+Keep ordinary tool descriptions within Claude Code's default 2,048-character cap; configured writable paths can expand the launch-policy prose.
 Ordinary use does not require declaration inspection, preparation, language switching, or restart.
 Put concise language-selection guidance, sequential execution, polling, and the security boundary at tool level.
 Lead the arguments with `r`, `python`, `sql`, `timeout_ms`, `control`, `stdin`, and `requirements`, omitting hidden fields.

@@ -242,6 +242,18 @@ def _initializes_and_lists_tools(
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
             send = listed_tools[0]
+            instructions = client.transcript[0]["result"].get("instructions")
+            assert isinstance(instructions, str), client.transcript[0]
+            assert instructions == send["description"].split("\n\n", 1)[0]
+            assert "\n" not in instructions and len(instructions) <= 250, instructions
+            assert "Send one complete" not in instructions
+            if not (writable or workspace_profile):
+                assert len(send["description"]) <= 2048, send["description"]
+            if custom:
+                assert "custom-worker" in instructions
+            else:
+                for capability in ("debugging", "simulations", "test hypotheses"):
+                    assert capability in instructions, instructions
             if languages is not None:
                 assert set(send["inputSchema"]["properties"]) == {
                     *languages,

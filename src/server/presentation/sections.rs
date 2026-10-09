@@ -1,10 +1,11 @@
 //! Named prose sections; selection belongs to the captured presentation profile.
 
-pub(super) const BUILTIN_SCOPE: &str =
-    "Persistent R, Python, and SQL workbench for calculations, data analysis, and plots.";
+pub(super) const BUILTIN_SCOPE: &str = "for calculations, data exploration and analysis, database queries, debugging, simulations, and plots.";
 
-pub(super) const SEND_WORKFLOW: &str =
-    " cell per call. Inspect its output and reuse persistent objects.";
+pub(super) const REUSE: &str =
+    "Reuse objects across calls to inspect results, test hypotheses, and compare approaches.";
+
+pub(super) const SEND_WORKFLOW: &str = " cell per call.";
 
 pub(super) const DISPLAY: &str =
     " Results display automatically; supported plots return as images.";
@@ -18,17 +19,12 @@ pub(super) const DEFAULTS: &str =
 
 pub(super) const OUTPUT: &str = "Text results, including notices, have an 8 KiB limit, retaining the beginning and latest tail; images have separate limits. Response notices report state and omitted-output locations.";
 
-pub(super) const CUSTOM_SCOPE: &str = "Persistent custom-worker workbench.";
-
 pub(super) const CUSTOM_CAPABILITIES: &str = "Language fields describe the configured interface; evaluation, display, SQL, and sharing depend on the worker. Console does not supply built-in runtime packages, import hooks, or a default SQL connection. Managed requirements need compatible worker callbacks; Python requirements are unavailable.";
 
 pub(super) const CUSTOM_SELECTED_CAPABILITIES: &str = "Language fields describe the configured interface; evaluation, display, connections, and sharing depend on the worker. Console does not supply built-in runtime packages, import hooks, or a default database connection. Managed requirements need compatible worker callbacks; registry package preparation is unavailable.";
 
 pub(super) const CUSTOM_SWITCHING: &str =
     " Switch languages when useful, using the worker's capabilities.";
-
-pub(super) const WINDOWS_SCOPE: &str =
-    "Persistent R, Python, and SQL workbench for local execution on Windows.";
 
 pub(super) const SQL_SELECTION: &str = "For databases and structured files, consider DuckDB SQL first for inspection, joins, and aggregation. ";
 

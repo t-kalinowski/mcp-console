@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -97,6 +98,15 @@ def test_configures_captured_tool_surface(
                     "timeout_ms",
                 }, fields
                 description = tool["description"]
+                instructions = client.transcript[0]["result"].get("instructions")
+                assert isinstance(instructions, str), client.transcript[0]
+                assert instructions == description.split("\n\n", 1)[0]
+                assert "\n" not in instructions and len(instructions) <= 250, (
+                    instructions
+                )
+                assert set(re.findall(r"\b(?:R|Python|SQL)\b", instructions)) == {
+                    name for name in ("R", "Python", "SQL") if name.lower() in languages
+                }, instructions
                 cell_guidance = description.split("Send one complete ")[1].split(
                     " cell per call"
                 )[0]
@@ -137,7 +147,7 @@ def test_builtin_guidance_matches_visible_languages(
                         for name in ("R", "Python", "SQL")
                         if name.lower() in languages
                     )
-                    + " workbench"
+                    + " sessions (REPLs)"
                     in tool["description"]
                 )
                 assert "CSV, Parquet, JSON, and JSONL directly" in tool["description"]
