@@ -884,10 +884,13 @@ def cancelled_retry_preparation(
                 control="restart",
                 requirements={"action": "set", "python": ["six"]},
                 stdin="cancelled input\n",
+                timeout_ms=int(client.response_timeout * 1_000),
                 **following_cell,
             )
             reached.wait(
-                "changed retry requirements are preparing before input or cell admission"
+                "changed retry requirements are preparing before input or cell admission",
+                # Retry can prepare defaults before reaching the changed resolver.
+                timeout=client.response_timeout,
             )
             client.notify("notifications/cancelled", requestId=pending["id"])
             client.request("ping")
