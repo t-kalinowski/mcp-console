@@ -299,10 +299,20 @@ def test_reached_managed_candidate_keeps_console_user_site(
         )
         with McpClient(binary, execution.serve(), env, root) as client:
             client.initialize_and_list_tools()
-            client.expect(
-                "console user site\n",
-                python=f"import os; assert os.environ['PYTHONUSERBASE'] == {str(expected)!r}; print('console user site')",
-            )
+            # fmt: python
+            program = code("""
+                import os, site, sys
+                from pathlib import Path
+
+                expected = Path(EXPECTED_USER_BASE)
+                assert Path(os.environ["PYTHONUSERBASE"]) == expected
+                assert Path(site.getuserbase()) == expected
+                assert not any(Path(path).is_relative_to(Path.cwd() / "host-user") for path in sys.path)
+                print("console user site")
+                """).replace("EXPECTED_USER_BASE", repr(str(expected)))
+            client.expect("console user site\n", python=program)
+            client.send(control="restart")
+            client.expect("console user site\n", python=program)
             client.finish()
             return [{"reached_managed_console_user_site": True}]
 

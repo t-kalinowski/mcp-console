@@ -11,7 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.progress import without_elapsed, without_elapsed_result
-from support.assertions import last_tool_text
+from support.assertions import last_tool_text, wait_for_evaluation_output
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.processes import (
@@ -21,8 +21,16 @@ from support.processes import (
     stop_process,
     stop_process_group,
 )
-from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, POSIX, PROCESS_EVENTS, requires
+from support.records import McpTranscript, Transcript, TranscriptWithCompanions
+from support.requirements import (
+    NATIVE_FIXTURES,
+    POSIX,
+    PROCESS_EVENTS,
+    R,
+    command,
+    requires,
+)
+from support.normalization import code
 from support.resolvers import resolver_interrupt_permission_environment
 from support.suites import run_this_suite
 
@@ -37,6 +45,106 @@ from boundaries.client_server._harness import (
     wait_for_stopped_worker,
     wait_for_worker_retirement,
 )
+
+
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_interrupt_with_requirements_in_mixed_managed_session(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with McpClient(
+        binary,
+        execution.serve("-c", "r.packages=[DBI]", "-c", "python.managed.packages=[]"),
+    ) as client:
+        client.initialize_and_list_tools()
+        inspected = client.send(requirements={"action": "get"})["structuredContent"]
+        assert inspected["requirements"]["r"] == ["DBI"], inspected
+        client.expect("[1] 0\n", r="print(0)")
+        client.expect("0\n", python="0")
+        client.expect(
+            "\n[output produced while idle]\n[1] 42\n[done]",
+            control="interrupt",
+            requirements={"r": ["DBI"]},
+            r="print(42)",
+        )
+        # The public input request proves that the old R evaluation is active.
+        wait_for_evaluation_output(
+            client,
+            '[input requested: "old> "]\n[waiting for stdin]',
+            "interruptible R input",
+            # fmt: r
+            r=code("""
+                tryCatch(
+                  {
+                    readline("old> ")
+                    old_cell_completed <- TRUE
+                  },
+                  interrupt = function(e) cat("interrupted\\n")
+                )
+                """),
+        )
+        interrupted = client.send(
+            control="interrupt",
+            requirements={"r": ["DBI"]},
+            r='stopifnot(!exists("old_cell_completed")); print(43)',
+        )
+        assert not interrupted.get("isError"), interrupted
+        output = last_tool_text(client)
+        assert output == "interrupted\n[1] 43\n[done]", repr(output)
+        client.expect("42\n", python="40 + 2")
+        return client.finish()
+
+
+@requires(R, command("uv"))
+@executions(DIRECT, SANDBOXED)
+def test_interrupt_precedes_follow_up_requirement_policy(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
+    transcripts = {}
+    for policy in ("startup_only", "disabled"):
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c",
+                "r.packages=[]",
+                "-c",
+                f"r.resolution={policy}",
+                "-c",
+                "python.managed.packages=[]",
+            ),
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("ready\n", r='cat("ready\\n")')
+            wait_for_evaluation_output(
+                client,
+                '[input requested: "old> "]\n[waiting for stdin]',
+                "interruptible R input",
+                # fmt: r
+                r=code("""
+                    tryCatch(
+                      readline("old> "),
+                      interrupt = function(e) cat("interrupted\\n")
+                    )
+                    """),
+            )
+            result = client.send(
+                control="interrupt",
+                requirements={"r": ["DBI"]},
+                r="follow_up_ran <- TRUE",
+            )
+            assert result.get("isError"), result
+            output = result["content"][0]["text"]
+            assert output.startswith("interrupted\n"), result
+            assert f"r.resolution={policy}" in output, result
+            client.expect(
+                "worker retained\n",
+                r='stopifnot(!exists("follow_up_ran")); cat("worker retained\\n")',
+            )
+            transcripts[policy] = client.finish()
+    return TranscriptWithCompanions(
+        transcripts["startup_only"],
+        {"disabled.yaml": McpTranscript(transcripts["disabled"])},
+    )
 
 
 @requires(POSIX)
