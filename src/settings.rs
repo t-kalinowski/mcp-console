@@ -103,7 +103,7 @@ struct Project {
     inherit_environment: bool,
     #[serde(deserialize_with = "environment")]
     environment: std::collections::BTreeMap<String, String>,
-    #[serde(deserialize_with = "sandbox::supplied_mapping")]
+    #[serde(deserialize_with = "sandbox::optional_mapping")]
     sandbox: Option<sandbox::Sandbox>,
     #[serde(deserialize_with = "sandbox::mapping")]
     resolver: Resolver,
@@ -143,7 +143,7 @@ struct Resolver {
     inherit_environment: Option<bool>,
     #[serde(deserialize_with = "environment")]
     environment: std::collections::BTreeMap<String, String>,
-    #[serde(deserialize_with = "sandbox::supplied_mapping")]
+    #[serde(deserialize_with = "sandbox::optional_mapping")]
     sandbox: Option<sandbox::Sandbox>,
 }
 

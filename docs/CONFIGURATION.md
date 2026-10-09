@@ -605,3 +605,8 @@ The former workspace profile also protected `.claude`; include `read_only: [.cla
 OS-specific runner controls are unavailable in this public format.
 The separate, explicit complete-native-policy CLI transport remains unchanged; it is not a field in `config.yaml`.
 Explicit `sandbox` or `resolver.sandbox` settings are rejected with `serve --no-sandbox`, rather than silently discarded.
+To retain other file settings while disabling enforcement, clear inherited permission nodes explicitly:
+
+```sh
+mcp-console serve --no-sandbox -c sandbox=null -c resolver.sandbox=null
+```

@@ -15,6 +15,9 @@ sandbox:
 Configuration is trusted and can widen permissions.
 [Configuration](CONFIGURATION.md) defines discovery and ordered CLI layering.
 This schema also applies unchanged to `resolver.sandbox`; neither policy inherits the other's permissions.
+Set either whole permission node to `null` to clear inherited settings and restore that context's built-in defaults.
+This does not disable sandboxing; `serve --no-sandbox` disables enforcement after both permission nodes have been omitted or cleared.
+Child nodes such as `filesystem` and `network.proxy` still require their documented types.
 
 ## Filesystem
 
