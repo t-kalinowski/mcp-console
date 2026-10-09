@@ -60,7 +60,10 @@ def creates_ragnar_store_after_workspace_write_denial(
             + r
         )
         with McpClient(
-            binary, SANDBOXED.serve(), environment, current_directory=workspace
+            binary,
+            SANDBOXED.serve("-c", "cache=host"),
+            environment,
+            current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
             client.send(requirements={"r": ["ragnar"]})
