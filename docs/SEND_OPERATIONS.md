@@ -94,8 +94,8 @@ Runtime-capability checks precede execution/preparation, though an early accepte
 Bare workers reject mutations before control, stdin, or evaluation.
 Python-only sessions reject **all** interrupt-plus-requirements combinations before signaling or queuing input, including retained requirements.
 
-Requirement-content errors normally precede effects too.
-The exception is a supported interrupt-plus-cell: signal delivery, input enqueue, grace, and settlement of the old evaluation precede deferred content validation.
+Requirement-content errors and dependency-policy denials normally precede effects too.
+The exception is a supported interrupt-plus-cell: signal delivery, input enqueue, grace, and settlement of the old evaluation precede deferred content and policy validation.
 If the old evaluation remains active, the new cell is not run or queued.
 
 ## Operations
