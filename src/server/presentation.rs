@@ -1,4 +1,5 @@
 //! Tool prose derived only from captured launch configuration.
+//! Client discovery and truncation rules: docs/TOOL_DESCRIPTIONS.md#deferred-tool-discovery.
 mod requirements;
 mod sections;
 

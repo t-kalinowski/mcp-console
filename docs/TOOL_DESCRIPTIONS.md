@@ -29,6 +29,41 @@ Advertising an unavailable language lets an agent identify the missing prerequis
 It neither proves availability nor authorizes installation.
 Installing a runtime requires a new server session; worker restart retains captured selection.
 
+## Deferred tool discovery
+
+Client behavior checked on 2026-10-09.
+These are client presentation limits; recheck the linked sources when changing discovery guidance.
+
+The `send` description returned by `tools/list` and the server `instructions` returned by MCP initialization serve different purposes.
+Console currently publishes the tool description and omits server instructions, as the [canonical handshake](../tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml) records.
+An opening paragraph in the tool description does not automatically become a server discovery summary.
+
+### Codex
+
+For regular MCP servers, Codex uses initialization `instructions` as the namespace description ([source](https://github.com/openai/codex/blob/36ae1561b9324c93d5638b45eb19fe2cc070a581/codex-rs/codex-mcp/src/rmcp_client.rs#L839-L854)).
+The optional `deferred_tool_world_state` feature is [disabled by default upstream](https://github.com/openai/codex/blob/36ae1561b9324c93d5638b45eb19fe2cc070a581/codex-rs/features/src/lib.rs#L1551-L1555).
+When enabled, its [namespace preview](https://github.com/openai/codex/blob/36ae1561b9324c93d5638b45eb19fe2cc070a581/codex-rs/core/src/context/world_state/tools.rs#L25-L75) takes only the first line, trims surrounding whitespace, and retains at most 250 Unicode characters.
+A longer line becomes its first 247 characters followed by `...`; truncation can split a word or sentence.
+This is a namespace-preview limit, not a universal limit on tool descriptions.
+
+The rendered namespace block has a shared 4 KiB UTF-8 budget, including tags and formatting.
+The [budget allocator](https://github.com/openai/codex/blob/36ae1561b9324c93d5638b45eb19fe2cc070a581/codex-rs/core/src/context/world_state/tools_budget.rs#L46-L115) reserves namespace names first, then shares remaining description space one character per namespace at a time.
+Descriptions can therefore be shortened further or omitted; names can also be omitted if the names alone exceed the budget.
+
+### Claude Code
+
+With tool search enabled, Claude Code initially loads tool names and server instructions.
+Discovery loads the selected tool definitions, including their descriptions and input schemas; the [documented behavior](https://code.claude.com/docs/en/mcp#scale-with-mcp-tool-search) does not define a separate short preview extracted from each tool description.
+Tool search is enabled by default on supported configurations.
+
+Claude Code [truncates each tool description and each server's instructions at 2,048 characters by default](https://code.claude.com/docs/en/mcp#for-mcp-server-authors).
+This cap applies to the whole text, with no documented first-line or sentence-count rule.
+Users can change it for every MCP server in a session with [`CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH`](https://code.claude.com/docs/en/env-vars#variables), available since v2.1.280; it accepts a positive whole number of characters.
+
+For server discovery instructions, describe the tasks, when to select Console, and its key capabilities first.
+Keep the first line within 250 characters for the Codex preview, with any further guidance before Claude Code's default 2,048-character cap.
+Keep full call construction and result interpretation guidance in the tool definition.
+
 ## Editorial rules
 
 Start with a complete cell, automatic display, inspecting its output, and reusing persistent objects.
