@@ -275,7 +275,7 @@ def test_lazy_sql_first_namespace(binary: Path, execution: Execution) -> Transcr
     return lazy_namespace(binary, execution, "sql")
 
 
-@requires(R)
+@requires(R, command("uv"))
 @executions(RUNTIME)
 def test_interrupted_setup_preserves_startup_bindings(
     binary: Path, execution: Execution
@@ -307,9 +307,13 @@ def test_interrupted_setup_preserves_startup_bindings(
         )
         environment, _ = r_test_environment()
         environment["RETICULATE_PYTHONPATH"] = str(modules)
+        # Keep site traceback lines and carets independent of the test runner.
+        python = subprocess.check_output(
+            ["uv", "python", "find", "3.13"], text=True
+        ).strip()
         arguments = execution.serve(
             "-c",
-            f"python={json.dumps(sys.executable)}",
+            f"python={json.dumps(python)}",
             *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
         )
         with McpClient(
