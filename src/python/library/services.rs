@@ -314,7 +314,7 @@ unsafe extern "C" fn activate_python_environment(
             Err(super::super::ActivationFailure::PythonException) => unsafe {
                 let function = services
                     .api
-                    .function(c"builtins", c"_mcp_console_raise_setup_error")?;
+                    .function(c"_mcp_console", c"raise_setup_error")?;
                 Ok((services.api.call_no_args)(function))
             },
             Err(error) => Err(error.to_string()),

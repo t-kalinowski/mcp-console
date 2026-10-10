@@ -735,8 +735,8 @@ def _mcp_console_activate_process_environment(
     return None
 
 
-_mcp_console = _types.ModuleType("_mcp_console")
-# Native startup uses CPython; reticulate supplies its converted callback.
+_mcp_console = _sys.modules.get("_mcp_console") or _types.ModuleType("_mcp_console")
+# Native setup may retain a site-hook error before evaluator installation.
 # Keep the following embedded-source lines stable for public SQL tracebacks.
 
 
@@ -764,11 +764,11 @@ _sys.modules[_mcp_console.__name__] = _mcp_console
 _mcp_console_configure_psutil()
 
 
-def _mcp_console_raise_setup_error(_state=_builtins.__dict__):
-    raise _state.pop("_mcp_console_setup_error")
+def _mcp_console_raise_setup_error(_state=_mcp_console.__dict__):
+    raise _state.pop("setup_error")
 
 
-_builtins.__dict__["_mcp_console_raise_setup_error"] = _mcp_console_raise_setup_error
+_mcp_console.raise_setup_error = _mcp_console_raise_setup_error
 
 
 def _mcp_console_activate_environment(
@@ -827,11 +827,11 @@ _mcp_console.configure_environment = _mcp_console_configure_environment
 # Setup and activation retain exceptions until their Rust caller reports them.
 # The wrapper below routes them through Console's ordered diagnostic stream.
 def _mcp_console_display_setup_exception(
-    _state=_builtins.__dict__,
+    _state=_mcp_console.__dict__,
     _traceback=_traceback,
     _stderr=_sys.__stderr__,
 ) -> None:
-    error = _state.pop("_mcp_console_setup_error", None)
+    error = _state.pop("setup_error", None)
     if error is not None:
         _traceback.print_exception(
             type(error), error, error.__traceback__, file=_stderr
