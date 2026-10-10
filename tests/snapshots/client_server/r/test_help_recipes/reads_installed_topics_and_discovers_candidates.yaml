@@ -5,6 +5,8 @@ send:
   r: |
     options(useFancyQuotes = FALSE)
     tools::Rd2txt_options(width = 80L, underline_titles = FALSE)
+    inherited_options <- options()[c("help_type", "browser", "pager")]
+    inherited_format <- tools::Rd2txt_options()
 result:
   content:
     - type: text
@@ -13,12 +15,29 @@ result:
 ---
 send:
   r: |
-    utils::help("mean", package = "base", help_type = "text")
+    local({
+      old <- options(pager = function(files, header, title, delete.file) {
+        writeLines(enc2utf8(readLines(files, warn = FALSE)), useBytes = TRUE)
+        if (delete.file) unlink(files)
+      })
+      on.exit(options(old))
+      print(utils::help("mean", package = "base", help_type = "text"))
+    })
 result:
   content:
     - type: text
       text: |
         Installed base::mean text matches Rscript reference.
+  isError: false
+---
+send:
+  r: >-
+    stopifnot(identical(options()[names(inherited_options)],
+    inherited_options))
+result:
+  content:
+    - type: text
+      text: "[done]"
   isError: false
 ---
 send:
@@ -30,6 +49,7 @@ send:
       menu.graphics = TRUE,
       useFancyQuotes = FALSE
     )
+    tools::Rd2txt_options(width = 80L, underline_titles = FALSE)
     inherited_options <- options()[c("help_type", "browser", "pager")]
     inherited_format <- tools::Rd2txt_options()
 result:

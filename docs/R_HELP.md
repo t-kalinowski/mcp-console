@@ -1,17 +1,20 @@
 # Read installed R documentation
 
 Submit these R cells through Console's `send(r=...)` interface to retrieve help from the packages installed in the session.
-Start with the ordinary qualified lookup below; a text pager, capture, discovery, installed-version provenance, and precise paging are optional additions.
+Start with the ordinary qualified lookup on macOS and Linux, or the scoped text pager on Windows; capture, discovery, installed-version provenance, and precise paging are optional additions.
 These cells do not install packages or run the examples printed in a help page.
 
 ## Read an installed topic
 
-In a default Console session, R's ordinary qualified [`help()`](https://stat.ethz.ch/R-manual/R-devel/library/utils/html/help.html) lookup displays installed documentation as text:
+In a default macOS or Linux Console session, R's ordinary qualified [`help()`](https://stat.ethz.ch/R-manual/R-devel/library/utils/html/help.html) lookup displays installed documentation as text:
 
 <!-- recipe: ordinary-topic -->
 ```r
 utils::help("mean", package = "base", help_type = "text")
 ```
+
+On Windows, use the [scoped text pager](#choose-a-text-pager) below.
+R's default Windows pager opens a GUI window and does not return the help text through Console.
 
 Specify the package to select the topic without an ambiguity menu.
 Operators are quoted strings, for example `utils::help("[", package = "base", help_type = "text")`.
@@ -24,9 +27,9 @@ For the installed package version, submit a separate cell:
 utils::packageVersion("base", lib.loc = .libPaths())
 ```
 
-## Optional: choose a text pager
+## Choose a text pager
 
-If the session has a custom pager, this small scoped option writes the rendered text directly to Console and restores the prior pager afterward:
+On Windows, or if the session has a custom pager, this small scoped option writes the rendered text directly to Console and restores the prior pager afterward:
 
 <!-- recipe: text-pager -->
 ```r

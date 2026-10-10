@@ -39,8 +39,8 @@ A sandboxed R worker also has a temporary writable library; manual installations
 
 ### Installed documentation
 
-Use the [R help recipes](R_HELP.md) for an ordinary qualified lookup of installed documentation through an R cell.
-Optional additions cover a text pager, capture, installed versions, candidate searches, package indexes, and precise paging without a browser or interactive help menu.
+Use the [R help recipes](R_HELP.md) for a qualified lookup of installed documentation through an R cell, with a scoped text pager on Windows.
+Optional additions cover capture, installed versions, candidate searches, package indexes, and precise paging without a browser or interactive help menu.
 
 ## Python
 

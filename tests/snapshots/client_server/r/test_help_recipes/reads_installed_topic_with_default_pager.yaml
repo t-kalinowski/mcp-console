@@ -1,0 +1,22 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    options(useFancyQuotes = FALSE)
+    tools::Rd2txt_options(width = 80L, underline_titles = FALSE)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    utils::help("mean", package = "base", help_type = "text")
+result:
+  content:
+    - type: text
+      text: |
+        Installed base::mean text matches Rscript reference.
+  isError: false
