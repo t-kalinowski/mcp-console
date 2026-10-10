@@ -558,15 +558,25 @@ impl Client {
             evaluation
                 .submit_stdin(stdin)
                 .map_err(ControlledStdinFailure::ActiveEvaluation)
-        } else {
-            let worker = target.worker().ok_or_else(|| {
-                ControlledStdinFailure::ActiveEvaluation("worker startup interrupted".into())
-            })?;
+        } else if let Some(worker) = target.worker() {
             self.0.unused_default.store(false, Ordering::Release);
             worker
                 .write_startup_stdin(stdin)
                 .map_err(SendFailure::from)
                 .map_err(ControlledStdinFailure::IdleWorker)
+        } else if matches!(
+            target,
+            SelectedInterruptTarget::Resolver { startup: None, .. }
+        ) {
+            // A resolver selected before any worker startup may be followed by
+            // lazy startup in the admitted generation. Preserve its terminal
+            // failure; an established target never uses this path.
+            self.write_idle_stdin_admitted(stdin, generation.clone(), Some(control))
+                .map_err(ControlledStdinFailure::IdleWorker)
+        } else {
+            Err(ControlledStdinFailure::ActiveEvaluation(
+                "worker startup interrupted".into(),
+            ))
         }
     }
 

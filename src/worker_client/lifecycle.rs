@@ -58,7 +58,7 @@ pub(crate) struct WorkerStartupAdmission {
 pub(super) enum SelectedInterruptTarget {
     Resolver {
         resolver: crate::resolver::ResolverStopHandle,
-        _startup: Option<Arc<WorkerStartupAdmission>>,
+        startup: Option<Arc<WorkerStartupAdmission>>,
         worker: Option<platform::WorkerShutdownHandle>,
         evaluation: Option<Arc<super::Evaluation>>,
     },
@@ -548,7 +548,7 @@ impl Client {
         if let Some(resolver) = lifecycle.processes.resolver.clone() {
             return Ok(SelectedInterruptTarget::Resolver {
                 resolver,
-                _startup: startup,
+                startup,
                 worker: lifecycle.processes.worker.clone(),
                 evaluation,
             });
