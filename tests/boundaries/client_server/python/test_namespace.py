@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -100,7 +101,40 @@ def lazy_namespace(
             "#!/bin/sh\nexec " + shlex.join([str(binary), "worker"]) + "\n"
         )
         worker.chmod(0o755)
-        environment, _ = r_test_environment()
+        environment, rscript = r_test_environment()
+        # Custom workers skip managed bootstrap. Prepare the real bridge and SQL
+        # prerequisites without initializing any interpreter in the worker.
+        library = subprocess.check_output(
+            [
+                "ir",
+                "run",
+                "--rscript",
+                str(rscript),
+                "--isolated",
+                "--vanilla",
+                *(
+                    argument
+                    for package in (
+                        "DBI",
+                        "arrow",
+                        "duckdb",
+                        "jsonlite",
+                        "nanoarrow",
+                        "pillar",
+                        "reticulate",
+                        "tibble",
+                        "utf8",
+                    )
+                    for argument in ("--with", package)
+                ),
+                "-e",
+                "cat(normalizePath(.libPaths()[[1L]]))",
+            ],
+            env=environment,
+            text=True,
+        ).strip()
+        for name in ("R_LIBS", "R_LIBS_SITE", "R_LIBS_USER"):
+            environment[name] = library
         environment["RETICULATE_PYTHON"] = sys.executable
         with McpClient(
             binary, execution.serve("--worker", str(worker)), environment
@@ -203,19 +237,19 @@ def lazy_namespace(
             return client.finish()
 
 
-@requires(POSIX, R, SQL)
+@requires(POSIX, R, SQL, command("ir"))
 @executions(RUNTIME)
 def test_lazy_python_first_namespace(binary: Path, execution: Execution) -> Transcript:
     return lazy_namespace(binary, execution, "python")
 
 
-@requires(POSIX, R, SQL)
+@requires(POSIX, R, SQL, command("ir"))
 @executions(RUNTIME)
 def test_lazy_r_first_namespace(binary: Path, execution: Execution) -> Transcript:
     return lazy_namespace(binary, execution, "r")
 
 
-@requires(POSIX, R, SQL)
+@requires(POSIX, R, SQL, command("ir"))
 @executions(RUNTIME)
 def test_lazy_sql_first_namespace(binary: Path, execution: Execution) -> Transcript:
     return lazy_namespace(binary, execution, "sql")
