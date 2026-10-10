@@ -49,6 +49,10 @@ def test_python_only_namespace_and_restart(
         path = Path(temporary)
         retain_system_bwrap(path)
         # Keep the complete globals transcript on Python 3.13's standard metadata.
+        subprocess.run(
+            ["uv", "python", "install", "--no-bin", "--no-registry", "3.13"],
+            check=True,
+        )
         python = subprocess.check_output(
             ["uv", "python", "find", "3.13"], text=True
         ).strip()
@@ -312,6 +316,10 @@ def test_interrupted_setup_preserves_startup_bindings(
         environment, _ = r_test_environment()
         environment["RETICULATE_PYTHONPATH"] = str(modules)
         # Keep site traceback lines and carets independent of the test runner.
+        subprocess.run(
+            ["uv", "python", "install", "--no-bin", "--no-registry", "3.13"],
+            check=True,
+        )
         python = subprocess.check_output(
             ["uv", "python", "find", "3.13"], text=True
         ).strip()
