@@ -2,6 +2,35 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
+  python: print(globals())
+result:
+  content:
+    - type: text
+      text: >
+        {'__name__': '__main__', '__doc__': None, '__package__': None,
+        '__loader__': <class '_frozen_importlib.BuiltinImporter'>, '__spec__':
+        None, '__annotations__': {}, '__builtins__': <module 'builtins'
+        (built-in)>}
+  isError: false
+---
+send:
+  python: |
+    assert globals().keys() == {
+        "__name__",
+        "__doc__",
+        "__package__",
+        "__loader__",
+        "__spec__",
+        "__annotations__",
+        "__builtins__",
+    }
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
   python: |
     assert globals() is __import__("__main__").__dict__
     assert __name__ == "__main__"

@@ -57,6 +57,26 @@ def test_python_only_namespace_and_restart(
             environment,
         ) as client:
             client.initialize_and_list_tools()
+            client.expect(
+                "{'__name__': '__main__', '__doc__': None, '__package__': None, "
+                "'__loader__': <class '_frozen_importlib.BuiltinImporter'>, '__spec__': None, "
+                "'__annotations__': {}, '__builtins__': <module 'builtins' (built-in)>}\n",
+                python="print(globals())",
+            )
+            client.expect(
+                # fmt: python
+                python=code("""
+                    assert globals().keys() == {
+                        "__name__",
+                        "__doc__",
+                        "__package__",
+                        "__loader__",
+                        "__spec__",
+                        "__annotations__",
+                        "__builtins__",
+                    }
+                    """),
+            )
             client.expect("clean Python namespace\n", python=CLEAN_NAMESPACE)
             client.expect(
                 "R unavailable\n",
