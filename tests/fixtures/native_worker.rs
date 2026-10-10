@@ -607,9 +607,7 @@ fn native_probe() {
                     Err(crate::python::ActivationFailure::PythonException)
                 ));
                 runtime
-                    .evaluate(
-                        "import builtins\nbuiltins.__dict__['_mcp_console_raise_setup_error']()",
-                    )
+                    .evaluate("__import__('_mcp_console').raise_setup_error()")
                     .expect("report retained Python exception through evaluator");
             }
             _ => unreachable!(),
