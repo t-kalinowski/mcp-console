@@ -3,6 +3,7 @@
 import select
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -789,7 +790,7 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
                 [resolver_started.descriptor, client.client.stdout],
                 [],
                 [],
-                client.client.response_timeout,
+                max(0, client.client.response_deadline() - time.monotonic()),
             )
             assert readable, "R resolver did not reach its preparation gate"
             if client.client.stdout in readable:

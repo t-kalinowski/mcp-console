@@ -149,6 +149,45 @@ def test_waits_with_client(binary: Path) -> list[dict[str, str]]:
 """.lstrip()
 
 
+# fmt: python
+STALLED_CHECKPOINT_SUITE = """
+import select
+import sys
+import time
+from pathlib import Path
+
+from support.client import McpClient
+
+
+def test_waits_with_client(binary: Path) -> list[dict[str, str]]:
+    root = binary.parents[2]
+    client = McpClient(
+        Path(sys.executable),
+        ("-u", str(root / "server.py"), "refuse-close", str(root)),
+        current_directory=root,
+        shutdown_timeout=0.1,
+    )
+    try:
+        with client:
+            assert client.send(r="1")["content"][0]["text"] == "ready"
+            with (root / "case-started").open("wb", buffering=0) as started:
+                assert started.write(b"1") == 1
+            with (root / "case-release").open("rb", buffering=0) as checkpoint:
+                readable, _, _ = select.select(
+                    [checkpoint, client.stdout],
+                    [],
+                    [],
+                    max(0, client.response_deadline() - time.monotonic()),
+                )
+                assert readable, "resolver startup checkpoint deadline expired"
+    finally:
+        (root / "client-closed").write_text(str(client.process.returncode))
+        with (root / "case-cleanup-complete").open("wb", buffering=0) as cleaned:
+            assert cleaned.write(b"1") == 1
+    return []
+""".lstrip()
+
+
 @unittest.skipUnless(POSIX.available, POSIX.reason)
 class McpClientTests(unittest.TestCase):
     @contextmanager
@@ -380,6 +419,21 @@ class McpClientTests(unittest.TestCase):
             self.assertIn("timed out waiting for response", stderr)
             self.assertIn("partial response diagnostic", stderr)
             self.assertNotIn("timed out after 16 seconds", stderr)
+
+    def test_stalled_checkpoint_leaves_time_to_reap_server(self) -> None:
+        with self.client_runner(STALLED_CHECKPOINT_SUITE, "--timeout", "16") as (
+            process,
+            root,
+            checkpoints,
+        ):
+            ready, _, _ = select.select([checkpoints[2]], [], [], 10)
+            self.assertTrue(ready, "first response did not complete")
+            self.assertEqual(os.read(checkpoints[2], 1), b"1")
+            stdout, stderr = process.communicate(timeout=20)
+            self.assertNotEqual(process.returncode, 0, stdout)
+            self.assertIn("resolver startup checkpoint deadline expired", stderr)
+            self.assertNotIn("timed out after 16 seconds", stderr)
+            self.assertEqual((root / "client-closed").read_text(), "-9")
 
 
 class PortableMcpClientTests(unittest.TestCase):
