@@ -520,6 +520,27 @@ base::local(
       )
     }
 
+    tools <- base::attach(
+      NULL,
+      pos = 2L,
+      name = "tools:mcp-console",
+      warn.conflicts = FALSE
+    )
+    # Resolve the actual exports lazily, preserving reticulate's arguments and
+    # caller provenance without loading its namespace just to install names.
+    base::delayedAssign("py_import", reticulate::import, assign.env = tools)
+    base::delayedAssign("py_eval", reticulate::py_eval, assign.env = tools)
+    base::delayedAssign(
+      "py_run_string",
+      reticulate::py_run_string,
+      assign.env = tools
+    )
+    base::delayedAssign(
+      "py_require",
+      reticulate::py_require,
+      assign.env = tools
+    )
+
     environment()
   },
   envir = base::new.env(parent = base::baseenv())
