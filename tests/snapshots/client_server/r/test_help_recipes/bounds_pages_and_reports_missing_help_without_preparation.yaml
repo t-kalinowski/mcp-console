@@ -413,7 +413,7 @@ result:
         Details:
 
              Three types of quotes are part of the syntax of R: single and
-        Next line: 12
+        Next line: <continuation>
   isError: false
 ---
 send:
@@ -433,7 +433,7 @@ result:
 
         Character constants:
 
-        Next line: 18
+        Next line: <continuation>
   isError: false
 ---
 send:
@@ -456,7 +456,7 @@ result:
         Lines <displayed range> of <total>
         Unicode paging fixture: ‘
         Line shortened; the full line remains in page$text.
-        Next line: 2
+        Next line: <continuation>
   isError: false
 ---
 send:

@@ -355,7 +355,7 @@ result:
 
              'lm' is used to fit linear models, including multivariate ones.
              It can be used to carry out regression, single stratum analysis of
-        Next line: 9
+        Next line: <continuation>
   isError: false
 ---
 send:
@@ -377,7 +377,7 @@ result:
 
              Operators acting on vectors, matrices, arrays and lists to extract
              or replace parts.
-        Next line: 9
+        Next line: <continuation>
   isError: false
 ---
 send:
@@ -455,7 +455,7 @@ result:
 
              Generic function for plotting of R objects.
 
-        Next line: 9
+        Next line: <continuation>
   isError: false
 ---
 send:
@@ -478,7 +478,7 @@ result:
         ARMAacf                 Compute Theoretical ACF for an ARMA Process
         ARMAtoMA                Convert ARMA Process to Infinite MA Process
         Beta                    The Beta Distribution
-        Next line: 32
+        Next line: <continuation>
   isError: false
 ---
 send:

@@ -62,6 +62,9 @@ def help_output(client: McpClient, package: str, topic: str) -> str:
     )
     normalized = normalized.replace(library, "Library: <selected installed library>", 1)
     normalized = normalized.replace(line_range, "Lines <displayed range> of <total>", 1)
+    if last < total:
+        normalized = normalized.removesuffix(f"Next line: {last + 1}\n")
+        normalized += "Next line: <continuation>\n"
     client.transcript[-1]["result"]["content"][0]["text"] = normalized
     return text
 

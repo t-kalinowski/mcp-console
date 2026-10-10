@@ -163,5 +163,5 @@ result:
         ARMAacf                 Compute Theoretical ACF for an ARMA Process
         ARMAtoMA                Convert ARMA Process to Infinite MA Process
         Beta                    The Beta Distribution
-        Next line: 32
+        Next line: <continuation>
   isError: false
