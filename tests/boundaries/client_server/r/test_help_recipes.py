@@ -152,6 +152,11 @@ def test_reads_installed_topics_and_discovers_candidates(
             "base::plot | Generic X-Y Plotting\n"
             "graphics::plot.default | The Default Scatterplot Function\n"
         ), text
+        client.expect(
+            r=recipe("candidates").replace(
+                '"^plot$"', '"^mcpconsolemissinghelptopic$"'
+            ),
+        )
         client.send(r=recipe("selected"))
         assert "Generic X-Y Plotting" in help_output(client, "base", "plot")
         client.send(r=recipe("index"))

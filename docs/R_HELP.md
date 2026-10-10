@@ -267,7 +267,12 @@ search <- utils::help.search(
   types = "help"
 )
 matches <- search$matches
-candidates <- paste0(matches$Package, "::", matches$Topic, " | ", matches$Title)
+candidates <- sprintf(
+  "%s::%s | %s",
+  matches$Package,
+  matches$Topic,
+  matches$Title
+)
 writeLines(substr(head(candidates, 10L), 1L, 120L))
 if (length(candidates) > 10L) {
   writeLines("More candidates remain in matches.")
