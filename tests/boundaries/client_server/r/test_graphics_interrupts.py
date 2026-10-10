@@ -24,7 +24,7 @@ from support.processes import (
 from support.progress import without_elapsed
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript
-from support.requirements import NATIVE_FIXTURES, POSIX, requires
+from support.requirements import NATIVE_FIXTURES, POSIX, R, requires
 from support.suites import run_this_suite
 
 
@@ -130,7 +130,7 @@ def finalizing_plot(
                 release.release()
 
 
-@requires(POSIX, NATIVE_FIXTURES)
+@requires(R, POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
 def test_interrupt_preserves_plot_and_state_after_deferred_closure(
     binary: Path, execution: Execution
@@ -175,7 +175,7 @@ def test_interrupt_preserves_plot_and_state_after_deferred_closure(
         return client.finish()
 
 
-@requires(POSIX, NATIVE_FIXTURES)
+@requires(R, POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
 def test_restart_retires_worker_during_deferred_plot_closure(
     binary: Path, execution: Execution
