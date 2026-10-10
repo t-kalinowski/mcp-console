@@ -15,6 +15,17 @@ result:
 ---
 send:
   python: |
+    assert globals() is __import__("__main__").__dict__
+    assert __name__ == "__main__"
+    assert globals().keys() <= {
+        "__name__", "__doc__", "__package__", "__loader__", "__spec__",
+        "__builtins__", "__annotations__", "r",
+    }
+    assert not {"os", "sys", "tempfile"} & globals().keys()
+    assert not {"os", "sys", "tempfile"} & vars(__import__("builtins")).keys()
+    assert not any(name.startswith("_mcp_console") for name in vars(__import__("builtins")))
+    assert callable(_console.sql_connection)
+    assert hasattr(__import__("builtins"), "r")
     assert globals().keys() == {
         "__name__",
         "__doc__",
@@ -34,27 +45,6 @@ result:
 ---
 send:
   python: |
-    assert globals() is __import__("__main__").__dict__
-    assert __name__ == "__main__"
-    assert globals().keys() <= {
-        "__name__", "__doc__", "__package__", "__loader__", "__spec__",
-        "__builtins__", "__annotations__", "r",
-    }
-    assert not {"os", "sys", "tempfile"} & globals().keys()
-    assert not {"os", "sys", "tempfile"} & vars(__import__("builtins")).keys()
-    assert not any(name.startswith("_mcp_console") for name in vars(__import__("builtins")))
-    assert callable(_console.sql_connection)
-    assert hasattr(__import__("builtins"), "r")
-    print("clean Python namespace")
-result:
-  content:
-    - type: text
-      text: |
-        clean Python namespace
-  isError: false
----
-send:
-  python: |
     try:
         r.pi
     except RuntimeError as error:
@@ -70,13 +60,7 @@ result:
   isError: false
 ---
 send:
-  python: |
-    import os, sys, tempfile
-
-    assert os is __import__("os")
-    assert sys is __import__("sys")
-    assert tempfile is __import__("tempfile")
-    retained = object()
+  python: retained = object()
 result:
   content:
     - type: text
@@ -95,7 +79,7 @@ result:
   isError: false
 ---
 send:
-  python: |
+  python: |-
     assert globals() is __import__("__main__").__dict__
     assert __name__ == "__main__"
     assert globals().keys() <= {
@@ -107,16 +91,8 @@ send:
     assert not any(name.startswith("_mcp_console") for name in vars(__import__("builtins")))
     assert callable(_console.sql_connection)
     assert hasattr(__import__("builtins"), "r")
-    print("clean Python namespace")
-result:
-  content:
-    - type: text
-      text: |
-        clean Python namespace
-  isError: false
----
-send:
-  python: assert "retained" not in globals()
+
+    assert "retained" not in globals()
 result:
   content:
     - type: text

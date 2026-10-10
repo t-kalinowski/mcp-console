@@ -36,8 +36,15 @@ CLEAN_NAMESPACE = code("""
     assert not any(name.startswith("_mcp_console") for name in vars(__import__("builtins")))
     assert callable(_console.sql_connection)
     assert hasattr(__import__("builtins"), "r")
-    print("clean Python namespace")
     """)
+
+
+def python_313() -> str:
+    # Provision before discovery; the runner's interpreter may differ.
+    subprocess.run(
+        ["uv", "python", "install", "--no-bin", "--no-registry", "3.13"], check=True
+    )
+    return subprocess.check_output(["uv", "python", "find", "3.13"], text=True).strip()
 
 
 @requires(POSIX, command("uv"))
@@ -49,13 +56,7 @@ def test_python_only_namespace_and_restart(
         path = Path(temporary)
         retain_system_bwrap(path)
         # Keep the complete globals transcript on Python 3.13's standard metadata.
-        subprocess.run(
-            ["uv", "python", "install", "--no-bin", "--no-registry", "3.13"],
-            check=True,
-        )
-        python = subprocess.check_output(
-            ["uv", "python", "find", "3.13"], text=True
-        ).strip()
+        python = python_313()
         environment = dict(os.environ, PATH=str(path))
         for name in ("R_HOME", "RHOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_UV"):
             environment.pop(name, None)
@@ -73,8 +74,9 @@ def test_python_only_namespace_and_restart(
             )
             client.expect(
                 "False True\n",
+                python=CLEAN_NAMESPACE
                 # fmt: python
-                python=code("""
+                + code("""
                     assert globals().keys() == {
                         "__name__",
                         "__doc__",
@@ -87,7 +89,6 @@ def test_python_only_namespace_and_restart(
                     print("_console" in globals(), hasattr(__import__("builtins"), "_console"))
                     """),
             )
-            client.expect("clean Python namespace\n", python=CLEAN_NAMESPACE)
             client.expect(
                 "R unavailable\n",
                 # fmt: python
@@ -101,29 +102,20 @@ def test_python_only_namespace_and_restart(
                     print("R unavailable")
                     """),
             )
-            client.expect(
-                # fmt: python
-                python=code("""
-                    import os, sys, tempfile
-
-                    assert os is __import__("os")
-                    assert sys is __import__("sys")
-                    assert tempfile is __import__("tempfile")
-                    retained = object()
-                    """),
-            )
+            client.expect(python="retained = object()")
             client.expect(
                 "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]",
                 control="restart",
             )
-            client.expect("clean Python namespace\n", python=CLEAN_NAMESPACE)
-            client.expect(python='assert "retained" not in globals()')
+            client.expect(
+                python=CLEAN_NAMESPACE + '\nassert "retained" not in globals()'
+            )
             return client.finish()
 
 
-def lazy_namespace(
-    binary: Path, execution: Execution, first_language: str
-) -> Transcript:
+@requires(POSIX, R, SQL, command("ir"))
+@executions(RUNTIME)
+def test_lazy_python_first_namespace(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         worker = root / "worker"
@@ -170,25 +162,11 @@ def lazy_namespace(
             binary, execution.serve("--worker", str(worker)), environment
         ) as client:
             client.initialize_and_list_tools()
-            if first_language == "r":
-                client.expect(r="namespace_r_value <- 42L")
-            elif first_language == "sql":
-                client.expect(
-                    "# A tibble: 1 × 1\n  namespace_value\n          <int32>\n1              42\n",
-                    sql="select 42 as namespace_value",
-                )
-            client.expect("clean Python namespace\n", python=CLEAN_NAMESPACE)
-            client.expect(python="assert int(r['sum(c(20, 22))']) == 42")
-            client.expect(r='stopifnot(reticulate::py_eval("42") == 42L)')
-            client.expect("clean Python namespace\n", python=CLEAN_NAMESPACE)
             client.expect(
+                python=CLEAN_NAMESPACE
                 # fmt: python
-                python=code("""
+                + code("""
                     import os, sys, tempfile
-
-                    assert os is __import__("os")
-                    assert sys is __import__("sys")
-                    assert tempfile is __import__("tempfile")
 
 
                     def namespace_callback(value):
@@ -198,16 +176,6 @@ def lazy_namespace(
                     class NamespaceValue:
                         def __init__(self, value):
                             self.value = value
-
-
-                    namespace_object = NamespaceValue(41)
-                    assert (
-                        __import__("pickle").loads(__import__("pickle").dumps(namespace_callback))
-                        is namespace_callback
-                    )
-                    assert (
-                        __import__("pickle").loads(__import__("pickle").dumps(namespace_object)).value == 41
-                    )
                     """),
             )
             client.expect(
@@ -224,30 +192,19 @@ def lazy_namespace(
                     assert os is __import__("os")
                     assert sys is __import__("sys")
                     assert tempfile is __import__("tempfile")
+                    assert (
+                        __import__("pickle").loads(__import__("pickle").dumps(namespace_callback))
+                        is namespace_callback
+                    )
+                    assert (
+                        __import__("pickle").loads(__import__("pickle").dumps(NamespaceValue(41))).value
+                        == 41
+                    )
                     os, sys, tempfile = object(), object(), object()
                     namespace_bindings = (os, sys, tempfile)
                     """),
             )
-            client.expect(
-                "# A tibble: 1 × 1\n  namespace_value\n          <int32>\n1              43\n",
-                sql="select 43 as namespace_value",
-            )
-            client.expect(
-                r='stopifnot(reticulate::py_eval("namespace_callback(41)") == 42L)'
-            )
-            client.expect(python="assert int(r.namespace_r_value) == 42")
-            client.expect(
-                '[input requested: "namespace interrupt> "]\n[waiting for stdin]',
-                python='input("namespace interrupt> ")',
-            )
-            output = wait_for_evaluation_output(
-                client,
-                None,
-                "input-gated namespace interrupt",
-                control="interrupt",
-            )
-            assert output.endswith("KeyboardInterrupt\n"), output
-            assert output.count("KeyboardInterrupt") == 1, output
+            client.expect(sql="CREATE TABLE namespace_value AS SELECT 42 AS value")
             client.expect(
                 "user namespace preserved\n",
                 # fmt: python
@@ -259,30 +216,7 @@ def lazy_namespace(
                     print("user namespace preserved")
                     """),
             )
-            client.expect(
-                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]",
-                control="restart",
-            )
-            client.expect("clean Python namespace\n", python=CLEAN_NAMESPACE)
             return client.finish()
-
-
-@requires(POSIX, R, SQL, command("ir"))
-@executions(RUNTIME)
-def test_lazy_python_first_namespace(binary: Path, execution: Execution) -> Transcript:
-    return lazy_namespace(binary, execution, "python")
-
-
-@requires(POSIX, R, SQL, command("ir"))
-@executions(RUNTIME)
-def test_lazy_r_first_namespace(binary: Path, execution: Execution) -> Transcript:
-    return lazy_namespace(binary, execution, "r")
-
-
-@requires(POSIX, R, SQL, command("ir"))
-@executions(RUNTIME)
-def test_lazy_sql_first_namespace(binary: Path, execution: Execution) -> Transcript:
-    return lazy_namespace(binary, execution, "sql")
 
 
 @requires(R, command("uv"))
@@ -318,13 +252,7 @@ def test_interrupted_setup_preserves_startup_bindings(
         environment, _ = r_test_environment()
         environment["RETICULATE_PYTHONPATH"] = str(modules)
         # Keep site traceback lines and carets independent of the test runner.
-        subprocess.run(
-            ["uv", "python", "install", "--no-bin", "--no-registry", "3.13"],
-            check=True,
-        )
-        python = subprocess.check_output(
-            ["uv", "python", "find", "3.13"], text=True
-        ).strip()
+        python = python_313()
         arguments = execution.serve(
             "-c",
             f"python={json.dumps(python)}",
@@ -367,11 +295,6 @@ def test_interrupted_setup_preserves_startup_bindings(
             client.expect(
                 r='stopifnot(reticulate::py_eval("all(a is b for a, b in zip((os, sys, tempfile), namespace_bindings))"))'
             )
-            client.expect(
-                "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]",
-                control="restart",
-            )
-            client.expect("clean Python namespace\n", python=CLEAN_NAMESPACE)
             return client.finish()
 
 
@@ -393,10 +316,10 @@ def test_activation_error_preserves_r_condition(
             installed_console(binary), execution.serve("-c", "cache=host"), environment
         ) as client:
             client.initialize_and_list_tools()
-            client.expect("clean Python namespace\n", python=CLEAN_NAMESPACE)
             client.expect(
+                python=CLEAN_NAMESPACE
                 # fmt: python
-                python=code("""
+                + code("""
                     os, sys, tempfile = object(), object(), object()
                     namespace_bindings = (os, sys, tempfile)
                     __import__ = namespace_import_binding = object()

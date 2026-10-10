@@ -14,16 +14,6 @@ send:
     assert not any(name.startswith("_mcp_console") for name in vars(__import__("builtins")))
     assert callable(_console.sql_connection)
     assert hasattr(__import__("builtins"), "r")
-    print("clean Python namespace")
-result:
-  content:
-    - type: text
-      text: |
-        clean Python namespace
-  isError: false
----
-send:
-  python: |
     os, sys, tempfile = object(), object(), object()
     namespace_bindings = (os, sys, tempfile)
     __import__ = namespace_import_binding = object()
