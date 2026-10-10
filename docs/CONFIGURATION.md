@@ -161,6 +161,7 @@ python:
 ```
 
 Managed selection uses uv-managed CPython, not a fallback interpreter on `PATH`.
+It excludes interpreters older than CPython 3.10 before ranking available versions or applying version constraints.
 Without R, it requires `uv` on the execution host.
 Omitted `python` retains the launch-time `RETICULATE_PYTHON` compatibility behavior described in [Environment](ENVIRONMENT.md).
 

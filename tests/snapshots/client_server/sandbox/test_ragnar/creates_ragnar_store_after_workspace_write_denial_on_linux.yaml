@@ -1,5 +1,5 @@
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.r-sql.yaml
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.configured-r-sql.yaml
 ---
 send:
   requirements:

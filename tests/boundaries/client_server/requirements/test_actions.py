@@ -100,7 +100,9 @@ def test_inspection_completes_while_prepared_cells_overlap(
 def test_empty_declaration_and_round_trip(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
+    # This case observes deliberate declarations; optional SQL preview probes
+    # must not automatically add packages such as Arrow's optional tzdb.
+    client = McpClient(binary, execution.serve("--config", "r.resolution=explicit"))
     client.initialize_and_list_tools()
     startup = inspect(client)
     assert startup["prepared"] is True

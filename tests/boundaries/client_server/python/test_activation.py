@@ -867,17 +867,15 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
         environment = managed_environments(root)
         # R-only bootstrap leaves Python selection lazy for R interoperability.
         environment["MCP_CONSOLE_LANGUAGES"] = "r,sql"
-        # The fixture environments omit the default NumPy/pandas seed. Declare
-        # that baseline before startup instead of replacing a prewarmed worker.
+        # Prepare the fixture baseline at startup. This case owns a later
+        # projection failure, after the first R cell has finished bootstrap.
         with McpClient(
             binary,
-            execution.serve("-c", "python.managed.packages=[]"),
+            execution.serve("-c", "python.managed.packages=[console-initial-fixture]"),
             environment,
             root,
         ) as client:
             client.initialize_and_list_tools()
-            client.send(requirements={"python": ["console-initial-fixture"]})
-            assert last_result_text(client) == "[prepared]", last_result_text(client)
             client.send(
                 # fmt: r
                 r=code("""
@@ -1144,6 +1142,16 @@ def test_retries_interrupted_startup_probe_with_live_r_and_sql(
                     without_elapsed(last_result_text(client))
                     == "\n[running; poll with an empty send]"
                 )
+                # The zero-timeout response can precede the probe and still
+                # report preparation. Observe again at the held probe, then
+                # retain the settled progress cut for the submitted cell.
+                client.send(timeout_ms=0)
+                assert (
+                    without_elapsed(last_result_text(client))
+                    == "\n[running; poll with an empty send]"
+                )
+                assert "phase:" not in last_result_text(client)
+                evaluation["result"] = client.transcript.pop()["result"]
                 client.send(control="interrupt", timeout_ms=30_000)
                 assert not process_exists(child_pid), (child_pid, client.transcript[-1])
                 hook.unlink()
