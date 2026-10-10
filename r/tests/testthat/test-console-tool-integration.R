@@ -338,7 +338,7 @@ test_that("requirements actions preserve scalar fields and empty lists", {
     fixture <- managed_python_mcp_console()
     send <- with_mcp_console_environment(
       fixture,
-      console_tool(path = fixture$path, no_sandbox = TRUE)
+      console_tool(path = fixture$path, config = ConsoleConfig(sandbox = FALSE))
     )
     startup <- inspect_requirements(send)
     # Inspect the committed default environment after worker readiness.

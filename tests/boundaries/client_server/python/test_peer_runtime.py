@@ -434,11 +434,28 @@ def test_idle_preparation_keeps_r_uninitialized(
             MCP_CONSOLE_TEST_UV_RECORD=str(root / "uv-environment"),
             MCP_CONSOLE_TEST_UV_ARGUMENTS_RECORD=str(arguments),
         )
-        serve = (
-            execution.serve("-c", "cache=host", "--writable-root", str(root))
-            if execution == SANDBOXED
-            else execution.serve("-c", "cache=host")
-        )
+        if execution == SANDBOXED:
+            # Own the resolver cache and its mount targets for this session.
+            # Other concurrent fixtures can mutate the shared host cache.
+            environment["XDG_CACHE_HOME"] = str(root / "cache")
+            serve = execution.serve(
+                "--writable-root",
+                str(root),
+                "-c",
+                "resolver="
+                + json.dumps(
+                    {
+                        "sandbox": {
+                            "filesystem": {
+                                "read_only": ["/"],
+                                "read_write": [str(root)],
+                            }
+                        }
+                    }
+                ),
+            )
+        else:
+            serve = execution.serve("-c", "cache=host")
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
             defer_r_bootstrap(client)

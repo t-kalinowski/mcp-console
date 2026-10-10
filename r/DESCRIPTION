@@ -1,27 +1,31 @@
 Package: mcp.console
-Title: Use MCP Console with 'ellmer'
+Title: Use MCP Console with Typed Session Configuration
 Version: 0.0.0.9000
 Authors@R:
     person("Tomasz", "Kalinowski", , "kalinowskit@gmail.com", role = c("aut", "cre"))
 Description: Adds MCP Console to an 'ellmer' chat as a persistent workbench
-    for R, Python, and DuckDB.
+    for R, Python, and DuckDB. Provides typed session configuration and
+    sandbox permissions through the Console command-line interface.
 License: MIT + file LICENSE
 URL: https://t-kalinowski.github.io/mcp-console/r/,
     https://github.com/t-kalinowski/mcp-console
 BugReports: https://github.com/t-kalinowski/mcp-console/issues
 Depends:
-    R (>= 4.1.0)
+    R (>= 4.2.0)
 Imports:
     ellmer (>= 0.4.2),
     jsonlite,
     processx,
     ps,
     reticulate (>= 1.41.0),
+    S7 (>= 0.2.2.9000),
     utils
 Suggests:
     httr2,
-    testthat (>= 3.1.8)
+    testthat (>= 3.2.0)
+Remotes:
+    RConsortium/S7@4bd824639a4ad45bb9b618a55bb33687637e5581
 Config/testthat/edition: 3
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-Config/roxygen2/version: 8.1.0
+Config/roxygen2/version: 8.1.1

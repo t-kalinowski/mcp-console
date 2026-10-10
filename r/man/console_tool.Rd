@@ -4,7 +4,13 @@
 \alias{console_tool}
 \title{Use MCP Console as an ellmer tool}
 \usage{
-console_tool(..., path = NULL, version = NULL, no_sandbox = FALSE)
+console_tool(
+  ...,
+  path = NULL,
+  version = NULL,
+  config = NULL,
+  project = getwd()
+)
 }
 \arguments{
 \item{...}{Must be empty. Reserved for future use.}
@@ -14,8 +20,15 @@ console_tool(..., path = NULL, version = NULL, no_sandbox = FALSE)
 \item{version}{\code{NULL}, or one published \code{mcp-console} version, such as
 \code{"0.0.2"}.}
 
-\item{no_sandbox}{Run evaluated code with the server's filesystem and
-network permissions.}
+\item{config}{\code{NULL} (equivalent to an empty \code{\link[=ConsoleConfig]{ConsoleConfig()}}), or a
+\code{ConsoleConfig()} combining runtimes, package preparation, permissions,
+and optional discovery. The default skips global and project config files
+and uses built-in permissions: host reads, private temporary writes, and
+no worker networking. Resolver defaults remain independent.}
+
+\item{project}{Existing directory to use as the child process's working
+directory, defaulting to \code{getwd()}. Relative config and runtime paths use
+this directory; the caller's working directory is unchanged.}
 }
 \value{
 An \link[ellmer:ToolDef]{ellmer::ToolDef} to pass to an ellmer chat's
@@ -31,7 +44,8 @@ When the tool is garbage collected, it closes the server's input to request
 shutdown and waits up to 15 seconds before forcibly stopping the server.
 With sandboxing enabled, the sandbox manager owns cleanup of worker
 descendants; the R wrapper's fallback targets only the server process.
-With \code{no_sandbox = TRUE}, worker descendants may survive server shutdown.
+With \code{ConsoleConfig(sandbox = FALSE)}, worker descendants may survive
+server shutdown.
 }
 \section{Executable resolution}{
 

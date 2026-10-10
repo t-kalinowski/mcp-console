@@ -53,6 +53,31 @@ def invoke(binary: Path, host: Path, *arguments: str):
     )
 
 
+def test_null_clears_requested_policies(binary: Path) -> Transcript:
+    with TemporaryDirectory() as directory:
+        host = Path(directory)
+        config = host / CONFIG
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            json.dumps({"sandbox": {}, "resolver": {"sandbox": {}}}),
+            encoding="utf-8",
+        )
+        return [
+            accepted(
+                binary,
+                host,
+                "serve",
+                "--worker",
+                "unused-worker",
+                "--no-sandbox",
+                "-c",
+                "sandbox=null",
+                "-c",
+                "resolver.sandbox=null",
+            )
+        ]
+
+
 @requires(SANDBOX)
 def test_duplicate_keys_use_last_value(binary: Path) -> Transcript:
     cases = (

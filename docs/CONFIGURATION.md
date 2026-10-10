@@ -304,6 +304,12 @@ Set `cache: host` to reuse host cache locations.
 `--no-sandbox` defaults to host caches and rejects `cache: console` and explicit sandbox policies.
 [Resolver caches](RESOLVER.md#cache-locations) documents locations and permission implications.
 
+To retain other file settings while disabling enforcement, clear inherited permission nodes explicitly:
+
+```sh
+mcp-console serve --no-sandbox -c sandbox=null -c resolver.sandbox=null
+```
+
 ## Migration
 
 Global configuration now contributes defaults even when a project file exists.

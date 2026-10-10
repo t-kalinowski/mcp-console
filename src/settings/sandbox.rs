@@ -34,6 +34,20 @@ where
     mapping(deserializer).map(Some)
 }
 
+// A whole permission node can be cleared by a later configuration layer.
+pub(super) fn optional_mapping<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        Ok(None)
+    } else {
+        mapping(value).map(Some).map_err(D::Error::custom)
+    }
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Sandbox {

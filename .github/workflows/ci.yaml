@@ -147,10 +147,12 @@ jobs:
       - name: Install Windows R bridge and package dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
+          working-directory: r
           cache-version: windows-runtime-v2-${{ steps.epoch.outputs.week }}
           upgrade: "FALSE"
           dependencies: "NA"
           packages: |
+            deps::.
             any::reticulate
             any::jsonlite
             any::ellmer
