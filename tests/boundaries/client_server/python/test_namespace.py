@@ -244,7 +244,8 @@ def test_interrupted_setup_preserves_startup_bindings(
             """)
         source = modules / "namespace_setup.py"
         source.write_text(checkpoint)
-        (modules / "sitecustomize.py").write_text(
+        sitecustomize = modules / "sitecustomize.py"
+        sitecustomize.write_text(
             f"marker_path = {str(root / 'attempted')!r}\n"
             f"with open({str(source)!r}) as stream:\n"
             "    checkpoint = compile(stream.read(), '<namespace setup checkpoint>', 'exec')\n"
@@ -273,6 +274,14 @@ def test_interrupted_setup_preserves_startup_bindings(
             )
             assert output.endswith("KeyboardInterrupt\n"), output
             assert "AssertionError" not in output, output
+            fixture_paths = (str(sitecustomize.resolve()), str(sitecustomize))
+            assert any(path in output for path in fixture_paths), output
+            # Normalize the complete filename before serialization escapes it.
+            for path in fixture_paths:
+                output = output.replace(
+                    path, "<namespace-workspace>/modules/sitecustomize.py"
+                )
+            client.transcript[-1]["result"]["content"][0]["text"] = output
             client.expect(
                 "startup namespace preserved\n",
                 # fmt: python
@@ -291,12 +300,7 @@ def test_interrupted_setup_preserves_startup_bindings(
                 control="restart",
             )
             client.expect("clean Python namespace\n", python=CLEAN_NAMESPACE)
-            records = json.dumps(client.finish())
-            return json.loads(
-                records.replace(str(root.resolve()), "<namespace-workspace>").replace(
-                    str(root), "<namespace-workspace>"
-                )
-            )
+            return client.finish()
 
 
 @requires(POSIX, R, command("uv"))
