@@ -205,7 +205,7 @@ def test_initialization_keeps_one_lifecycle_while_startup_is_pending(
         return [{"startup_kept_one_lifecycle": True, "output": result}]
 
 
-@requires(POSIX)
+@requires(POSIX, R)
 @executions(DIRECT, SANDBOXED)
 def test_callable_tools_follow_connected_server_fields(
     binary: Path, execution: Execution
@@ -299,7 +299,9 @@ def test_callable_tools_follow_connected_server_fields(
                 "command": binary,
                 "args": execution.serve(),
                 "server_parameters": {
-                    "env": bare_runtime_environment(os.environ.copy(), Path(directory))
+                    "env": bare_runtime_environment(
+                        r_test_environment()[0], Path(directory)
+                    )
                 },
             }
             for label, settings, source, expected_fields in (

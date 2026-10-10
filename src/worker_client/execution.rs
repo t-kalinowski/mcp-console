@@ -242,10 +242,13 @@ impl Client {
             }
             if let Err(error) = readiness.and_then(|()| self.validate_cell(&cell)) {
                 Response::tool_error(error).recover_to(self.0.output.clone());
+                // Completion admits the next cell; release startup ownership first.
+                drop(startup);
                 evaluation.complete_cell(Ok(()));
                 return Ok(());
             }
             if self.take_startup_failure(&generation)? {
+                drop(startup);
                 evaluation.complete_cell(Ok(()));
                 return Ok(());
             }
