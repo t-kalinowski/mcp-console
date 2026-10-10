@@ -70,6 +70,7 @@ website:
         contents:
         - DEVELOPMENT.md
         - ARCHITECTURE.md
+        - R_GRAPHICS_CALLBACKS.md
         - RELAY_PROTOCOL.md
         - WORKER_PROTOCOL.md
         - TOOL_DESCRIPTIONS.md

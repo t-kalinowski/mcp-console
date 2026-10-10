@@ -131,6 +131,7 @@ The focused baseline executed the first five rows; the worker-isolation row was 
 
 Retain ownership, closure/resumption, and isolation coverage even when the examples require manual device management.
 Device-number reuse is another distinct ownership case; its useful assertion is that a user device replacing a closed managed device survives cleanup.
+The missing public regression is tracked in [Open work](TODO.md#graphics-coverage).
 An exact order among pages from deliberately switched devices is incidental unless a documented contract requires it.
 There is no need to restore the removed permutation-heavy `dev.set()` transcript or a cell-wide text barrier to prove these invariants.
 This assessment leaves test consolidation to the existing coverage work.

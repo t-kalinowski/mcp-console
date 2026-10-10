@@ -35,6 +35,13 @@ Per-output caps are not a total disk budget.
 Choose a concrete user need before adding cleanup or artifact APIs; protect active sessions and user-managed files.
 Current documentation must continue to state the limits.
 
+## Graphics coverage
+
+**GR-1 — Cover device-number reuse through the public API.** Within one cell, create a managed plot, record its device number, close it, and open an explicit user PNG device in the same slot.
+Assert the slot is reused, cell cleanup leaves the user device open and uncaptured, and drawing and explicit closure succeed in a later cell.
+The [callback assessment](R_GRAPHICS_CALLBACKS.md#which-device-tests-carry-a-contract) explains the ownership invariant.
+Coordinate the regression with existing test consolidation.
+
 ## Sandbox and platforms
 
 **SP-1 — Review evidence for macOS policy exceptions.** Check each application extension against the actual sandboxed workflow and selected native pin.
