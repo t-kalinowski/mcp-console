@@ -172,11 +172,15 @@ show_r_help <- function(page, from = 1L, n = 40L, bytes = 6000L) {
     lines <- lines[seq_len(count)]
   }
   last <- from + count - 1L
-  writeLines(c(
-    header,
-    sprintf("Lines %d-%d of %d", from, last, length(page$text)),
-    lines
-  ))
+  # Preserve the normalized UTF-8 bytes even in a non-UTF-8 R locale.
+  writeLines(
+    c(
+      header,
+      sprintf("Lines %d-%d of %d", from, last, length(page$text)),
+      lines
+    ),
+    useBytes = TRUE
+  )
   if (shortened) {
     writeLines("Line shortened; the full line remains in page$text.")
   }

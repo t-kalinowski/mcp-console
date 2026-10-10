@@ -202,22 +202,27 @@ def test_bounds_pages_and_reports_missing_help_without_preparation(
         client.send(r=recipe("later-page"))
         later = help_output(client, "base", "Quotes")
         assert later != text, later
-        # A real directional quote must survive a cut inside a long help line.
+        # Explicit UTF-8 makes the paging fixture independent of R's help locale.
+        # A cut inside the second quote must preserve the complete first quote.
         client.send(
             # fmt: r
             r=code(r"""
-                options(useFancyQuotes = TRUE)
                 quotes_page <- read_r_help("base", "Quotes")
-                unicode_line <- which(grepl("\u2018", quotes_page$text, fixed = TRUE))[1L]
-                characters <- strsplit(quotes_page$text[unicode_line], "", fixed = TRUE)[[1L]]
-                quote_position <- match("\u2018", characters)
-                prefix <- paste0(characters[seq_len(quote_position - 1L)], collapse = "")
-                unicode_budget <- nchar(prefix, type = "bytes") + 4L
-                show_r_help(quotes_page, from = unicode_line, n = 1L, bytes = unicode_budget)
+                prefix <- "Unicode paging fixture: "
+                quotes_page$text[1L] <- paste0(
+                  prefix,
+                  "\u2018\u2019",
+                  strrep("x", 80L)
+                )
+                unicode_budget <- nchar(prefix, type = "bytes") + 5L
+                show_r_help(quotes_page, from = 1L, n = 1L, bytes = unicode_budget)
                 """),
         )
         unicode = help_output(client, "base", "Quotes")
         body = unicode.split("\n", 3)[3].split("Line shortened;", 1)[0]
+        assert (
+            len(body.encode("utf-8")) <= len("Unicode paging fixture: ".encode()) + 5
+        ), unicode
         assert body.endswith("\u2018\n"), unicode
         assert "Line shortened; the full line remains in page$text.\n" in unicode
         client.expect(

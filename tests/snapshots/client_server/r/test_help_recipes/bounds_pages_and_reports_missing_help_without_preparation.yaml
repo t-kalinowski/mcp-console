@@ -104,11 +104,15 @@ send:
         lines <- lines[seq_len(count)]
       }
       last <- from + count - 1L
-      writeLines(c(
-        header,
-        sprintf("Lines %d-%d of %d", from, last, length(page$text)),
-        lines
-      ))
+      # Preserve the normalized UTF-8 bytes even in a non-UTF-8 R locale.
+      writeLines(
+        c(
+          header,
+          sprintf("Lines %d-%d of %d", from, last, length(page$text)),
+          lines
+        ),
+        useBytes = TRUE
+      )
       if (shortened) {
         writeLines("Line shortened; the full line remains in page$text.")
       }
@@ -431,14 +435,15 @@ result:
 ---
 send:
   r: |
-    options(useFancyQuotes = TRUE)
     quotes_page <- read_r_help("base", "Quotes")
-    unicode_line <- which(grepl("\u2018", quotes_page$text, fixed = TRUE))[1L]
-    characters <- strsplit(quotes_page$text[unicode_line], "", fixed = TRUE)[[1L]]
-    quote_position <- match("\u2018", characters)
-    prefix <- paste0(characters[seq_len(quote_position - 1L)], collapse = "")
-    unicode_budget <- nchar(prefix, type = "bytes") + 4L
-    show_r_help(quotes_page, from = unicode_line, n = 1L, bytes = unicode_budget)
+    prefix <- "Unicode paging fixture: "
+    quotes_page$text[1L] <- paste0(
+      prefix,
+      "\u2018\u2019",
+      strrep("x", 80L)
+    )
+    unicode_budget <- nchar(prefix, type = "bytes") + 5L
+    show_r_help(quotes_page, from = 1L, n = 1L, bytes = unicode_budget)
 result:
   content:
     - type: text
@@ -446,9 +451,9 @@ result:
         base::Quotes | package <version> | R <version>
         Library: <selected installed library>
         Lines <displayed range> of <total>
-             double quotation marks and the backtick (or back quote, ‘
+        Unicode paging fixture: ‘
         Line shortened; the full line remains in page$text.
-        Next line: 13
+        Next line: 2
   isError: false
 ---
 send:
