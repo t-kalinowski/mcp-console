@@ -73,6 +73,28 @@ Attribute access attaches the bridge on demand; loading reticulate or reading it
 Conversion follows reticulate's rules.
 Objects and proxies do not survive worker replacement.
 
+Console attaches four R helpers in `tools:mcp-console`:
+
+| Helper            | Reticulate function           | Purpose                                 |
+| ----------------- | ----------------------------- | --------------------------------------- |
+| `py_import()`     | `reticulate::import()`        | Import a Python module.                 |
+| `py_eval()`       | `reticulate::py_eval()`       | Evaluate a Python expression.           |
+| `py_run_string()` | `reticulate::py_run_string()` | Run Python statements.                  |
+| `py_require()`    | `reticulate::py_require()`    | Inspect or declare Python requirements. |
+
+These aliases preserve reticulate's arguments, return values, and conversion rules.
+Import, evaluation, and execution use Console's shared Python interpreter and state.
+Installing or inspecting the helpers does not initialize Python, and ordinary R definitions can mask them.
+
+For help, use `help("import", package = "reticulate")` for `py_import()`.
+The other helpers use their matching reticulate help topics, for example `help("py_run_string", package = "reticulate")`.
+
+`py_require()` without arguments returns the current R-side Python declarations.
+In managed sessions, declarations use Console's existing [requirements and preparation](REQUIREMENTS.md#live-preparation) path.
+Pre-initialization declarations are accepted when Python is prepared; MCP requirements inspection returns the last committed declaration.
+Before Python initializes, `action = "set"` can replace requirements; after initialization, compatible additions preserve live objects.
+Use [restart](REQUIREMENTS.md#restarting-with-requirements) for changes that require a fresh environment.
+
 Ordinary Python does not need to attach reticulate, and R can run without Python.
 Both interpreters and reentrant bridge calls use the worker's owning thread.
 
