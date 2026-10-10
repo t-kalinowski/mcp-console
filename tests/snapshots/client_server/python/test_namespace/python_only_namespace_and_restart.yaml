@@ -24,10 +24,12 @@ send:
         "__annotations__",
         "__builtins__",
     }
+    print("_console" in globals(), hasattr(__import__("builtins"), "_console"))
 result:
   content:
     - type: text
-      text: "[done]"
+      text: |
+        False True
   isError: false
 ---
 send:

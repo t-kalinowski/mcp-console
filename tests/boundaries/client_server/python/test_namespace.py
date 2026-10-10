@@ -72,6 +72,7 @@ def test_python_only_namespace_and_restart(
                 python="print(globals())",
             )
             client.expect(
+                "False True\n",
                 # fmt: python
                 python=code("""
                     assert globals().keys() == {
@@ -83,6 +84,7 @@ def test_python_only_namespace_and_restart(
                         "__annotations__",
                         "__builtins__",
                     }
+                    print("_console" in globals(), hasattr(__import__("builtins"), "_console"))
                     """),
             )
             client.expect("clean Python namespace\n", python=CLEAN_NAMESPACE)
