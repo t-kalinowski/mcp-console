@@ -2035,6 +2035,87 @@ runner: orphan
 
 
 class TranscriptDiscoveryTests(TranscriptRunnerFixture):
+    def test_help_discovery_preserves_broken_r_selections(self) -> None:
+        shutil.copytree(
+            ROOT / "tests/support",
+            self.root / "tests/support",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        suite = "client_server/r/test_help_recipes"
+        destination = self.boundaries / f"{suite}.py"
+        destination.parent.mkdir(parents=True)
+        shutil.copy2(RUNNER.parent / f"{suite}.py", destination)
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + "\nfrom support.requirements import R, requires\n"
+            + "test_selected = requires(R)(test_selected)\n",
+            encoding="utf-8",
+        )
+        selected_home = self.root / "selected-r"
+        selected_bin = selected_home / "bin"
+        selected_bin.mkdir(parents=True)
+        commands = self.root / "commands"
+        commands.mkdir()
+        # uv rejects R's arguments and needs no adjacent Python DLLs on Windows.
+        executable = shutil.which("uv")
+        self.assertIsNotNone(executable)
+        shutil.copy2(
+            executable,
+            selected_bin / ("Rscript.exe" if os.name == "nt" else "Rscript"),
+        )
+        shutil.copy2(executable, commands / ("R.exe" if os.name == "nt" else "R"))
+        environment = os.environ | {"MCP_CONSOLE_HOME": str(self.root / "home")}
+        path_selection = environment.copy()
+        path_selection.pop("R_HOME", None)
+        path_selection["PATH"] = os.pathsep.join((str(commands), environment["PATH"]))
+        marker = self.root / "selected.marker"
+        for selection, selected_environment in (
+            ("missing R_HOME", environment | {"R_HOME": str(self.root / "missing-r")}),
+            ("failing Rscript", environment | {"R_HOME": str(selected_home)}),
+            ("failing R on PATH", path_selection),
+        ):
+            with self.subTest(selection=selection):
+                arguments = [sys.executable, self.boundaries / "_run.py"]
+                listed = subprocess.run(
+                    [*arguments, "--list", suite],
+                    cwd=self.root,
+                    env=selected_environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(listed.returncode, 0, listed.stderr)
+                self.assertEqual(
+                    listed.stdout.splitlines(),
+                    [
+                        f"{suite}::{case}"
+                        for case in (
+                            "reads_installed_topic_with_default_pager",
+                            "reads_installed_topics_and_discovers_candidates",
+                            "reads_translated_package_index",
+                            "bounds_pages_and_reports_missing_help_without_preparation",
+                            "preserves_utf8_in_compact_outputs",
+                        )
+                    ],
+                )
+                marker.unlink(missing_ok=True)
+                result = subprocess.run(
+                    [
+                        *arguments,
+                        f"{suite}::reads_translated_package_index",
+                        "client_server/server/test_tools::selected",
+                    ],
+                    cwd=self.root,
+                    env=selected_environment,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(": skipped; R French messages:", result.stdout)
+                self.assertTrue(marker.exists(), result.stdout)
+
     def test_shared_direct_handshake_precedes_equal_variants(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE

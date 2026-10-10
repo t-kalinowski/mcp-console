@@ -202,17 +202,22 @@ def r_french_messages() -> Requirement:
     if R.available:
         from support.r import r_test_environment
 
-        environment, rscript = r_test_environment()
-        result = subprocess.run(
-            [rscript, "--vanilla", "-"],
-            input='writeLines(gettext("Index:", domain = "R-base"))\n',
-            env=environment | {"LANGUAGE": "fr"},
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=10,
-        )
-        available = result.stdout.strip() == "Index :"
+        try:
+            environment, rscript = r_test_environment()
+            result = subprocess.run(
+                [rscript, "--vanilla", "-"],
+                input='writeLines(gettext("Index:", domain = "R-base"))\n',
+                env=environment | {"LANGUAGE": "fr"},
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            # Leave broken selections to the R cases, not this optional probe.
+            pass
+        else:
+            available = result.stdout.strip() == "Index :"
     return Requirement(
         "R French messages",
         available,
