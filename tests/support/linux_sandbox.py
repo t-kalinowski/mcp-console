@@ -41,6 +41,58 @@ def inherited_procfs_command(command: list[str]) -> list[str]:
     ]
 
 
+def procfs_probe_command(command: list[str], *, inherited: bool) -> list[str]:
+    helper = shutil.which("bwrap")
+    assert helper is not None, "the procfs probe requires bwrap on PATH"
+    # The trusted driver must be able to enter its disposable network namespace
+    # before testing the sandbox. Never grant this capability to the target.
+    namespace = [
+        helper,
+        "--unshare-user",
+        "--unshare-pid",
+        "--unshare-net",
+        "--uid",
+        "0",
+        "--gid",
+        "0",
+        "--cap-add",
+        "ALL",
+        "--bind",
+        "/",
+        "/",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--",
+        *command,
+    ]
+    if inherited:
+        return [
+            sys.executable,
+            str(
+                Path(__file__).resolve().parents[1]
+                / "fixtures/cli/sandbox/inherited_procfs.py"
+            ),
+            *namespace,
+        ]
+    return namespace
+
+
+def procfs_network_available() -> bool:
+    if sys.platform != "linux" or shutil.which("bwrap") is None:
+        return False
+    command = procfs_probe_command(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "fixtures/cli/sandbox/procfs.py"),
+            "network-baseline",
+        ],
+        inherited=False,
+    )
+    return subprocess.run(command, capture_output=True, timeout=10).returncode == 0
+
+
 def inherited_procfs_available() -> bool:
     if sys.platform != "linux" or shutil.which("bwrap") is None:
         return False

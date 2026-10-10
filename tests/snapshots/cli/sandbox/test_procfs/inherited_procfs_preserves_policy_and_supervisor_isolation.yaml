@@ -22,7 +22,8 @@ operations:
   vm_read: errno:1
   vm_write: errno:1
   network: errno:1
-  network_setns: errno:22
+  network_namespace_link: errno:13
+  network_setns: errno:1
   supervisor_environment: errno:13
   supervisor_memory_write: errno:30
   supervisor_fd_metadata: "True"
@@ -54,7 +55,8 @@ operations:
   vm_read: errno:3
   vm_write: errno:3
   network: allowed
-  network_setns: errno:22
+  network_namespace_link: errno:13
+  network_setns: errno:1
   supervisor_environment: errno:13
   supervisor_memory_write: errno:30
   supervisor_fd_metadata: "True"
@@ -86,7 +88,8 @@ operations:
   vm_read: errno:1
   vm_write: errno:1
   network: errno:1
-  network_setns: errno:22
+  network_namespace_link: errno:13
+  network_setns: errno:1
   supervisor_environment: errno:13
   supervisor_memory_write: errno:30
   supervisor_fd_metadata: "True"
@@ -118,7 +121,8 @@ operations:
   vm_read: errno:3
   vm_write: errno:3
   network: allowed
-  network_setns: errno:22
+  network_namespace_link: errno:13
+  network_setns: errno:1
   supervisor_environment: errno:13
   supervisor_memory_write: errno:30
   supervisor_fd_metadata: "True"

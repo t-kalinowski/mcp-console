@@ -14,6 +14,7 @@ from support.linux_sandbox import (
     fresh_procfs_available,
     inherited_procfs_available,
     nested_namespaces_available,
+    procfs_network_available,
     process_events_available,
 )
 
@@ -74,6 +75,11 @@ FRESH_PROCFS = Requirement(
     "fresh procfs fixture",
     fresh_procfs_available(),
     "requires an outer bwrap fixture and permission to mount namespace-local procfs",
+)
+PROCFS_NETWORK = Requirement(
+    "procfs network fixture",
+    procfs_network_available(),
+    "requires a disposable root user/network namespace with usable loopback and setns",
 )
 POSIX = Requirement(
     "POSIX", os.name == "posix", "requires POSIX processes and descriptors"
