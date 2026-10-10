@@ -87,6 +87,7 @@ mcp-console prepare-python-docs --python /path/to/python \
 ```
 
 The saved page must identify the selected minor's official plain-text ZIP and documentation release.
+Official archive filenames can include a patch version; cache selection still uses the running interpreter's major/minor.
 The receipt distinguishes local inputs from a live download; these files are trusted inputs, not an authenticity proof.
 It records source/final URLs, archive and download-page SHA-256 hashes, compressed/expanded sizes, entry count, and `download_page_release`.
 That release is the **download page's label at preparation**, not a promise that the archive matches the interpreter's exact historical patch.

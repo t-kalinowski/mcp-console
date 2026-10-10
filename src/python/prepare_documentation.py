@@ -83,7 +83,9 @@ def read_source(path: str | None, url: str, limit: int) -> tuple[bytes, str]:
     return data, final_url
 
 
-def members(archive: zipfile.ZipFile, minor: str) -> list[tuple[zipfile.ZipInfo, Path]]:
+def members(
+    archive: zipfile.ZipFile, prefix: str
+) -> list[tuple[zipfile.ZipInfo, Path]]:
     entries = archive.infolist()
     if (
         len(entries) > MAX_ENTRIES
@@ -92,7 +94,6 @@ def members(archive: zipfile.ZipFile, minor: str) -> list[tuple[zipfile.ZipInfo,
         raise ValueError(
             "documentation archive exceeds its entry or expanded-byte limit"
         )
-    prefix = f"python-{minor}-docs-text"
     seen = set()
     spellings = {}
     files = set()
@@ -168,27 +169,33 @@ def prepare(archive_path: str | None, page_path: str | None) -> dict[str, object
             if key not in {"directory", "python_version", "python_executable"}
         }
     page_url = f"https://docs.python.org/{minor}/download.html"
-    source_url = (
-        f"https://docs.python.org/{minor}/archives/python-{minor}-docs-text.zip"
-    )
     page_bytes, page_final_url = read_source(page_path, page_url, MAX_PAGE)
     page = DownloadPage()
     page.feed(page_bytes.decode("utf-8"))
     release = re.search(
         r"Python (\d+\.\d+\.\d+) documentation", page.title, re.IGNORECASE
     )
-    links = [urllib.parse.urljoin(page_url, link) for link in page.text_links]
-    if (
-        source_url not in links
-        or release is None
-        or not release[1].startswith(minor + ".")
-    ):
+    # Older documentation series include the patch in both ZIP and root names.
+    # Use the selected page's link, retaining the official origin/minor boundary.
+    links = [
+        match
+        for link in page.text_links
+        if (
+            match := re.fullmatch(
+                rf"https://docs\.python\.org/{re.escape(minor)}/archives/"
+                rf"(python-{re.escape(minor)}(?:\.\d+)?-docs-text)\.zip",
+                urllib.parse.urljoin(page_final_url, link),
+            )
+        )
+    ]
+    if len(links) != 1 or release is None or not release[1].startswith(minor + "."):
         raise ValueError(
             "official download page does not identify this Python minor's plain-text ZIP and release"
         )
+    source_url, archive_root = links[0].group(0, 1)
     data, final_url = read_source(archive_path, source_url, MAX_ARCHIVE)
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        selected = members(archive, minor)
+        selected = members(archive, archive_root)
         receipt = {
             "python_minor": minor,
             "indexes": list(MANUAL_INDEXES),

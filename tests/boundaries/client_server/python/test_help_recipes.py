@@ -101,14 +101,18 @@ def test_long_object_help_retains_readable_raw_log(
 
 
 def manual_fixture(
-    root: Path, extra: tuple[str, bytes] | None = None, *, minor: str | None = None
+    root: Path,
+    extra: tuple[str, bytes] | None = None,
+    *,
+    minor: str | None = None,
+    archive_version: str | None = None,
 ) -> tuple[Path, Path]:
     minor = minor or f"{sys.version_info.major}.{sys.version_info.minor}"
-    prefix = f"python-{minor}-docs-text/"
+    prefix = f"python-{archive_version or minor}-docs-text/"
     page = root / "download.html"
     page.write_text(
         f"<title>Download — Python {minor}.99 documentation</title>"
-        f'<table><tr><td>Plain text</td><td><a href="archives/python-{minor}-docs-text.zip">Download</a></td></tr></table>',
+        f'<table><tr><td>Plain text</td><td><a href="archives/{prefix[:-1]}.zip">Download</a></td></tr></table>',
         encoding="utf-8",
     )
     archive = root / "manual.zip"
@@ -148,6 +152,75 @@ def prepare_manual(
         encoding="utf-8",
         timeout=30,
     )
+
+
+def test_manual_archive_uses_the_download_page_filename(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        minor = f"{sys.version_info.major}.{sys.version_info.minor}"
+        audit = []
+        for archive_version in (minor, minor + ".99"):
+            fixture = root / archive_version
+            fixture.mkdir()
+            page, archive = manual_fixture(fixture, archive_version=archive_version)
+            filename = f"python-{archive_version}-docs-text.zip"
+            # Official pages offer both archive formats; select the plain-text ZIP.
+            page.write_text(
+                f"<title>Download — Python {minor}.99 documentation</title>"
+                f'<table><tr><td>HTML</td><td><a href="archives/python-{archive_version}-docs-html.zip">Download</a></td></tr>'
+                f'<tr><td>Plain Text</td><td><a href="archives/{filename.replace(".zip", ".tar.bz2")}">Download</a></td>'
+                f'<td><a href="archives/{filename}">Download</a></td></tr></table>',
+                encoding="utf-8",
+            )
+            cache = fixture / "cache"
+            result = prepare_manual(binary, cache, page, archive)
+            assert result.returncode == 0, result.stderr
+            receipt = json.loads(result.stdout)
+            assert receipt["python_minor"] == minor, receipt
+            assert receipt["download_page_release"] == minor + ".99", receipt
+            assert (
+                receipt["source_url"]
+                == f"https://docs.python.org/{minor}/archives/{filename}"
+            ), receipt
+            assert receipt["archive_final_url"] == receipt["source_url"], receipt
+            assert (
+                receipt["archive_sha256"]
+                == hashlib.sha256(archive.read_bytes()).hexdigest()
+            ), receipt
+            manual = cache / minor / "manual"
+            assert (
+                manual / "contents.txt"
+            ).read_text() == "Python Documentation contents\n"
+            assert (
+                (manual / "library/json.txt")
+                .read_text()
+                .endswith("json.loads decodes a JSON document.\n")
+            )
+            assert (manual / "license.txt").is_file()
+            # A ZIP for this minor must still use the exact root named by its link.
+            other_version = minor + ".99" if archive_version == minor else minor
+            page.write_text(
+                page.read_text().replace(
+                    filename, f"python-{other_version}-docs-text.zip"
+                ),
+                encoding="utf-8",
+            )
+            rejected_cache = fixture / "mismatched-cache"
+            rejected = prepare_manual(binary, rejected_cache, page, archive)
+            assert rejected.returncode == 1, rejected
+            assert "unsafe documentation archive member" in rejected.stderr, (
+                rejected.stderr
+            )
+            assert not (rejected_cache / minor).exists()
+            assert not list(rejected_cache.glob(".prepare-*"))
+            audit.append(
+                {
+                    "archive_version": "minor" if archive_version == minor else "patch",
+                    "prepared": True,
+                    "mismatched_root_rejected": True,
+                }
+            )
+        return audit
 
 
 @requires(POSIX)
@@ -345,7 +418,8 @@ def test_manual_download_failure_and_retry_use_local_transport(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
-        page, archive = manual_fixture(root)
+        minor = f"{sys.version_info.major}.{sys.version_info.minor}"
+        page, archive = manual_fixture(root, archive_version=minor + ".99")
         downloader = root / "download.py"
         downloader.write_text(
             # fmt: python
@@ -443,9 +517,11 @@ def test_manual_download_failure_and_retry_use_local_transport(
             audit.append({"transport": failure, "published": destination.exists()})
         requests = (root / "requests.txt").read_text().splitlines()
         assert len(requests) == 4, requests
-        assert all(
-            url.startswith(f"https://docs.python.org/{minor}/") for url in requests
-        ), requests
+        page_url = f"https://docs.python.org/{minor}/download.html"
+        archive_url = (
+            f"https://docs.python.org/{minor}/archives/python-{minor}.99-docs-text.zip"
+        )
+        assert requests == [page_url, page_url, page_url, archive_url], requests
         return audit
 
 
