@@ -56,6 +56,11 @@ The procfs matrix compares fresh/inherited views with readable/denied sentinel p
 It checks direct policy behavior and attempts through process metadata, descriptors, memory, signals, and namespace entry.
 Host restrictions must not substitute for the sandbox property under test.
 
+Namespace-link access and namespace entry are separate assertions, resolving [SP-5](https://github.com/t-kalinowski/mcp-console/issues/603).
+The trusted fixture driver first proves that it can enter its disposable network namespace, then supplies a validated handle to the sandboxed target.
+The disposable host process drops the driver's capabilities so they cannot conceal a ptrace bypass.
+This keeps namespace entry reachable even when procfs denies access to the host process's namespace link, and retains exact errors for both checks.
+
 These probes establish specific contracts, not proof against all kernel attacks.
 Fixture process-observation requirements are separate from production requirements.
 [Boundary tests](../tests/boundaries/README.md) covers capability skips and safe namespace-PID handling.
