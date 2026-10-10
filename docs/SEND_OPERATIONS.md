@@ -65,6 +65,9 @@ It does not start a missing worker or retarget a replacement.
 Interruption is cooperative: code can catch, delay, or block it.
 Use restart when fresh state is required.
 
+Managed R graphics can defer interruption while native callbacks or automatic device closure finish.
+See [Graphics interruption](GRAPHICS_INTERRUPTION.md) for bounded measurements and recovery coverage.
+
 A control-only interrupt may overlap a pending call.
 If that call owns polling or output delivery, interrupt returns a running notice without consuming its output.
 This is a control exception, not support for concurrent cells.
