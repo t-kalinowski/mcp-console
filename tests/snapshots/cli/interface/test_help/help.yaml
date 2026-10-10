@@ -8,9 +8,12 @@ stderr: |
   Usage: mcp-console [OPTIONS] <COMMAND>
 
   Commands:
-    serve    Run the MCP server over standard input and output
-    sandbox  Run a command with the default or an explicit sandbox policy
-    help     Print this message or the help of the given subcommand(s)
+    prepare-python-docs  Prepare the official text manual (trusted host
+                         administration; never fetched at startup)
+    serve                Run the MCP server over standard input and output
+    sandbox              Run a command with the default or an explicit sandbox
+                         policy
+    help                 Print this message or the help of the given subcommand(s)
 
   Options:
         --no-project-config   Skip trusted launch-directory project configuration;
@@ -38,9 +41,12 @@ stdout: |
   Usage: mcp-console [OPTIONS] <COMMAND>
 
   Commands:
-    serve    Run the MCP server over standard input and output
-    sandbox  Run a command with the default or an explicit sandbox policy
-    help     Print this message or the help of the given subcommand(s)
+    prepare-python-docs  Prepare the official text manual (trusted host
+                         administration; never fetched at startup)
+    serve                Run the MCP server over standard input and output
+    sandbox              Run a command with the default or an explicit sandbox
+                         policy
+    help                 Print this message or the help of the given subcommand(s)
 
   Options:
         --no-project-config

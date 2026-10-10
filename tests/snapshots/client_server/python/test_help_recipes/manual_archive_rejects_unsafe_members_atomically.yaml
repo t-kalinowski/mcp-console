@@ -1,0 +1,28 @@
+---
+member: ../escape.txt
+rejected: true
+published: false
+---
+member: /absolute.txt
+rejected: true
+published: false
+---
+member: python-bad-docs-text/a.txt
+rejected: true
+published: false
+---
+member: python-<active minor>-docs-text/../escape.txt
+rejected: true
+published: false
+---
+member: C:/escape.txt
+rejected: true
+published: false
+---
+member: back\slash.txt
+rejected: true
+published: false
+---
+member: python-<active minor>-docs-text/alias//
+rejected: true
+published: false

@@ -1,0 +1,15 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: help(str.upper)
+result:
+  content:
+    - type: text
+      text: |+
+        Help on method_descriptor:
+
+        upper(self, /) unbound builtins.str method
+            Return a copy of the string converted to uppercase.
+
+  isError: false

@@ -100,6 +100,18 @@ pub enum Command {
         #[arg(long)]
         status: bool,
     },
+    /// Prepare the official text manual (trusted host administration; never fetched at startup)
+    PreparePythonDocs {
+        /// Executable of the Python interpreter whose major/minor manual to prepare
+        #[arg(long, value_name = "PATH")]
+        python: PathBuf,
+        /// Import a previously downloaded official ZIP without networking
+        #[arg(long, value_name = "PATH", requires = "download_page")]
+        archive: Option<PathBuf>,
+        /// Saved official download HTML page, used for link and release provenance
+        #[arg(long, value_name = "PATH", requires = "archive")]
+        download_page: Option<PathBuf>,
+    },
     /// Run the MCP server over standard input and output
     Serve {
         #[command(flatten)]
