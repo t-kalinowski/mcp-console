@@ -1,11 +1,11 @@
 Package: mcp.console
-Title: Use MCP Console Tools and Sandboxed Commands
+Title: Use MCP Console with Typed Session Configuration
 Version: 0.0.0.9000
 Authors@R:
     person("Tomasz", "Kalinowski", , "kalinowskit@gmail.com", role = c("aut", "cre"))
 Description: Adds MCP Console to an 'ellmer' chat as a persistent workbench
     for R, Python, and DuckDB. Provides typed session configuration and
-    sandboxed system commands through the Console command-line interface.
+    sandbox permissions through the Console command-line interface.
 License: MIT + file LICENSE
 URL: https://t-kalinowski.github.io/mcp-console/r/,
     https://github.com/t-kalinowski/mcp-console

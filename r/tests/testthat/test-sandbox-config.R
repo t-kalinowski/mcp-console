@@ -143,20 +143,4 @@ test_that("invalid public launch options fail before executable resolution", {
     console_tool(config = list(), path = "missing"),
     "ConsoleConfig"
   )
-  expect_error(
-    sandboxed_system2("echo", sandbox = NULL, path = "missing"),
-    "SandboxPolicy"
-  )
-  expect_error(
-    sandboxed_system2("echo", sandbox = FALSE, path = "missing"),
-    "SandboxPolicy"
-  )
-  expect_error(
-    sandboxed_system2("echo", path = "missing", version = "0.0.2"),
-    "Only one"
-  )
-  expect_error(
-    sandboxed_system2("echo", typo = 1, path = "missing"),
-    "must be empty"
-  )
 })

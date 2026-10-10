@@ -47,7 +47,7 @@ config_flag <- function() {
 #' and which network connections it can make. Build a policy from the
 #' `SandboxFilesystem()` and `SandboxNetwork()` constructors, then pass it to
 #' `console_tool(config = ConsoleConfig(sandbox = policy))`. The same object
-#' can be reused with [sandboxed_system2()] or supplied as
+#' can also be supplied as
 #' `ConsoleConfig(resolver = ResolverConfig(sandbox = policy))` to configure
 #' dependency preparation separately.
 #'
@@ -58,8 +58,7 @@ config_flag <- function() {
 #' `console_tool()` also skips configuration-file discovery by default.
 #' An explicit policy replaces permissions from any files you opt into reading.
 #' To disable sandboxing for both workers and preparation, use
-#' `ConsoleConfig(sandbox = FALSE)`; `sandboxed_system2()` always requires a
-#' policy and does not accept `FALSE`.
+#' `ConsoleConfig(sandbox = FALSE)`.
 #'
 #' @section Reading and writing files:
 #' `SandboxFilesystem()` groups paths by the access you want to permit:
@@ -78,9 +77,9 @@ config_flag <- function() {
 #' Workers retain their host-read baseline.
 #'
 #' Paths are literal, without globs or automatic `~` or environment-variable
-#' expansion. Relative paths use `console_tool(project = ...)`, or the launch
-#' directory of `sandboxed_system2()`. Changing the worker's directory later
-#' does not move those grants. To deny a home-directory path, construct an
+#' expansion. Relative paths use `console_tool(project = ...)`. Changing the
+#' worker's directory later does not move those grants. To deny a home-directory
+#' path, construct an
 #' absolute path explicitly, for example `file.path(path.expand("~"), ".ssh")`.
 #' The wrapper does not resolve symlinks or create configured directories.
 #' Create writable directories before launching; directory roots are the
@@ -461,19 +460,6 @@ S7::method(as.list, ConfigNode) <- function(x, ...) {
   config_mapping(S7::props(x))
 }
 
-check_sandbox_policy <- function(sandbox) {
-  if (!S7::S7_inherits(sandbox, SandboxPolicy)) {
-    stop("`sandbox` must be a SandboxPolicy() object.", call. = FALSE)
-  }
-  S7::validate(sandbox)
-  invisible(NULL)
-}
-
 config_override <- function(key, value) {
   c("-c", paste0(key, "=", jsonlite::toJSON(value, auto_unbox = TRUE)))
-}
-
-sandbox_cli_arguments <- function(sandbox) {
-  check_sandbox_policy(sandbox)
-  c("-c", "sandbox=null", config_override("sandbox", as.list(sandbox)))
 }

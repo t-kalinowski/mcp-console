@@ -126,9 +126,9 @@ It cannot be combined with an explicit resolver policy.
 Those choices remain available as `config@discovery` and `config@sandbox`.
 The native CLI owns final validation, defaults, supported paths, and platform capabilities.
 
-## Sandbox policies and commands
+## Sandbox policies
 
-A `SandboxPolicy()` can be reused for the worker, resolver, or a one-off command.
+A `SandboxPolicy()` can configure worker or resolver permissions.
 Its nested classes are `SandboxFilesystem`, `SandboxNetwork`, `SandboxProxy`, `SandboxDomains`, and `SandboxSockets`.
 An empty worker policy grants no workspace writes or networking.
 This is a host-read/private-write baseline, not filesystem secrecy: sensitive readable locations need explicit denial.
@@ -137,13 +137,6 @@ Create required output directories on the host before granting them; R does not 
 ```r
 policy <- SandboxPolicy(filesystem = SandboxFilesystem(read_write = "./output"))
 tool <- console_tool(config = ConsoleConfig(sandbox = policy))
-sandboxed_system2(
-  file.path(R.home("bin"), "Rscript"),
-  c("--vanilla", "-e", shQuote("cat(1 + 1, '\\n')")),
-  stdout = TRUE,
-  sandbox = policy,
-  path = Sys.which("mcp-console")
-)
 ```
 
 `NULL` policy properties are omitted, `SandboxFilesystem()` is an explicit empty mapping, and `read_write = character()` is an explicit empty sequence.
@@ -151,10 +144,4 @@ Serialization preserves these distinctions.
 Worker and resolver policies are independent; an omitted resolver filesystem retains its native cache grants, while an explicit mapping replaces them.
 Explicit resolver sandbox policies are unsupported on Windows, where preparation runs with host permissions.
 
-`sandboxed_system2()` always disables config-file discovery and requires a `SandboxPolicy()`.
-It retains `system2()`'s already-quoted argument convention.
-On Unix, shell fragments execute inside the sandbox.
-On Windows, there is no added shell; `env` has base R's command-line-assignment limitations.
-R opens `stdin`/`stdout`/`stderr` files on the host and passes those authorized streams across the boundary.
-Native policy support, setup, and process retirement remain Console's responsibility.
-See `?ConsoleConfig`, `?SandboxPolicy`, and `?sandboxed_system2`.
+See `?ConsoleConfig` and `?SandboxPolicy`.

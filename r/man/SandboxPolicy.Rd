@@ -87,7 +87,7 @@ A \code{SandboxPolicy()} describes which files sandboxed code can read or change
 and which network connections it can make. Build a policy from the
 \code{SandboxFilesystem()} and \code{SandboxNetwork()} constructors, then pass it to
 \code{console_tool(config = ConsoleConfig(sandbox = policy))}. The same object
-can be reused with \code{\link[=sandboxed_system2]{sandboxed_system2()}} or supplied as
+can also be supplied as
 \code{ConsoleConfig(resolver = ResolverConfig(sandbox = policy))} to configure
 dependency preparation separately.
 }
@@ -99,8 +99,7 @@ reading sensitive files unless you explicitly deny their paths.
 \code{console_tool()} also skips configuration-file discovery by default.
 An explicit policy replaces permissions from any files you opt into reading.
 To disable sandboxing for both workers and preparation, use
-\code{ConsoleConfig(sandbox = FALSE)}; \code{sandboxed_system2()} always requires a
-policy and does not accept \code{FALSE}.
+\code{ConsoleConfig(sandbox = FALSE)}.
 }
 \section{Reading and writing files}{
 
@@ -121,9 +120,9 @@ Adding a \code{read_only} path does not make all other host files unreadable.
 Workers retain their host-read baseline.
 
 Paths are literal, without globs or automatic \code{~} or environment-variable
-expansion. Relative paths use \code{console_tool(project = ...)}, or the launch
-directory of \code{sandboxed_system2()}. Changing the worker's directory later
-does not move those grants. To deny a home-directory path, construct an
+expansion. Relative paths use \code{console_tool(project = ...)}. Changing the
+worker's directory later does not move those grants. To deny a home-directory
+path, construct an
 absolute path explicitly, for example \code{file.path(path.expand("~"), ".ssh")}.
 The wrapper does not resolve symlinks or create configured directories.
 Create writable directories before launching; directory roots are the

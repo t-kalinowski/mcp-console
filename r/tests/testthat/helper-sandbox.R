@@ -36,41 +36,6 @@ with_sandbox_directory <- function(code) {
   force(code)
 }
 
-sandbox_rscript <- function(code, ..., sandbox = SandboxPolicy()) {
-  sandboxed_system2(
-    file.path(R.home("bin"), "Rscript"),
-    c("--vanilla", "-e", shQuote(code)),
-    ...,
-    sandbox = sandbox,
-    path = sandbox_test_binary()
-  )
-}
-
-# This fixture is an argv/transport probe, NOT a sandbox implementation.
-# Its marker is introduced after the outer shell has launched the fake CLI.
-with_fake_sandbox <- function(code) {
-  skip_on_os("windows")
-  directory <- tempfile("mcp-console-fake-")
-  stopifnot(dir.create(directory))
-  on.exit(unlink(directory, recursive = TRUE), add = TRUE)
-  path <- file.path(directory, "console with spaces")
-  record <- file.path(directory, "argv")
-  writeLines(
-    c(
-      "#!/bin/sh",
-      paste("printf '%s\\n' \"$@\" >", shQuote(record)),
-      "while [ \"$#\" -gt 0 ] && [ \"$1\" != '--' ]; do shift; done",
-      "[ \"$#\" -gt 0 ] || exit 64",
-      "shift",
-      "export MCP_CONSOLE_TEST_INSIDE=inside",
-      "exec \"$@\""
-    ),
-    path
-  )
-  Sys.chmod(path, "0755")
-  code(path, record)
-}
-
 with_console_config_probe <- function(code) {
   skip_on_os("windows")
   directory <- tempfile("mcp-console-mcp-probe-")

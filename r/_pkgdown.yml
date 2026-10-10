@@ -43,4 +43,3 @@ reference:
     - SandboxProxy
     - SandboxSockets
     - SandboxNetwork
-    - sandboxed_system2
