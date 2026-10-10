@@ -117,6 +117,7 @@ Use `sleep` or `plot-sleep` instead of `lines` for the interruptible wait compar
 Use fresh trial labels for repetitions, with at most three repetitions per comparison.
 Each invocation retains `<label>.json`, `<label>.calls.json`, and `<label>.sample.txt` in the chosen output directory.
 The report includes per-trial limits, phase CPU/wall markers, timing, RSS, sampling gaps, recovery state, PNG cleanup, and process exit.
+Its image count and settled text include admission, control, and polling responses, each retained once.
 It intentionally rejects another host instead of substituting a different observation method.
 
 ## Where interruption waits
@@ -141,6 +142,7 @@ The investigation makes no changes to these production paths.
 
 ```sh
 scripts/test client_server/r/test_graphics_interrupts
+python3 tests/graphics_interrupt_benchmark.py
 ```
 
 The public regression module uses a small plot and an R tracer with a native FIFO gate during automatic closure.
@@ -148,3 +150,6 @@ The gate has no R checkpoint and stays blocked until explicitly released; it is 
 One case verifies pending interruption, completed image delivery, preserved objects, device/file cleanup, and another plot after release.
 The other leaves the gate blocked and verifies public restart, confirmed old-worker retirement, temporary-directory cleanup, state loss, and plotting in the replacement.
 Both cases run in direct and sandbox modes on supported POSIX hosts with native fixture capability.
+
+The Mac benchmark check runs the documented entry point against real MCP responses, holding admission open until a small plot and text marker complete.
+It verifies that completion, interrupt, and restart reports retain that admission output exactly once; it does not measure native interruption latency.

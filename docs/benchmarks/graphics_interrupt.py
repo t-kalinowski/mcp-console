@@ -277,6 +277,7 @@ cat(Sys.getpid(), tempdir(), R.version.string, R.version$platform,
             admitted_at = time.monotonic()
             result = client.send(r=program, timeout_ms=0)
             report["admission_ms"] = 1000 * (time.monotonic() - admitted_at)
+            outputs = [result]
             if action != "complete":
                 try:
                     report["phase_enter"] = marker(directory / f"{phase}_enter", watch)
@@ -286,10 +287,10 @@ cat(Sys.getpid(), tempdir(), R.version.string, R.version$platform,
                 control_wall = time.time()
                 control_at = time.monotonic()
                 result = client.send(control=action, timeout_ms=0)
+                outputs.append(result)
                 report["control_wall"] = control_wall
                 report["control_ms"] = 1000 * (time.monotonic() - control_at)
                 report["control_text"] = text(result)
-            outputs = [result]
             while "[running" in text(result) or "[worker starting]" in text(result):
                 watch.check()
                 result = client.send(timeout_ms=30000)
