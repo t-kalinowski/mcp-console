@@ -37,6 +37,11 @@ Use ordinary package-loading operations.
 In managed automatic mode, reached missing-package loads can prepare dependencies without rerunning the cell.
 A sandboxed R worker also has a temporary writable library; manual installations there last only for that worker and remain subject to permissions.
 
+### Installed documentation
+
+Use the [R help recipes](R_HELP.md) to retrieve bounded text from installed packages through ordinary R cells, including qualified topics, operators, package indexes, and candidate searches.
+The recipes report package/version provenance and support paging without a browser or interactive help menu.
+
 ## Python
 
 Python cells execute in persistent `__main__.__dict__`; the final expression is displayed.
