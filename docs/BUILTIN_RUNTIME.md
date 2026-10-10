@@ -39,8 +39,8 @@ A sandboxed R worker also has a temporary writable library; manual installations
 
 ### Installed documentation
 
-Use the [R help recipes](R_HELP.md) for a standalone, bounded installed-topic lookup through an ordinary R cell.
-Optional additions cover installed versions, candidate searches, package indexes, and precise paging without a browser or interactive help menu.
+Use the [R help recipes](R_HELP.md) for an ordinary qualified lookup of installed documentation through an R cell.
+Optional additions cover a text pager, capture, installed versions, candidate searches, package indexes, and precise paging without a browser or interactive help menu.
 
 ## Python
 

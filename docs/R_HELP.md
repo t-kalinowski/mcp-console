@@ -1,18 +1,53 @@
 # Read installed R documentation
 
 Submit these R cells through Console's `send(r=...)` interface to retrieve help from the packages installed in the session.
-Start with the standalone topic lookup below; discovery, installed-version provenance, and precise paging are optional additions.
+Start with the ordinary qualified lookup below; a text pager, capture, discovery, installed-version provenance, and precise paging are optional additions.
 These cells do not install packages or run the examples printed in a help page.
-
-R's ordinary help display can use a browser, external pager, or an interactive menu for ambiguous topics.
-The recipe below selects one package and library, requests text explicitly, and captures the rendered file with a function-valued pager.
-It uses the public [`help()`](https://stat.ethz.ch/R-manual/R-devel/library/utils/html/help.html), [`file.show()`](https://stat.ethz.ch/R-manual/R-devel/library/base/html/file.show.html), and [`Rd2txt_options()`](https://stat.ethz.ch/R-manual/R-devel/library/tools/html/Rd2txt_options.html) interfaces.
 
 ## Read an installed topic
 
-Submit this cell as-is for `stats::lm`.
+In a default Console session, R's ordinary qualified [`help()`](https://stat.ethz.ch/R-manual/R-devel/library/utils/html/help.html) lookup displays installed documentation as text:
+
+<!-- recipe: ordinary-topic -->
+```r
+utils::help("mean", package = "base", help_type = "text")
+```
+
+Specify the package to select the topic without an ambiguity menu.
+Operators are quoted strings, for example `utils::help("[", package = "base", help_type = "text")`.
+Console bounds the response to its [8 KiB text budget](API.md#output-limits); use the optional capture and paging recipes below to inspect a long page in smaller windows.
+
+For the installed package version, submit a separate cell:
+
+<!-- recipe: quick-version -->
+```r
+utils::packageVersion("base", lib.loc = .libPaths())
+```
+
+## Optional: choose a text pager
+
+If the session has a custom pager, this small scoped option writes the rendered text directly to Console and restores the prior pager afterward:
+
+<!-- recipe: text-pager -->
+```r
+local({
+  old <- options(pager = function(files, header, title, delete.file) {
+    writeLines(enc2utf8(readLines(files, warn = FALSE)), useBytes = TRUE)
+    if (delete.file) unlink(files)
+  })
+  on.exit(options(old))
+  print(utils::help("mean", package = "base", help_type = "text"))
+})
+```
+
+This uses the public [`file.show()`](https://stat.ethz.ch/R-manual/R-devel/library/base/html/file.show.html) pager interface.
+Explicit text mode avoids HTML and PDF rendering.
+
+## Optional: retain a bounded excerpt
+
+To retain the complete page in a session variable while displaying a short excerpt, submit this cell for `stats::lm`.
 Change `package` and `topic` for another qualified topic, including operators such as `package <- "base"` and `topic <- "["`.
-No helper definitions are needed.
+It captures the rendered file with a scoped pager and uses the public [`Rd2txt_options()`](https://stat.ethz.ch/R-manual/R-devel/library/tools/html/Rd2txt_options.html) formatting interface.
 
 <!-- recipe: quick-topic -->
 ```r
@@ -54,14 +89,7 @@ Submit it alone so other output does not consume Console's [8 KiB response budge
 The complete page stays in `help_text`, and the prior pager and text-format settings are restored on success or error.
 Missing packages and topics fail without package preparation or a selection menu.
 
-For the installed package version, with the same `.libPaths()` used for lookup:
-
-<!-- recipe: quick-version -->
-```r
-utils::packageVersion("stats", lib.loc = .libPaths())
-```
-
-For candidate discovery, use the search cell under [Discover an ambiguous topic](#discover-an-ambiguous-topic); then put the selected package and topic into the cell above.
+For candidate discovery, use the search cell under [Discover an ambiguous topic](#discover-an-ambiguous-topic); then put the selected package and topic into either lookup above.
 Use the optional recipe below when you need full provenance, a package index, or later line windows.
 
 ## Optional: full provenance and precise paging

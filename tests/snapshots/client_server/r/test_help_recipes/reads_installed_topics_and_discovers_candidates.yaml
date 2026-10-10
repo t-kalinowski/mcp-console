@@ -3,6 +3,84 @@
 ---
 send:
   r: |
+    options(useFancyQuotes = FALSE)
+    tools::Rd2txt_options(width = 80L, underline_titles = FALSE)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    utils::help("mean", package = "base", help_type = "text")
+result:
+  content:
+    - type: text
+      text: |+
+        mean                   package:base                    R Documentation
+
+        Arithmetic Mean
+
+        Description:
+
+             Generic function for the (trimmed) arithmetic mean.
+
+        Usage:
+
+             mean(x, ...)
+
+             ## Default S3 method:
+             mean(x, trim = 0, na.rm = FALSE, ...)
+
+        Arguments:
+
+               x: an R object.  Currently there are methods for numeric/logical
+                  vectors and date, date-time and time interval objects.
+                  Complex vectors are allowed for 'trim = 0', only.
+
+            trim: the fraction (0 to 0.5) of observations to be trimmed from
+                  each end of 'x' before the mean is computed.  Values of trim
+                  outside that range are taken as the nearest endpoint.
+
+           na.rm: a logical evaluating to 'TRUE' or 'FALSE' indicating whether
+                  'NA' values should be stripped before the computation
+                  proceeds.
+
+             ...: further arguments passed to or from other methods.
+
+        Value:
+
+             If 'trim' is zero (the default), the arithmetic mean of the values
+             in 'x' is computed, as a numeric or complex vector of length one.
+             If 'x' is not logical (coerced to numeric), numeric (including
+             integer) or complex, 'NA_real_' is returned, with a warning.
+
+             If 'trim' is non-zero, a symmetrically trimmed mean is computed
+             with a fraction of 'trim' observations deleted from each end
+             before the mean is computed.
+
+        References:
+
+             Becker RA, Chambers JM, Wilks AR (1988). _The New S Language_.
+             Chapman and Hall/CRC, London. ISBN 053409192X.
+
+        See Also:
+
+             'weighted.mean', 'mean.POSIXct', 'colMeans' for row and column
+             means.
+
+        Examples:
+
+             x <- c(0:10, 50)
+             xm <- mean(x)
+             c(xm, mean(x, trim = 0.10))
+
+
+  isError: false
+---
+send:
+  r: |
     options(
       help_type = "html",
       browser = function(...) stop("browser invoked"),
@@ -12,6 +90,90 @@ send:
     )
     inherited_options <- options()[c("help_type", "browser", "pager")]
     inherited_format <- tools::Rd2txt_options()
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    local({
+      old <- options(pager = function(files, header, title, delete.file) {
+        writeLines(enc2utf8(readLines(files, warn = FALSE)), useBytes = TRUE)
+        if (delete.file) unlink(files)
+      })
+      on.exit(options(old))
+      print(utils::help("mean", package = "base", help_type = "text"))
+    })
+result:
+  content:
+    - type: text
+      text: |+
+        mean                   package:base                    R Documentation
+
+        Arithmetic Mean
+
+        Description:
+
+             Generic function for the (trimmed) arithmetic mean.
+
+        Usage:
+
+             mean(x, ...)
+
+             ## Default S3 method:
+             mean(x, trim = 0, na.rm = FALSE, ...)
+
+        Arguments:
+
+               x: an R object.  Currently there are methods for numeric/logical
+                  vectors and date, date-time and time interval objects.
+                  Complex vectors are allowed for 'trim = 0', only.
+
+            trim: the fraction (0 to 0.5) of observations to be trimmed from
+                  each end of 'x' before the mean is computed.  Values of trim
+                  outside that range are taken as the nearest endpoint.
+
+           na.rm: a logical evaluating to 'TRUE' or 'FALSE' indicating whether
+                  'NA' values should be stripped before the computation
+                  proceeds.
+
+             ...: further arguments passed to or from other methods.
+
+        Value:
+
+             If 'trim' is zero (the default), the arithmetic mean of the values
+             in 'x' is computed, as a numeric or complex vector of length one.
+             If 'x' is not logical (coerced to numeric), numeric (including
+             integer) or complex, 'NA_real_' is returned, with a warning.
+
+             If 'trim' is non-zero, a symmetrically trimmed mean is computed
+             with a fraction of 'trim' observations deleted from each end
+             before the mean is computed.
+
+        References:
+
+             Becker RA, Chambers JM, Wilks AR (1988). _The New S Language_.
+             Chapman and Hall/CRC, London. ISBN 053409192X.
+
+        See Also:
+
+             'weighted.mean', 'mean.POSIXct', 'colMeans' for row and column
+             means.
+
+        Examples:
+
+             x <- c(0:10, 50)
+             xm <- mean(x)
+             c(xm, mean(x, trim = 0.10))
+
+  isError: false
+---
+send:
+  r: >-
+    stopifnot(identical(options()[names(inherited_options)],
+    inherited_options))
 result:
   content:
     - type: text
@@ -68,7 +230,7 @@ result:
 ---
 send:
   r: |
-    utils::packageVersion("stats", lib.loc = .libPaths())
+    utils::packageVersion("base", lib.loc = .libPaths())
 result:
   content:
     - type: text

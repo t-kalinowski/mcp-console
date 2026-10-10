@@ -60,10 +60,29 @@ def help_output(client: McpClient, package: str, topic: str) -> str:
 def test_reads_installed_topics_and_discovers_candidates(
     binary: Path, execution: Execution
 ) -> Transcript:
+    ordinary_topic = recipe("ordinary-topic")
     quick_topic = recipe("quick-topic")
     definitions = recipe("definitions")
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
+        # Fix presentation across R versions; keep Console's default pager.
+        client.expect(
+            # fmt: r
+            r=code(r"""
+                options(useFancyQuotes = FALSE)
+                tools::Rd2txt_options(width = 80L, underline_titles = FALSE)
+                """),
+        )
+        client.send(r=ordinary_topic)
+        text = last_tool_text(client)
+        assert len(text.encode("utf-8")) < 8192, text
+        assert "package:base" in text and "Arithmetic Mean" in text, text
+        assert "Examples:" in text, text
+        assert "[running" not in text and "[input" not in text, text
+        # Rd indents empty lines; discard only that incidental presentation.
+        client.transcript[-1]["result"]["content"][0]["text"] = re.sub(
+            r"(?m)^[ \t]+$", "", text
+        )
         # Inherited HTML/viewer settings must not affect explicit retrieval.
         client.expect(
             # fmt: r
@@ -78,6 +97,18 @@ def test_reads_installed_topics_and_discovers_candidates(
                 inherited_options <- options()[c("help_type", "browser", "pager")]
                 inherited_format <- tools::Rd2txt_options()
                 """),
+        )
+        client.send(r=recipe("text-pager"))
+        text = last_tool_text(client)
+        assert len(text.encode("utf-8")) < 8192, text
+        assert "package:base" in text and "Arithmetic Mean" in text, text
+        assert "Examples:" in text, text
+        assert "[running" not in text and "[input" not in text, text
+        client.transcript[-1]["result"]["content"][0]["text"] = re.sub(
+            r"(?m)^[ \t]+$", "", text
+        )
+        client.expect(
+            r="stopifnot(identical(options()[names(inherited_options)], inherited_options))",
         )
         client.send(r=quick_topic)
         text = last_tool_text(client)
