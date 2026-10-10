@@ -19,7 +19,7 @@ from support.suites import run_this_suite
 def test_documents_existing_module_and_function_with_provenance(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory:
+    with tempfile.TemporaryDirectory(prefix="PythonHelp-") as directory:
         workspace = Path(directory).resolve()
         module_path = workspace / "recipe_example.py"
         module_path.write_text(
@@ -77,10 +77,16 @@ def test_documents_existing_module_and_function_with_provenance(
             assert "[documentation preview;" not in output and "\b" not in output, (
                 output
             )
-            assert output.count(str(module_path)) == 2, output
-            client.transcript[-1]["result"]["content"][0]["text"] = output.replace(
-                version, "Python <installed version>"
-            ).replace(str(module_path), "<workspace>/recipe_example.py")
+            file_section = re.search(r"\nFILE\n    ([^\n]+)\n", output)
+            assert file_section is not None, output
+            file_path = file_section.group(1)
+            # pydoc's FILE path is normcase-normalized, unlike module provenance.
+            assert Path(file_path).samefile(module_path), output
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                output.replace(version, "Python <installed version>")
+                .replace(str(module_path), "<workspace>/recipe_example.py")
+                .replace(file_path, "<workspace>/recipe_example.py")
+            )
             return client.finish()
 
 
