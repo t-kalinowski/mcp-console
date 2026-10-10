@@ -60,6 +60,8 @@ Sleeps, broader matching, and longer timeouts do not establish ordering.
 Give cold preparation an explicit longer budget.
 The default `send` observation deadline can return while setup is still running; establish completion before dependent requests.
 Use the client's preparation budget for resolver collection and initial requirements inspection.
+Use `McpClient.response_deadline()` for client-aware fixture waits so the remaining case deadline retains its shutdown and reap reserve.
+Convert the absolute deadline to a nonnegative timeout immediately before blocking.
 Retain raw exchanges when delivery or polling is the contract being tested.
 
 See the [Python lifecycle cases](client_server/python/test_lifecycle.py) and [retention cases](client_server/output/test_spools.py).

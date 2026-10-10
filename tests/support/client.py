@@ -262,7 +262,8 @@ class McpClient:
         self.stdin.flush()
         return entry
 
-    def _read_response_line(self) -> str:
+    def response_deadline(self) -> float:
+        """Bound response and fixture waits while reserving case cleanup time."""
         deadline = time.monotonic() + self.response_timeout
         if (
             case_deadline := os.environ.get("MCP_CONSOLE_TEST_CASE_DEADLINE")
@@ -270,6 +271,10 @@ class McpClient:
             deadline = min(
                 deadline, float(case_deadline) - CASE_RESPONSE_RESERVE_SECONDS
             )
+        return deadline
+
+    def _read_response_line(self) -> str:
+        deadline = self.response_deadline()
         while b"\n" not in self.stdout.buffer and not self.stdout.eof:
             self._wait_for_output(deadline, "response")
         if self.stdout.buffer:

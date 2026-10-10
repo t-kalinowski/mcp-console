@@ -1,7 +1,9 @@
 #!/usr/bin/env -S uv run --script
 
+import select
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -749,6 +751,10 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
         library = root / "cancelled-interrupt-candidate"
         library.mkdir()
         environment = _fake_ir_environment(root, [library])
+        resolver_started = FifoCheckpoint.create(root / "resolver-started")
+        resolver_release = FifoCheckpoint.create(root / "resolver-release")
+        environment["MCP_CONSOLE_TEST_IR_STARTED"] = str(resolver_started.path)
+        environment["MCP_CONSOLE_TEST_IR_RELEASE"] = str(resolver_release.path)
         client = ServerRelayClient(
             binary,
             "cancelled_interrupt_during_live_r_preparation",
@@ -770,6 +776,7 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
         interrupt_ack_release = FifoCheckpoint.attach(
             relay_root / INTERRUPT_ACK_RELEASE_NAME
         )
+        resolver_released = False
         preparation_released = False
         interrupt_ack_released = False
         finished = False
@@ -777,6 +784,21 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
             preparation = client.client.start_send(
                 requirements={"r": ["cancelled-interrupt"]},
             )
+            # Cold resolver launch has the preparation budget. Only start the
+            # short relay receipt wait after the resolver reaches its gate.
+            readable, _, _ = select.select(
+                [resolver_started.descriptor, client.client.stdout],
+                [],
+                [],
+                max(0, client.client.response_deadline() - time.monotonic()),
+            )
+            assert readable, "R resolver did not reach its preparation gate"
+            if client.client.stdout in readable:
+                client.client.receive(preparation)
+                raise AssertionError(preparation)
+            resolver_started.wait(timeout=0)
+            resolver_release.release()
+            resolver_released = True
             preparation_received.wait()
 
             interrupt = client.client.start_send(
@@ -818,6 +840,8 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
             transcript = client.finish_active()
             finished = True
         finally:
+            if not resolver_released:
+                resolver_release.release()
             if not interrupt_ack_released:
                 interrupt_ack_release.release()
             if not preparation_released:
@@ -827,6 +851,8 @@ def test_cancelled_interrupt_during_live_preparation_does_not_recover_running(
             preparation_sent.close()
             interrupt_received.close()
             interrupt_ack_release.close()
+            resolver_started.close()
+            resolver_release.close()
             if not finished:
                 stop_client(client.client)
                 client._temporary.cleanup()
