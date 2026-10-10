@@ -30,6 +30,7 @@ def interrupt_held_evaluator(
                 "bootstrap-completing",
                 "bootstrap-release",
                 "bootstrap-signal",
+                "evaluator-waiting",
                 "evaluator-reached",
                 "evaluator-release",
                 "receipt-processed",
@@ -53,6 +54,9 @@ def interrupt_held_evaluator(
                 ),
                 "MCP_CONSOLE_TEST_BOOTSTRAP_SIGNAL": str(
                     checkpoints["bootstrap-signal"].path
+                ),
+                "MCP_CONSOLE_TEST_EVALUATOR_WAITING": str(
+                    checkpoints["evaluator-waiting"].path
                 ),
                 "MCP_CONSOLE_TEST_EVALUATOR_REACHED": str(
                     checkpoints["evaluator-reached"].path
@@ -81,6 +85,9 @@ def interrupt_held_evaluator(
                         "the accepted evaluator has not begun its first bootstrap wait"
                     )
                 else:
+                    checkpoints["evaluator-waiting"].wait(
+                        "the evaluator entered its bootstrap condition wait"
+                    )
                     checkpoints["bootstrap-release"].release()
                     checkpoints["evaluator-reached"].wait(
                         "the bootstrap receipt woke the evaluator before Evaluate dispatch"

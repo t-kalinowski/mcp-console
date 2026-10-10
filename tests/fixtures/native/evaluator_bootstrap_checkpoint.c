@@ -71,6 +71,9 @@ static int observed_wait(pthread_cond_t *condition, pthread_mutex_t *mutex) {
             hold_evaluator(mutex);
             return 0;
         }
+        // Keep the operation mutex until the native wait atomically releases
+        // it. Receipt processing cannot race ahead of this wait-entry marker.
+        notify("MCP_CONSOLE_TEST_EVALUATOR_WAITING");
     }
     int result = pthread_cond_wait(condition, mutex);
     if (result == 0 && evaluator && atomic_load(&receipt_processed))
