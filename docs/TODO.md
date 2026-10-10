@@ -57,6 +57,13 @@ Audit through full-suite capability diagnostics; see [Windows parity](WINDOWS.md
 Reproduce against current tooling before removing the tested Python 3.13 recommendation.
 This concerns the test runner, not a blanket claim that Console cannot embed later Python versions.
 
+**SP-5 — Make inherited-procfs error coverage portable.** At Console `071101d9` with companion `42322a39`, the Linux audit on 2026-10-10 observed `network_setns: errno:13` (EACCES) where the inherited-procfs transcript expects `errno:22` (EINVAL).
+This reproduced on Ubuntu 24.04 and in an Ubuntu 26.04 container sharing the host's Linux 6.8 kernel, including root and ordinary-user execution.
+All policy and supervisor-isolation assertions passed; the remaining failure is the exact error transcript.
+On the audited host, opening `/proc/<fixture-pid>/ns/net` fails before `setns()` runs.
+Identify why the denial stage differs and make the fixture deterministic without masking a bypass, weakening assertions, or discarding complete errors.
+See the [public regression](../tests/boundaries/cli/sandbox/test_procfs.py) and its [disposable probe](../tests/fixtures/cli/sandbox/procfs.py).
+
 ## Documentation and agent usability
 
 **DX-1 — Measure tool-description changes with agent evaluations.** This documentation refactor does not change advertised tool prose.
