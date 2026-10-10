@@ -49,6 +49,9 @@ Startup hooks run before cells, and attaching reticulate later preserves the run
 The working-directory import entry follows `os.chdir()`.
 Managed automatic mode can resolve reached missing imports; existing environments require preinstalled packages.
 
+Use `help(object)` for installed documentation and `_console.python_docs()` for a prepared, worker-local official text manual.
+See [Python documentation](PYTHON_HELP.md) for preparation, provenance, file-reading examples, and native read-only limits.
+
 Console does not provide a notebook event loop.
 Manage asynchronous work explicitly.
 Background threads and subprocesses can produce raw output, but managed dependency resolution is restricted to the owning interpreter thread.

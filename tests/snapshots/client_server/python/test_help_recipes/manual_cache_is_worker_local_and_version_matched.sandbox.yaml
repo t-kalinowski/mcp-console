@@ -1,0 +1,150 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    import os
+    import sys
+    from pathlib import Path
+
+    docs = _console.python_docs()
+    assert docs["python_minor"] == f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert docs["python_version"] == sys.version.split()[0]
+    assert (
+        docs["directory"]
+        == Path(os.environ["MCP_CONSOLE_PYTHON_DOCS"]) / docs["python_minor"] / "manual"
+    )
+    assert docs["download_page_release"] == docs["python_minor"] + ".99"
+    assert "Python standard library" in (docs["directory"] / "library/index.txt").read_text(
+        encoding="utf-8"
+    )
+    print(
+        [
+            p.name
+            for p in docs["directory"].rglob("*.txt")
+            if "json.loads" in p.read_text(encoding="utf-8")
+        ]
+    )
+    assert (
+        (docs["directory"] / "copyright.txt")
+        .read_text()
+        .startswith("Python Software Foundation")
+    )
+    assert (
+        (docs["directory"] / "license.txt")
+        .read_text()
+        .startswith("Python Software Foundation")
+    )
+    print("active manual read")
+result:
+  content:
+    - type: text
+      text: |
+        ['json.txt']
+        active manual read
+  isError: false
+---
+send:
+  python: |
+    canary = docs["directory"] / "contents.txt"
+    original = canary.read_text(encoding="utf-8")
+    try:
+        canary.write_text("overwrite", encoding="utf-8")
+    except PermissionError:
+        assert os.environ.get("MCP_CONSOLE_SANDBOX") == "1"
+        print("persistent write denied")
+    else:
+        assert os.environ.get("MCP_CONSOLE_SANDBOX") != "1"
+        canary.write_text(original, encoding="utf-8")
+        print("host write allowed")
+result:
+  content:
+    - type: text
+      text: |
+        persistent write denied
+  isError: false
+---
+send:
+  python: |
+    import subprocess
+
+    refused = subprocess.run(
+        ["<mcp-console binary>", "prepare-python-docs", "--python", sys.executable],
+        capture_output=True,
+        text=True,
+    )
+    assert refused.returncode == 1
+    print(refused.stderr.strip())
+result:
+  content:
+    - type: text
+      text: >
+        cannot prepare Python documentation: prepare-python-docs is trusted host
+        administration; run it outside evaluated cells
+  isError: false
+---
+send:
+  python: >-
+    os.environ["MCP_CONSOLE_PYTHON_DOCS"] += "-absent";
+    print(_console.python_docs()); print(42)
+result:
+  content:
+    - type: text
+      text: |
+        None
+        42
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  python: |
+    import os
+    import sys
+    from pathlib import Path
+
+    docs = _console.python_docs()
+    assert docs["python_minor"] == f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert docs["python_version"] == sys.version.split()[0]
+    assert (
+        docs["directory"]
+        == Path(os.environ["MCP_CONSOLE_PYTHON_DOCS"]) / docs["python_minor"] / "manual"
+    )
+    assert docs["download_page_release"] == docs["python_minor"] + ".99"
+    assert "Python standard library" in (docs["directory"] / "library/index.txt").read_text(
+        encoding="utf-8"
+    )
+    print(
+        [
+            p.name
+            for p in docs["directory"].rglob("*.txt")
+            if "json.loads" in p.read_text(encoding="utf-8")
+        ]
+    )
+    assert (
+        (docs["directory"] / "copyright.txt")
+        .read_text()
+        .startswith("Python Software Foundation")
+    )
+    assert (
+        (docs["directory"] / "license.txt")
+        .read_text()
+        .startswith("Python Software Foundation")
+    )
+    print("active manual read")
+result:
+  content:
+    - type: text
+      text: |
+        ['json.txt']
+        active manual read
+  isError: false

@@ -101,15 +101,18 @@ result:
               Evaluate one complete Python cell in persistent `__main__` state. The
               final visible expression autoprints; leave the primary result last. Use
               `help(object)` for installed documentation; bare `help()` prompts.
-              Import packages normally; managed sessions prepare missing PyPI
-              distributions on first import. Use `requirements.python` when import and
-              distribution names differ or to prepare before execution. Access R
-              globals and call functions through `r.name`. Select a user-owned DB-API
-              connection for SQL cells with `_console.sql_connection(connection)`;
-              restore managed DuckDB with `_console.sql_connection(None)`. For R-owned
-              DuckDB, bind Python frames to an R name through `r` before querying.
-              `_console.sql_connection()` returns the active native Python connection,
-              or errors if SQL uses R; on Python-owned DuckDB, register frames with
+              `_console.python_docs()` returns the prepared official text manual
+              directory/provenance for the active Python minor, or `None` if absent on
+              this worker host. Import packages normally; managed sessions prepare
+              missing PyPI distributions on first import. Use `requirements.python`
+              when import and distribution names differ or to prepare before
+              execution. Access R globals and call functions through `r.name`. Select
+              a user-owned DB-API connection for SQL cells with
+              `_console.sql_connection(connection)`; restore managed DuckDB with
+              `_console.sql_connection(None)`. For R-owned DuckDB, bind Python frames
+              to an R name through `r` before querying. `_console.sql_connection()`
+              returns the active native Python connection, or errors if SQL uses R; on
+              Python-owned DuckDB, register frames with
               `_console.sql_connection().register(name, frame)` (globals are not
               scanned). `matplotlib.pyplot.show()` returns open figures as PNGs
               immediately and closes them. At cell end, even after errors, remaining

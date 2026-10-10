@@ -434,6 +434,15 @@ pub(super) fn install_runtime(source: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub(super) fn install_documentation() -> Result<(), String> {
+    let source = CString::new(format!(
+        "{}\nimport builtins\nbuiltins._console.python_docs = python_docs\n",
+        crate::python_documentation::LOOKUP_SOURCE
+    ))
+    .map_err(|_| "embedded Python documentation source contains NUL")?;
+    api()?.with_gil(|api| unsafe { api.run_module(c"_mcp_console_documentation", &source) })
+}
+
 pub(super) fn install_sql_runtime(source: &str) -> Result<bool, String> {
     let api = {
         let slot = PYTHON_LIBRARY.lock().unwrap();

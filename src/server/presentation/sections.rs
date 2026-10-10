@@ -55,7 +55,7 @@ pub(super) const R_SQL: &str = r#" `.console$sql_connection()` returns the activ
 
 pub(super) const R_PLOTS: &str = r#" Default-device plots return as PNGs and finalize at cell end, including after errors; draw each plot in one cell. Explicit devices are not captured. Set persistent dimensions in inches and DPI with `options(console.plot.width_in = ..., console.plot.height_in = ..., console.plot.dpi = ...)`."#;
 
-pub(super) const PYTHON_RUNTIME: &str = r#"Evaluate one complete Python cell in persistent `__main__` state. The final visible expression autoprints; leave the primary result last. Use `help(object)` for installed documentation; bare `help()` prompts. Import packages normally; managed sessions prepare missing PyPI distributions on first import. Use `requirements.python` when import and distribution names differ or to prepare before execution."#;
+pub(super) const PYTHON_RUNTIME: &str = r#"Evaluate one complete Python cell in persistent `__main__` state. The final visible expression autoprints; leave the primary result last. Use `help(object)` for installed documentation; bare `help()` prompts. `_console.python_docs()` returns the prepared official text manual directory/provenance for the active Python minor, or `None` if absent on this worker host. Import packages normally; managed sessions prepare missing PyPI distributions on first import. Use `requirements.python` when import and distribution names differ or to prepare before execution."#;
 
 pub(super) const PYTHON_BRIDGE: &str = " Access R globals and call functions through `r.name`.";
 
