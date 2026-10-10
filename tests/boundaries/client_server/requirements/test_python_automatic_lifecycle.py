@@ -297,6 +297,9 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
             signal.signal(signal.SIGINT, previous_handler)
             signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
         passed = False
+        begin = FifoCheckpoint.create(
+            Path(client.temporary_directory.name) / "automatic-import-release"
+        )
         try:
             client.initialize_and_list_tools()
             client.send(python="import sys; print(sys.executable)")
@@ -310,6 +313,8 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
                 import importlib
                 import os
 
+                with open("automatic-import-release", "rb", buffering=0) as gate:
+                    assert gate.read(1) == b"1"
                 automatic_interrupt_state = 41
                 automatic_interrupt_pid = os.getpid()
                 importlib.import_module("{requirement}")
@@ -320,7 +325,15 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
                 without_elapsed(last_result_text(client))
                 == "\n[running; poll with an empty send]"
             )
+            assert "phase:" not in last_result_text(client), client.transcript[-1]
+            # Collect the admitted cell's response before it can enter preparation.
+            begin.release()
             started.wait("automatic Python resolver")
+            client.send(timeout_ms=0)
+            assert without_elapsed(last_result_text(client)) == (
+                "\n[running; poll with an empty send]"
+            )
+            assert phase_progress(last_result_text(client)) == "dependency preparation"
             resolver = [
                 child
                 for child in child_process_identities(owner)
@@ -358,6 +371,8 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
             passed = True
             return transcript
         finally:
+            begin.release()
+            begin.close()
             release.release()
             started.close()
             release.close()
