@@ -1,16 +1,72 @@
 # Read installed R documentation
 
 Submit these R cells through Console's `send(r=...)` interface to retrieve help from the packages installed in the session.
-The recipes capture text, identify its installed package version, and display a bounded line window.
-They do not install packages or run the examples printed in a help page.
+Start with the standalone topic lookup below; discovery, installed-version provenance, and precise paging are optional additions.
+These cells do not install packages or run the examples printed in a help page.
 
 R's ordinary help display can use a browser, external pager, or an interactive menu for ambiguous topics.
 The recipe below selects one package and library, requests text explicitly, and captures the rendered file with a function-valued pager.
 It uses the public [`help()`](https://stat.ethz.ch/R-manual/R-devel/library/utils/html/help.html), [`file.show()`](https://stat.ethz.ch/R-manual/R-devel/library/base/html/file.show.html), and [`Rd2txt_options()`](https://stat.ethz.ch/R-manual/R-devel/library/tools/html/Rd2txt_options.html) interfaces.
 
-## Define the recipe
+## Read an installed topic
 
-Submit this cell once.
+Submit this cell as-is for `stats::lm`.
+Change `package` and `topic` for another qualified topic, including operators such as `package <- "base"` and `topic <- "["`.
+No helper definitions are needed.
+
+<!-- recipe: quick-topic -->
+```r
+help_text <- local({
+  package <- "stats"
+  topic <- "lm"
+  path <- find.package(package, lib.loc = .libPaths(), quiet = TRUE)
+  if (!length(path)) {
+    stop(paste("Package is not installed:", package), call. = FALSE)
+  }
+  text <- character()
+  old <- options(pager = function(files, header, title, delete.file) {
+    text <<- enc2utf8(readLines(files, warn = FALSE))
+    if (delete.file) unlink(files)
+  })
+  on.exit(options(old))
+  old_format <- tools::Rd2txt_options(width = 80L, underline_titles = FALSE)
+  on.exit(tools::Rd2txt_options(old_format), add = TRUE)
+  page <- utils::help(
+    (topic),
+    package = (package),
+    lib.loc = dirname(path),
+    help_type = "text",
+    try.all.packages = FALSE,
+    verbose = FALSE
+  )
+  if (length(page) != 1L) {
+    stop("Expected one installed help page", call. = FALSE)
+  }
+  print(page)
+  writeLines(substr(paste(head(text, 8L), collapse = "\n"), 1L, 1500L))
+  writeLines("[Excerpt; full text retained in help_text.]")
+  text
+})
+```
+
+The excerpt contains at most eight lines and 1,500 Unicode characters, or at most 6,000 UTF-8 bytes, plus the notice.
+Submit it alone so other output does not consume Console's [8 KiB response budget](API.md#output-limits).
+The complete page stays in `help_text`, and the prior pager and text-format settings are restored on success or error.
+Missing packages and topics fail without package preparation or a selection menu.
+
+For the installed package version, with the same `.libPaths()` used for lookup:
+
+<!-- recipe: quick-version -->
+```r
+utils::packageVersion("stats", lib.loc = .libPaths())
+```
+
+For candidate discovery, use the search cell under [Discover an ambiguous topic](#discover-an-ambiguous-topic); then put the selected package and topic into the cell above.
+Use the optional recipe below when you need full provenance, a package index, or later line windows.
+
+## Optional: full provenance and precise paging
+
+Submit this cell once if you need the additions below.
 These functions are ordinary session definitions; Console does not install a help package or maintain a documentation corpus.
 
 <!-- recipe: definitions -->

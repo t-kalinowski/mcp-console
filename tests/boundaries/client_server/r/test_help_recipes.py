@@ -60,10 +60,10 @@ def help_output(client: McpClient, package: str, topic: str) -> str:
 def test_reads_installed_topics_and_discovers_candidates(
     binary: Path, execution: Execution
 ) -> Transcript:
+    quick_topic = recipe("quick-topic")
     definitions = recipe("definitions")
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
-        client.expect(r=definitions)
         # Inherited HTML/viewer settings must not affect explicit retrieval.
         client.expect(
             # fmt: r
@@ -79,6 +79,36 @@ def test_reads_installed_topics_and_discovers_candidates(
                 inherited_format <- tools::Rd2txt_options()
                 """),
         )
+        client.send(r=quick_topic)
+        text = last_tool_text(client)
+        assert len(text.encode("utf-8")) < 8192, text
+        assert "Fitting Linear Models" in text, text
+        assert text.endswith("[Excerpt; full text retained in help_text.]\n"), text
+        client.send(r=recipe("quick-version"))
+        assert re.fullmatch(r"\[1\] [‘']\d+\.\d+\.\d+[’']\n", last_tool_text(client))
+        client.transcript[-1]["result"]["content"][0]["text"] = "[1] '<version>'\n"
+        client.send(
+            r=quick_topic.replace(
+                'topic <- "lm"', 'topic <- "mcpconsolemissinghelptopic"'
+            )
+        )
+        assert last_tool_text(client) == "Error: Expected one installed help page\n"
+        client.expect(
+            # fmt: r
+            r=code(r"""
+                stopifnot(
+                  identical(options()[names(inherited_options)], inherited_options),
+                  identical(tools::Rd2txt_options(), inherited_format),
+                  any(grepl("Fitting Linear Models", help_text, fixed = TRUE)),
+                  sum(nchar(help_text, type = "bytes") + 1L) > 6000L
+                )
+                writeLines(
+                  "Quick lookup retains long text and restores settings after success and failure"
+                )
+                """),
+            expected="Quick lookup retains long text and restores settings after success and failure\n",
+        )
+        client.expect(r=definitions)
         client.send(r=recipe("qualified"))
         assert "Fitting Linear Models" in help_output(client, "stats", "lm")
         client.send(r=recipe("operator"))
@@ -144,6 +174,14 @@ def test_bounds_pages_and_reports_missing_help_without_preparation(
                 """),
         )
         declaration = client.send(requirements={"action": "get"})["structuredContent"]
+        client.send(
+            r=recipe("quick-topic").replace(
+                'package <- "stats"', 'package <- "mcpconsolemissinghelppackage"'
+            )
+        )
+        assert last_tool_text(client) == (
+            "Error: Package is not installed: mcpconsolemissinghelppackage\n"
+        ), last_tool_text(client)
         client.send(r=recipe("missing-package"))
         assert last_tool_text(client) == (
             "Error: Package is not installed: mcpconsolemissinghelppackage\n"

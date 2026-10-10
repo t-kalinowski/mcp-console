@@ -39,8 +39,8 @@ A sandboxed R worker also has a temporary writable library; manual installations
 
 ### Installed documentation
 
-Use the [R help recipes](R_HELP.md) to retrieve bounded text from installed packages through ordinary R cells, including qualified topics, operators, package indexes, and candidate searches.
-The recipes report package/version provenance and support paging without a browser or interactive help menu.
+Use the [R help recipes](R_HELP.md) for a standalone, bounded installed-topic lookup through an ordinary R cell.
+Optional additions cover installed versions, candidate searches, package indexes, and precise paging without a browser or interactive help menu.
 
 ## Python
 

@@ -3,6 +3,140 @@
 ---
 send:
   r: |
+    options(
+      help_type = "html",
+      browser = function(...) stop("browser invoked"),
+      pager = function(...) stop("inherited pager invoked"),
+      menu.graphics = TRUE,
+      useFancyQuotes = FALSE
+    )
+    inherited_options <- options()[c("help_type", "browser", "pager")]
+    inherited_format <- tools::Rd2txt_options()
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    help_text <- local({
+      package <- "stats"
+      topic <- "lm"
+      path <- find.package(package, lib.loc = .libPaths(), quiet = TRUE)
+      if (!length(path)) {
+        stop(paste("Package is not installed:", package), call. = FALSE)
+      }
+      text <- character()
+      old <- options(pager = function(files, header, title, delete.file) {
+        text <<- enc2utf8(readLines(files, warn = FALSE))
+        if (delete.file) unlink(files)
+      })
+      on.exit(options(old))
+      old_format <- tools::Rd2txt_options(width = 80L, underline_titles = FALSE)
+      on.exit(tools::Rd2txt_options(old_format), add = TRUE)
+      page <- utils::help(
+        (topic),
+        package = (package),
+        lib.loc = dirname(path),
+        help_type = "text",
+        try.all.packages = FALSE,
+        verbose = FALSE
+      )
+      if (length(page) != 1L) {
+        stop("Expected one installed help page", call. = FALSE)
+      }
+      print(page)
+      writeLines(substr(paste(head(text, 8L), collapse = "\n"), 1L, 1500L))
+      writeLines("[Excerpt; full text retained in help_text.]")
+      text
+    })
+result:
+  content:
+    - type: text
+      text: |
+        lm                    package:stats                    R Documentation
+
+        Fitting Linear Models
+
+        Description:
+
+             'lm' is used to fit linear models, including multivariate ones.
+             It can be used to carry out regression, single stratum analysis of
+        [Excerpt; full text retained in help_text.]
+  isError: false
+---
+send:
+  r: |
+    utils::packageVersion("stats", lib.loc = .libPaths())
+result:
+  content:
+    - type: text
+      text: |
+        [1] '<version>'
+  isError: false
+---
+send:
+  r: |
+    help_text <- local({
+      package <- "stats"
+      topic <- "mcpconsolemissinghelptopic"
+      path <- find.package(package, lib.loc = .libPaths(), quiet = TRUE)
+      if (!length(path)) {
+        stop(paste("Package is not installed:", package), call. = FALSE)
+      }
+      text <- character()
+      old <- options(pager = function(files, header, title, delete.file) {
+        text <<- enc2utf8(readLines(files, warn = FALSE))
+        if (delete.file) unlink(files)
+      })
+      on.exit(options(old))
+      old_format <- tools::Rd2txt_options(width = 80L, underline_titles = FALSE)
+      on.exit(tools::Rd2txt_options(old_format), add = TRUE)
+      page <- utils::help(
+        (topic),
+        package = (package),
+        lib.loc = dirname(path),
+        help_type = "text",
+        try.all.packages = FALSE,
+        verbose = FALSE
+      )
+      if (length(page) != 1L) {
+        stop("Expected one installed help page", call. = FALSE)
+      }
+      print(page)
+      writeLines(substr(paste(head(text, 8L), collapse = "\n"), 1L, 1500L))
+      writeLines("[Excerpt; full text retained in help_text.]")
+      text
+    })
+result:
+  content:
+    - type: text
+      text: |
+        Error: Expected one installed help page
+  isError: false
+---
+send:
+  r: |
+    stopifnot(
+      identical(options()[names(inherited_options)], inherited_options),
+      identical(tools::Rd2txt_options(), inherited_format),
+      any(grepl("Fitting Linear Models", help_text, fixed = TRUE)),
+      sum(nchar(help_text, type = "bytes") + 1L) > 6000L
+    )
+    writeLines(
+      "Quick lookup retains long text and restores settings after success and failure"
+    )
+result:
+  content:
+    - type: text
+      text: >
+        Quick lookup retains long text and restores settings after success and
+        failure
+  isError: false
+---
+send:
+  r: |
     read_r_help <- function(package, topic = NULL) {
       stopifnot(
         is.character(package),
@@ -119,23 +253,6 @@ send:
       }
       invisible(last + 1L)
     }
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
-  r: |
-    options(
-      help_type = "html",
-      browser = function(...) stop("browser invoked"),
-      pager = function(...) stop("inherited pager invoked"),
-      menu.graphics = TRUE,
-      useFancyQuotes = FALSE
-    )
-    inherited_options <- options()[c("help_type", "browser", "pager")]
-    inherited_format <- tools::Rd2txt_options()
 result:
   content:
     - type: text
