@@ -44,6 +44,7 @@ website:
         contents:
         - getting-started.qmd
         - BUILTIN_RUNTIME.md
+        - R_HELP.md
         - RECORDING.md
         - PYTHON.md
         - href: r/index.html
