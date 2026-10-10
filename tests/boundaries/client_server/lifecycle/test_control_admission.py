@@ -43,6 +43,7 @@ def test_interrupt_following_cell_does_not_migrate_to_automatic_replacement(
         }
         environment = {
             **os.environ,
+            "TMPDIR": str(root),
             LOADER_VARIABLE: str(build_interposer(root, "interrupt_grace_checkpoint")),
             "MCP_CONSOLE_TEST_ADMISSION_ROOT": str(root),
             "MCP_CONSOLE_TEST_INTERRUPT_GRACE_REACHED": str(
@@ -118,6 +119,7 @@ def test_lost_interrupt_ack_does_not_signal_replacement(
         }
         environment = {
             **os.environ,
+            "TMPDIR": str(root),
             "MCP_CONSOLE_TEST_ADMISSION_ROOT": str(root),
             "MCP_CONSOLE_TEST_ADMISSION_LOST_ACK": "1",
         }
