@@ -95,8 +95,9 @@ result:
 ---
 send:
   r: |
+    # R can turn non-native titles into NA with use_UTF8 = TRUE.
     search <- utils::help.search(
-      "^currency$",
+      "^(currency|unicode)$",
       fields = "alias",
       agrep = FALSE,
       package = "mcpconsolehelp",
@@ -119,6 +120,7 @@ result:
     - type: text
       text: |
         mcpconsolehelp::currency | Currency €2.50
+        mcpconsolehelp::unicode | Unicode 日本語
   isError: false
 ---
 send:

@@ -382,6 +382,7 @@ result:
 ---
 send:
   r: |
+    # R can turn non-native titles into NA with use_UTF8 = TRUE.
     search <- utils::help.search(
       "^plot$",
       fields = "alias",
@@ -411,6 +412,7 @@ result:
 ---
 send:
   r: |
+    # R can turn non-native titles into NA with use_UTF8 = TRUE.
     search <- utils::help.search(
       "^mcpconsolemissinghelptopic$",
       fields = "alias",

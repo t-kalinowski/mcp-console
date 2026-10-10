@@ -404,8 +404,9 @@ def test_preserves_utf8_in_compact_outputs(
                 f"--library={library}",
                 fixture,
             ],
-            # Build the index where its euro title is representable as well.
-            env=environment | {"LC_ALL": NATIVE_EURO_LOCALE},
+            # Preserve the Unicode title in the installed index before searching
+            # in a locale that cannot represent all of its characters.
+            env=environment | {"LC_ALL": ".UTF-8" if os.name == "nt" else "C.UTF-8"},
             check=True,
             capture_output=True,
         )
@@ -466,12 +467,13 @@ def test_preserves_utf8_in_compact_outputs(
             excerpt = last_tool_text(client)
             client.send(
                 r=recipe("candidates")
-                .replace('"^plot$"', '"^currency$"')
+                .replace('"^plot$"', '"^(currency|unicode)$"')
                 .replace('c("base", "graphics")', '"mcpconsolehelp"'),
             )
             candidates = last_tool_text(client)
             assert "Currency €2.50" in excerpt and candidates == (
                 "mcpconsolehelp::currency | Currency €2.50\n"
+                "mcpconsolehelp::unicode | Unicode 日本語\n"
             ), (excerpt, candidates)
             assert len(excerpt.encode("utf-8")) < 8192, excerpt
             assert excerpt.endswith("[Excerpt; full text retained in help_text.]\n")

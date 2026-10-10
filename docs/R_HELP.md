@@ -264,6 +264,7 @@ For example, `plot` has help in both base and graphics:
 
 <!-- recipe: candidates -->
 ```r
+# R can turn non-native titles into NA with use_UTF8 = TRUE.
 search <- utils::help.search(
   "^plot$",
   fields = "alias",
