@@ -2,10 +2,40 @@
 !same-as MCP initialization for this execution mode
 ---
 send:
-  r: |-
+  r: |
     help_locale <- Sys.getlocale("LC_CTYPE")
-    selected_help_locale <- Sys.setlocale("LC_CTYPE", "<native euro locale>")
-    stopifnot(nzchar(selected_help_locale), !l10n_info()[["UTF-8"]])
+    local({
+      before <- l10n_info()
+      locale_warnings <- character()
+      selected_help_locale <- withCallingHandlers(
+        Sys.setlocale("LC_CTYPE", "<native euro locale>"),
+        warning = function(w) {
+          locale_warnings <<- c(locale_warnings, conditionMessage(w))
+          invokeRestart("muffleWarning")
+        }
+      )
+      after <- l10n_info()
+      expected_warnings <- character()
+      # Windows warns only when changing away from its system code page.
+      if (
+        .Platform$OS.type == "windows" &&
+          after$codepage != 0L &&
+          after$codepage != after$system.codepage &&
+          before$codepage != after$codepage
+      ) {
+        expected_warnings <- gettextf(
+          "using locale code page other than %d%s may cause problems",
+          after$system.codepage,
+          if (after$system.codepage == 65001L) ' ("UTF-8")' else "",
+          domain = "R"
+        )
+      }
+      stopifnot(
+        identical(locale_warnings, expected_warnings),
+        nzchar(selected_help_locale),
+        !after[["UTF-8"]]
+      )
+    })
 result:
   content:
     - type: text

@@ -418,9 +418,42 @@ def test_preserves_utf8_in_compact_outputs(
             client.initialize_and_list_tools()
             # Renderable in native encoding, but Console receives UTF-8 bytes.
             client.expect(
-                r='help_locale <- Sys.getlocale("LC_CTYPE")\n'
-                f'selected_help_locale <- Sys.setlocale("LC_CTYPE", "{NATIVE_EURO_LOCALE}")\n'
-                'stopifnot(nzchar(selected_help_locale), !l10n_info()[["UTF-8"]])',
+                # fmt: r
+                r=code(r"""
+                    help_locale <- Sys.getlocale("LC_CTYPE")
+                    local({
+                      before <- l10n_info()
+                      locale_warnings <- character()
+                      selected_help_locale <- withCallingHandlers(
+                        Sys.setlocale("LC_CTYPE", "<native euro locale>"),
+                        warning = function(w) {
+                          locale_warnings <<- c(locale_warnings, conditionMessage(w))
+                          invokeRestart("muffleWarning")
+                        }
+                      )
+                      after <- l10n_info()
+                      expected_warnings <- character()
+                      # Windows warns only when changing away from its system code page.
+                      if (
+                        .Platform$OS.type == "windows" &&
+                          after$codepage != 0L &&
+                          after$codepage != after$system.codepage &&
+                          before$codepage != after$codepage
+                      ) {
+                        expected_warnings <- gettextf(
+                          "using locale code page other than %d%s may cause problems",
+                          after$system.codepage,
+                          if (after$system.codepage == 65001L) ' ("UTF-8")' else "",
+                          domain = "R"
+                        )
+                      }
+                      stopifnot(
+                        identical(locale_warnings, expected_warnings),
+                        nzchar(selected_help_locale),
+                        !after[["UTF-8"]]
+                      )
+                    })
+                    """).replace("<native euro locale>", NATIVE_EURO_LOCALE),
             )
             client.transcript[-1]["send"]["r"] = client.transcript[-1]["send"][
                 "r"
