@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from support.assertions import last_tool_text
 from support.client import McpClient
 from support.execution import RUNTIME, Execution, executions
 from support.normalization import code
+from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import R, requires
 from support.suites import run_this_suite
@@ -63,7 +65,28 @@ def test_reads_installed_topics_and_discovers_candidates(
     ordinary_topic = recipe("ordinary-topic")
     quick_topic = recipe("quick-topic")
     definitions = recipe("definitions")
-    with McpClient(binary, execution.serve()) as client:
+    environment, rscript = r_test_environment()
+    # Compare the whole page with the selected installation, not one R manual.
+    # fmt: r
+    reference_source = code(r"""
+        options(
+          useFancyQuotes = FALSE,
+          pager = function(files, header, title, delete.file) {
+            writeLines(enc2utf8(readLines(files, warn = FALSE)), useBytes = TRUE)
+            if (delete.file) unlink(files)
+          }
+        )
+        tools::Rd2txt_options(width = 80L, underline_titles = FALSE)
+        print(utils::help("mean", package = "base", help_type = "text"))
+        """)
+    reference = subprocess.check_output(
+        [rscript, "--vanilla", "-"],
+        input=reference_source,
+        env=environment,
+        text=True,
+        encoding="utf-8",
+    )
+    with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
         # Fix presentation across R versions; keep Console's default pager.
         client.expect(
@@ -79,9 +102,10 @@ def test_reads_installed_topics_and_discovers_candidates(
         assert "package:base" in text and "Arithmetic Mean" in text, text
         assert "Examples:" in text, text
         assert "[running" not in text and "[input" not in text, text
-        # Rd indents empty lines; discard only that incidental presentation.
-        client.transcript[-1]["result"]["content"][0]["text"] = re.sub(
-            r"(?m)^[ \t]+$", "", text
+        # R's default file.show pager adds a newline after each rendered file.
+        assert text == reference + "\n", repr(text)
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "Installed base::mean text matches Rscript reference.\n"
         )
         # Inherited HTML/viewer settings must not affect explicit retrieval.
         client.expect(
@@ -104,8 +128,9 @@ def test_reads_installed_topics_and_discovers_candidates(
         assert "package:base" in text and "Arithmetic Mean" in text, text
         assert "Examples:" in text, text
         assert "[running" not in text and "[input" not in text, text
-        client.transcript[-1]["result"]["content"][0]["text"] = re.sub(
-            r"(?m)^[ \t]+$", "", text
+        assert text == reference, repr(text)
+        client.transcript[-1]["result"]["content"][0]["text"] = (
+            "Installed base::mean text matches Rscript reference.\n"
         )
         client.expect(
             r="stopifnot(identical(options()[names(inherited_options)], inherited_options))",
