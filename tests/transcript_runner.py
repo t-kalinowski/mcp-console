@@ -2070,11 +2070,51 @@ class TranscriptDiscoveryTests(TranscriptRunnerFixture):
         path_selection.pop("R_HOME", None)
         path_selection["PATH"] = os.pathsep.join((str(commands), environment["PATH"]))
         marker = self.root / "selected.marker"
-        for selection, selected_environment in (
+        selections = [
             ("missing R_HOME", environment | {"R_HOME": str(self.root / "missing-r")}),
             ("failing Rscript", environment | {"R_HOME": str(selected_home)}),
             ("failing R on PATH", path_selection),
-        ):
+        ]
+        # Executable script fixtures require POSIX shebangs; the launch-failure
+        # selections above also exercise native Windows discovery.
+        if POSIX.available:
+            invalid_home = self.root / "invalid-r"
+            invalid_bin = invalid_home / "bin"
+            invalid_bin.mkdir(parents=True)
+            invalid_commands = self.root / "invalid-commands"
+            invalid_commands.mkdir()
+            for executable in (invalid_bin / "Rscript", invalid_commands / "R"):
+                executable.write_text(
+                    f"#!{sys.executable}\n"
+                    # fmt: python
+                    + code(r"""
+                        import os
+
+                        os.write(int(os.environ["MCP_CONSOLE_TEST_PROBE_STREAM"]), b"\xff")
+                        """),
+                    encoding="utf-8",
+                )
+                executable.chmod(0o755)
+            for stream in (1, 2):
+                invalid_environment = environment | {
+                    "PYTHONUTF8": "1",
+                    "MCP_CONSOLE_TEST_PROBE_STREAM": str(stream),
+                }
+                invalid_path = invalid_environment.copy()
+                invalid_path.pop("R_HOME", None)
+                invalid_path["PATH"] = os.pathsep.join(
+                    (str(invalid_commands), environment["PATH"])
+                )
+                selections.extend(
+                    [
+                        (
+                            f"undecodable Rscript stream {stream}",
+                            invalid_environment | {"R_HOME": str(invalid_home)},
+                        ),
+                        (f"undecodable R on PATH stream {stream}", invalid_path),
+                    ]
+                )
+        for selection, selected_environment in selections:
             with self.subTest(selection=selection):
                 arguments = [sys.executable, self.boundaries / "_run.py"]
                 listed = subprocess.run(

@@ -213,7 +213,7 @@ def r_french_messages() -> Requirement:
                 check=True,
                 timeout=10,
             )
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
             # Leave broken selections to the R cases, not this optional probe.
             pass
         else:
