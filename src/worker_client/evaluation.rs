@@ -10,6 +10,7 @@ const INPUT_REQUEST_GRACE: Duration = Duration::from_millis(10);
 const CELL_COMPLETION_GRACE: Duration = Duration::from_millis(1);
 
 pub(super) struct Evaluation {
+    pub(super) admission: super::admission::CellAdmission,
     state: Mutex<EvaluationState>,
     changed: tokio::sync::Notify,
     delivery_changed: Arc<tokio::sync::Notify>,
@@ -42,8 +43,6 @@ struct EvaluationState {
     /// Restart or controlled handoff permanently retires this evaluation.
     /// Releasing its response reservation must not revive late task failures.
     retired: bool,
-    /// This accepted cell preceded an interrupted bootstrap receipt.
-    bootstrap_interrupted: bool,
     restart_handoff: Option<Response>,
     #[cfg(any(unix, windows))]
     stdin: Option<super::platform::StdinSender>,
@@ -116,7 +115,9 @@ enum WaitKind {
 }
 
 impl Evaluation {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
+        generation: super::lifecycle::WorkerGeneration,
         transcript: crate::transcript::Transcript,
         call_id: Option<u64>,
         output: OutputTape,
@@ -127,6 +128,7 @@ impl Evaluation {
     ) -> Self {
         let delivery_changed = Arc::new(tokio::sync::Notify::new());
         Self {
+            admission: super::admission::CellAdmission::new(generation),
             state: Mutex::new(EvaluationState {
                 phase: EvaluationPhase::Evaluating,
                 completion_cut: None,
@@ -140,7 +142,6 @@ impl Evaluation {
                 input_report_at: None,
                 waiting: false,
                 retired: false,
-                bootstrap_interrupted: false,
                 restart_handoff: None,
                 #[cfg(any(unix, windows))]
                 stdin: None,
@@ -191,38 +192,10 @@ impl Evaluation {
         }))
     }
 
-    pub(super) fn is_interruptible(&self) -> Result<bool, String> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        Ok(matches!(
-            state.phase,
-            EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting
-        ))
-    }
-
     /// None omits a busy observation; false leaves other owners observable.
     pub(super) fn replacement_observation(&self) -> Option<bool> {
         let state = self.state.try_lock().ok()?;
         Some(!state.retired && matches!(state.phase, EvaluationPhase::ReplacementStarting))
-    }
-
-    pub(super) fn interrupt_bootstrap(&self) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        state.bootstrap_interrupted = true;
-        Ok(())
-    }
-
-    pub(super) fn bootstrap_interrupted(&self) -> Result<bool, String> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        Ok(state.bootstrap_interrupted)
     }
 
     /// Reserves an open response until restart finishes retiring the worker.
@@ -474,10 +447,17 @@ impl Evaluation {
     }
 
     pub(super) fn complete_cell(&self, result: Result<(), SendFailure>) {
+        self.admission.finish(if result.is_ok() {
+            super::admission::CellOutcome::Completed
+        } else {
+            super::admission::CellOutcome::Failed
+        });
         self.complete(result, CompletionKind::Cell, None);
     }
 
     pub(super) fn complete_cell_after_grace(self: &Arc<Self>) {
+        self.admission
+            .finish(super::admission::CellOutcome::Completed);
         // Give raw-output readers a brief window to publish cross-pipe output that
         // arrived with Completed. The cut still leaves later observations for the
         // next response; it does not claim cross-pipe chronology.
@@ -524,6 +504,7 @@ impl Evaluation {
     }
 
     pub(super) fn start_replacement(&self, failure: SendFailure) {
+        self.admission.finish(super::admission::CellOutcome::Failed);
         let Ok(mut state) = self.state.lock() else {
             return;
         };
@@ -910,6 +891,7 @@ mod tests {
     async fn completed_response() -> (Arc<Evaluation>, Response) {
         let output = OutputTape::new();
         let evaluation = Arc::new(Evaluation::new(
+            super::super::lifecycle::WorkerGeneration::new(),
             crate::transcript::Transcript::new(true),
             None,
             output,
