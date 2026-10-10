@@ -299,7 +299,7 @@ Omit the topic to capture the installed package's text index:
 <!-- recipe: index -->
 ```r
 index_page <- read_r_help("stats")
-index_start <- grep("^Index:$", index_page$text)[1L]
+index_start <- match(gettext("Index:", domain = "R-base"), index_page$text)
 show_r_help(index_page, from = index_start, n = 8L)
 ```
 

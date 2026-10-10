@@ -15,7 +15,13 @@ from support.execution import RUNTIME, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import NATIVE_EURO_LOCALE, R, native_euro_locale, requires
+from support.requirements import (
+    NATIVE_EURO_LOCALE,
+    R,
+    native_euro_locale,
+    r_french_messages,
+    requires,
+)
 from support.suites import run_this_suite
 
 GUIDE = Path(__file__).resolve().parents[4] / "docs/R_HELP.md"
@@ -213,6 +219,34 @@ def test_reads_installed_topics_and_discovers_candidates(
                 """),
             expected="Installed provenance and inherited settings preserved\n",
         )
+        return client.finish()
+
+
+@requires(R, r_french_messages())
+@executions(RUNTIME)
+def test_reads_translated_package_index(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, _ = r_test_environment()
+    environment["LANGUAGE"] = "fr"
+    with McpClient(binary, execution.serve(), environment) as client:
+        client.initialize_and_list_tools()
+        client.expect(
+            # fmt: r
+            r=code(r"""
+                stopifnot(identical(gettext("Index:", domain = "R-base"), "Index :"))
+                options(
+                  help_type = "html",
+                  browser = function(...) stop("browser invoked"),
+                  pager = function(...) stop("inherited pager invoked")
+                )
+                """),
+        )
+        client.expect(r=recipe("definitions"))
+        client.send(r=recipe("index"))
+        text = help_output(client, "stats", "<index>")
+        assert text.split("\n", 3)[3].startswith("Index :\n\n"), text
+        assert "acf" in text, text
         return client.finish()
 
 

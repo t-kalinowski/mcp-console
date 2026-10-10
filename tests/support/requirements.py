@@ -197,6 +197,29 @@ def native_euro_locale() -> Requirement:
     )
 
 
+def r_french_messages() -> Requirement:
+    available = False
+    if R.available:
+        from support.r import r_test_environment
+
+        environment, rscript = r_test_environment()
+        result = subprocess.run(
+            [rscript, "--vanilla", "-"],
+            input='writeLines(gettext("Index:", domain = "R-base"))\n',
+            env=environment | {"LANGUAGE": "fr"},
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        available = result.stdout.strip() == "Index :"
+    return Requirement(
+        "R French messages",
+        available,
+        "requires French R-base translations in the selected R message locale",
+    )
+
+
 def joblib_processes() -> Requirement:
     from joblib import cpu_count
 
