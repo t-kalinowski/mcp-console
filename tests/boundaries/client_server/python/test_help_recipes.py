@@ -22,7 +22,7 @@ from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.previews import assert_preview, normalize_preview_paths
 from support.records import Transcript
-from support.requirements import POSIX, Requirement, requires
+from support.requirements import POSIX, UNPRIVILEGED, Requirement, requires
 from support.snapshots import execution_snapshots
 from support.suites import run_this_suite
 from boundaries.client_server.python.test_without_r import environment
@@ -372,6 +372,80 @@ def test_manual_cache_is_worker_local_and_version_matched(
             assert (
                 cache / minor / "manual/contents.txt"
             ).read_text() == "Python Documentation contents\n"
+            return client.finish()
+
+
+@requires(UNPRIVILEGED)
+@executions(DIRECT, SANDBOXED)
+def test_manual_cache_preserves_permission_errors(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        workspace = root / "workspace"
+        workspace.mkdir()
+        tools = root / "tools"
+        tools.mkdir()
+        cache = root / "manuals"
+        page, archive = manual_fixture(root)
+        prepared = prepare_manual(binary, cache, page, archive)
+        assert prepared.returncode == 0, prepared.stderr
+        env = {
+            **environment(tools),
+            "MCP_CONSOLE_PYTHON_DOCS": str(cache),
+            "MCP_CONSOLE_HOME": str(root / "console"),
+        }
+        with McpClient(
+            binary,
+            execution.serve("-c", "python=" + json.dumps(sys.executable)),
+            env,
+            workspace,
+            use_home_configuration=True,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                "manual readable\n",
+                python='assert _console.python_docs() is not None; print("manual readable")',
+            )
+            permissions = stat.S_IMODE(cache.stat().st_mode)
+            cache.chmod(0)
+            try:
+                client.expect(
+                    "manifest stat: permission denied\nmanual lookup: permission denied\n",
+                    # fmt: python
+                    python=code("""
+                        import errno
+                        import os
+                        import sys
+                        from pathlib import Path
+
+                        minor = f"{sys.version_info.major}.{sys.version_info.minor}"
+                        manifest = Path(os.environ["MCP_CONSOLE_PYTHON_DOCS"]) / minor / "manifest.json"
+                        for label, lookup in (
+                            ("manifest stat", manifest.stat),
+                            ("manual lookup", _console.python_docs),
+                        ):
+                            try:
+                                lookup()
+                            except PermissionError as error:
+                                assert error.errno == errno.EACCES
+                                assert error.filename == str(manifest)
+                                print(label + ": permission denied")
+                            else:
+                                raise AssertionError(label + " must preserve PermissionError")
+                        """),
+                )
+            finally:
+                cache.chmod(permissions)
+            client.expect(
+                "manual readable\n",
+                python='assert _console.python_docs() is not None; print("manual readable")',
+            )
+            minor = f"{sys.version_info.major}.{sys.version_info.minor}"
+            (cache / minor / "manifest.json").unlink()
+            client.expect(
+                "None\n42\n", python="print(_console.python_docs()); print(42)"
+            )
             return client.finish()
 
 

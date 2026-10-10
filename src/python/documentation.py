@@ -41,9 +41,11 @@ def python_docs() -> dict[str, object] | None:
     minor = f"{sys.version_info.major}.{sys.version_info.minor}"
     destination = documentation_root() / minor
     manifest = destination / "manifest.json"
-    if not manifest.exists():
+    try:
+        manifest_text = manifest.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return None
-    receipt = json.loads(manifest.read_text(encoding="utf-8"))
+    receipt = json.loads(manifest_text)
     if receipt["python_minor"] != minor:
         raise ValueError(
             "Python documentation cache version does not match the active interpreter"
