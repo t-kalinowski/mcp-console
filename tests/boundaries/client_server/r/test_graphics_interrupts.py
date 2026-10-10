@@ -19,6 +19,7 @@ from support.processes import (
     ProcessIdentity,
     capture_process_identity,
     current_process_identity,
+    host_process_id,
 )
 from support.progress import without_elapsed
 from support.r import r_test_environment, reference_plots
@@ -112,7 +113,9 @@ def finalizing_plot(
                     """),
             )
             worker = capture_process_identity(
-                int((directory / "worker-pid").read_text())
+                host_process_id(
+                    int((directory / "worker-pid").read_text()), client.process.pid
+                )
             )
             worker_tempdir = Path((directory / "worker-tempdir").read_text())
             try:
