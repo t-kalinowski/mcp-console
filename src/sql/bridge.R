@@ -189,12 +189,7 @@ base::local(
       selected_connection <<- NULL
       1L
     }
-    tools <- base::attach(
-      NULL,
-      pos = 2L,
-      name = "tools:mcp-console",
-      warn.conflicts = FALSE
-    )
+    tools <- base::as.environment("tools:mcp-console")
     # Match reticulate's getter-only `py` binding. Attribute assignment such as
     # `py$name <- value` already writes through the returned Python module proxy.
     base::makeActiveBinding("py", function() reticulate::py, tools)
