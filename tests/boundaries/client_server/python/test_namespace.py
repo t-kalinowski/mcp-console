@@ -40,7 +40,7 @@ CLEAN_NAMESPACE = code("""
     """)
 
 
-@requires(POSIX)
+@requires(POSIX, command("uv"))
 @executions(DIRECT, SANDBOXED)
 def test_python_only_namespace_and_restart(
     binary: Path, execution: Execution
@@ -48,12 +48,16 @@ def test_python_only_namespace_and_restart(
     with tempfile.TemporaryDirectory() as temporary:
         path = Path(temporary)
         retain_system_bwrap(path)
+        # Keep the complete globals transcript on Python 3.13's standard metadata.
+        python = subprocess.check_output(
+            ["uv", "python", "find", "3.13"], text=True
+        ).strip()
         environment = dict(os.environ, PATH=str(path))
         for name in ("R_HOME", "RHOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_UV"):
             environment.pop(name, None)
         with McpClient(
             binary,
-            execution.serve("-c", f"python={json.dumps(sys.executable)}"),
+            execution.serve("-c", f"python={json.dumps(python)}"),
             environment,
         ) as client:
             client.initialize_and_list_tools()
