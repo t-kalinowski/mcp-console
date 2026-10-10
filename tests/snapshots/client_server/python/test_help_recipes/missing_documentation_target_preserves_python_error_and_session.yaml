@@ -1,0 +1,32 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: import math, pydoc
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  python: >-
+    pydoc.render_doc(math.missing_documentation_target,
+    renderer=pydoc.plaintext)
+result:
+  content:
+    - type: text
+      text: |
+        Traceback (most recent call last):
+          File "<mcp-console:python:e2>", line 1, in <module>
+        AttributeError: module 'math' has no attribute 'missing_documentation_target'
+  isError: false
+---
+send:
+  python: math.sqrt(81)
+result:
+  content:
+    - type: text
+      text: |
+        9.0
+  isError: false
