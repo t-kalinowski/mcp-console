@@ -836,6 +836,25 @@ def run_controlled_interrupt_with_waiting_poll(relay: ScriptedRelay) -> None:
     relay.retire()
 
 
+def run_completion_before_interrupt_ack(relay: ScriptedRelay) -> None:
+    relay.make_checkpoint(POLL_STDIN_RECEIVED_NAME)
+    relay.make_checkpoint(INTERRUPT_ACK_RELEASE_NAME)
+    relay.ready()
+    relay.expect({"kind": "evaluate", "language": "r", "source": "first cell"})
+    (relay.root / EVALUATING_NAME).touch()
+    relay.expect({"kind": "stdin", "data": "waiter owns first response\n"})
+    relay.notify_checkpoint(POLL_STDIN_RECEIVED_NAME)
+    relay.expect({"kind": "interrupt", "request_id": 0})
+    relay.send({"kind": "console_output", "data": "first cell completed\n"})
+    relay.send(COMPLETED)
+    relay.wait_for_checkpoint(INTERRUPT_ACK_RELEASE_NAME)
+    relay.send({"kind": "interrupt_result", "request_id": 0})
+    relay.expect({"kind": "evaluate", "language": "r", "source": "following cell"})
+    relay.send({"kind": "console_output", "data": "following cell completed\n"})
+    relay.complete()
+    relay.retire()
+
+
 def run_cancelled_interrupt_during_live_r_preparation(
     relay: ScriptedRelay,
 ) -> None:
@@ -1490,6 +1509,7 @@ def main() -> None:
         "controlled_interrupt_with_waiting_poll": (
             run_controlled_interrupt_with_waiting_poll
         ),
+        "completion_before_interrupt_ack": run_completion_before_interrupt_ack,
         "cancelled_interrupt_during_live_r_preparation": (
             run_cancelled_interrupt_during_live_r_preparation
         ),
