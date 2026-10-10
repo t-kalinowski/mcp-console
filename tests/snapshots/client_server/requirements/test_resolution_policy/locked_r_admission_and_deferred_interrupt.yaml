@@ -561,9 +561,13 @@ result:
   isError: false
 ---
 send:
-  r: >-
-    writeChar('1', "<fixture>/active", eos = NULL); tryCatch(Sys.sleep(60),
-    interrupt = function(e) cat('active interrupted\n'))
+  r: |
+    local({
+      checkpoint <- file("<fixture>/active", "wb", raw = TRUE)
+      on.exit(close(checkpoint))
+      writeChar("1", checkpoint, eos = NULL)
+    })
+    tryCatch(Sys.sleep(60), interrupt = function(e) cat("active interrupted\n"))
   timeout_ms: 0
 result:
   content:
@@ -585,9 +589,6 @@ result:
   content:
     - type: text
       text: |-
-        Warning message:
-        In file(con, "wb") :
-          using 'raw = TRUE' because '<fixture>/active' is a fifo or pipe
         active interrupted
         R requirements cannot change under r.resolution=startup_only (requirements.action=add)
   isError: true

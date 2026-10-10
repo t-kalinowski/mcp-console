@@ -315,6 +315,7 @@ def check_recording(
                         if sys.platform == "win32"
                         else ".direct.yaml"
                     ),
+                    path != reference.with_suffix(".direct.yaml"),
                     path,
                 ),
             ),

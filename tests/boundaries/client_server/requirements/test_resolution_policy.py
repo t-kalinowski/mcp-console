@@ -237,7 +237,15 @@ def test_locked_r_admission_and_deferred_interrupt(
             with closing(FifoCheckpoint.create(root / "active")) as active:
                 # Signal the actual cell boundary; no timing assumption precedes interrupt.
                 client.send(
-                    r=f"writeChar('1', {json.dumps(str(active.path))}, eos = NULL); tryCatch(Sys.sleep(60), interrupt = function(e) cat('active interrupted\\n'))",
+                    # fmt: r
+                    r=code(f"""
+                        local({{
+                          checkpoint <- file({json.dumps(str(active.path))}, "wb", raw = TRUE)
+                          on.exit(close(checkpoint))
+                          writeChar("1", checkpoint, eos = NULL)
+                        }})
+                        tryCatch(Sys.sleep(60), interrupt = function(e) cat("active interrupted\\n"))
+                        """),
                     timeout_ms=0,
                 )
                 active.wait("active R cell")

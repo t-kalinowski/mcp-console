@@ -1,15 +1,5 @@
 ---
 send:
-  requirements:
-    python:
-      - console-initial-fixture
-result:
-  content:
-    - type: text
-      text: "[prepared]"
-  isError: false
----
-send:
   r: |
     before <- reticulate::py_require()
     worker_pid <- Sys.getpid()

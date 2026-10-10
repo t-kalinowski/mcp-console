@@ -108,7 +108,10 @@ Available Python versions found: {available}
 
 impl Candidate {
     fn from_uv(row: UvPython) -> Option<Self> {
-        if row.variant != "default" || row.implementation != "cpython" {
+        if row.variant != "default"
+            || row.implementation != "cpython"
+            || (row.version_parts.major, row.version_parts.minor) < (3, 10)
+        {
             return None;
         }
         let VersionParts {

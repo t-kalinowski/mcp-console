@@ -67,6 +67,7 @@ On Windows it uses the staged companion, a debug build, and native acceptance.
 The full gate adds applicable tooling, shared functional, and installation checks; installation runs last because it can replace staging/build directories.
 
 CI runs the comprehensive profiles, including Unix allocation stress.
+CI pins uv's Python catalogue so interpreter-dependent tracebacks and debugger transcripts change only with an intentional tool update.
 A focused local pass or capability skip does not validate another platform.
 Report exact commands and missing coverage rather than “all tests pass.”
 
