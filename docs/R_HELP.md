@@ -78,7 +78,10 @@ help_text <- local({
     stop("Expected one installed help page", call. = FALSE)
   }
   print(page)
-  writeLines(substr(paste(head(text, 8L), collapse = "\n"), 1L, 1500L))
+  writeLines(
+    substr(paste(head(text, 8L), collapse = "\n"), 1L, 1500L),
+    useBytes = TRUE
+  )
   writeLines("[Excerpt; full text retained in help_text.]")
   text
 })
@@ -273,7 +276,7 @@ candidates <- sprintf(
   matches$Topic,
   matches$Title
 )
-writeLines(substr(head(candidates, 10L), 1L, 120L))
+writeLines(substr(head(candidates, 10L), 1L, 120L), useBytes = TRUE)
 if (length(candidates) > 10L) {
   writeLines("More candidates remain in matches.")
 }

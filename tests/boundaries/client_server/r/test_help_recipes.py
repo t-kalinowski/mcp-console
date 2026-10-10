@@ -1,8 +1,10 @@
 #!/usr/bin/env -S uv run --script
 
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -13,7 +15,7 @@ from support.execution import RUNTIME, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment
 from support.records import Transcript
-from support.requirements import R, requires
+from support.requirements import NATIVE_EURO_LOCALE, R, native_euro_locale, requires
 from support.suites import run_this_suite
 
 GUIDE = Path(__file__).resolve().parents[4] / "docs/R_HELP.md"
@@ -317,6 +319,67 @@ def test_bounds_pages_and_reports_missing_help_without_preparation(
             expected="No package preparation, example effects, or workspace leaks\n",
         )
         return client.finish()
+
+
+@requires(R, native_euro_locale())
+@executions(RUNTIME)
+def test_preserves_utf8_in_compact_outputs(
+    binary: Path, execution: Execution
+) -> Transcript:
+    environment, rscript = r_test_environment()
+    fixture = Path(__file__).resolve().parents[3] / "fixtures/r_help"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        directory = Path(temporary_directory)
+        library = directory / "library"
+        library.mkdir()
+        subprocess.run(
+            [
+                rscript.with_name("R.exe" if os.name == "nt" else "R"),
+                "CMD",
+                "INSTALL",
+                f"--library={library}",
+                fixture,
+            ],
+            # Build the index where its euro title is representable as well.
+            env=environment | {"LC_ALL": NATIVE_EURO_LOCALE},
+            check=True,
+            capture_output=True,
+        )
+        environment["R_LIBS"] = os.pathsep.join(
+            filter(None, (str(library), environment.get("R_LIBS")))
+        )
+        with McpClient(
+            binary, execution.serve(), environment, current_directory=directory
+        ) as client:
+            client.initialize_and_list_tools()
+            # Renderable in native encoding, but Console receives UTF-8 bytes.
+            client.expect(
+                r='help_locale <- Sys.getlocale("LC_CTYPE")\n'
+                f'selected_help_locale <- Sys.setlocale("LC_CTYPE", "{NATIVE_EURO_LOCALE}")\n'
+                'stopifnot(nzchar(selected_help_locale), !l10n_info()[["UTF-8"]])',
+            )
+            client.transcript[-1]["send"]["r"] = client.transcript[-1]["send"][
+                "r"
+            ].replace(NATIVE_EURO_LOCALE, "<native euro locale>")
+            client.send(
+                r=recipe("quick-topic")
+                .replace('package <- "stats"', 'package <- "mcpconsolehelp"')
+                .replace('topic <- "lm"', 'topic <- "currency"'),
+            )
+            excerpt = last_tool_text(client)
+            client.send(
+                r=recipe("candidates")
+                .replace('"^plot$"', '"^currency$"')
+                .replace('c("base", "graphics")', '"mcpconsolehelp"'),
+            )
+            candidates = last_tool_text(client)
+            assert "Currency €2.50" in excerpt and candidates == (
+                "mcpconsolehelp::currency | Currency €2.50\n"
+            ), (excerpt, candidates)
+            assert len(excerpt.encode("utf-8")) < 8192, excerpt
+            assert excerpt.endswith("[Excerpt; full text retained in help_text.]\n")
+            client.expect(r='invisible(Sys.setlocale("LC_CTYPE", help_locale))')
+            return client.finish()
 
 
 if __name__ == "__main__":

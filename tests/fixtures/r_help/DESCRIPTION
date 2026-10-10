@@ -1,0 +1,8 @@
+Package: mcpconsolehelp
+Version: 0.0.1
+Title: Installed Unicode Help Fixture
+Description: Exercises text help retrieval and discovery through Console.
+License: MIT
+Author: Test Fixture
+Maintainer: Test Fixture <fixture@example.invalid>
+Encoding: UTF-8
