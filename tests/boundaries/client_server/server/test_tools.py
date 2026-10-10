@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -21,7 +22,7 @@ from support.normalization import code
 from support.records import Transcript, TranscriptWithCompanions
 from support.resolvers import bare_runtime_environment
 from support.suites import run_this_suite
-from support.snapshots import execution_snapshots, platform_snapshots
+from support.snapshots import execution_snapshots
 
 
 @contextmanager
@@ -104,9 +105,6 @@ def test_invalid_send_has_no_external_effects(binary: Path) -> Transcript:
         return client.finish()
 
 
-@platform_snapshots(
-    "win32", reason="Canonical tool schemas and control descriptions differ on Windows"
-)
 @executions(DIRECT, SANDBOXED)
 def test_initializes_and_lists_tools(
     binary: Path, execution: Execution
@@ -242,6 +240,18 @@ def _initializes_and_lists_tools(
             listed_tools = client.transcript[-1]["result"]["tools"]
             assert [tool["name"] for tool in listed_tools] == ["send"], listed_tools
             send = listed_tools[0]
+            instructions = client.transcript[0]["result"].get("instructions")
+            assert isinstance(instructions, str), client.transcript[0]
+            assert instructions == send["description"].split("\n\n", 1)[0]
+            assert "\n" not in instructions and len(instructions) <= 250, instructions
+            assert "Send one complete" not in instructions
+            if not (writable or workspace_profile):
+                assert len(send["description"]) <= 2048, send["description"]
+            if custom:
+                assert "custom-worker" in instructions
+            else:
+                for capability in ("debugging", "simulations", "test hypotheses"):
+                    assert capability in instructions, instructions
             if languages is not None:
                 assert set(send["inputSchema"]["properties"]) == {
                     *languages,
@@ -251,6 +261,25 @@ def _initializes_and_lists_tools(
                     "timeout_ms",
                 }, send
             properties = send["inputSchema"]["properties"]
+            visible = set(properties) & {"r", "python", "sql"}
+            names = {name for name in ("R", "Python", "SQL") if name.lower() in visible}
+            assert set(re.findall(r"\b(?:R|Python|SQL)\b", instructions)) == names
+            assert (
+                set(
+                    re.findall(r"\b(?:R|Python|SQL)\b", json.dumps(send["inputSchema"]))
+                )
+                == names
+            )
+            cell_guidance = (
+                send["description"]
+                .split("Send one complete ")[1]
+                .split(" cell per call")[0]
+            )
+            assert {
+                field
+                for field in ("r", "python", "sql")
+                if f"`{field}`" in cell_guidance
+            } == visible
             assert list(properties) == [
                 field
                 for field in (
@@ -524,6 +553,19 @@ def _language_switching_guidance(
             fields = set(tool["inputSchema"]["properties"]) & {"r", "python", "sql"}
             assert fields == set(enabled.split(",")), fields
             description = tool["description"]
+            instructions = client.transcript[0]["result"]["instructions"]
+            assert instructions == description.split("\n\n", 1)[0]
+            assert set(re.findall(r"\b(?:R|Python|SQL)\b", description)) == {
+                name for name in ("R", "Python", "SQL") if name.lower() in fields
+            }, (enabled, description)
+            cell_guidance = description.split("Send one complete ")[1].split(
+                " cell per call"
+            )[0]
+            assert {
+                field
+                for field in ("r", "python", "sql")
+                if f"`{field}`" in cell_guidance
+            } == fields, (enabled, cell_guidance)
             assert ("Switch languages when useful" in description) == (
                 len(fields) > 1
             ), (
@@ -532,6 +574,20 @@ def _language_switching_guidance(
             )
             transcript.append({"languages": enabled, "description": description})
             client.finish()
+        with McpClient(
+            binary,
+            DIRECT.serve(
+                "--worker",
+                "unused-worker",
+                "-c",
+                "languages=" + json.dumps(enabled.split(",")),
+            ),
+            environment,
+        ) as configured:
+            configured.initialize_and_list_tools()
+            assert configured.transcript[-1]["result"]["tools"] == [tool], enabled
+            assert configured.transcript[0]["result"]["instructions"] == instructions
+            configured.finish()
     return transcript
 
 

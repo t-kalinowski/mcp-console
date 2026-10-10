@@ -1,85 +1,73 @@
-# Recordings and rendering
+# Recordings and reports
 
-Recordings live on the host running Console.
-They contain source, stdin, requirements, output, and artifacts without redaction.
+Recordings live on the Console host and contain source, stdin, requirements, output, and artifacts **without redaction**.
 There is no aggregate quota or automatic cleanup.
-Shared paths can expose controller records to the workload; choose them deliberately.
+Review files before sharing them and remove old sessions deliberately.
 
 ## Location and files
 
-On the first `send`, startup output, or startup failure, Console uses `.agents/console/sessions/<run-id>/` if `.agents/console` already exists in the launch directory.
-Otherwise it uses `~/.agents/console/sessions/<run-id>/`, without creating a project `.agents` directory.
-`MCP_CONSOLE_HOME` replaces the fallback Console directory, not `HOME`; project selection still takes precedence.
+If `.agents/console` already exists in the launch directory, recordings use `.agents/console/sessions/<run-id>/`.
+Otherwise they use `~/.agents/console/sessions/<run-id>/`; `MCP_CONSOLE_HOME` replaces that fallback Console directory.
+Console does not create a project `.agents` directory merely to select project storage.
 
-| File                      | Meaning                                                                                         |
-| ------------------------- | ----------------------------------------------------------------------------------------------- |
-| `internal/events.jsonl`   | Authoritative append-only journal of calls, assembled results, environment and lifecycle events |
-| `transcript.md`           | Readable chronological call ledger, with results and artifact links                             |
-| `transcript.qmd`          | Source projection for editing and rendering; not a replay                                       |
-| `outputs/call-NNNNNN.log` | Raw text for an admitted cell, capped at 1 GiB                                                  |
-| `outputs/session.log`     | Startup and idle text outside a cell, capped at 1 GiB                                           |
-| `artifacts/`              | Retained image files                                                                            |
+Recording begins when the first call, startup output, or startup failure needs it.
 
-Returned raw-log paths are launch-directory-relative for project recordings and absolute for fallback recordings.
-When a preview's location exceeds 512 UTF-8 bytes, it instead gives the exact `sessions/<run-id>/...` path, labelled relative to the Console recording directory selected above.
-Retrieving omitted text requires filesystem access there; Console has no log read/search tool.
+| File                      | Purpose                                                    |
+| ------------------------- | ---------------------------------------------------------- |
+| `transcript.md`           | Chronological call ledger with results and artifact links. |
+| `transcript.qmd`          | Source projection to review and edit into a report.        |
+| `outputs/call-NNNNNN.log` | Raw text for an admitted cell, up to 1 GiB.                |
+| `outputs/session.log`     | Startup and idle text, up to 1 GiB.                        |
+| `artifacts/`              | Retained images.                                           |
+| `internal/events.jsonl`   | Internal append-only journal underlying the projections.   |
 
-The journal schema is unversioned, with nullable runtime metadata before discovery.
-`startup_requirements` records the captured startup declaration once discovery supplies it.
-It uses configured startup packages and Python version constraints, including replacements and empty package lists.
-`artifact_created.call_id` is `null` for session-owned images and an integer for cell-owned images.
+Returned paths identify files on the Console host.
+Project paths are normally launch-relative; fallback paths are absolute.
+Long-location notices can instead name an exact path relative to the selected Console directory.
 
-The journal is flushed before derived projections.
-A `tool_result` is recorded before transport delivery, so it does not prove that the client received it.
-Polling remains separate calls in the Markdown ledger, not a reconstructed notebook cell with one inferred result.
-Calls admitted before discovery completes are retained with their results even if discovery fails.
-The session timestamp is captured before those calls, even when the files are created later.
-Recording metadata remains unknown until discovery supplies it; a startup failure does not fabricate runtime capabilities.
-Discovery configures the ledger and replays pending records before publishing worker configuration, so startup artifacts follow earlier calls and results.
+## Retrieve omitted output
 
-## Raw output and failures
+Use the client's filesystem tools to read the named raw log.
+Console has no file-read/search tool.
+Reading a file does not move the polling cursor, and resubmitting a cell is not a way to retrieve its output.
 
-Cell logs receive console text and direct stdout/stderr before inline preview truncation.
-Response cuts flush active logs; reaching a response timeout does not finish the file.
-Completion or restart detaches it.
-After its cap or a write failure, Console still drains output and counts discarded bytes.
+Raw logs receive output before preview truncation and are flushed at response cuts, so they can be read while a cell runs.
+Limits, write failures, or early image rejection can leave only partial retained output; omission notices distinguish that from a complete recording.
 
-`cell_output` events distinguish retained raw bytes, raw bytes discarded from the file, and rendered UTF-8 bytes omitted from previews.
-These counts are not interchangeable: stream normalization can change byte counts, and discarded raw text can still appear in a preview.
-The latest summary for a cell owns its cumulative totals.
-`session_output` events provide the same counts for startup and idle text; startup images have no call owner.
-Native R startup runs before Console's plot device attaches; its plots use R's native device rather than recorded Console images.
-Failed discovery and explicit retries share the same session log, preserving earlier bytes and appending later preparation, startup and idle output until connection closure.
-
-A journal or artifact failure disables further recording without stopping the worker.
-A cell-log failure affects that file and is reported in the response.
-Failure to create the session log disables recording and reports the error on server stderr, including sessions that close without a tool call.
-Failure of either derived projection disables both projections but leaves the journal and artifacts available.
-None of these files is a live-state checkpoint.
+No log can recover values that a language printer or SQL preview never emitted.
+Fetch or save the complete data explicitly when it matters.
 
 ## Render a reviewed copy
 
-The QMD contains calls with exactly one R, Python, or SQL source field, including qualifying **rejected calls and failed evaluations**.
-It omits stdin, control, results, errors, polls, and recorded artifacts.
-Review and edit a copy before executing it outside the worker sandbox.
-Until discovery supplies runtime metadata, the QMD marks its environment as unknown and disables evaluation without inventing a dependency manifest.
-Failed discovery preserves that state and the submitted source.
+`transcript.qmd` is **not a replay or checkpoint**.
+It contains qualifying submitted source, including failed evaluations and rejected calls.
+It omits interactive input, control operations, output, and recorded images.
+Review a copy before executing it; rendering runs outside the worker sandbox.
 
-For a local recording, from the recording directory:
+From the recording directory:
 
 ```sh
 uv tool run --from r-lib-ir ir render transcript.qmd
 ```
 
-With `ir` on `PATH`, use `ir render transcript.qmd`.
-Rendering requires R on the render host even when the original Console session had no R.
+With `ir` already on PATH, use `ir render transcript.qmd`.
+Rendering requires R even for a Python-only original session.
 SQL chunks need a user-supplied DBI connection.
 
-Front matter supplies dependency declarations, not a lockfile.
-Sessions combine the captured startup declaration and recorded additions, which need not match every successfully accepted or automatically inferred package.
-An existing Python environment starts with an empty managed Python declaration, including in an R session.
-Managed Python-only sessions also track accepted Python environments and omit rejected candidates; neither mode pins the complete environment or Python version.
-Bare sessions omit managed defaults.
+Front matter supplies declarations, not a lockfile or a complete installed-environment inventory.
+It may not reproduce every automatic addition or historical environment.
+Committed `set`/`reset` boundaries disable evaluation because one header cannot represent incompatible environments.
+Review those boundaries and choose the rendering environment explicitly.
 
-Committed `set`/`reset` operations create requirement boundaries and disable QMD evaluation: one header manifest cannot reproduce cells that used incompatible historical environments.
-Adjust those boundaries and the rendering environment explicitly rather than treating the document as automatic replay.
+When runtime discovery failed or has not supplied metadata, the QMD keeps the environment unknown and evaluation disabled rather than inventing requirements.
+
+## Recording failures
+
+A journal or artifact failure disables further recording without stopping computation.
+A raw-log failure affects that file.
+Failure of a derived projection disables the projections but can leave the journal and artifacts available.
+Diagnostics and notices report unavailable or partial retention.
+
+Journal events and generated projections are internal formats, not independently versioned public APIs.
+A journaled result records response assembly, not confirmed client receipt.
+See [Architecture](ARCHITECTURE.md#output-and-delivery) for ownership and [Open work](TODO.md) for retention and export gaps.

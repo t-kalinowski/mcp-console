@@ -63,10 +63,11 @@ send:
       "mcp_test_register_input_handler",
       file.path(tempdir(), "input-handler-fifo"),
       function() {
+        # Install cleanup before the checkpoint permits interruption.
+        on.exit(boundary_interrupt_cleanup <<- TRUE)
         checkpoint <- fifo("r-boundary-interrupt-started", open = "wb")
         writeBin(charToRaw("1"), checkpoint)
         close(checkpoint)
-        on.exit(boundary_interrupt_cleanup <<- TRUE)
         repeat {
           Sys.sleep(60)
         }
