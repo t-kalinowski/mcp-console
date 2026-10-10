@@ -5,65 +5,26 @@ toc: false
 sidebar: false
 ---
 
-MCP Console gives your MCP client one tool, `send`, for running R, Python, and SQL.
-Data, models, imports, and database state stay available between calls.
-Results include text and plots, with complete logs and artifacts saved on disk.
+Run R, Python, and SQL through one MCP tool.
+Keep data and models between calls, work across languages, and receive text and plots without filling the model's context with raw output.
 
 ::: {.home-links}
-[Get started](getting-started.qmd){.btn .btn-primary} [Read the docs](README.md){.btn .btn-outline-primary}
+[Get started](getting-started.qmd){.btn .btn-primary} [Documentation](README.md){.btn .btn-outline-primary}
 :::
 
-## Work across languages
+## One workspace, three languages
 
-With both runtimes available, Python reads R objects through `r.name`, R reads Python objects through `py$name`, and SQL can query live R data frames.
-Python and SQL also work without R.
+Python and SQL work without R.
+With both runtimes available, use reticulate's `r.name` and `py$name` bridges to share objects.
+Sessions support interactive input, package preparation, interruption, and restart.
 
-```r
-measurements <- data.frame(value = c(2, 4, 6))
-mean(measurements$value)
-```
+Read [Working with R, Python, and SQL](BUILTIN_RUNTIME.md), [Configuration](CONFIGURATION.md), or [Recordings and reports](RECORDING.md).
 
-In a later Python call, the R object is still available:
+## Status and trust
 
-```python
-r.measurements
-```
+Console is a **development preview** for macOS, Linux, and [experimental Windows x64](WINDOWS.md).
+Run it alongside the MCP client on the intended execution host.
 
-Sessions support interactive input, dependency preparation, interruption, and restart.
-The [runtime guide](BUILTIN_RUNTIME.md) describes language bridges, SQL connections, and plots.
-
-::: {.grid .home-guides}
-::: {.g-col-12 .g-col-md-4}
-## Configure a session
-
-Choose runtimes, packages, and startup settings for your project.
-
-[Configuration](CONFIGURATION.md) · [Dependencies](REQUIREMENTS.md)
-:::
-
-::: {.g-col-12 .g-col-md-4}
-## Keep your work
-
-Inspect recorded sessions and use their Quarto source as the starting point for a report.
-
-[Recordings and reports](RECORDING.md)
-:::
-
-::: {.g-col-12 .g-col-md-4}
-## Connect from code
-
-Use Console from a Python client or through the R ellmer integration.
-
-[Python clients](PYTHON.md) · [Python API](python/index.html) · [R and ellmer](../r/README.md)
-:::
-:::
-
-## Status and execution
-
-MCP Console is a **development preview**; interfaces may change.
-macOS and Linux are supported, and Windows x64 has [experimental local support](WINDOWS.md).
-
-Console runs processes on the host where it is launched.
-Evaluated code has shell-class capability.
-The default [native sandbox](SANDBOX.md) restricts writes and direct networking, but permits host-file reads, including readable secrets.
-[Dependency preparation](REQUIREMENTS.md#host-resolution-and-trust) is a separate trusted host operation.
+The default sandbox restricts writes and direct networking but permits host-file reads, including readable secrets.
+Dependency preparation has a separate policy.
+See [Sandbox and trust](SANDBOX.md).

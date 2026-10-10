@@ -1,34 +1,39 @@
 # Documentation
 
-These pages describe the implemented system.
-Start with the [user quickstart](../README.md), the [development workflow](DEVELOPMENT.md), or the [architecture](ARCHITECTURE.md).
+These guides describe the implemented development preview.
+Start with [Get started](getting-started.qmd); use the references when you need an exact argument, setting, or limit.
+
+## Use Console
+
+[Working with R, Python, and SQL](BUILTIN_RUNTIME.md) explains persistent state, language bridges, database connections, and plots.
+[Calls, input, and control](SEND_OPERATIONS.md) explains polling, interactive input, cancellation, and restart.
+
+Configure a session with [Configuration](CONFIGURATION.md), manage [Dependencies](REQUIREMENTS.md), and keep results with [Recordings and reports](RECORDING.md).
+Integrate Console into an application with the [Python clients](PYTHON.md) or [R and ellmer](../r/README.md).
+
+Before choosing permissions, read [Sandbox and trust](SANDBOX.md).
+Host-specific setup is in [Linux compatibility](LINUX_COMPATIBILITY.md) and [Windows](WINDOWS.md).
+
+## Public reference
+
+| Interface                          | Reference                                                                               |
+| ---------------------------------- | --------------------------------------------------------------------------------------- |
+| MCP tool                           | [`send` API](API.md)                                                                    |
+| Command line                       | [CLI](CLI.md)                                                                           |
+| Application configuration          | [Configuration](CONFIGURATION.md)                                                       |
+| Worker permissions                 | [Sandbox configuration](SANDBOX_CONFIGURATION.md)                                       |
+| Preparation permissions and caches | [Resolver](RESOLVER.md)                                                                 |
+| Environment variables              | [Environment](ENVIRONMENT.md)                                                           |
+| Python package                     | [Generated API](https://t-kalinowski.github.io/mcp-console/python/reference/index.html) |
+
+## Develop Console
+
+Read [Development](DEVELOPMENT.md) for the local workflow and [Architecture](ARCHITECTURE.md) for state and process ownership.
+[Relay protocol](RELAY_PROTOCOL.md) and [Worker protocol](WORKER_PROTOCOL.md) are internal integration references, not the public MCP API.
+
+[Tool descriptions](TOOL_DESCRIPTIONS.md) covers agent-facing prose.
+[Release](../RELEASE.md) covers packaging and publishing.
+[Open work](TODO.md) collects unresolved items without treating every current limitation as a promised feature.
 The [glossary](GLOSSARY.md) defines shared terms.
-Source and public acceptance tests take precedence over prose; [`design-sketches/`](../design-sketches/) describes possible future work.
 
-## Using Console
-
-| Question                                             | Guide                                                                   |
-| ---------------------------------------------------- | ----------------------------------------------------------------------- |
-| How do I configure a session?                        | [Configuration](CONFIGURATION.md)                                       |
-| Which environment variables affect Console?          | [Environment variables](ENVIRONMENT.md)                                 |
-| How do cells, input, plots, and languages work?      | [Built-in runtime](BUILTIN_RUNTIME.md)                                  |
-| What happens when a call combines actions?           | [`send` operations](SEND_OPERATIONS.md)                                 |
-| How are dependencies selected and changed?           | [Requirements](REQUIREMENTS.md), [resolver policy](RESOLVER.md)         |
-| Where are transcripts, retained output, and exports? | [Recordings](RECORDING.md)                                              |
-| How do I connect from Python or R?                   | [Python](PYTHON.md), [ellmer](../r/README.md)                           |
-| Where does Console run?                              | [Execution host](../README.md#execution-host)                           |
-| What works on Windows?                               | [Windows local execution](WINDOWS.md)                                   |
-| What can evaluated code access?                      | [Sandbox](SANDBOX.md), [policy configuration](SANDBOX_CONFIGURATION.md) |
-
-## Changing Console
-
-| Question                                | Guide                                                                          |
-| --------------------------------------- | ------------------------------------------------------------------------------ |
-| Who owns state, processes, and cleanup? | [Architecture](ARCHITECTURE.md)                                                |
-| What crosses the internal transports?   | [Relay protocol](RELAY_PROTOCOL.md), [worker protocol](WORKER_PROTOCOL.md)     |
-| How should MCP tool prose be written?   | [Tool descriptions](TOOL_DESCRIPTIONS.md)                                      |
-| How do I develop and test a change?     | [Development](DEVELOPMENT.md), [boundary tests](../tests/boundaries/README.md) |
-| What does Linux enforcement require?    | [Linux compatibility](LINUX_COMPATIBILITY.md)                                  |
-| How do I build and publish a release?   | [Release](../RELEASE.md)                                                       |
-
-Before changing isolation or lifecycle behavior, read the [sandbox limits](SANDBOX.md#supported-hosts-and-lifetime-limits) and [dependency trust boundary](REQUIREMENTS.md#host-resolution-and-trust).
+Historical proposals in [`design-sketches/`](../design-sketches/) are not current specifications and are not published as website guides.
