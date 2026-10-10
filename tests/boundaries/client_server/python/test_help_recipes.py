@@ -1,157 +1,90 @@
-"""Installed-object documentation recipes through ordinary Python cells."""
+"""Installed-object help through ordinary Python cells."""
 
+import json
 import re
 import sys
-import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
 from support.client import McpClient
-from support.execution import RUNTIME, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.previews import assert_preview, normalize_preview_paths
 from support.records import Transcript
 from support.suites import run_this_suite
 
 
 @executions(RUNTIME)
-def test_documents_existing_module_and_function_with_provenance(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory(prefix="PythonHelp-") as directory:
-        workspace = Path(directory).resolve()
-        module_path = workspace / "recipe_example.py"
-        module_path.write_text(
-            # fmt: python
-            code('''
-                """A local documentation example."""
-
-
-                def double(value: int) -> int:
-                    """Return twice the value."""
-                    return value * 2
-                '''),
-            encoding="utf-8",
-        )
-        # Offline distribution metadata; the import and distribution names differ.
-        metadata = workspace / "recipe_distribution-1.2.3.dist-info"
-        metadata.mkdir()
-        (metadata / "METADATA").write_text(
-            "Metadata-Version: 2.1\nName: recipe-distribution\nVersion: 1.2.3\n",
-            encoding="utf-8",
-        )
-        with McpClient(
-            binary, execution.serve(), current_directory=workspace
-        ) as client:
-            client.initialize_and_list_tools()
-            client.expect(
-                python="import importlib.metadata, platform, pydoc, recipe_example"
-            )
-            client.send(
-                # fmt: python
-                python=code("""
-                    module = recipe_example
-                    print(f"Python {platform.python_version()}")
-                    print(f"Module {module.__name__}: {module.__spec__.origin}")
-                    print(
-                        f"Distribution recipe-distribution: {importlib.metadata.version('recipe-distribution')}"
-                    )
-                    for target in (module, module.double):
-                        encoded = pydoc.render_doc(target, renderer=pydoc.plaintext).encode("utf-8")
-                        preview = encoded[:4096].decode("utf-8", errors="ignore")
-                        print(preview, end="")
-                        omitted = len(encoded) - len(preview.encode("utf-8"))
-                        if omitted:
-                            print(f"\\n[documentation preview; {omitted} UTF-8 bytes omitted]")
-                    """),
-            )
-            output = last_tool_text(client)
-            version, origin, distribution = output.splitlines()[:3]
-            assert re.fullmatch(r"Python \d+\.\d+\.\d+", version), output
-            assert origin == f"Module recipe_example: {module_path}", output
-            assert distribution == "Distribution recipe-distribution: 1.2.3", output
-            assert "A local documentation example." in output, output
-            assert "double(value: int) -> int" in output, output
-            assert "Return twice the value." in output, output
-            assert "[documentation preview;" not in output and "\b" not in output, (
-                output
-            )
-            file_section = re.search(r"\nFILE\n    ([^\n]+)\n", output)
-            assert file_section is not None, output
-            file_path = file_section.group(1)
-            # pydoc's FILE path is normcase-normalized, unlike module provenance.
-            assert Path(file_path).samefile(module_path), output
-            client.transcript[-1]["result"]["content"][0]["text"] = (
-                output.replace(version, "Python <installed version>")
-                .replace(str(module_path), "<workspace>/recipe_example.py")
-                .replace(file_path, "<workspace>/recipe_example.py")
-            )
-            return client.finish()
-
-
-@executions(RUNTIME)
-def test_missing_documentation_target_preserves_python_error_and_session(
+def test_short_object_help_is_discoverable_and_noninteractive(
     binary: Path, execution: Execution
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
-        client.expect(python="import math, pydoc")
-        client.send(
-            python="pydoc.render_doc(math.missing_documentation_target, renderer=pydoc.plaintext)"
+        client.expect(
+            "Help on method_descriptor:\n\n"
+            "upper(self, /) unbound builtins.str method\n"
+            "    Return a copy of the string converted to uppercase.\n\n",
+            python="help(str.upper)",
         )
-        output = last_tool_text(client)
-        assert output.startswith("Traceback (most recent call last):\n"), output
-        assert output.endswith(
-            "AttributeError: module 'math' has no attribute 'missing_documentation_target'\n"
-        ), output
-        client.expect("9.0\n", python="math.sqrt(81)")
+        python_guidance = client.transcript[2]["result"]["tools"][0]["inputSchema"][
+            "properties"
+        ]["python"]["description"]
+        assert "`help(object)`" in python_guidance, python_guidance
+        assert "bare `help()` prompts" in python_guidance, python_guidance
         return client.finish()
 
 
-@executions(RUNTIME)
-def test_long_unicode_documentation_has_bounded_preview_and_omission_count(
+@executions(DIRECT, SANDBOXED)
+def test_long_object_help_retains_readable_raw_log(
     binary: Path, execution: Execution
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
         client.initialize_and_list_tools()
         client.expect(
             # fmt: python
-            python=code("""
-                import pydoc
-
-
-                def documented() -> None:
+            python=code(r"""
+                def documented():
                     pass
 
 
-                documented.__doc__ = "🙂" * 3000
+                documented.__doc__ = "🙂" * 1500 + "\nOnly in the omitted middle.\n" + "🙂" * 1500
                 """),
         )
-        client.send(
+        client.send(python="help(documented)")
+        output = last_tool_text(client)
+        notice = re.search(r"; raw log: ([^\n]+)\]\n", output)
+        assert notice is not None, output
+        assert client.temporary_directory is not None
+        raw_path = Path(client.temporary_directory.name) / notice[1]
+        raw = raw_path.read_bytes().decode("utf-8")
+        assert raw == (
+            "Help on function documented in module __main__:\n\n"
+            "documented()\n    "
+            + "🙂" * 1500
+            + "\n    Only in the omitted middle.\n    "
+            + "🙂" * 1500
+            + "\n\n"
+        ), raw
+        assert_preview(output, raw)
+        assert "Only in the omitted middle." not in output, output
+
+        # Read the advertised file through the worker's ordinary execution path.
+        client.expect(
+            "Only in the omitted middle.\n",
             # fmt: python
-            python=code("""
-                target = documented
-                encoded = pydoc.render_doc(target, renderer=pydoc.plaintext).encode("utf-8")
-                preview = encoded[:4096].decode("utf-8", errors="ignore")
-                print(preview, end="")
-                omitted = len(encoded) - len(preview.encode("utf-8"))
-                if omitted:
-                    print(f"\\n[documentation preview; {omitted} UTF-8 bytes omitted]")
+            python=code(f"""
+                with open({json.dumps(notice[1])}, encoding="utf-8") as log:
+                    documentation = log.read()
+                print(documentation.splitlines()[4].strip())
                 """),
         )
-        # The 95-byte heading leaves space for 1,000 complete four-byte characters.
-        # One byte of the next character is excluded and counted as omitted.
-        prefix = (
-            "Python Library Documentation: function documented in module __main__\n\n"
-            "documented() -> None\n    "
+        read_arguments = client.transcript[-1]["send"]
+        read_arguments["python"] = read_arguments["python"].replace(
+            raw_path.parent.parent.name, "<run ID>"
         )
-        expected = (
-            prefix
-            + "🙂" * 1000
-            + "\n[documentation preview; 8001 UTF-8 bytes omitted]\n"
-        )
-        assert last_tool_text(client) == expected, client.transcript[-1]
+        normalize_preview_paths(client)
         return client.finish()
 
 
