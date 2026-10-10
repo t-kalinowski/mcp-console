@@ -37,7 +37,7 @@ struct EvaluationState {
     completion_collected: bool,
     /// Whether successful cell completion must end with an explicit final marker.
     controlled_completion: bool,
-    input_report_at: Option<Instant>,
+    input_request: Option<InputRequest>,
     /// Whether one `send` currently owns the right to drain this evaluation's response.
     waiting: bool,
     /// Restart or controlled handoff permanently retires this evaluation.
@@ -48,6 +48,11 @@ struct EvaluationState {
     stdin: Option<super::platform::StdinSender>,
     pending_stdin: String,
     observed_worker_revision: u64,
+}
+
+struct InputRequest {
+    prompt: String,
+    report_at: Instant,
 }
 
 #[derive(Clone, Copy)]
@@ -139,7 +144,7 @@ impl Evaluation {
                 delivery_changed: Arc::clone(&delivery_changed),
                 completion_collected: false,
                 controlled_completion,
-                input_report_at: None,
+                input_request: None,
                 waiting: false,
                 retired: false,
                 restart_handoff: None,
@@ -335,8 +340,8 @@ impl Evaluation {
             return Ok(());
         }
 
-        if let Some(report_at) = state.input_report_at.as_mut() {
-            *report_at = Instant::now() + INPUT_REQUEST_GRACE;
+        if let Some(request) = state.input_request.as_mut() {
+            request.report_at = Instant::now() + INPUT_REQUEST_GRACE;
         }
         #[cfg(any(unix, windows))]
         if let Some(writer) = &state.stdin {
@@ -392,24 +397,27 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.input_report_at.is_some() {
+        if state.input_request.is_some() {
             return Err("worker requested new input before receiving prior input".to_string());
         }
         let prompt = serde_json::to_string(&prompt)
             .map_err(|error| format!("failed to render worker input prompt: {error}"))?;
         self.output
             .push_notice_line(format!("input requested: {prompt}"));
-        state.input_report_at = Some(Instant::now() + INPUT_REQUEST_GRACE);
+        state.input_request = Some(InputRequest {
+            prompt,
+            report_at: Instant::now() + INPUT_REQUEST_GRACE,
+        });
         self.changed.notify_one();
         Ok(())
     }
 
-    pub(super) fn resume_input_request(&self) -> Result<(), String> {
+    pub(super) fn resume_input_request(&self, prompt: String) -> Result<(), String> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.input_report_at.is_some() {
+        if state.input_request.is_some() {
             return Err("worker evaluation already has an outstanding input request".to_string());
         }
         let grace = if state.pending_stdin.is_empty() {
@@ -417,9 +425,20 @@ impl Evaluation {
         } else {
             INPUT_REQUEST_GRACE
         };
-        state.input_report_at = Some(Instant::now() + grace);
+        state.input_request = Some(InputRequest {
+            prompt,
+            report_at: Instant::now() + grace,
+        });
         self.changed.notify_one();
         Ok(())
+    }
+
+    pub(super) fn take_input_request(&self) -> Result<Option<String>, String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        Ok(state.input_request.take().map(|request| request.prompt))
     }
 
     pub(super) fn input_received(&self) -> Result<(), String> {
@@ -428,7 +447,7 @@ impl Evaluation {
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
         state
-            .input_report_at
+            .input_request
             .take()
             .ok_or_else(|| "worker reported received input without requesting it".to_string())?;
         self.changed.notify_one();
@@ -440,7 +459,7 @@ impl Evaluation {
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        if state.input_report_at.is_some() {
+        if state.input_request.is_some() {
             return Err("worker completed with an outstanding input request".to_string());
         }
         Ok(())
@@ -465,7 +484,7 @@ impl Evaluation {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        state.input_report_at = None;
+        state.input_request = None;
         state.phase = EvaluationPhase::CellCompletionGrace(deadline);
         state.completion_cut = None;
         state.completion_collected = false;
@@ -508,7 +527,7 @@ impl Evaluation {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        state.input_report_at = None;
+        state.input_request = None;
         state.completion_cut = None;
         self.finish_cell_output();
         self.output.push_failure(failure);
@@ -534,7 +553,7 @@ impl Evaluation {
         let Ok(mut state) = self.state.lock() else {
             return;
         };
-        state.input_report_at = None;
+        state.input_request = None;
         if let Err(failure) = result
             && (!state.retired || failure.should_survive_restart())
         {
@@ -705,7 +724,7 @@ impl Evaluation {
             }
             EvaluationPhase::Evaluating | EvaluationPhase::ReplacementStarting => {}
         }
-        let Some(report_at) = state.input_report_at else {
+        let Some(request) = state.input_request.as_ref() else {
             if at_deadline {
                 let cut = self.output.cut();
                 let mut output = take_owned_response(&mut state, &self.output, cut);
@@ -717,7 +736,7 @@ impl Evaluation {
             }
             return Ok(EvaluationStatus::Waiting);
         };
-        let grace = report_at.saturating_duration_since(Instant::now());
+        let grace = request.report_at.saturating_duration_since(Instant::now());
         if !at_deadline && !grace.is_zero() {
             return Ok(EvaluationStatus::Grace(grace));
         }

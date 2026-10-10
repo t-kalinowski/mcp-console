@@ -185,14 +185,20 @@ impl WorkerOperationState {
     }
 
     pub(in crate::worker_client) fn abort_bootstrap_cell(&self) -> Result<(), String> {
-        let operation = self
-            .lock()?
+        let mut state = self.lock()?;
+        let operation = state
             .operation
             .take()
             .ok_or("interrupted bootstrap has no waiting cell")?;
         let OperationKind::Cell(evaluation) = operation.kind else {
             return Err("interrupted bootstrap did not own a waiting cell".into());
         };
+        // Withholding never ran this cell. Its input may still belong to an
+        // idle callback that ignored interruption; return ownership before
+        // another input event can observe the detached operation.
+        assert!(state.idle_input.is_none());
+        state.idle_input = evaluation.take_input_request()?;
+        drop(state);
         evaluation.complete_cell_after_grace();
         Ok(())
     }
@@ -296,8 +302,8 @@ impl WorkerOperationState {
                 .wait(state)
                 .map_err(|_| "worker operation state lock poisoned".to_string())?;
         }
-        if state.idle_input.take().is_some() {
-            evaluation.resume_input_request()?;
+        if let Some(prompt) = state.idle_input.take() {
+            evaluation.resume_input_request(prompt)?;
         }
         let mut operation = Some(Operation {
             kind: OperationKind::Cell(evaluation.clone()),
