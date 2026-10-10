@@ -1047,21 +1047,20 @@ impl PythonApi {
                 &mut exception_value,
                 &mut traceback,
             );
-            let builtins = (self.import_add_module)(c"builtins".as_ptr());
-            let namespace = if builtins.is_null() {
+            // Site hooks can fail before evaluator installation. Its later
+            // installation reuses this module and the retained exception.
+            let runtime = (self.import_add_module)(c"_mcp_console".as_ptr());
+            let namespace = if runtime.is_null() {
                 std::ptr::null_mut()
             } else {
-                (self.module_get_dict)(builtins)
+                (self.module_get_dict)(runtime)
             };
             let retained = !exception_value.is_null()
                 && !namespace.is_null()
                 && (traceback.is_null()
                     || (self.exception_set_traceback)(exception_value, traceback) == 0)
-                && (self.dict_set_item_string)(
-                    namespace,
-                    c"_mcp_console_setup_error".as_ptr(),
-                    exception_value,
-                ) == 0;
+                && (self.dict_set_item_string)(namespace, c"setup_error".as_ptr(), exception_value)
+                    == 0;
             for object in [exception_type, exception_value, traceback] {
                 if !object.is_null() {
                     (self.dec_ref)(object);

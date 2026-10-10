@@ -44,6 +44,12 @@ The whole cell is compiled before execution.
 Ordinary exceptions print a traceback and leave the worker usable.
 An uncaught main-thread `SystemExit` terminates the worker.
 
+Console supplies `r` and `_console.sql_connection()` through Python's builtins; attaching reticulate may also bind `r` in `__main__`.
+Alongside Python's standard workspace metadata and builtins, these are the intentional conveniences available without imports.
+Console's internal imports, setup state, and exception helpers remain private.
+Modules such as `os`, `sys`, and `tempfile` enter the workspace only when user code or startup hooks bind them.
+Later setup and interrupt recovery preserve those user bindings; restart creates a fresh workspace.
+
 Console owns Python initialization.
 Startup hooks run before cells, and attaching reticulate later preserves the running interpreter and its objects.
 The working-directory import entry follows `os.chdir()`.

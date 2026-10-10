@@ -422,7 +422,7 @@ base::local(
         # Native setup retains the exception without printing it. Preserve
         # reticulate's R condition classes, last error, and interrupt handling.
         reticulate::py_eval(
-          "(lambda: None).__builtins__['_mcp_console_raise_setup_error']()",
+          "(lambda: None).__builtins__['__import__']('_mcp_console').raise_setup_error()",
           convert = TRUE
         )
       }

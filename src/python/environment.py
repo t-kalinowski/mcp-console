@@ -1,6 +1,6 @@
 """Live path activation; manifests and resolution belong to the native owner."""
 
-import builtins
+# Activation errors belong to the private runtime module, not user builtins.
 import importlib
 import importlib.metadata
 import json
@@ -171,7 +171,7 @@ def prepare(request: str) -> str:
         )
         return json.dumps({"kind": "prepared"})
     except _ActivationFailure as failure:
-        builtins.__dict__["_mcp_console_setup_error"] = failure.__cause__
+        runtime.setup_error = failure.__cause__
         return json.dumps(
             {"kind": "failed", "message": "Python activation failed; restart required"}
         )
