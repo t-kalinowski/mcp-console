@@ -10,8 +10,8 @@ The agent can run code, inspect the result, and continue from the same live stat
 Code runs in an [OS-level sandbox](docs/SANDBOX.md) by default, with configurable limits on filesystem writes and direct network access.
 Console prepares environments and packages automatically; no Console configuration file is required.
 
-Use [R, Python, or SQL](docs/BUILTIN_RUNTIME.md), or combine them in one session.
-Data can move between languages without intermediate files.
+The agent can use [R, Python, or SQL](docs/BUILTIN_RUNTIME.md), or combine them in one session.
+The runtimes are embedded in one process, so data can move between languages without intermediate files.
 Console works with MCP-compatible clients such as Codex and Claude Code and does not depend on a particular model provider.
 
 **Development preview:** interfaces may change.

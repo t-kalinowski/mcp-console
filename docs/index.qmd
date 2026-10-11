@@ -21,21 +21,23 @@ Console prepares environments and packages automatically; no Console configurati
 ## Work in a persistent session
 
 Console provides a persistent session—a REPL—through one MCP tool, `send`.
-An agent can inspect a plot and adjust it, read help, or pause in a debugger to evaluate code against live objects.
+The agent can:
 
-Long computations can continue between calls.
-The agent can collect output as it arrives or interrupt the computation while keeping the session.
-Output previews limit how much text enters the model's context, while [recordings](RECORDING.md) keep logs and plots available for later inspection.
+- Inspect plots and refine code using objects already in memory.
+- Read help, pause in a debugger, and evaluate code against live objects.
+- Run long computations across calls, collect output as it arrives, and interrupt work without restarting the session.
+- Read previews of long output that limit how much text enters the model's context.
+- Revisit logs and plots through [recordings](RECORDING.md).
 
 ## R, Python, and SQL {#one-workspace-three-languages}
 
-Use one language or combine them in the same session.
-You can query R data frames with SQL and share objects between R and Python without intermediate files.
+The built-in runtimes are embedded in one process, so the agent can pass data between R, Python, and SQL without writing intermediate files.
+It can use one language or combine them in the same session.
 See [Working with R, Python, and SQL](BUILTIN_RUNTIME.md).
 
 ## Environment setup
 
-Console prepares a managed Python environment and a default set of data packages.
+Console prepares an ephemeral Python environment with a default set of data packages.
 It can install additional packages as code needs them.
 You can also [use an existing project environment](CONFIGURATION.md).
 See [Get started](getting-started.qmd) for installation prerequisites and client setup, or [Requirements and environments](REQUIREMENTS.md) for package preparation.
