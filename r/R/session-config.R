@@ -170,7 +170,21 @@ FirstAvailablePython <- S7::new_class(
               logical(1)
             ))
         ) {
-          "must contain ExistingPython(), active_venv, or ManagedPython() candidates"
+          return(
+            "must contain ExistingPython(), active_venv, or ManagedPython() candidates"
+          )
+        }
+        if (sum(vapply(value, identical, logical(1), "active_venv")) > 1L) {
+          return("must contain at most one active_venv candidate")
+        }
+        managed <- which(vapply(
+          value,
+          S7::S7_inherits,
+          logical(1),
+          ManagedPython
+        ))
+        if (length(managed) > 1L || any(managed != length(value))) {
+          "must contain at most one ManagedPython() candidate, last"
         }
       }
     )
@@ -437,7 +451,7 @@ S7::method(as.list, ConsoleConfig) <- function(x, ...) {
   config_mapping(fields)
 }
 
-console_cli_arguments <- function(config) {
+console_cli_arguments <- function(config, file) {
   settings <- S7::props(config)
   discovery <- if (!is.null(settings$discovery)) S7::props(settings$discovery)
   resolver <- if (!is.null(settings$resolver)) S7::props(settings$resolver)
@@ -459,13 +473,22 @@ console_cli_arguments <- function(config) {
     if (!is.null(settings$python)) "python"
   )
   values <- as.list(config)
+  overrides <- c(
+    vapply(clears, function(key) paste0(key, "=null"), character(1)),
+    unlist(Map(config_override, names(values), values), use.names = FALSE)
+  )
+  writeLines(
+    as.character(jsonlite::toJSON(
+      unname(as.list(overrides)),
+      auto_unbox = TRUE
+    )),
+    file,
+    useBytes = TRUE
+  )
   c(
     flags,
     if (disabled) "--no-sandbox",
-    unlist(
-      lapply(clears, function(key) c("-c", paste0(key, "=null"))),
-      use.names = FALSE
-    ),
-    unlist(Map(config_override, names(values), values), use.names = FALSE)
+    "--config-overrides-file",
+    file
   )
 }

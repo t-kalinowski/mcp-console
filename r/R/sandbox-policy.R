@@ -473,5 +473,5 @@ S7::method(as.list, ConfigNode) <- function(x, ...) {
 }
 
 config_override <- function(key, value) {
-  c("-c", paste0(key, "=", jsonlite::toJSON(value, auto_unbox = TRUE)))
+  paste0(key, "=", jsonlite::toJSON(value, auto_unbox = TRUE))
 }

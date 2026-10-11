@@ -52,9 +52,17 @@ resolve_console_config <- function(
   S7::validate(config)
   binary <- resolve_mcp_console(path, version)
   project <- normalizePath(project, mustWork = TRUE)
+  file <- tempfile("mcp-console-overrides-", fileext = ".json")
+  on.exit(unlink(file), add = TRUE)
   result <- processx::run(
     binary,
-    c("config", "resolve", "--format", "json", console_cli_arguments(config)),
+    c(
+      "config",
+      "resolve",
+      "--format",
+      "json",
+      console_cli_arguments(config, file)
+    ),
     wd = project,
     error_on_status = FALSE
   )

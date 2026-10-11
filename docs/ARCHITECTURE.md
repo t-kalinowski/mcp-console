@@ -53,6 +53,9 @@ Each producer preserves order, but their observation order does not reconstruct 
 ## Startup and runtime ownership
 
 The server captures configuration once and constructs tool presentation from it.
+The R adapter sends ordered configuration overrides through a private JSON file using `--config-overrides-file`.
+Native capture applies them after discovered files and before ordinary `-c` overrides; discovery exclusions and permission replacement retain their existing semantics.
+The adapter removes the file after synchronous materialization or the server's initialization handshake, when native capture has finished reading it.
 One connection-owned background task discovers runtimes, prepares defaults, and prelaunches the built-in worker.
 MCP initialization, tool discovery, and pings do not wait.
 Custom workers remain lazy.

@@ -129,6 +129,26 @@ test_that("new properties preserve existing positional constructor arguments", {
   expect_null(config@startup)
 })
 
+test_that("fallback chains reject duplicate selectors and misplaced managed candidates", {
+  expect_error(
+    FirstAvailablePython(list("active_venv", "active_venv")),
+    "at most one active_venv"
+  )
+  expect_error(
+    FirstAvailablePython(list(ManagedPython(), ManagedPython())),
+    "ManagedPython.*last"
+  )
+  expect_error(
+    FirstAvailablePython(list(ManagedPython(), ExistingPython(".venv"))),
+    "ManagedPython.*last"
+  )
+  expect_no_error(S7::validate(FirstAvailablePython(list(
+    "active_venv",
+    ExistingPython(".venv"),
+    ManagedPython()
+  ))))
+})
+
 test_that("tool configuration preserves descriptions and nested parameter mappings", {
   tool <- ToolConfig(
     description = "Evaluation tool.\n\nUse the parameter descriptions.",
@@ -241,16 +261,20 @@ test_that("console_tool defaults to no discovery and exposes explicit source cho
       c(
         "serve",
         "--no-config",
-        "--no-sandbox",
-        "-c",
-        "sandbox=null",
-        "-c",
-        "resolver.sandbox=null"
+        "--no-sandbox"
       )
     )
     for (i in seq_along(choices)) {
       tool <- console_tool(path = path, config = choices[[i]])
-      expect_identical(readLines(record, warn = FALSE), expected[[i]])
+      argv <- readLines(record, warn = FALSE)
+      file <- match("--config-overrides-file", argv)
+      expect_false(is.na(file))
+      expect_identical(argv[-c(file, file + 1L)], expected[[i]])
+      expect_false(file.exists(argv[[file + 1L]]))
+      expect_identical(
+        readLines(paste0(record, ".overrides")),
+        if (i == 7L) c("sandbox=null", "resolver.sandbox=null") else character()
+      )
       rm(tool)
       invisible(gc())
     }
@@ -267,24 +291,15 @@ test_that("runtime options layer while explicit permission nodes replace", {
       resolver = ResolverConfig(sandbox = SandboxPolicy())
     )
     tool <- console_tool(path = path, config = config)
-    argv <- readLines(record, warn = FALSE)
     expect_identical(
-      argv,
+      readLines(paste0(record, ".overrides")),
       c(
-        "serve",
-        "-c",
         "sandbox=null",
-        "-c",
         "resolver.sandbox=null",
-        "-c",
         "python=null",
-        "-c",
         "r={\"packages\":[]}",
-        "-c",
         "python={\"managed\":{\"packages\":[]}}",
-        "-c",
         "resolver={\"sandbox\":{}}",
-        "-c",
         "sandbox={}"
       )
     )

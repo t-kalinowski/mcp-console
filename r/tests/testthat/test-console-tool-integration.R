@@ -543,3 +543,54 @@ test_that("sandbox materialization round trips through typed configuration", {
     }
   })
 })
+
+test_that("large constructed and materialized settings use bounded launch arguments", {
+  binary <- real_mcp_console()
+  with_temp_working_directory({
+    description <- paste(rep("Evaluation cell.", 80000), collapse = "\n")
+    startup <- StartupConfig(
+      language = "python",
+      code = paste0(
+        "#",
+        strrep("x", 31000),
+        "\n",
+        "import sqlite3\n",
+        "_console.sql_connection(sqlite3.connect(':memory:'))"
+      )
+    )
+    size <- nchar(
+      jsonlite::toJSON(as.list(startup), auto_unbox = TRUE),
+      type = "bytes"
+    )
+    expect_gt(size, 30000)
+    expect_lt(size, 32 * 1024)
+    source <- ConsoleConfig(
+      discovery = ConfigDiscovery(global = FALSE),
+      sandbox = FALSE,
+      r = RConfig(packages = character(), resolution = "disabled"),
+      python = ExistingPython(sandbox_test_python()),
+      languages = c("python", "sql"),
+      startup = startup,
+      tool = ToolConfig(description = description)
+    )
+    dir.create(".agents/console", recursive = TRUE)
+    writeLines(
+      "environment: {LARGE_CONFIG: discovered}",
+      ".agents/console/config.yaml"
+    )
+    resolved <- resolve_console_config(source, path = binary)
+    expect_identical(resolved@tool@description, description)
+    expect_identical(resolved@startup@code, startup@code)
+    for (config in list(source, resolved)) {
+      tool <- console_tool(config = config, path = binary)
+      expect_identical(tool@description, description)
+      expect_match(tool(sql = "SELECT 42 AS answer")@text, "42", fixed = TRUE)
+      expect_identical(
+        tool(python = "import os; print(os.environ['LARGE_CONFIG'])")@text,
+        "discovered\n"
+      )
+      rm(tool)
+      invisible(gc())
+    }
+  })
+})

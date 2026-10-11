@@ -151,7 +151,7 @@ Use `enabled = FALSE` to hide a field; assigning `NULL` removes an override and 
 Saved descriptions are literal: changing visibility does not regenerate them.
 Runtime-dependent selections, package defaults, and inherited environment variables remain launch policies.
 `as.list(config)` exposes JSON-ready application settings; `config@sandbox` retains `FALSE` for host execution.
-Constructed and materialized configurations use the same validation and command-line override transport.
+Constructed and materialized configurations use the same validation and temporary-file transport for ordered overrides, preserving discovery and layering without placing descriptions or startup source in process arguments.
 
 This replaces the earlier list result: use `@` for S7 properties and `$` for entries in the named `parameters` list, as above.
 Calls that previously relied on the result retaining `path` or `project` must now supply those launch arguments explicitly:
