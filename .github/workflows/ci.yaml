@@ -692,18 +692,6 @@ jobs:
           # Build optional Ragnar dependencies before the bounded sandbox case.
           prewarm_r --with ragnar
 
-      - name: Regenerate macOS writable-root snapshot for CI repair
-        if: runner.os == 'macOS'
-        run: scripts/test --update client_server/sandbox/test_writable_roots::writable_roots_reach_every_runner_launch_on_macos --jobs 1
-
-      - name: Upload regenerated macOS writable-root snapshot
-        if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v7
-        with:
-          name: regenerated-macos-writable-root-snapshot
-          path: tests/snapshots/client_server/sandbox/test_writable_roots/writable_roots_reach_every_runner_launch_on_macos*.yaml
-          retention-days: 1
-
       - name: Run transcripts
         id: transcripts
         env:
