@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from boundaries.client_server.python.test_without_r import environment
 from support.assertions import wait_for_worker_ready
 from support.client import McpClient
+from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.python import write_test_wheel
 from support.records import Transcript
@@ -179,6 +180,49 @@ def test_console_cache_rejects_unsandboxed_execution(binary: Path) -> Transcript
         assert not result.stdout
         assert not (root / "cache-base").exists()
     return [{"unsandboxed_console_cache_rejected": True}]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_non_r_sessions_do_not_require_manual_cache(
+    binary: Path, execution: Execution
+) -> Transcript:
+    for language in ("python", "sql"):
+        for source in ("environment", "settings"):
+            with TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                cache = root / "cache"
+                cache.write_text("cache parent cannot be a directory\n")
+                env = dict(
+                    os.environ,
+                    XDG_CACHE_HOME=str(cache),
+                    RETICULATE_PYTHON=sys.executable,
+                )
+                env.pop("MCP_CONSOLE_LANGUAGES", None)
+                for name in CACHE_VARIABLES:
+                    env[name] = str(root / "host-caches" / name)
+                env["MPLCONFIGDIR"] = str(root / "host-caches/matplotlib")
+                arguments = ["-c", "cache=host"]
+                if source == "environment":
+                    env["MCP_CONSOLE_LANGUAGES"] = language
+                else:
+                    arguments.extend(("-c", f"languages=[{language}]"))
+                with McpClient(
+                    binary, execution.serve(*arguments), env, root
+                ) as client:
+                    client.initialize_and_list_tools()
+                    tool = client.transcript[-1]["result"]["tools"][0]
+                    properties = tool["inputSchema"]["properties"]
+                    assert language in properties and "r" not in properties, properties
+                    client.request("ping")
+                    client.finish()
+                assert cache.read_text() == "cache parent cannot be a directory\n"
+    return [
+        {
+            "non_r_sessions_require_manual_cache": False,
+            "languages": ["python", "sql"],
+            "sources": ["environment", "settings"],
+        }
+    ]
 
 
 @requires(SANDBOX, R, command("ir"), command("uv"))

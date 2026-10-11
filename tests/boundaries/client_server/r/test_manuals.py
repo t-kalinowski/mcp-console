@@ -94,6 +94,7 @@ def test_manual_navigation(binary: Path, execution: Execution) -> Transcript:
         output = normalize_paths(client, root)
         assert "Writing R Extensions" in output, output
         assert "1 Small sections" in output, output
+        assert 'Read: `RShowDoc("R-exts#original-anchor")`' in output, output
         assert ".console$manual" in output, output
         assert "¶" not in output, output
         client.send(r='RShowDoc("R-exts#SEC_Contents")')
@@ -284,13 +285,21 @@ def test_manual_cache_write_scope(binary: Path, execution: Execution) -> Transcr
         return client.finish()
 
 
-def completed_collection(root: Path) -> Path:
+def cache_entries(root: Path) -> list[Path]:
     cache = root / "cache/mcp-console/manuals"
-    entries = sorted(cache.iterdir())
-    assert entries and all(re.fullmatch("[a-f0-9]{64}", p.name) for p in entries), (
-        entries
+    # Native sandboxes can add protected metadata mounts at a writable root.
+    # The public cache entries are the source-identity directories.
+    entries = sorted(p for p in cache.iterdir() if re.fullmatch("[a-f0-9]{64}", p.name))
+    assert not list(cache.glob(".incomplete-*")), (
+        "publication left an incomplete collection"
     )
     assert all((p / "manifest.json").is_file() for p in entries), entries
+    return entries
+
+
+def completed_collection(root: Path) -> Path:
+    entries = cache_entries(root)
+    assert entries, "no completed manual collection"
     return entries[-1]
 
 
@@ -369,8 +378,7 @@ def test_manual_cache_reuse_and_invalidation(
     binary: Path, execution: Execution
 ) -> Transcript:
     with manual_client(binary, execution) as (client, root):
-        cache = root / "cache/mcp-console/manuals"
-        assert not list(cache.iterdir()), "startup must not convert manuals"
+        assert not cache_entries(root), "startup must not convert manuals"
         client.send(r='RShowDoc("R-exts")')
         normalize_paths(client, root)
         first = completed_collection(root)
@@ -394,10 +402,82 @@ def test_manual_cache_reuse_and_invalidation(
         )
         client.send(r='.console$manual("R-exts#Small-sections")')
         assert "Changed source text." in normalize_paths(client, root)
-        assert len(list(cache.iterdir())) == 2
+        assert len(cache_entries(root)) == 2
         source.write_bytes(b"<html>\xff</html>")
         client.send(r='RShowDoc("R-exts")')
         assert "UTF-8" in normalize_paths(client, root)
-        assert len(list(cache.iterdir())) == 2
-        assert all((p / "manifest.json").is_file() for p in cache.iterdir())
+        assert len(cache_entries(root)) == 2
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_cache_repairs_modified_outputs(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.send(
+            r='discard <- capture.output(path <- .console$manual("R-exts#Small-sections"))'
+        )
+        normalize_paths(client, root)
+        collection = completed_collection(root)
+        original = {
+            p.relative_to(collection): p.read_bytes()
+            for p in collection.rglob("*")
+            if p.is_file()
+        }
+        client.expect(
+            "modified chunk and manifest\n",
+            # fmt: r
+            r=code(r"""
+                manifest <- file.path(dirname(dirname(path)), "manifest.json")
+                for (file in c(path, manifest)) {
+                  text <- readLines(file, encoding = "UTF-8", warn = FALSE)
+                  writeLines(
+                    sub("Parent-only text.", "INJECTED-CACHE-TEXT", text, fixed = TRUE),
+                    file,
+                    useBytes = TRUE
+                  )
+                }
+                cat("modified chunk and manifest\n")
+                """),
+        )
+        client.send(r='.console$manual_search("INJECTED-CACHE-TEXT")')
+        assert "No matches." in normalize_paths(client, root)
+        assert original == {p: (collection / p).read_bytes() for p in original}
+        client.expect("[done]", r="unlink(path)")
+        client.send(r='.console$manual("R-exts#Small-sections")')
+        assert "Parent-only text." in normalize_paths(client, root)
+        assert original == {p: (collection / p).read_bytes() for p in original}
+        client.expect("[done]", r='writeLines("invalid manifest", manifest)')
+        client.send(control="restart")
+        client.send(r='utils::RShowDoc("R-exts")')
+        assert "Writing R Extensions" in normalize_paths(client, root)
+        assert original == {p: (collection / p).read_bytes() for p in original}
+        client.expect(
+            "[done]",
+            r='discard <- capture.output(complete <- .console$manual_export("R-exts")); writeLines("INJECTED-CACHE-TEXT", complete)',
+        )
+        client.send(r='.console$manual_export("R-exts")')
+        normalize_paths(client, root)
+        exported = (collection / "exports/R-exts.md").read_text()
+        assert "INJECTED-CACHE-TEXT" not in exported and "Parent-only text." in exported
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_bounded_anchor_continues_current_section(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.send(r='.console$manual("R-exts#Grouped-A", lines = 1L)')
+        output = normalize_paths(client, root)
+        continuation = re.search(r"Continue: (.+)", output)
+        assert continuation and "Next section:" not in output, output
+        client.send(r=continuation[1])
+        output = normalize_paths(client, root)
+        assert "1.1 Grouped A" in output and "A short needle introduction." in output, (
+            output
+        )
         return client.finish()

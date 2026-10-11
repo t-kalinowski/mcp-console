@@ -86,6 +86,7 @@ RShowDoc("R-exts#Registering-native-routines")
 ```
 
 `RShowDoc()` shows a compact TOC or resolves an original HTML anchor; qualified `utils::RShowDoc()` calls behave the same way and retain their native invisible return value.
+Section navigation and heading search hits use `RShowDoc()`; Console-specific read commands handle file ranges and continuations.
 Console handles only installed manual HTML through R's browser option.
 Other documentation calls retain their existing behavior, plain text uses the pager, and later browser-option overrides take precedence.
 PDF extraction is unavailable.
@@ -100,6 +101,7 @@ The displayed `File` is relative to the displayed `Cache` directory.
 Reading and search work with `capture.output()`.
 
 `.console$manual_search(query, manual = "", start = 1L, limit = 5L)` performs local, case-insensitive literal matching.
+This searches manual bodies; `help.search()` and `??` retain their package-documentation metadata searches.
 An empty `manual` searches the collection.
 Heading matches come first; each logical section appears at most once, with its section number, heading path, excerpt, and read command.
 Results are bounded; follow the printed continuation command for more matches.
@@ -111,9 +113,13 @@ The first manual operation converts the installed collection together; R startup
 Console records the R installation and version, source paths and SHA-256 content fingerprints, and conversion-format version in `manifest.json`.
 Completed entries persist across cells and sessions and are published atomically.
 Changed inputs select a new entry; old entries remain inspectable.
+On first manual use, each worker derives its model and expected files from the installed sources, then reuses that model while the inputs are unchanged.
+Before reuse, Console compares cached files, including the manifest, with those source-derived projections; missing or modified files are regenerated.
+R reading and search use the source-derived model, so concurrent cache edits cannot replace the displayed documentation.
 The [platform cache policy](RESOLVER.md#cache-locations) determines the root, independently of `MCP_CONSOLE_HOME`.
 The worker can write this manual subtree without write access to the broader Console cache.
 Treat completed entries as immutable; removing an entry regenerates it on next use.
+Complete exports are checked against the same model when requested.
 
 Each manual directory contains a TOC and descriptive, numbered Markdown files with parent/previous/next links.
 Short sections can share files; large sections split at headings or paragraphs without overlapping body text.

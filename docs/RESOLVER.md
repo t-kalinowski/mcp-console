@@ -54,6 +54,7 @@ The companion's source/build cache is separate from dependency caches.
 It is not worker-writable under the default policy.
 
 [Installed R manuals](BUILTIN_RUNTIME.md#built-in-r-manuals) use the sibling `mcp-console/manuals` directory (on Windows, `mcp-console/cache/manuals`), including with `cache: host` or `--no-sandbox`.
+Only built-in sessions with the R language enabled set up this directory.
 The location is captured before dependency-cache environment redirection.
 Console grants the worker writes only to this documentation subtree, not its cache parent or companion storage.
 These entries contain converted documentation data, not executable dependencies.

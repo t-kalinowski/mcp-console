@@ -1,0 +1,40 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: .console$manual("R-exts#Grouped-A", lines = 1L)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/01-small-sections-part-001.md
+        Location: Writing R Extensions > 1 Small sections > 1.1 Grouped A
+
+
+        Continue: .console$manual("R-exts/01-small-sections-part-001.md", start = 13, column = 1)
+  isError: false
+---
+send:
+  r: >-
+    .console$manual("R-exts/01-small-sections-part-001.md", start = 13,
+    column = 1)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/01-small-sections-part-001.md
+        Location: Writing R Extensions > 1 Small sections > 1.1 Grouped A
+
+        ### 1.1 Grouped A
+
+        A short needle introduction. See [B](01-small-sections-part-001.md#Grouped-B), [language](../R-lang/01-shared-references-part-001.md#Shared-anchor), and [external](https://example.org/external).
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](../R-lang/01-shared-references-part-001.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next file: .console$manual("R-exts/02-needle-examples-part-001.md")
+  isError: false

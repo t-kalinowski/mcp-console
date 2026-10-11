@@ -82,15 +82,15 @@ result:
               installed help; `vignette()` prints rendered HTML text or labeled
               UTF-8/ASCII source for other formats. Capture long documentation with
               `text <- capture.output(print(?pkg::topic))`, then print line ranges
-              with `writeLines()`. `.console$manual()` lists cached installed R
-              manuals and their paths; `RShowDoc("R-exts#original-anchor")` reads a
-              section. Search with `.console$manual_search("phrase")`; follow the
-              exact read/continuation commands. `.console$manual_export("R-exts")`
-              writes a complete Markdown export. Default-device plots return as PNGs
-              and finalize at cell end, including after errors; draw each plot in one
-              cell. Explicit devices are not captured. Set persistent dimensions in
-              inches and DPI with `options(console.plot.width_in = ...,
-              console.plot.height_in = ..., console.plot.dpi = ...)`.
+              with `writeLines()`. `RShowDoc("R-exts")` opens an installed manual TOC;
+              `RShowDoc("R-exts#original-anchor")` reads a section. Search manual
+              bodies with `.console$manual_search("phrase")`. Follow the printed
+              read/continuation commands; `.console$manual()` lists the collection and
+              cache paths. Default-device plots return as PNGs and finalize at cell
+              end, including after errors; draw each plot in one cell. Explicit
+              devices are not captured. Set persistent dimensions in inches and DPI
+              with `options(console.plot.width_in = ..., console.plot.height_in = ...,
+              console.plot.dpi = ...)`.
             type:
               - string
               - "null"

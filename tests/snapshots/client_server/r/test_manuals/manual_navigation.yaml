@@ -22,7 +22,7 @@ result:
           - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
           - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
 
-        Read: `.console$manual("R-exts#original-anchor")`
+        Read: `RShowDoc("R-exts#original-anchor")`
         Search: `.console$manual_search("phrase", manual = "R-exts")`
         Full TOC: `.console$manual("R-exts/index.md")`
   isError: false
@@ -50,7 +50,7 @@ result:
           - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
                 - [(1)](B-fixture-reference-part-001.md#FOOT1)
 
-        Read: `.console$manual("R-exts#original-anchor")`
+        Read: `RShowDoc("R-exts#original-anchor")`
         Search: `.console$manual_search("phrase", manual = "R-exts")`
   isError: false
 ---
@@ -87,7 +87,7 @@ result:
         A short needle introduction. See [B](01-small-sections-part-001.md#Grouped-B), [language](../R-lang/01-shared-references-part-001.md#Shared-anchor), and [external](https://example.org/external).
 
 
-        Next section: .console$manual("R-exts#Grouped-B")
+        Next section: RShowDoc("R-exts#Grouped-B")
   isError: false
 ---
 send:

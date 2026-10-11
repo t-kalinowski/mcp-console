@@ -13,7 +13,7 @@ result:
 
         R-exts: Writing R Extensions > 2 Needle examples
           ## 2 Needle examples
-          Read: .console$manual("R-exts#Needle-examples")
+          Read: RShowDoc("R-exts#Needle-examples")
 
         R-exts: Writing R Extensions > 1 Small sections > 1.1 Grouped A
           A short needle introduction. See [B](01-small-sections-part-001.md#Grouped-B), [language](../R-lang/01-shared-references-part-001.md#Shared-anchor), and [extern

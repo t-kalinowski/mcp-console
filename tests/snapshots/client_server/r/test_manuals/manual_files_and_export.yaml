@@ -17,7 +17,7 @@ result:
         - [Writing R Extensions (R-exts)](R-exts/index.md)
         - [R Language Definition (R-lang)](R-lang/index.md)
 
-        Read: `.console$manual("R-exts")`
+        Read: `RShowDoc("R-exts")`
         Search: `.console$manual_search("phrase")`
         Export: `.console$manual_export("R-exts")`
 

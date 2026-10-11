@@ -7,19 +7,20 @@ use harp::object::RObject;
 use html2text::render::{RichAnnotation, TaggedLineElement};
 use html2text::{Handle, RcDom};
 use libr::SEXP;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 // Bump when conversion or projection changes, including chunking defaults.
-const FORMAT: u32 = 4;
+const FORMAT: u32 = 5;
 const TARGET: usize = 4096;
 const BODY_MAX: usize = 5400; // Leave room for hierarchy and navigation.
 const READ_BUDGET: usize = 5000; // Paths, commands, and notices fit below 8 KiB.
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct Collection {
     format: u32,
     installation: String,
@@ -29,14 +30,14 @@ struct Collection {
     manuals: Vec<Manual>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct Source {
     name: String,
     path: String,
     sha256: String,
 }
 
-#[derive(Serialize, Deserialize, Default)]
+#[derive(Serialize, Default)]
 struct Manual {
     name: String,
     title: String,
@@ -47,14 +48,14 @@ struct Manual {
     toc_anchors: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct Section {
     title: String,
     level: usize,
     parent: Option<usize>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct Block {
     section: usize,
     heading: bool,
@@ -63,12 +64,25 @@ struct Block {
     links: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 struct Chunk {
     file: String,
     start: usize,
     end: usize,
 }
+
+type Files = BTreeMap<String, String>;
+
+#[derive(Clone)]
+struct Prepared {
+    identity: String,
+    collection: Arc<Collection>,
+    files: Arc<Files>,
+}
+
+// Submitted code can write cache data. Authenticate it from installed sources,
+// never from the cached manifest; retain that source-derived model per worker.
+static PREPARED: Mutex<Option<Prepared>> = Mutex::new(None);
 
 fn attribute(node: &Handle, key: &str) -> Option<String> {
     if let html2text::Element { attrs, .. } = &node.data {
@@ -598,7 +612,7 @@ fn toc(manual: &Manual, compact: bool) -> String {
             section.title
         ));
     }
-    text.push_str(&format!("\nRead: `.console$manual(\"{}#original-anchor\")`\nSearch: `.console$manual_search(\"phrase\", manual = \"{}\")`\n", manual.name, manual.name));
+    text.push_str(&format!("\nRead: `RShowDoc(\"{}#original-anchor\")`\nSearch: `.console$manual_search(\"phrase\", manual = \"{}\")`\n", manual.name, manual.name));
     if compact {
         text.push_str(&format!(
             "Full TOC: `.console$manual(\"{}/index.md\")`\n",
@@ -679,10 +693,37 @@ fn anchor_positions(manual: &Manual, chunk: &Chunk, lines: &[usize]) -> BTreeMap
     positions
 }
 
-fn materialize(args: &[String]) -> Result<(PathBuf, Collection)> {
+fn projected_files(collection: &Collection) -> Result<Files> {
+    let mut files = Files::new();
+    let mut index = format!("# Installed R manuals\n\n{}\n\n", collection.r_version);
+    for manual in &collection.manuals {
+        index.push_str(&format!(
+            "- [{} ({})]({}/index.md)\n",
+            manual.title, manual.name, manual.name
+        ));
+        files.insert(format!("{}/index.md", manual.name), toc(manual, false));
+        for (i, chunk) in manual.chunks.iter().enumerate() {
+            files.insert(
+                format!("{}/{}", manual.name, chunk.file),
+                content(collection, manual, chunk, i),
+            );
+        }
+    }
+    index.push_str("\nRead: `RShowDoc(\"R-exts\")`\nSearch: `.console$manual_search(\"phrase\")`\nExport: `.console$manual_export(\"R-exts\")`\n\nThe per-manual directories contain non-overlapping content files and TOCs.\nComplete exports live separately in `exports/`; exclude them from filesystem searches.\n");
+    files.insert("index.md".into(), index);
+    files.insert(
+        "manifest.json".into(),
+        serde_json::to_string_pretty(collection)?,
+    );
+    Ok(files)
+}
+
+fn materialize(args: &[String]) -> Result<(PathBuf, Prepared)> {
     let root = std::env::var_os("MCP_CONSOLE_MANUAL_CACHE")
         .filter(|s| !s.is_empty())
-        .context("Manual cache requires an absolute HOME or XDG_CACHE_HOME at server launch")?;
+        .context(
+            "Manual cache requires a UTF-8 absolute HOME or XDG_CACHE_HOME at server launch",
+        )?;
     let source =
         fs::canonicalize(&args[1]).context("Installed HTML manual directory is unavailable")?;
     let mut paths = fs::read_dir(&source)?
@@ -724,50 +765,61 @@ fn materialize(args: &[String]) -> Result<(PathBuf, Collection)> {
         inputs.push((name, bytes));
     }
     let identity = fingerprint(&serde_json::to_vec(&collection)?);
-    let directory = PathBuf::from(root).join(identity);
-    let manifest = directory.join("manifest.json");
-    if manifest.is_file() {
-        return Ok((directory, serde_json::from_slice(&fs::read(manifest)?)?));
-    }
-    for (name, bytes) in inputs {
-        collection.manuals.push(parse(&name, &bytes)?);
+    let directory = PathBuf::from(root).join(&identity);
+    let prepared = {
+        let mut cached = PREPARED.lock().expect("manual source model lock");
+        if cached
+            .as_ref()
+            .is_none_or(|entry| entry.identity != identity)
+        {
+            for (name, bytes) in inputs {
+                collection.manuals.push(parse(&name, &bytes)?);
+            }
+            let files = Arc::new(projected_files(&collection)?);
+            *cached = Some(Prepared {
+                identity,
+                collection: Arc::new(collection),
+                files,
+            });
+        }
+        cached.as_ref().unwrap().clone()
+    };
+    let complete = || {
+        prepared.files.iter().all(|(name, expected)| {
+            fs::read(directory.join(name)).is_ok_and(|actual| actual == expected.as_bytes())
+        })
+    };
+    if complete() {
+        return Ok((directory, prepared));
     }
     let temporary = tempfile::Builder::new()
         .prefix(".incomplete-")
         .tempdir_in(directory.parent().unwrap())?;
-    let mut index = format!("# Installed R manuals\n\n{}\n\n", collection.r_version);
-    for manual in &collection.manuals {
-        index.push_str(&format!(
-            "- [{} ({})]({}/index.md)\n",
-            manual.title, manual.name, manual.name
-        ));
-        let path = temporary.path().join(&manual.name);
-        fs::create_dir(&path)?;
-        fs::write(path.join("index.md"), toc(manual, false))?;
-        for (i, chunk) in manual.chunks.iter().enumerate() {
-            fs::write(
-                path.join(&chunk.file),
-                content(&collection, manual, chunk, i),
-            )?;
+    for (name, text) in prepared.files.iter() {
+        let path = temporary.path().join(name);
+        fs::create_dir_all(path.parent().unwrap())?;
+        fs::write(path, text)?;
+    }
+    if directory.exists() {
+        if complete() {
+            return Ok((directory, prepared));
         }
+        fs::remove_dir_all(&directory)?;
     }
-    index.push_str("\nRead: `.console$manual(\"R-exts\")`\nSearch: `.console$manual_search(\"phrase\")`\nExport: `.console$manual_export(\"R-exts\")`\n\nThe per-manual directories contain non-overlapping content files and TOCs.\nComplete exports live separately in `exports/`; exclude them from filesystem searches.\n");
-    fs::write(temporary.path().join("index.md"), index)?;
-    fs::write(
-        temporary.path().join("manifest.json"),
-        serde_json::to_vec_pretty(&collection)?,
-    )?;
-    match fs::rename(temporary.path(), &directory) {
-        Ok(()) => {}
-        Err(error) if manifest.is_file() => {
-            let _ = error;
-        } // Another session published the identical inputs.
-        Err(error) => return Err(error.into()),
+    if let Err(error) = fs::rename(temporary.path(), &directory) {
+        // A concurrent publisher is acceptable only if its complete entry
+        // matches the same source-derived projections, including the manifest.
+        ensure!(complete(), "Cannot publish manual cache: {error}");
     }
-    Ok((directory, collection))
+    Ok((directory, prepared))
 }
 
-fn read(collection: &Collection, directory: &Path, args: &[String]) -> Result<Vec<String>> {
+fn read(
+    collection: &Collection,
+    files: &Files,
+    directory: &Path,
+    args: &[String],
+) -> Result<Vec<String>> {
     let topic = &args[4];
     let mut anchor = "";
     let relative = if topic.is_empty() {
@@ -800,7 +852,12 @@ fn read(collection: &Collection, directory: &Path, args: &[String]) -> Result<Ve
     let text = if let Some(manual) = collection.manuals.iter().find(|m| m.name == *topic) {
         toc(manual, true)
     } else {
-        fs::read_to_string(&path)?
+        // Reading uses the source-derived projection even if another worker
+        // changes a cache file after the integrity check.
+        files
+            .get(&relative)
+            .context("Unknown manual content file")?
+            .clone()
     };
     let lines = text.lines().collect::<Vec<_>>();
     let mut positions = BTreeMap::new();
@@ -876,10 +933,13 @@ fn read(collection: &Collection, directory: &Path, args: &[String]) -> Result<Ve
                 .copied()
         {
             end = end.min(line);
-            following = Some(format!(
-                "{}#{}",
-                manual.name,
-                block.anchors.first().map_or("", String::as_str)
+            following = Some((
+                line,
+                format!(
+                    "{}#{}",
+                    manual.name,
+                    block.anchors.first().map_or("", String::as_str)
+                ),
             ));
         }
     }
@@ -946,10 +1006,10 @@ fn read(collection: &Collection, directory: &Path, args: &[String]) -> Result<Ve
         next = i + 1;
         next_column = 0;
     }
-    if next == end
-        && let Some(following) = following
+    if let Some((boundary, following)) = following
+        && next == boundary
     {
-        output.push_str(&format!("\nNext section: .console$manual({following:?})\n"));
+        output.push_str(&format!("\nNext section: RShowDoc({following:?})\n"));
     } else if next < lines.len() {
         output.push_str(&format!(
             "\nContinue: .console$manual({:?}, start = {}, column = {})\n",
@@ -1022,7 +1082,7 @@ fn search(collection: &Collection, directory: &Path, args: &[String]) -> Result<
                 let excerpt = excerpt.chars().skip(offset).take(160).collect::<String>();
                 let command = if heading {
                     let (_, anchor) = section_location(manual, i);
-                    format!(".console$manual({:?})", format!("{}#{anchor}", manual.name))
+                    format!("RShowDoc({:?})", format!("{}#{anchor}", manual.name))
                 } else {
                     let prefix = Chunk {
                         file: chunk.file.clone(),
@@ -1133,24 +1193,20 @@ fn export(collection: &Collection, directory: &Path, name: &str) -> Result<Vec<S
     let exports = directory.join("exports");
     fs::create_dir_all(&exports)?;
     let path = exports.join(format!("{name}.md"));
-    if !path.exists() {
-        let mut text = format!(
-            "<!-- Installed {}, {}. Converted under the permission notice below. -->\n\n",
-            manual.name, collection.r_version
-        );
-        for anchor in &manual.toc_anchors {
-            text.push_str(&format!("{}\n", anchor_html(anchor)));
-        }
-        for block in &manual.blocks {
-            text.push_str(&project(collection, manual, block, true));
-        }
+    let mut text = format!(
+        "<!-- Installed {}, {}. Converted under the permission notice below. -->\n\n",
+        manual.name, collection.r_version
+    );
+    for anchor in &manual.toc_anchors {
+        text.push_str(&format!("{}\n", anchor_html(anchor)));
+    }
+    for block in &manual.blocks {
+        text.push_str(&project(collection, manual, block, true));
+    }
+    if !fs::read(&path).is_ok_and(|actual| actual == text.as_bytes()) {
         let temporary = tempfile::NamedTempFile::new_in(&exports)?;
         fs::write(temporary.path(), text)?;
-        if let Err(error) = temporary.persist_noclobber(&path)
-            && !path.is_file()
-        {
-            return Err(error.error.into());
-        }
+        temporary.persist(&path).map_err(|error| error.error)?;
     }
     Ok(vec![
         path.to_string_lossy().into(),
@@ -1167,11 +1223,12 @@ pub extern "C-unwind" fn mcp_console_manual(request: SEXP) -> harp::Result<SEXP>
     let args = Vec::<String>::try_from(&RObject::view(request))?;
     let run = || -> Result<Vec<String>> {
         ensure!(args.len() == 10, "invalid manual request");
-        let (directory, collection) = materialize(&args)?;
+        let (directory, prepared) = materialize(&args)?;
+        let collection = &prepared.collection;
         match args[3].as_str() {
-            "read" => read(&collection, &directory, &args),
-            "search" => search(&collection, &directory, &args),
-            "export" => export(&collection, &directory, &args[4]),
+            "read" => read(collection, &prepared.files, &directory, &args),
+            "search" => search(collection, &directory, &args),
+            "export" => export(collection, &directory, &args[4]),
             _ => bail!("unknown manual operation"),
         }
     };

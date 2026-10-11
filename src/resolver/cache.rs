@@ -8,7 +8,7 @@ pub(crate) fn configure(
     selection: Option<Cache>,
     no_sandbox: bool,
     python: Option<&crate::settings::PythonChoice>,
-    builtin: bool,
+    manuals: bool,
     resolver: &mut SandboxSettings,
     worker: &mut SandboxSettings,
 ) -> Result<(), String> {
@@ -22,7 +22,7 @@ pub(crate) fn configure(
     if no_sandbox && matches!(selection, Cache::Console) {
         return Err("cache: console requires sandboxing; use cache: host with --no-sandbox".into());
     }
-    if builtin {
+    if manuals {
         configure_manuals(resolver, worker)?;
     }
     if matches!(selection, Cache::Host) {
@@ -141,14 +141,17 @@ fn configure_manuals(
     resolver: &SandboxSettings,
     worker: &mut SandboxSettings,
 ) -> Result<(), String> {
-    let root = console_root(resolver).ok().map(|root| root.join("manuals"));
+    let root = console_root(resolver)
+        .ok()
+        .map(|root| root.join("manuals"))
+        .filter(|root| root.to_str().is_some());
     let path = match &root {
         Some(root) => {
             std::fs::create_dir_all(root).map_err(|error| error.to_string())?;
             root.to_str().ok_or("manual cache paths must be UTF-8")?
         }
-        // Host-cache sessions without a cache location can still use other
-        // runtimes. Manual access reports the missing location on first use.
+        // Missing or non-UTF-8 host-cache locations do not prevent unrelated
+        // runtime use. Manual access reports the unavailable location on use.
         None => "",
     };
     let environment = worker.entry("environment").or_insert_with(|| json!({}));
