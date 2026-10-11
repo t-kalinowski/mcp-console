@@ -96,15 +96,22 @@ impl Client {
             }
             return Err(active.reject_preparation_message().to_string());
         }
-        // Unchanged declarations do not wait for bootstrap. Recalculate after
-        // admission because bootstrap callbacks can change the environment.
+        // Unchanged declarations do not wait for bootstrap when their snapshot
+        // is available. A resolver callback can hold this lock; reserve below
+        // before waiting so idle callbacks can reject conflicting preparation.
+        // Recalculate after admission because callbacks can change the snapshot.
         {
-            let environment = environment
-                .lock()
-                .map_err(|_| "worker environment lock poisoned".to_string())?;
-            self.ensure_generation(generation)?;
-            if RequirementDelta::calculate(&environment, requirements.clone())?.is_empty() {
-                return Ok(PrepareResult::Prepared);
+            match environment.try_lock() {
+                Ok(environment) => {
+                    self.ensure_generation(generation)?;
+                    if RequirementDelta::calculate(&environment, requirements.clone())?.is_empty() {
+                        return Ok(PrepareResult::Prepared);
+                    }
+                }
+                Err(std::sync::TryLockError::WouldBlock) => {}
+                Err(std::sync::TryLockError::Poisoned(_)) => {
+                    return Err("worker environment lock poisoned".to_string());
+                }
             }
         }
         // Preparation owns admission and no evaluation is active. A delivered
