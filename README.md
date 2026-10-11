@@ -8,7 +8,7 @@ Console provides a persistent session—a REPL—through one MCP tool, `send`.
 The agent can run code, inspect the result, and continue from the same live state.
 
 Code runs in an [OS-level sandbox](docs/SANDBOX.md) by default, with configurable limits on filesystem writes and direct network access.
-Console prepares environments and packages automatically; no Console configuration file is required.
+By default, Console prepares environments and packages automatically; no Console configuration file is required.
 
 The agent can use [R, Python, or SQL](docs/BUILTIN_RUNTIME.md), or combine them in one session.
 The runtimes are embedded in one process, so data can move between languages without intermediate files.
@@ -31,7 +31,7 @@ See [Get started](docs/getting-started.qmd) for prerequisites, optional R instal
 Configure your MCP client to launch `mcp-console serve` over stdio.
 Run the client and Console on the same host, with the client's shell and filesystem tools using the same workspace.
 
-Console prepares R packages, Python packages, and DuckDB extensions for the session.
+By default, Console prepares R packages, Python packages, and DuckDB extensions for the session.
 The agent can request more as it works.
 See [Requirements and environments](docs/REQUIREMENTS.md) for details.
 
