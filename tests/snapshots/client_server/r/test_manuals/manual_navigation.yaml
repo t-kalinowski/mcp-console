@@ -1,0 +1,135 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/index.md
+
+        # Writing R Extensions
+
+        [Collection](../index.md)
+
+
+        - [Writing R Extensions](00.00-writing-r-extensions-part-001.md#Top)
+          - [1 Small sections](01-small-sections-part-001.md#Small-sections)
+          - [2 Needle examples](02-needle-examples-part-001.md#Needle-examples)
+          - [3 Long Unicode line](03-long-unicode-line-part-001.md#Long-line)
+          - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
+          - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
+
+        Read: `.console$manual("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC: `.console$manual("R-exts/index.md")`
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#SEC_Contents")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/index.md
+        Location: Writing R Extensions > Table of Contents
+
+
+        - [Writing R Extensions](00.00-writing-r-extensions-part-001.md#Top)
+          - [1 Small sections](01-small-sections-part-001.md#Small-sections)
+            - [1.1 Grouped A](01-small-sections-part-001.md#Grouped-A)
+            - [1.2 Grouped B](01-small-sections-part-001.md#Grouped-B)
+          - [2 Needle examples](02-needle-examples-part-001.md#Needle-examples)
+            - [2.1 Large section](02-needle-examples-part-001.md#Large-section)
+            - [2.2 Oversized example](02.02-oversized-example-part-001.md#Oversized-example)
+          - [3 Long Unicode line](03-long-unicode-line-part-001.md#Long-line)
+          - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
+          - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
+
+        Read: `.console$manual("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts#Grouped-B")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/01-small-sections-part-001.md
+        Location: Writing R Extensions > 1 Small sections > 1.2 Grouped B
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](../R-lang/01-shared-references-part-001.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next file: .console$manual("R-exts/02-needle-examples-part-001.md")
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#Grouped-A")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/01-small-sections-part-001.md
+        Location: Writing R Extensions > 1 Small sections > 1.1 Grouped A
+
+        ### 1.1 Grouped A
+
+        A short needle introduction. See [B](01-small-sections-part-001.md#Grouped-B), [language](../R-lang/01-shared-references-part-001.md#Shared-anchor), and [external](https://example.org/external).
+
+
+        Next section: .console$manual("R-exts#Grouped-B")
+  isError: false
+---
+send:
+  r: |
+    discard <- capture.output(
+      value <- withVisible(utils::RShowDoc("R-exts#Grouped-B"))
+    )
+    a <- capture.output(RShowDoc("R-exts#Grouped-B"))
+    b <- capture.output(utils::RShowDoc("R-exts#Grouped-B"))
+    stopifnot(
+      !value$visible,
+      identical(value$value, file.path(R.home("doc"), "manual", "R-exts.html")),
+      identical(a, b),
+      any(grepl("café λ", a, fixed = TRUE)),
+      identical(
+        capture.output(RShowDoc("COPYING")),
+        "Plain text still uses the pager."
+      )
+    )
+    cat("capture, native return, and plain pager retained\n")
+result:
+  content:
+    - type: text
+      text: |
+        capture, native return, and plain pager retained
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#absent-anchor")
+result:
+  content:
+    - type: text
+      text: |
+        Error: Unknown manual anchor: R-exts#absent-anchor
+  isError: false
+---
+send:
+  r: |
+    options(browser = function(url, ...) cat("later browser override retained\n"))
+    utils::RShowDoc("R-exts#Grouped-B")
+result:
+  content:
+    - type: text
+      text: |
+        later browser override retained
+  isError: false

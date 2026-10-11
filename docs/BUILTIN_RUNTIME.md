@@ -73,6 +73,60 @@ Custom pagers receive converted HTML through `file.show()` with its standard enc
 A pager that returns before reading the file must remove it after use.
 Console removes the temporary file if a function pager raises an error.
 
+### Built-in R manuals
+
+`.console$manual()` lists the installed HTML manuals and the persistent Markdown cache location.
+No R client package or filesystem tool is required.
+For example:
+
+```r
+RShowDoc("R-exts")
+RShowDoc("R-exts#Registering-native-routines")
+.console$manual_search("native routines", manual = "R-exts")
+```
+
+`RShowDoc()` shows a compact TOC or resolves an original HTML anchor; qualified `utils::RShowDoc()` calls behave the same way and retain their native invisible return value.
+Console handles only installed manual HTML through R's browser option.
+Other documentation calls retain their existing behavior, plain text uses the pager, and later browser-option overrides take precedence.
+PDF extraction is unavailable.
+
+`.console$manual(topic = "", start = 1L, lines = 0L, column = 1L)` reads a manual, original anchor, or collection-relative content filename.
+An empty topic lists the collection; a manual name shows its compact TOC.
+Use the displayed `manual/index.md` command for its full TOC.
+Reading returns the selected cache filename invisibly and prints bounded UTF-8 text with hierarchy context and exact continuation or next-file commands.
+The displayed `File` is relative to the displayed `Cache` directory.
+`start` and `lines` select physical file lines; `lines = 0L` reads to the response budget.
+`column` is a one-based character position for continuing an unusually long line.
+Reading and search work with `capture.output()`.
+
+`.console$manual_search(query, manual = "", start = 1L, limit = 5L)` performs local, case-insensitive literal matching.
+An empty `manual` searches the collection.
+Heading matches come first; each logical section appears at most once, with its section number, heading path, excerpt, and read command.
+Results are bounded; follow the printed continuation command for more matches.
+`limit` accepts 1–20 results, subject to the response budget.
+Search does not include TOCs, generated navigation, or complete exports.
+
+The first manual operation converts the installed collection together; R startup does not render it.
+Console records the R installation and version, source paths and SHA-256 content fingerprints, and conversion-format version in `manifest.json`.
+Completed entries persist across cells and sessions and are published atomically.
+Changed inputs select a new entry; old entries remain inspectable.
+The [platform cache policy](RESOLVER.md#cache-locations) determines the root, independently of `MCP_CONSOLE_HOME`.
+The worker can write this manual subtree without write access to the broader Console cache.
+Treat completed entries as immutable; removing an entry regenerates it on next use.
+
+Each manual directory contains a TOC and descriptive, numbered Markdown files with parent/previous/next links.
+Short sections can share files; large sections split at headings or paragraphs without overlapping body text.
+Code blocks and tables remain whole, so individual files can exceed the usual roughly 4–6 KiB size.
+The R reader still provides bounded access to them.
+Explicit HTML anchors preserve original identities, and relative links connect grouped sections and other installed manuals.
+External links remain intact; unavailable local targets are labeled rather than linked to invented files.
+Source HTML must be UTF-8; scripts and styles are excluded and assets are not fetched or executed.
+
+The displayed paths also work with ordinary filesystem tools, `readLines(path, encoding = "UTF-8")`, and `grep()`.
+`.console$manual_export("R-exts")` writes complete Markdown from the same logical content and returns its filename invisibly.
+Same-manual links resolve inside the export; cross-manual links point into the cached collection.
+Exports live in `exports/`, outside the per-manual content directories; exclude that directory from filesystem searches to avoid duplicate hits.
+
 ## Python
 
 Python cells execute in persistent `__main__.__dict__`; the final expression is displayed.

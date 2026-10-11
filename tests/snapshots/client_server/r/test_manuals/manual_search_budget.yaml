@@ -1,0 +1,76 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: .console$manual_search("Budgetmatch", limit = 20L)
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "Budgetmatch"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        12 matching sections; results 1–9
+
+        R-lang: R Language Definition > 2 Search pages > 2.1 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.1 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise exc
+          Read: .console$manual("R-lang#Budget-1")
+
+        R-lang: R Language Definition > 2 Search pages > 2.2 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.2 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise exc
+          Read: .console$manual("R-lang#Budget-2")
+
+        R-lang: R Language Definition > 2 Search pages > 2.3 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.3 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise exc
+          Read: .console$manual("R-lang#Budget-3")
+
+        R-lang: R Language Definition > 2 Search pages > 2.4 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.4 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise exc
+          Read: .console$manual("R-lang#Budget-4")
+
+        R-lang: R Language Definition > 2 Search pages > 2.5 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.5 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise exc
+          Read: .console$manual("R-lang#Budget-5")
+
+        R-lang: R Language Definition > 2 Search pages > 2.6 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.6 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise exc
+          Read: .console$manual("R-lang#Budget-6")
+
+        R-lang: R Language Definition > 2 Search pages > 2.7 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.7 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise exc
+          Read: .console$manual("R-lang#Budget-7")
+
+        R-lang: R Language Definition > 2 Search pages > 2.8 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.8 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise exc
+          Read: .console$manual("R-lang#Budget-8")
+
+        R-lang: R Language Definition > 2 Search pages > 2.9 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.9 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise exc
+          Read: .console$manual("R-lang#Budget-9")
+
+        Continue: .console$manual_search("Budgetmatch", manual = "", start = 10, limit = 20)
+  isError: false
+---
+send:
+  r: >-
+    .console$manual_search("Budgetmatch", manual = "", start = 10, limit =
+    20)
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "Budgetmatch"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        12 matching sections; results 10–12
+
+        R-lang: R Language Definition > 2 Search pages > 2.10 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.10 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise ex
+          Read: .console$manual("R-lang#Budget-10")
+
+        R-lang: R Language Definition > 2 Search pages > 2.11 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.11 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise ex
+          Read: .console$manual("R-lang#Budget-11")
+
+        R-lang: R Language Definition > 2 Search pages > 2.12 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise excerpts from the same logical content
+          ### 2.12 Budgetmatch reference with enough heading context to exercise the response budget while preserving section numbers, exact read commands, and concise ex
+          Read: .console$manual("R-lang#Budget-12")
+  isError: false

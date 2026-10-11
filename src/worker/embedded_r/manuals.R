@@ -1,0 +1,125 @@
+base::local(
+  {
+    request <- function(
+      operation,
+      topic = "",
+      query = "",
+      start = 1L,
+      lines = 0L,
+      column = 1L,
+      limit = 5L
+    ) {
+      stopifnot(
+        is.character(topic),
+        length(topic) == 1L,
+        !is.na(topic),
+        is.character(query),
+        length(query) == 1L,
+        !is.na(query),
+        length(start) == 1L,
+        is.finite(start),
+        start >= 1,
+        start == as.integer(start),
+        length(lines) == 1L,
+        is.finite(lines),
+        lines >= 0,
+        lines == as.integer(lines),
+        length(column) == 1L,
+        is.finite(column),
+        column >= 1,
+        column == as.integer(column),
+        length(limit) == 1L,
+        is.finite(limit),
+        limit >= 1,
+        limit <= 20,
+        limit == as.integer(limit)
+      )
+      result <- .Call(
+        "mcp_console_manual",
+        enc2utf8(c(
+          R.home(),
+          file.path(R.home("doc"), "manual"),
+          R.version.string,
+          operation,
+          topic,
+          query,
+          start,
+          lines,
+          column,
+          limit
+        ))
+      )
+      if (nzchar(result[[2L]])) {
+        writeLines(result[[2L]], useBytes = TRUE)
+      }
+      invisible(result[[1L]])
+    }
+
+    console <- base::get(".console", base::as.environment("tools:mcp-console"))
+    console$manual <- function(
+      topic = "",
+      start = 1L,
+      lines = 0L,
+      column = 1L
+    ) {
+      request("read", topic, start = start, lines = lines, column = column)
+    }
+    console$manual_search <- function(
+      query,
+      manual = "",
+      start = 1L,
+      limit = 5L
+    ) {
+      stopifnot(nzchar(query))
+      request("search", manual, query, start, limit = limit)
+    }
+    console$manual_export <- function(manual) request("export", manual)
+
+    previous_browser <- getOption("browser")
+    options(browser = function(url, ...) {
+      if (missing(url)) {
+        return(previous_browser(...))
+      }
+      stopifnot(is.character(url), length(url) == 1L)
+      if (startsWith(url, "file://")) {
+        # RShowDoc URL-encodes the whole native path, including '#'. Separate
+        # the fragment after decoding, then restrict to installed manuals.
+        local <- utils::URLdecode(substring(url, 8L))
+        path <- sub("#.*$", "", local)
+        directory <- normalizePath(
+          file.path(R.home("doc"), "manual"),
+          winslash = "/",
+          mustWork = FALSE
+        )
+        if (
+          tolower(tools::file_ext(path)) == "html" &&
+            identical(
+              normalizePath(dirname(path), winslash = "/", mustWork = FALSE),
+              directory
+            ) &&
+            grepl("^R-[A-Za-z]+$", tools::file_path_sans_ext(basename(path)))
+        ) {
+          manual <- tools::file_path_sans_ext(basename(path))
+          anchor <- if (grepl("#", local, fixed = TRUE)) {
+            sub("^[^#]*#", "", local)
+          } else {
+            ""
+          }
+          # Native RShowDoc appends the manual name when no fragment is given.
+          if (identical(anchor, manual)) {
+            anchor <- ""
+          }
+          return(console$manual(
+            if (nzchar(anchor)) paste0(manual, "#", anchor) else manual
+          ))
+        }
+      }
+      if (is.function(previous_browser)) {
+        return(previous_browser(url, ...))
+      }
+      utils::browseURL(url, browser = previous_browser, ...)
+    })
+    invisible(NULL)
+  },
+  envir = base::new.env(parent = base::baseenv())
+)

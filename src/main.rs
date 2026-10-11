@@ -158,6 +158,7 @@ fn run_server(
         cache,
         no_sandbox,
         python.as_ref(),
+        worker.is_none() && relay.is_none(),
         &mut resolver,
         &mut policy,
     )?;

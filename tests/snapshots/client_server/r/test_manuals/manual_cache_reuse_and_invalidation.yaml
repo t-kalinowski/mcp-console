@@ -1,0 +1,119 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/index.md
+
+        # Writing R Extensions
+
+        [Collection](../index.md)
+
+
+        - [Writing R Extensions](00.00-writing-r-extensions-part-001.md#Top)
+          - [1 Small sections](01-small-sections-part-001.md#Small-sections)
+          - [2 Needle examples](02-needle-examples-part-001.md#Needle-examples)
+          - [3 Long Unicode line](03-long-unicode-line-part-001.md#Long-line)
+          - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
+          - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
+
+        Read: `.console$manual("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC: `.console$manual("R-exts/index.md")`
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/index.md
+
+        # Writing R Extensions
+
+        [Collection](../index.md)
+
+
+        - [Writing R Extensions](00.00-writing-r-extensions-part-001.md#Top)
+          - [1 Small sections](01-small-sections-part-001.md#Small-sections)
+          - [2 Needle examples](02-needle-examples-part-001.md#Needle-examples)
+          - [3 Long Unicode line](03-long-unicode-line-part-001.md#Long-line)
+          - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
+          - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
+
+        Read: `.console$manual("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC: `.console$manual("R-exts/index.md")`
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/index.md
+
+        # Writing R Extensions
+
+        [Collection](../index.md)
+
+
+        - [Writing R Extensions](00.00-writing-r-extensions-part-001.md#Top)
+          - [1 Small sections](01-small-sections-part-001.md#Small-sections)
+          - [2 Needle examples](02-needle-examples-part-001.md#Needle-examples)
+          - [3 Long Unicode line](03-long-unicode-line-part-001.md#Long-line)
+          - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
+          - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
+
+        Read: `.console$manual("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC: `.console$manual("R-exts/index.md")`
+  isError: false
+---
+send:
+  r: .console$manual("R-exts#Small-sections")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/01-small-sections-part-001.md
+        Location: Writing R Extensions > 1 Small sections
+
+        ## 1 Small sections
+
+        Changed source text.
+
+
+        Next section: .console$manual("R-exts#Grouped-A")
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: >
+        Error: installed manual HTML must be UTF-8: invalid utf-8 sequence of 1
+        bytes from index 6
+  isError: false

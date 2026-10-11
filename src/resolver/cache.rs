@@ -8,6 +8,7 @@ pub(crate) fn configure(
     selection: Option<Cache>,
     no_sandbox: bool,
     python: Option<&crate::settings::PythonChoice>,
+    builtin: bool,
     resolver: &mut SandboxSettings,
     worker: &mut SandboxSettings,
 ) -> Result<(), String> {
@@ -16,13 +17,16 @@ pub(crate) fn configure(
     } else {
         Cache::Console
     });
-    if matches!(selection, Cache::Host) {
-        return Ok(());
-    }
     // Console cache contents may have been produced by sandboxed code. Never
     // reuse them in a local session that removes native enforcement.
-    if no_sandbox {
+    if no_sandbox && matches!(selection, Cache::Console) {
         return Err("cache: console requires sandboxing; use cache: host with --no-sandbox".into());
+    }
+    if builtin {
+        configure_manuals(resolver, worker)?;
+    }
+    if matches!(selection, Cache::Host) {
+        return Ok(());
     }
     let explicit_python = python.map_or_else(
         || {
@@ -129,6 +133,38 @@ fn console_root(settings: &SandboxSettings) -> Result<PathBuf, String> {
     } else {
         ".cache/mcp-console"
     }))
+}
+
+/// Capture before dependency-cache redirection changes XDG_CACHE_HOME. Only
+/// this documentation subtree is worker-writable; companion storage is not.
+fn configure_manuals(
+    resolver: &SandboxSettings,
+    worker: &mut SandboxSettings,
+) -> Result<(), String> {
+    let root = console_root(resolver).ok().map(|root| root.join("manuals"));
+    let path = match &root {
+        Some(root) => {
+            std::fs::create_dir_all(root).map_err(|error| error.to_string())?;
+            root.to_str().ok_or("manual cache paths must be UTF-8")?
+        }
+        // Host-cache sessions without a cache location can still use other
+        // runtimes. Manual access reports the missing location on first use.
+        None => "",
+    };
+    let environment = worker.entry("environment").or_insert_with(|| json!({}));
+    if let Value::Object(environment) = environment {
+        environment.insert("MCP_CONSOLE_MANUAL_CACHE".into(), path.into());
+    }
+    if let Some(root) = root {
+        let filesystem = worker.entry("filesystem").or_insert_with(|| json!({}));
+        if let Value::Object(filesystem) = filesystem {
+            let entries = filesystem.entry("entries").or_insert_with(|| json!([]));
+            if let Value::Array(entries) = entries {
+                entries.push(writable_cache_entry(&root)?);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn environment_path(settings: &SandboxSettings, name: &str) -> Option<PathBuf> {

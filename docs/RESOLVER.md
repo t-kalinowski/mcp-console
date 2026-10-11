@@ -53,6 +53,12 @@ Shared cache writes can affect artifacts later used outside Console.
 The companion's source/build cache is separate from dependency caches.
 It is not worker-writable under the default policy.
 
+[Installed R manuals](BUILTIN_RUNTIME.md#built-in-r-manuals) use the sibling `mcp-console/manuals` directory (on Windows, `mcp-console/cache/manuals`), including with `cache: host` or `--no-sandbox`.
+The location is captured before dependency-cache environment redirection.
+Console grants the worker writes only to this documentation subtree, not its cache parent or companion storage.
+These entries contain converted documentation data, not executable dependencies.
+Conversion happens on first use, with complete collections published atomically; it does not run during R startup.
+
 ## Configuration
 
 To use a private package mirror:
