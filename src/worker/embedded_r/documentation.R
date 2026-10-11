@@ -47,10 +47,28 @@ base::local(
       base::on.exit(base::unlink(file))
       base::writeBin(base::charToRaw(text), file)
       selected_pager <- base::getOption("pager")
+      encoding <- "UTF-8"
       if (base::identical(selected_pager, pager)) {
         selected_pager <- utf8_pager
+        # The Console pager reads UTF-8 directly, regardless of the locale.
+        encoding <- ""
+      } else if (base::is.function(selected_pager)) {
+        user_pager <- selected_pager
+        selected_pager <- function(files, ...) {
+          # file.show() may replace the file when translating to native encoding.
+          file <<- files
+          user_pager(files, ...)
+        }
       }
-      base::file.show(file, title = title, pager = selected_pager)
+      base::file.show(
+        file,
+        title = title,
+        delete.file = TRUE,
+        pager = selected_pager,
+        encoding = encoding
+      )
+      # A successful pager owns cleanup, including deferred consumption.
+      base::on.exit(NULL)
       base::invisible(NULL)
     }
 

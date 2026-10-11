@@ -69,6 +69,9 @@ R opens the installed file using its native filename handling and passes its byt
 
 Console installs text help and pager defaults after native R startup, once per worker.
 Later changes to R options or print methods remain in effect until restart.
+Custom pagers receive converted HTML through `file.show()` with its standard encoding behavior and `delete.file = TRUE`.
+A pager that returns before reading the file must remove it after use.
+Console removes the temporary file if a function pager raises an error.
 
 ## Python
 

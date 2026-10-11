@@ -519,6 +519,93 @@ def test_vignette_source_and_capture(binary: Path, execution: Execution) -> Tran
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+def test_vignette_deferred_pager(binary: Path, execution: Execution) -> Transcript:
+    with documentation_client(binary, execution) as client:
+        client.expect(
+            "HTML remains available for a deferred pager\n",
+            # fmt: r
+            r=code(r"""
+                options(pager = function(files, header, title, delete.file) {
+                  pending <<- list(files = files, delete.file = delete.file)
+                })
+                vignette("rendered", package = "consolehelp")
+                stopifnot(file.exists(pending$files), pending$delete.file)
+                cat("HTML remains available for a deferred pager\n")
+                """),
+        )
+        client.expect(
+            "deferred pager reads evaluated results and owns cleanup\n",
+            # fmt: r
+            r=code(r"""
+                text <- readLines(pending$files, encoding = "UTF-8")
+                stopifnot(any(grepl("42 — evaluated result", text, fixed = TRUE)))
+                if (pending$delete.file) {
+                  unlink(pending$files)
+                }
+                stopifnot(!file.exists(pending$files))
+                options(pager = function(files, header, title, delete.file) {
+                  failed <<- files
+                  stop("pager failed")
+                })
+                error <- tryCatch(
+                  print(vignette("rendered", package = "consolehelp")),
+                  error = identity
+                )
+                stopifnot(
+                  identical(conditionMessage(error), "pager failed"),
+                  !file.exists(failed)
+                )
+                cat("deferred pager reads evaluated results and owns cleanup\n")
+                """),
+        )
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_vignette_custom_pager_encoding(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with documentation_client(binary, execution) as client:
+        client.expect(
+            "custom pagers receive the standard native encoding\n",
+            # fmt: r
+            r=code(r"""
+                local({
+                  saved <- utils::vignette("rendered", package = "consolehelp")
+                  text <- capture.output(print(saved))
+                  previous <- Sys.getlocale("LC_CTYPE")
+                  on.exit(Sys.setlocale("LC_CTYPE", previous))
+                  stopifnot(identical(Sys.setlocale("LC_CTYPE", "C"), "C"))
+                  reference <- tempfile()
+                  writeBin(charToRaw(paste(text, collapse = "\n")), reference)
+                  selected <- function(files, header, title, delete.file) {
+                    bytes <<- readBin(files, "raw", n = file.info(files)$size)
+                    if (delete.file) unlink(files)
+                  }
+                  file.show(reference, pager = selected, encoding = "UTF-8", delete.file = TRUE)
+                  expected <- bytes
+                  options(pager = selected)
+                  print(saved)
+                  stopifnot(identical(bytes, expected))
+                  options(pager = function(files, header, title, delete.file) {
+                    failed <<- files
+                    stop("pager failed")
+                  })
+                  error <- tryCatch(print(saved), error = identity)
+                  stopifnot(
+                    identical(conditionMessage(error), "pager failed"),
+                    !file.exists(failed)
+                  )
+                  cat("custom pagers receive the standard native encoding\n")
+                })
+                """),
+        )
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
 def test_documentation_startup_restart_and_overrides(
     binary: Path, execution: Execution
 ) -> Transcript:
