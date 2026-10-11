@@ -16,6 +16,7 @@ use crate::settings::SandboxSettings;
 struct Profile {
     languages: Languages,
     builtin: bool,
+    timeout: bool,
 }
 
 impl ConsoleServer {
@@ -24,17 +25,26 @@ impl ConsoleServer {
         builtin: bool,
         policy: &SandboxSettings,
         no_sandbox: bool,
-    ) -> (ToolRouter<Self>, String) {
-        let profile = Profile { languages, builtin };
-        let instructions = profile.summary();
+        tool: &crate::settings::Tool,
+    ) -> Result<(ToolRouter<Self>, String), String> {
+        let profile = Profile {
+            languages,
+            builtin,
+            timeout: tool.enabled("timeout_ms"),
+        };
+        let instructions = tool
+            .instructions
+            .clone()
+            .unwrap_or_else(|| profile.summary());
         let mut router = Self::tool_router();
         let send = router
             .map
             .get_mut("send")
             .expect("send tool must be registered");
         send.attr.description = Some(
-            profile
-                .description(&instructions, policy, no_sandbox)
+            tool.description
+                .clone()
+                .unwrap_or_else(|| profile.description(&profile.summary(), policy, no_sandbox))
                 .into(),
         );
         let schema = Arc::make_mut(&mut send.attr.input_schema);
@@ -74,7 +84,8 @@ impl ConsoleServer {
             }
         }
         profile.configure_fields(properties);
-        (router, instructions)
+        tool.configure_schema(schema)?;
+        Ok((router, instructions))
     }
 }
 
@@ -140,8 +151,12 @@ impl Profile {
         description.push_str("\n\n");
         description.push_str(sections::SEND_ORDERING);
         description.push(' ');
-        description.push_str(sections::POLLING);
-        description.push_str(sections::DEFAULTS);
+        if self.timeout {
+            description.push_str(sections::POLLING);
+            description.push_str(sections::DEFAULTS);
+        } else {
+            description.push_str(sections::POLLING_DEFAULT_TIMEOUT);
+        }
         description.push_str("\n\n");
         description.push_str(sections::OUTPUT);
         description.push_str("\n\n");

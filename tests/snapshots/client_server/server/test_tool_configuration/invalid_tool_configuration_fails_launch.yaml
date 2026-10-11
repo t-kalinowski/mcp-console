@@ -1,0 +1,7 @@
+---
+configuration:
+  parameters:
+    missing:
+      enabled: false
+stderr: |
+  tool.parameters.missing: unknown or unavailable parameter

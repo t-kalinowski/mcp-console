@@ -1,0 +1,10 @@
+---
+configuration:
+  parameters:
+    requirements:
+      parameters:
+        missing:
+          description: unused
+stderr: >
+  tool.parameters.requirements.parameters.missing: unknown or unavailable
+  parameter

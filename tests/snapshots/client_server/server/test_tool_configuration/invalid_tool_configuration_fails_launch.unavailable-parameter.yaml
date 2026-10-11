@@ -1,0 +1,7 @@
+---
+configuration:
+  parameters:
+    r:
+      description: Unavailable R cell.
+stderr: |
+  tool.parameters.r: unknown or unavailable parameter
