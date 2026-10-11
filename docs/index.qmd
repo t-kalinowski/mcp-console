@@ -25,7 +25,8 @@ The agent can:
 
 - Inspect plots and refine code using objects already in memory.
 - Read help, pause in a debugger, and evaluate code against live objects.
-- Run long computations across calls, collect output as it arrives, and interrupt work without restarting the session.
+- Run long computations across calls and collect output as it arrives.
+- Interrupt work and keep the session, or [restart it](SEND_OPERATIONS.md#explicit-restart) to clear live objects and start fresh.
 - Read previews of long output that limit how much text enters the model's context.
 - Revisit logs and plots through [recordings](RECORDING.md).
 
