@@ -1,0 +1,105 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: |
+    options(useFancyQuotes = FALSE)
+    lm_help <- capture.output(?stats::lm)
+    writeLines(head(lm_help, 19))
+result:
+  content:
+    - type: text
+      text: |
+        lm                    package:stats                    R Documentation
+
+        Fitting Linear Models
+
+        Description:
+
+             'lm' is used to fit linear models, including multivariate ones.
+             It can be used to carry out regression, single stratum analysis of
+             variance and analysis of covariance (although 'aov' may provide a
+             more convenient interface for these).
+
+        Usage:
+
+             lm(formula, data, subset, weights, na.action,
+                method = "qr", model = TRUE, x = FALSE, y = FALSE, qr = TRUE,
+                singular.ok = TRUE, contrasts = NULL, offset, ...)
+
+             ## S3 method for class 'lm'
+             print(x, digits = max(3L, getOption("digits") - 3L), ...)
+  isError: false
+---
+send:
+  r: |
+    start <- match("Value:", lm_help)
+    end <- match("Using time series:", lm_help)
+    writeLines(lm_help[start:(end - 2L)])
+result:
+  content:
+    - type: text
+      text: |
+        Value:
+
+             'lm' returns an object of 'class' '"lm"' or for multivariate
+             ('multiple') responses of class 'c("mlm", "lm")'.
+
+             The functions 'summary' and 'anova' are used to obtain and print a
+             summary and analysis of variance table of the results.  The
+             generic accessor functions 'coefficients', 'effects',
+             'fitted.values' and 'residuals' extract various useful features of
+             the value returned by 'lm'.
+
+             An object of class '"lm"' is a list containing at least the
+             following components:
+
+        coefficients: a named vector of coefficients
+
+        residuals: the residuals, that is response minus fitted values.
+
+        fitted.values: the fitted mean values.
+
+            rank: the numeric rank of the fitted linear model.
+
+         weights: (only for weighted fits) the specified weights.
+
+        df.residual: the residual degrees of freedom.
+
+            call: the matched call.
+
+           terms: the 'terms' object used.
+
+        contrasts: (only where relevant) the contrasts used.
+
+         xlevels: (only where relevant) a record of the levels of the factors
+                  used in fitting.
+
+          offset: the offset used (missing if none were used).
+
+               y: if requested, the response used.
+
+               x: if requested, the model matrix used.
+
+           model: if requested (the default), the model frame used.
+
+        na.action: (where relevant) information returned by 'model.frame' on
+                  the special handling of 'NA's.
+
+             In addition, non-null fits will have components 'assign',
+             'effects' and (unless not requested) 'qr' relating to the linear
+             fit, for use by extractor functions such as 'summary' and
+             'effects'.
+  isError: false
+---
+send:
+  r: |
+    fit <- lm(mpg ~ wt, data = mtcars)
+    coef(fit)
+result:
+  content:
+    - type: text
+      text: |
+        (Intercept)          wt
+          37.285126   -5.344472
+  isError: false

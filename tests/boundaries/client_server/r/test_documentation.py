@@ -21,7 +21,9 @@ from support.resolvers import bare_runtime_environment
 
 
 @contextmanager
-def documentation_client(binary: Path, execution: Execution) -> Iterator[McpClient]:
+def documentation_client(
+    binary: Path, execution: Execution, *, packages: tuple[Path, ...] = ()
+) -> Iterator[McpClient]:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         environment, rscript = r_test_environment()
@@ -36,6 +38,7 @@ def documentation_client(binary: Path, execution: Execution) -> Iterator[McpClie
                 "INSTALL",
                 f"--library={library}",
                 FIXTURES / "r_documentation",
+                *packages,
             ],
             env=environment,
             check=True,
@@ -75,6 +78,97 @@ def documentation_client(binary: Path, execution: Execution) -> Iterator[McpClie
         ) as client:
             client.initialize_and_list_tools()
             yield client
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_help_workflow(binary: Path, execution: Execution) -> Transcript:
+    with documentation_client(binary, execution) as client:
+        client.send(
+            # fmt: r
+            r=code(r"""
+                options(useFancyQuotes = FALSE)
+                lm_help <- capture.output(?stats::lm)
+                writeLines(head(lm_help, 19))
+                """),
+        )
+        output = last_tool_text(client)
+        assert "Fitting Linear Models" in output, output
+        assert "lm(formula" in output, output
+        normalize_trailing_spaces(client)
+        client.send(
+            # fmt: r
+            r=code(r"""
+                start <- match("Value:", lm_help)
+                end <- match("Using time series:", lm_help)
+                writeLines(lm_help[start:(end - 2L)])
+                """),
+        )
+        output = last_tool_text(client)
+        assert "coefficients" in output, output
+        assert "residuals" in output, output
+        normalize_trailing_spaces(client)
+        client.send(
+            # fmt: r
+            r=code(r"""
+                fit <- lm(mpg ~ wt, data = mtcars)
+                coef(fit)
+                """),
+        )
+        assert "(Intercept)" in last_tool_text(client)
+        normalize_trailing_spaces(client)
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_vignette_workflow(binary: Path, execution: Execution) -> Transcript:
+    with documentation_client(
+        binary, execution, packages=(FIXTURES / "cpp11_0.5.2.tar.gz",)
+    ) as client:
+        client.send(
+            # fmt: r
+            r=code(r"""
+                options(useFancyQuotes = FALSE)
+                vignette(package = "cpp11")
+                """),
+        )
+        output = last_tool_text(client)
+        assert "Converting from Rcpp" in output, output
+        normalize_trailing_spaces(client)
+        client.send(
+            # fmt: r
+            r=code(r"""
+                conversion <- capture.output(vignette("converting", package = "cpp11"))
+                writeLines(head(conversion, 28))
+                """),
+        )
+        output = last_tool_text(client)
+        assert "# Converting from Rcpp" in output, output
+        assert "## Getting started" in output, output
+        assert "Vignette source:" not in output, output
+        normalize_trailing_spaces(client)
+        client.send(
+            # fmt: r
+            r=code(r"""
+                start <- match("### Vectors", conversion)
+                end <- match("### Other objects", conversion)
+                writeLines(conversion[start:(end - 2L)])
+                """),
+        )
+        output = last_tool_text(client)
+        assert "NumericVector" in output, output
+        assert "writable::doubles" in output, output
+        assert (
+            "https://cpp11.r-lib.org/articles/motivations.html#growing-vectors"
+            in output
+        )
+        normalize_trailing_spaces(client)
+        client.send(r=r'writeLines(grep("^\\[[0-9]+\\]:", conversion, value = TRUE))')
+        output = last_tool_text(client)
+        assert "https://youtu.be/KKeucpfAuuA" in output, output
+        assert "[1]:" in output, output
+        return client.finish()
 
 
 @requires(R)

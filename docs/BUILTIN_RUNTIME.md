@@ -55,6 +55,10 @@ The vignette object's rendered-artifact metadata selects the file; Console does 
 Headings, paragraphs, lists, code indentation, simple tables, link destinations, captions, and available image alt text appear as text.
 Scripts, styles, and embedded image payloads are omitted; linked assets are not fetched.
 Figures appear only through their captions and alt text, and JavaScript-dependent content is unavailable.
+The text does not expose image paths or a request mechanism for figure pixels.
+To inspect an original figure, locate the installed HTML with `file.path(x$Dir, "doc", x$PDF)` from the retained vignette object and inspect its image references.
+Images may be separate local files, embedded data, or remote URLs.
+A client can use its own image tools or display a locally decoded figure through [ordinary plot capture](#plots-and-images).
 Assignment stays quiet, so you can retain the ordinary vignette object and print it later.
 Use `capture.output(print(vignette("topic", package = "pkg")))` to capture its text and print selected line ranges with `writeLines()`.
 

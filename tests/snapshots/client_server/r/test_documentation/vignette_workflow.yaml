@@ -1,0 +1,124 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: |
+    options(useFancyQuotes = FALSE)
+    vignette(package = "cpp11")
+result:
+  content:
+    - type: text
+      text: |
+        Vignettes in package 'cpp11':
+
+        converting              Converting from Rcpp (source, html)
+        internals               cpp11 internals (source, html)
+        FAQ                     FAQ (source, html)
+        cpp11                   Get started with cpp11 (source, html)
+        motivations             Motivations for cpp11 (source, html)
+  isError: false
+---
+send:
+  r: |
+    conversion <- capture.output(vignette("converting", package = "cpp11"))
+    writeLines(head(conversion, 28))
+result:
+  content:
+    - type: text
+      text: |
+        # Converting from Rcpp
+
+        In many cases there is no need to convert a package from Rcpp. If the code is
+        already written and you don’t have a very compelling need to use cpp11 I would
+        recommend you continue to use Rcpp. However if you *do* feel like your project
+        will benefit from using cpp11 this vignette will provide some guidance and doing
+        the conversion.
+
+        ## Getting started
+        1. Add cpp11 by calling `usethis::use_cpp11()`.
+        2. Start converting function by function.
+
+           Converting the code a bit at a time (and regularly running your tests) is the
+           best way to do the conversion correctly and make progress. Doing a separate
+           commit after converting each file (or possibly each function) can make
+           finding any regressions with [git bisect][1] much easier in the future.
+           1. Convert `#include <Rcpp.h>` to `#include <cpp11.hpp>`.
+           2. Convert all instances of `// [[Rcpp::export]]` to `[[cpp11::register]]`.
+           3. Grep for `Rcpp::` and replace with the equivalent cpp11 function using the
+              cheatsheets below.
+        3. Remove Rcpp
+           1. Remove Rcpp from the `LinkingTo` and `Imports` fields.
+           2. Remove `@importFrom Rcpp sourceCpp`.
+           3. Delete `src/RccpExports.cpp` and `R/RcppExports.R`.
+           4. Delete `src/Makevars` if it only contains
+              `PKG_CPPFLAGS=-DSTRICT_R_HEADERS`.
+           5. Clean out old compiled code with `pkgbuild::clean_dll()`.
+           6. Re-document the package to update the `NAMESPACE`.
+  isError: false
+---
+send:
+  r: |
+    start <- match("### Vectors", conversion)
+    end <- match("### Other objects", conversion)
+    writeLines(conversion[start:(end - 2L)])
+result:
+  content:
+    - type: text
+      text: |
+        ### Vectors
+
+        ───────────────┬─────────────────┬───────────────────────────
+        Rcpp           │cpp11 (read-only)│cpp11 (writable)
+        ───────────────┼─────────────────┼───────────────────────────
+        NumericVector  │doubles          │writable::doubles
+        ───────────────┼─────────────────┼───────────────────────────
+        NumericMatrix  │doubles_matrix<> │writable::doubles_matrix<>
+        ───────────────┼─────────────────┼───────────────────────────
+        IntegerVector  │integers         │writable::integers
+        ───────────────┼─────────────────┼───────────────────────────
+        IntegerMatrix  │integers_matrix<>│writable::integers_matrix<>
+        ───────────────┼─────────────────┼───────────────────────────
+        CharacterVector│strings          │writable::strings
+        ───────────────┼─────────────────┼───────────────────────────
+        RawVector      │raws             │writable::raws
+        ───────────────┼─────────────────┼───────────────────────────
+        List           │list             │writable::list
+        ───────────────┼─────────────────┼───────────────────────────
+        RObject        │sexp             │
+        ───────────────┴─────────────────┴───────────────────────────
+
+        Note that each cpp11 vector class has a read-only and writeable version. The
+        default classes, e.g. `cpp11::doubles` are *read-only* classes that do not
+        permit modification. If you want to modify the data you or create a new vector,
+        use the writeable variant.
+
+        Another major difference in Rcpp and cpp11 is how vectors are grown. Rcpp
+        vectors have a `push_back()` method, but unlike `std::vector()` no additional
+        space is reserved when pushing. This makes calling `push_back()` repeatably very
+        expensive, as the entire vector has to be copied each call. In contrast `cpp11`
+        vectors grow efficiently, reserving extra space. See
+        [https://cpp11.r-lib.org/articles/motivations.html#growing-vectors][2] for more
+        details.
+
+        Rcpp also allows very flexible implicit conversions, e.g. if you pass a
+        `REALSXP` to a function that takes a `Rcpp::IntegerVector()` it is implicitly
+        converted to a `INTSXP`. These conversions are nice for usability, but require
+        (implicit) duplication of the data, with the associated runtime costs. cpp11
+        throws an error in these cases. If you want the implicit coercions you can add a
+        call to `as.integer()` or `as.double()` as appropriate from R when you call the
+        function.
+  isError: false
+---
+send:
+  r: writeLines(grep("^\\[[0-9]+\\]:", conversion, value = TRUE))
+result:
+  content:
+    - type: text
+      text: |
+        [1]: https://youtu.be/KKeucpfAuuA
+        [2]: https://cpp11.r-lib.org/articles/motivations.html#growing-vectors
+        [3]: https://CRAN.R-project.org/package=Rcpp/vignettes/Rcpp-modules.pdf
+        [4]: https://CRAN.R-project.org/package=Rcpp/vignettes/Rcpp-sugar.pdf
+        [5]: https://CRAN.R-project.org/package=Rcpp/vignettes/Rcpp-attributes.pdf
+        [6]: https://cran.r-project.org/doc/manuals/r-release/R-exts.html#Random-numbers
+  isError: false
