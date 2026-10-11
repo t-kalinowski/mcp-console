@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 // Bump when conversion or projection changes, including chunking defaults.
-const FORMAT: u32 = 3;
+const FORMAT: u32 = 4;
 const TARGET: usize = 4096;
 const BODY_MAX: usize = 5400; // Leave room for hierarchy and navigation.
 const READ_BUDGET: usize = 5000; // Paths, commands, and notices fit below 8 KiB.
@@ -114,7 +114,7 @@ fn plain(node: &Handle, width: usize) -> Result<String> {
 
 // Link destinations remain typed slots until the complete collection has an
 // anchor map. This avoids parsing renderer-specific heading slugs or Markdown.
-fn inline(node: &Handle, links: &mut Vec<String>, width: usize) -> Result<String> {
+fn inline(node: &Handle, links: &mut Vec<String>, width: usize) -> Result<(String, String)> {
     let dom = RcDom::default();
     if matches!(tag(node), "td" | "th") {
         // html2text renders cells only inside a table. Render their inline
@@ -129,9 +129,11 @@ fn inline(node: &Handle, links: &mut Vec<String>, width: usize) -> Result<String
     let config = html2text::config::rich().allow_width_overflow();
     let lines = config.render_to_lines(config.dom_to_render_tree(&dom)?, width)?;
     let mut output = String::new();
+    let mut label = String::new();
     for line in lines {
         for item in line.iter() {
             if let TaggedLineElement::Str(span) = item {
+                label.push_str(&span.s);
                 let mut text = span.s.clone();
                 if span.tag.contains(&RichAnnotation::Code) {
                     let fence = "`".repeat(text.chars().filter(|c| *c == '`').count() + 1);
@@ -160,8 +162,9 @@ fn inline(node: &Handle, links: &mut Vec<String>, width: usize) -> Result<String
             }
         }
         output.push('\n');
+        label.push('\n');
     }
-    Ok(output.trim_end().into())
+    Ok((output.trim_end().into(), label.trim_end().into()))
 }
 
 fn descendants(node: &Handle, names: &[&str], output: &mut Vec<Handle>) {
@@ -195,6 +198,7 @@ fn table(node: &Handle, links: &mut Vec<String>) -> Result<String> {
             .iter()
             .map(|cell| {
                 Ok(inline(cell, links, 100_000)?
+                    .0
                     .replace('|', "\\|")
                     .replace('\n', "<br>"))
             })
@@ -242,7 +246,11 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
         // Self-link glyphs are navigation, not heading content.
         pending.extend(anchors(node));
         remove_self_links(node);
-        let title = plain(node, 100_000)?
+        // html2text consumes child handles. Obtain the visible heading and its
+        // Markdown links in one pass rather than rendering the node twice.
+        let mut links = Vec::new();
+        let (heading, title) = inline(node, &mut links, 100_000)?;
+        let title = title
             .trim_start_matches('#')
             .trim()
             .trim_end_matches('¶')
@@ -267,8 +275,12 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
             section,
             heading: true,
             anchors: std::mem::take(pending),
-            text: format!("{} {title}", "#".repeat(level)),
-            links: Vec::new(),
+            text: format!(
+                "{} {}",
+                "#".repeat(level),
+                heading.trim_start_matches('#').trim()
+            ),
+            links,
         });
     } else if matches!(
         name,
@@ -297,7 +309,7 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
                 format!("{fence}\n{body}\n{fence}")
             }
             "table" => table(node, &mut links)?,
-            _ => inline(node, &mut links, 80)?,
+            _ => inline(node, &mut links, 80)?.0,
         };
         manual.blocks.push(Block {
             section,
@@ -964,6 +976,10 @@ fn read(collection: &Collection, directory: &Path, args: &[String]) -> Result<Ve
 }
 
 fn search(collection: &Collection, directory: &Path, args: &[String]) -> Result<Vec<String>> {
+    ensure!(
+        format!("{:?}", args[5]).len() <= 2048,
+        "Manual search query must fit a 2048-byte continuation command"
+    );
     let query = args[5].to_lowercase();
     let mut results = Vec::new();
     ensure!(
@@ -1023,10 +1039,32 @@ fn search(collection: &Collection, directory: &Path, args: &[String]) -> Result<
                             .position(|c| c.file == chunk.file)
                             .unwrap(),
                     );
-                    let line =
+                    let mut line =
                         prefix.bytes().filter(|c| *c == b'\n').count() + block.anchors.len() + 1;
+                    let offset = body.to_lowercase().find(&query).unwrap_or(0);
+                    let mut consumed = 0;
+                    let mut column: usize = 1;
+                    for character in body.chars() {
+                        let bytes = character.to_lowercase().map(char::len_utf8).sum::<usize>();
+                        if consumed + bytes > offset {
+                            break;
+                        }
+                        consumed += bytes;
+                        if character == '\n' {
+                            line += 1;
+                            column = 1;
+                        } else {
+                            column += 1;
+                        }
+                    }
+                    let column = column.saturating_sub(60).max(1);
+                    let column = if column > 1 {
+                        format!(", column = {column}")
+                    } else {
+                        String::new()
+                    };
                     format!(
-                        ".console$manual({:?}, start = {line})",
+                        ".console$manual({:?}, start = {line}{column})",
                         format!("{}/{}", manual.name, chunk.file)
                     )
                 };

@@ -104,6 +104,7 @@ An empty `manual` searches the collection.
 Heading matches come first; each logical section appears at most once, with its section number, heading path, excerpt, and read command.
 Results are bounded; follow the printed continuation command for more matches.
 `limit` accepts 1–20 results, subject to the response budget.
+Queries are limited to 1 KiB of UTF-8 and 2 KiB when quoted in continuation commands.
 Search does not include TOCs, generated navigation, or complete exports.
 
 The first manual operation converts the installed collection together; R startup does not render it.

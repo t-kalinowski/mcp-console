@@ -71,6 +71,9 @@ base::local(
       limit = 5L
     ) {
       stopifnot(nzchar(query))
+      if (nchar(enc2utf8(query), type = "bytes") > 1024L) {
+        stop("Manual search queries must be at most 1024 UTF-8 bytes")
+      }
       request("search", manual, query, start, limit = limit)
     }
     console$manual_export <- function(manual) request("export", manual)
@@ -82,10 +85,15 @@ base::local(
       }
       stopifnot(is.character(url), length(url) == 1L)
       if (startsWith(url, "file://")) {
-        # RShowDoc URL-encodes the whole native path, including '#'. Separate
-        # the fragment after decoding, then restrict to installed manuals.
+        # RShowDoc encodes the whole path. Separate the fragment after the
+        # manual filename, preserving '#' characters in directory names.
         local <- utils::URLdecode(substring(url, 8L))
-        path <- sub("#.*$", "", local)
+        path <- sub(
+          "(R-[A-Za-z]+[.]html)#.*$",
+          "\\1",
+          local,
+          ignore.case = TRUE
+        )
         directory <- normalizePath(
           file.path(R.home("doc"), "manual"),
           winslash = "/",
@@ -100,8 +108,8 @@ base::local(
             grepl("^R-[A-Za-z]+$", tools::file_path_sans_ext(basename(path)))
         ) {
           manual <- tools::file_path_sans_ext(basename(path))
-          anchor <- if (grepl("#", local, fixed = TRUE)) {
-            sub("^[^#]*#", "", local)
+          anchor <- if (nchar(path) < nchar(local)) {
+            substring(local, nchar(path) + 2L)
           } else {
             ""
           }

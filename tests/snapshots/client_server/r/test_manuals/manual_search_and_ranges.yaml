@@ -218,3 +218,101 @@ result:
       text: |
         bounded reading and capture retained
   isError: false
+---
+send:
+  r: .console$manual_search("code-line-159")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "code-line-159"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
+          de-line-158 <- "example output stays indented and complete" code-line-159 <- "example output stays indented and complete" ```
+          Read: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 170)
+  isError: false
+---
+send:
+  r: >-
+    .console$manual("R-exts/02.02-oversized-example-part-001.md", start =
+    170)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/02.02-oversized-example-part-001.md
+        Location: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
+
+          code-line-159 <- "example output stays indented and complete"
+        ```
+
+
+        Next file: .console$manual("R-exts/02.02-oversized-example-part-002.md")
+  isError: false
+---
+send:
+  r: .console$manual_search("wide-end")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "wide-end"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 3 Long Unicode line
+          λéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéwide-end ```
+          Read: .console$manual("R-exts/03-long-unicode-line-part-001.md", start = 11, column = 6951)
+  isError: false
+---
+send:
+  r: >-
+    .console$manual("R-exts/03-long-unicode-line-part-001.md", start = 11,
+    column = 6951)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/03-long-unicode-line-part-001.md
+        Location: Writing R Extensions > 3 Long Unicode line
+
+        λéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéwide-end
+        ```
+
+
+        Next file: .console$manual("R-exts/03-long-unicode-line-part-002.md")
+  isError: false
+---
+send:
+  r: |
+    discard <- capture.output(
+      search_error <- tryCatch(
+        .console$manual_search(strrep("λ", 600L)),
+        error = conditionMessage
+      )
+    )
+    stopifnot(identical(
+      search_error,
+      "Manual search queries must be at most 1024 UTF-8 bytes"
+    ))
+    discard <- capture.output(
+      command_error <- tryCatch(
+        .console$manual_search(strrep("\u001b", 400L)),
+        error = conditionMessage
+      )
+    )
+    stopifnot(identical(
+      command_error,
+      "Manual search query must fit a 2048-byte continuation command"
+    ))
+    cat("search queries have a UTF-8 byte bound\n")
+result:
+  content:
+    - type: text
+      text: |
+        search queries have a UTF-8 byte bound
+  isError: false

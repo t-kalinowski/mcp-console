@@ -25,7 +25,7 @@ from support.resolvers import bare_runtime_environment
 def manual_client(
     binary: Path, execution: Execution, *, installed: bool = False
 ) -> Iterator[tuple[McpClient, Path]]:
-    with tempfile.TemporaryDirectory(prefix="console-manuals-café-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="console-manuals-café#-") as temporary:
         root = Path(temporary).resolve()
         workspace = root / "workspace"
         workspace.mkdir()
@@ -180,6 +180,40 @@ def test_manual_search_and_ranges(binary: Path, execution: Execution) -> Transcr
                 """),
         )
         normalize_paths(client, root)
+        for query in ("code-line-159", "wide-end"):
+            client.send(r=f'.console$manual_search("{query}")')
+            output = normalize_paths(client, root)
+            command = re.search(r"  Read: (.+)", output)[1]
+            client.send(r=command)
+            matched = normalize_paths(client, root)
+            assert query in matched, matched
+        client.expect(
+            "search queries have a UTF-8 byte bound\n",
+            # fmt: r
+            r=code(r"""
+                discard <- capture.output(
+                  search_error <- tryCatch(
+                    .console$manual_search(strrep("λ", 600L)),
+                    error = conditionMessage
+                  )
+                )
+                stopifnot(identical(
+                  search_error,
+                  "Manual search queries must be at most 1024 UTF-8 bytes"
+                ))
+                discard <- capture.output(
+                  command_error <- tryCatch(
+                    .console$manual_search(strrep("\u001b", 400L)),
+                    error = conditionMessage
+                  )
+                )
+                stopifnot(identical(
+                  command_error,
+                  "Manual search query must fit a 2048-byte continuation command"
+                ))
+                cat("search queries have a UTF-8 byte bound\n")
+                """),
+        )
         return client.finish()
 
 
@@ -284,6 +318,7 @@ def test_manual_files_and_export(binary: Path, execution: Execution) -> Transcri
         assert "keep <- function(x) {\n  x + 1L\n}" in bodies
         assert "| Name | Value |" in bodies and "| café | 42 |" in bodies
         assert "Example table" in bodies
+        assert "[(1)](01-small-sections-part-001.md#Grouped-B)" in bodies
         assert "hidden-script" not in bodies and "hidden-style" not in bodies
         assert "unwanted navigation repetition" not in bodies
         assert "https://example.org/external" in bodies
@@ -309,6 +344,7 @@ def test_manual_files_and_export(binary: Path, execution: Execution) -> Transcri
         normalize_paths(client, root)
         complete = (collection / "exports/R-exts.md").read_text()
         assert "](#Grouped-B)" in complete and "](../R-lang/" in complete
+        assert "[(1)](#Grouped-B)" in complete
         assert all(complete.count(f"paragraph-{i:03}:") == 1 for i in range(80))
         client.expect(
             "file access and R navigation use the same cache\n",

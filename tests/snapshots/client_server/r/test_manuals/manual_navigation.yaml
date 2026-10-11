@@ -48,6 +48,7 @@ result:
           - [3 Long Unicode line](03-long-unicode-line-part-001.md#Long-line)
           - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
           - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
+                - [(1)](B-fixture-reference-part-001.md#FOOT1)
 
         Read: `.console$manual("R-exts#original-anchor")`
         Search: `.console$manual_search("phrase", manual = "R-exts")`
