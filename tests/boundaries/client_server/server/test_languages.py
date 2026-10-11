@@ -17,6 +17,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.installation import installed_console
 from support.linux_sandbox import retain_system_bwrap
 from support.normalization import code
+from support.presentation import assert_tool_guidance, without_descriptions
 from support.records import McpTranscript, Transcript, TranscriptWithCompanions
 from support.requirements import POSIX, R, SQL, requires
 from support.resolvers import expose_uv
@@ -76,9 +77,15 @@ def test_configures_captured_tool_surface(
             "to enable R alone and checks that tools/list is unchanged."
         ),
     }
-    # Exhaustive language/schema combinations belong to presentation unit tests.
-    # Keep restricted and full interfaces at the real configuration/MCP boundary.
-    for languages in (["sql"], ["r", "python", "sql"]):
+    for languages in (
+        ["r", "python", "sql"],
+        ["sql"],
+        ["sql", "python"],
+        ["r"],
+        ["python"],
+        ["r", "sql"],
+        ["r", "python"],
+    ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = _configure(root, ["r", "python", "sql"])
@@ -95,6 +102,15 @@ def test_configures_captured_tool_surface(
             ) as client:
                 client.initialize_and_list_tools()
                 tool = _tool(client)
+                assert_tool_guidance(tool, set(languages), custom=True)
+                schema = without_descriptions(tool)
+                if languages == ["r", "python", "sql"]:
+                    baseline = schema
+                else:
+                    expected = without_descriptions(baseline)
+                    for field in {"r", "python", "sql"} - set(languages):
+                        del expected["inputSchema"]["properties"][field]
+                    assert schema == expected
                 fields = set(tool["inputSchema"]["properties"])
                 assert fields == {
                     *languages,

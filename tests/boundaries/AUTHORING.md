@@ -6,7 +6,8 @@ Follow the [validation ladder](../../docs/DEVELOPMENT.md#validation-ladder).
 ## Readable session transcripts
 
 A client/server transcript should read as a plausible client session or a focused behavioral regression, not a second unit-test suite.
-Keep pure schema, formatting, and configuration permutations in unit tests; retain representative sessions at the actual process boundary.
+Check schema, guidance, and configuration through public discovery or configuration interfaces.
+Extend existing cases rather than launching duplicate sessions for the same permutations.
 Before deleting a case, identify its surviving coverage and remove its producer and owned snapshots together.
 
 Make each YAML understandable without reading its Python fixture.
@@ -16,7 +17,6 @@ Record one Console invocation per transcript, using companions for genuinely dis
 
 Focused interrupt handlers and causal lifecycle fixtures are valid behavioral tests even when their cells contain assertions.
 Preserve real-library sandbox regressions and distinct permission, isolation, cold-cache, and activation paths; do not replace them with trivial programs.
-Keep resolved non-default configuration dumps and their broad regeneration separate from transcript pruning.
 
 ## Embedded programs
 
