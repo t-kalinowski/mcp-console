@@ -49,29 +49,35 @@ pub(crate) fn render(
     let r = captured.r.unwrap_or_default();
     value["r"] = json!({ "vanilla": r.vanilla, "resolution": r.resolution.name() });
     if let Some(path) = r.executable {
-        value["r"]["executable"] = json!(path);
+        value["r"]["executable"] = serde_json::to_value(path)
+            .map_err(|error| format!("cannot export r.executable: {error}"))?;
     }
     if let Some(packages) = r.packages {
         value["r"]["packages"] = json!(packages);
     }
     // Runtime-dependent selections and package defaults remain policies. Do not
     // run discovery/preparation merely to print configuration.
-    value["python"] = match captured.python {
-        None => Value::Null,
-        Some(python) => match python.executable {
-            Some(path) => json!({ "existing": path }),
-            None => {
-                let mut managed = json!({ "resolution": python.managed.resolution.name() });
-                if let Some(packages) = python.managed.packages {
-                    managed["packages"] = json!(packages);
+    // A fallback chain remains a launch policy; its current winner must not
+    // replace active_venv or the remaining existing/managed candidates.
+    if value["python"].get("first_available").is_none() {
+        value["python"] = match captured.python {
+            None => Value::Null,
+            Some(python) => match python.executable {
+                Some(path) => json!({ "existing": serde_json::to_value(path)
+                    .map_err(|error| format!("cannot export python.existing: {error}"))? }),
+                None => {
+                    let mut managed = json!({ "resolution": python.managed.resolution.name() });
+                    if let Some(packages) = python.managed.packages {
+                        managed["packages"] = json!(packages);
+                    }
+                    if let Some(version) = python.managed.version {
+                        managed["version"] = json!(version);
+                    }
+                    json!({ "managed": managed })
                 }
-                if let Some(version) = python.managed.version {
-                    managed["version"] = json!(version);
-                }
-                json!({ "managed": managed })
-            }
-        },
-    };
+            },
+        };
+    }
     value["sandbox"] = if no_sandbox {
         Value::Null
     } else {

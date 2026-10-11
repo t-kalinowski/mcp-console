@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,19 +11,24 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from support.client import McpClient
+from support.normalization import code
 from support.records import Transcript
-from support.requirements import POSIX, requires
+from support.requirements import NON_UTF8_FILENAMES, POSIX, requires
 from support.public_configuration import CONFIGURATION_EXAMPLES
 from support.suites import run_this_suite
 
 
 def resolve(
-    binary: Path, directory: Path, *arguments: str
+    binary: Path,
+    directory: Path,
+    *arguments: str,
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
         [binary, "config", "resolve", *arguments],
         cwd=directory,
-        env=os.environ | {"MCP_CONSOLE_HOME": str(directory / "console-home")},
+        env=(os.environ if environment is None else environment)
+        | {"MCP_CONSOLE_HOME": str(directory / "console-home")},
         capture_output=True,
         text=True,
         timeout=15,
@@ -137,6 +143,111 @@ def test_rejects_edits_to_parameter_types(binary: Path) -> Transcript:
         assert "tool.parameters.timeout_ms.schema" in result.stderr
         assert "read-only" in result.stderr
     return [{"schema_edits_rejected": True}]
+
+
+@requires(NON_UTF8_FILENAMES)
+def test_non_utf8_executable_paths_return_errors(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        native = Path(os.fsdecode(os.fsencode(root) + b"/native-\xff"))
+        native.mkdir()
+        shutil.copy2(sys.executable, native / "relative-python")
+        audit = []
+        for parameter, path in (
+            ("python.existing", "relative-python"),
+            ("r.executable", "relative-R"),
+        ):
+            result = resolve(binary, native, "--no-config", "-c", f"{parameter}={path}")
+            assert result.returncode == 1 and result.stdout == "", result
+            assert f"cannot export {parameter}" in result.stderr, result
+            assert "UTF-8" in result.stderr, result
+            audit.append(
+                {
+                    "parameter": parameter,
+                    "exit_code": result.returncode,
+                    "stderr": result.stderr,
+                }
+            )
+    return audit
+
+
+def test_python_fallback_policies_survive_export(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        venv = root / "selected-venv"
+        subprocess.run(
+            [sys.executable, "-m", "venv", "--without-pip", venv],
+            check=True,
+            capture_output=True,
+        )
+        fallback = {"existing": sys.executable}
+        managed = {"managed": {"packages": [], "resolution": "startup_only"}}
+        choices = {
+            "existing": {
+                "first_available": [{"existing": venv.name}, fallback, managed]
+            },
+            "active_venv": {"first_available": ["active_venv", fallback, managed]},
+        }
+        selected = root / "selected.json"
+        exported = root / "exported.json"
+        audit = []
+        for name, policy in choices.items():
+            selected.write_text(
+                json.dumps(
+                    {
+                        "python": policy,
+                        "languages": ["python"],
+                        "r": {"packages": [], "resolution": "disabled"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = resolve(
+                binary,
+                root,
+                "--config-file",
+                str(selected),
+                "--no-sandbox",
+                "--format",
+                "json",
+                environment=os.environ | {"VIRTUAL_ENV": str(venv)},
+            )
+            assert result.returncode == 0 and result.stderr == "", result
+            settings = json.loads(result.stdout)
+            assert settings["python"] == policy, settings["python"]
+            exported.write_text(result.stdout, encoding="utf-8")
+            retired = root / "retired-venv"
+            venv.rename(retired)
+            environment = dict(os.environ)
+            environment.pop("VIRTUAL_ENV", None)
+            environment["MCP_CONSOLE_HOME"] = str(root / "console-home")
+            try:
+                with McpClient(
+                    binary,
+                    ("serve", "--no-sandbox", "--config-file", str(exported)),
+                    environment=environment,
+                    current_directory=root,
+                ) as client:
+                    client.initialize_and_list_tools()
+                    client.expect(
+                        "fallback interpreter selected\n",
+                        # fmt: python
+                        python=code("""
+                            import sys
+                            from pathlib import Path
+
+                            assert Path(sys.prefix) != Path.cwd() / "selected-venv"
+                            assert Path(sys.prefix) != Path.cwd() / "retired-venv"
+                            print("fallback interpreter selected")
+                            """),
+                    )
+                    client.finish()
+            finally:
+                retired.rename(venv)
+            audit.append(
+                {"choice": name, "policy_preserved": True, "fallback_launched": True}
+            )
+    return audit
 
 
 @requires(POSIX)

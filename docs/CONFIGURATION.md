@@ -204,7 +204,9 @@ For host execution, pass `--no-sandbox` to both `config resolve` and `serve`; la
 The selected configuration file bypasses automatic global/project discovery.
 
 Values determined during runtime preparation remain policies: omitted automatic package lists, `python: null` for normal interpreter selection, inherited environment variables, and runtime-created cache and temporary paths.
+Python `first_available` lists retain their candidates, including `active_venv`; the next launch evaluates them against its own environment and filesystem.
 The export does not pin installed dependencies or copy the host environment.
+Exported interpreter paths must be representable as UTF-8; other native paths produce a configuration error.
 Changing `languages` may make saved parameter entries unavailable; resolve the desired language selection before editing the tool.
 
 R provides the same workflow through [`resolve_console_config()`](../r/README.md#inspect-and-edit-configuration).
