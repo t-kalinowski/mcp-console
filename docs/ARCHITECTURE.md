@@ -146,8 +146,14 @@ Aborting a partial command ends that transport; no control can be inserted into 
 
 Physical cleanup, protocol settlement, and output delivery are separate results.
 Available output is drained within bounds even when cleanup fails.
-Unconfirmed native retirement blocks replacement.
-A forced launcher kill or pipe EOF cannot be promoted into proof of successful cleanup.
+The local launch adapter retains raw exit status, requested termination, and Console-owned storage retirement independently of diagnostic suppression.
+Readiness and the origin of an operation failure affect error reporting, not those observations.
+
+The existing failure-recovery barrier requires direct-launcher reaping, successful Console-owned storage retirement, and settled I/O.
+Storage-removal failure blocks replacement.
+Recovery after runner loss can still permit replacement without confirming native descendant or runner-owned storage cleanup.
+A forced launcher kill, pipe EOF, or suppressed status diagnostic cannot prove that cleanup.
+The pinned runner has no separate Unix cleanup receipt; a nonzero status can represent workload failure or a cleanup error.
 
 Connection closure cancels startup/preparation, retires execution resources, settles accepted responses, and bounds blocked MCP delivery.
 Native runner loss retains the [documented lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits); Console has no independent recovery daemon.
@@ -164,6 +170,33 @@ This does not guarantee exactly-once observation: cancellation can race with byt
 The journal records calls and assembled results.
 Markdown and QMD are projections, not interpreter checkpoints; a journaled result does not prove client receipt.
 See [Recordings](RECORDING.md).
+
+### Why native R graphics callbacks
+
+Console retains the managed PNG device's native `newPage` and `close` callbacks.
+R's `plot.new()` and `grid.newpage()` hooks do not observe every physical page transition.
+For example, on an open PNG device:
+
+```r
+dev.control(displaylist = "enable")
+plot(1:3)
+saved <- recordPlot()
+replayPlot(saved)
+cat("after first replay\n")
+replayPlot(saved)
+cat("after second replay\n")
+```
+
+The initial plot and two replays start three pages, but the replay transitions bypass the R page hooks.
+Observing only those hooks and cell end would miss the intermediate publication points and move completed images past intervening R console text.
+The device callbacks publish after the backend finalizes each page, without replaying plots or capturing incomplete pages.
+
+The [R bridge](../src/r_graphics/bridge.R) matches cleanup ownership by device number and filename template.
+An explicit user device that reuses the number with a different template remains open and uncaptured.
+If it also reuses the managed template exposed by `.Devices`, cleanup can mistake it for the managed device and close it.
+Device-reuse coverage and the same-template collision are tracked in [open work](TODO.md#graphics-coverage).
+The [C trampoline](../src/r_graphics.c) invokes the backend outside Rust lookup/notification frames and locks because R callbacks can `longjmp`; Rust is notified only after normal return.
+Any replacement must preserve these boundaries and the [existing plot contract](BUILTIN_RUNTIME.md#plots-and-images).
 
 ## Where to look in source
 

@@ -59,6 +59,7 @@ resolve_console_config <- function(
     c(
       "config",
       "resolve",
+      "--full",
       "--format",
       "json",
       console_cli_arguments(config, file)
