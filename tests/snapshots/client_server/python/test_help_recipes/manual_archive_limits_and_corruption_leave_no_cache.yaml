@@ -1,0 +1,36 @@
+---
+invalid_archive: symlink
+rejected: true
+published: false
+---
+invalid_archive: case alias
+rejected: true
+published: false
+---
+invalid_archive: file size
+rejected: true
+published: false
+---
+invalid_archive: entry count
+rejected: true
+published: false
+---
+invalid_archive: expanded bytes
+rejected: true
+published: false
+---
+invalid_archive: compressed bytes
+rejected: true
+published: false
+---
+invalid_archive: CRC
+rejected: true
+published: false
+---
+invalid_archive: page link
+rejected: true
+published: false
+---
+invalid_archive: missing license
+rejected: true
+published: false

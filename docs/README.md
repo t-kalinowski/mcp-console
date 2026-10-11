@@ -6,6 +6,7 @@ Start with [Get started](getting-started.qmd); use the references when you need 
 ## Use Console
 
 [Working with R, Python, and SQL](BUILTIN_RUNTIME.md) explains persistent state, language bridges, database connections, and plots.
+[Python documentation in a cell](PYTHON_HELP.md) covers installed `help(object)`, the prepared official text manuals, and omitted-output retrieval.
 [Calls, input, and control](SEND_OPERATIONS.md) explains polling, interactive input, cancellation, and restart.
 
 Configure a session with [Configuration](CONFIGURATION.md), manage [Dependencies](REQUIREMENTS.md), and keep results with [Recordings and reports](RECORDING.md).

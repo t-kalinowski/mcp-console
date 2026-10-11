@@ -94,6 +94,7 @@ pub(crate) fn setup_runtime(libpython: &Path, managed: bool) -> Result<bool, Str
     if !crate::sql::install_python_runtime()? {
         return Ok(false);
     }
+    super::library::install_documentation()?;
     if !crate::worker::r_available() {
         super::library::configure_native_sql()?;
     }

@@ -22,6 +22,8 @@ EXPECTED_SOURCES = {
     "src/python/bridge.R",
     "src/python/initialize.R",
     "src/python/environment.py",
+    "src/python/documentation.py",
+    "src/python/prepare_documentation.py",
     "src/python/inspection.py",
     "src/python/probe.py",
     "src/python/runtime.py",

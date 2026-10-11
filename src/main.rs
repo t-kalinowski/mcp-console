@@ -24,6 +24,7 @@ mod process_io;
 mod process_output;
 #[cfg(any(unix, windows))]
 mod python;
+mod python_documentation;
 mod python_requirement;
 #[cfg(any(unix, windows))]
 mod r_bridge;
@@ -75,6 +76,20 @@ fn main() -> ExitCode {
                     eprintln!("{error}");
                     ExitCode::FAILURE
                 }
+            }
+        }
+        cli::Command::PreparePythonDocs {
+            python,
+            archive,
+            download_page,
+        } => {
+            match python_documentation::prepare(
+                &python,
+                archive.as_deref(),
+                download_page.as_deref(),
+            ) {
+                Ok(exit_code) => exit_code,
+                Err(error) => exit_with_error(error),
             }
         }
         cli::Command::Serve {

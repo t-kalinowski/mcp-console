@@ -1,0 +1,59 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: assert _console.python_docs() is not None; print("manual readable")
+result:
+  content:
+    - type: text
+      text: |
+        manual readable
+  isError: false
+---
+send:
+  python: |
+    import errno
+    import os
+    import sys
+    from pathlib import Path
+
+    minor = f"{sys.version_info.major}.{sys.version_info.minor}"
+    manifest = Path(os.environ["MCP_CONSOLE_PYTHON_DOCS"]) / minor / "manifest.json"
+    for label, lookup in (
+        ("manifest stat", manifest.stat),
+        ("manual lookup", _console.python_docs),
+    ):
+        try:
+            lookup()
+        except PermissionError as error:
+            assert error.errno == errno.EACCES
+            assert error.filename == str(manifest)
+            print(label + ": permission denied")
+        else:
+            raise AssertionError(label + " must preserve PermissionError")
+result:
+  content:
+    - type: text
+      text: |
+        manifest stat: permission denied
+        manual lookup: permission denied
+  isError: false
+---
+send:
+  python: assert _console.python_docs() is not None; print("manual readable")
+result:
+  content:
+    - type: text
+      text: |
+        manual readable
+  isError: false
+---
+send:
+  python: print(_console.python_docs()); print(42)
+result:
+  content:
+    - type: text
+      text: |
+        None
+        42
+  isError: false

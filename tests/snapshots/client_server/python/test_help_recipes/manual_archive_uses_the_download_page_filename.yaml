@@ -1,0 +1,8 @@
+---
+archive_version: minor
+prepared: true
+mismatched_root_rejected: true
+---
+archive_version: patch
+prepared: true
+mismatched_root_rejected: true

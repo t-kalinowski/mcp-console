@@ -43,6 +43,17 @@ This command applies the sandbox and workload environment; it does not provide C
 The default permits host reads and private temporary writes, not workspace writes.
 Network access and cleanup limits are described in [Sandbox and trust](SANDBOX.md).
 
+## Python documentation preparation
+
+```sh
+mcp-console prepare-python-docs --python /path/to/python
+```
+
+This explicit trusted host-administration command prepares the official plain-text manual for that interpreter's major/minor.
+It reuses an existing cache without networking; startup and evaluated cells never trigger it.
+It uses the supplied executable and host environment, not project configuration or resolver policy.
+See [Python documentation](PYTHON_HELP.md#official-python-manuals) for cache selection, offline import, provenance and native read-only limits.
+
 ## Configuration options
 
 These options work before or after `serve` and ordinary `sandbox`:
