@@ -29,6 +29,7 @@ def r_test_environment() -> tuple[dict[str, str], Path]:
             check=True,
             capture_output=True,
             text=True,
+            timeout=10,
         )
         home = Path(output.stdout.strip())
         environment["R_HOME"] = str(home)

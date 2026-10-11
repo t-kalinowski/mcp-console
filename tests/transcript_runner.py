@@ -2035,6 +2035,79 @@ runner: orphan
 
 
 class TranscriptDiscoveryTests(TranscriptRunnerFixture):
+    @unittest.skipUnless(POSIX.available, "requires a POSIX executable script and FIFO")
+    def test_help_discovery_bounds_r_home_lookup(self) -> None:
+        shutil.copytree(
+            ROOT / "tests/support",
+            self.root / "tests/support",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        suite = "client_server/r/test_help_recipes"
+        destination = self.boundaries / f"{suite}.py"
+        destination.parent.mkdir(parents=True)
+        shutil.copy2(RUNNER.parent / f"{suite}.py", destination)
+        commands = self.root / "commands"
+        commands.mkdir()
+        launcher = commands / "R"
+        launcher.write_text(
+            f"#!{sys.executable}\n"
+            # fmt: python
+            + code("""
+                import os
+                import signal
+                import sys
+
+                assert sys.argv[1:] == ["RHOME"], sys.argv
+                with open(os.environ["MCP_CONSOLE_TEST_R_STARTED"], "wb", buffering=0) as started:
+                    started.write(b"1")
+                signal.pause()
+                """),
+            encoding="utf-8",
+        )
+        launcher.chmod(0o755)
+        checkpoint = self.root / "r-started"
+        os.mkfifo(checkpoint)
+        environment = os.environ | {
+            "PATH": os.pathsep.join((str(commands), os.environ["PATH"])),
+            "MCP_CONSOLE_HOME": str(self.root / "home"),
+            "MCP_CONSOLE_TEST_R_STARTED": str(checkpoint),
+        }
+        environment.pop("R_HOME", None)
+        for arguments in (("--list", suite), ("--full", "--list")):
+            with self.subTest(arguments=arguments):
+                started = os.open(checkpoint, os.O_RDWR | os.O_NONBLOCK)
+                process = subprocess.Popen(
+                    [sys.executable, self.boundaries / "_run.py", *arguments],
+                    cwd=self.root,
+                    env=environment,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+                try:
+                    ready, _, _ = select.select([started], [], [], 10)
+                    self.assertTrue(ready, "discovery did not start R-home lookup")
+                    self.assertEqual(os.read(started, 1), b"1")
+                    try:
+                        stdout, stderr = process.communicate(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        self.fail("gated R-home lookup blocked test discovery")
+                    self.assertEqual(process.returncode, 0, stderr)
+                    self.assertIn(f"{suite}::reads_translated_package_index", stdout)
+                    if "--full" in arguments:
+                        self.assertIn(
+                            "client_server/server/test_tools::selected", stdout
+                        )
+                    with self.assertRaises(ProcessLookupError):
+                        os.killpg(process.pid, 0)
+                finally:
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.communicate(timeout=5)
+                    os.close(started)
+
     def test_help_discovery_preserves_broken_r_selections(self) -> None:
         shutil.copytree(
             ROOT / "tests/support",
