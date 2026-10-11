@@ -13,6 +13,25 @@ result:
 send:
   requirements:
     r:
+      - dplyr
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
+    action: reset
+result:
+  content:
+    - type: text
+      text: "[prepared]"
+  isError: false
+---
+send:
+  requirements:
+    r:
       - praise
 result:
   content:

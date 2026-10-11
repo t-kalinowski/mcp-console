@@ -507,6 +507,10 @@ def test_preparation_preserves_input_before_native_r_startup(
                 "Python input before native R startup",
                 completion_timeout_seconds=client.response_timeout,
             )
+            for requirements in ({"r": ["dplyr"]}, {"action": "reset"}):
+                result = client.send(requirements=requirements)
+                assert result["isError"] is False, result
+                assert result["content"][0]["text"] == "[prepared]", result
             result = client.send(requirements={"r": ["praise"]})
             assert result["isError"] is True, result
             assert result["content"][0]["text"] == (

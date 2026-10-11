@@ -96,6 +96,17 @@ impl Client {
             }
             return Err(active.reject_preparation_message().to_string());
         }
+        // Unchanged declarations do not wait for bootstrap. Recalculate after
+        // admission because bootstrap callbacks can change the environment.
+        {
+            let environment = environment
+                .lock()
+                .map_err(|_| "worker environment lock poisoned".to_string())?;
+            self.ensure_generation(generation)?;
+            if RequirementDelta::calculate(&environment, requirements.clone())?.is_empty() {
+                return Ok(PrepareResult::Prepared);
+            }
+        }
         // Preparation owns admission and no evaluation is active. A delivered
         // completion can precede release of the evaluator's worker lock.
         let mut worker = self
