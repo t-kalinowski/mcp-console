@@ -87,12 +87,9 @@ result:
               sessions prepare missing packages on first use. Avoid availability
               probes or `install.packages()`. `?pkg::topic` and `help.search()` print
               installed help; `vignette()` prints rendered HTML text or labeled
-              UTF-8/ASCII source for other formats.
-              `RShowDoc("R-exts#Package-structure", type = "html")` prints an
-              installed manual section; `help.start()` prints the documentation index.
-              Capture long documentation with `text <-
-              capture.output(print(?pkg::topic))`, then print line ranges with
-              `writeLines()`. Access Python globals through `py$name`.
+              UTF-8/ASCII source for other formats. Capture long documentation with
+              `text <- capture.output(print(?pkg::topic))`, then print line ranges
+              with `writeLines()`. Access Python globals through `py$name`.
               `.console$sql_connection()` returns the active native DBI connection for
               DBI/dplyr, or errors if another runtime owns SQL. Select a user-owned
               DBI connection for SQL cells with `.console$sql_connection(connection)`;

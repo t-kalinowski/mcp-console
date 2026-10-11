@@ -16,15 +16,12 @@ from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_trailing_spaces
 from support.r import FIXTURES, r_test_environment
 from support.records import Transcript
-from support.requirements import R, r_html_manuals, requires
+from support.requirements import R, requires
 from support.resolvers import bare_runtime_environment
-from support.snapshots import execution_snapshots
 
 
 @contextmanager
-def documentation_client(
-    binary: Path, execution: Execution, *, network: bool = False
-) -> Iterator[McpClient]:
+def documentation_client(binary: Path, execution: Execution) -> Iterator[McpClient]:
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
         environment, rscript = r_test_environment()
@@ -70,11 +67,6 @@ def documentation_client(
             execution.serve(
                 "-c",
                 "cache=host",
-                *(
-                    ("-c", "sandbox.network=enabled")
-                    if network and execution == SANDBOXED
-                    else ()
-                ),
                 *(("--writable-root", str(root)) if execution == SANDBOXED else ()),
             ),
             environment,
@@ -385,150 +377,6 @@ def test_vignette_source_and_capture(binary: Path, execution: Execution) -> Tran
         return client.finish()
 
 
-@requires(R, r_html_manuals())
-@executions(DIRECT, SANDBOXED)
-def test_local_documentation_without_network(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with documentation_client(binary, execution) as client:
-        client.expect(
-            "manuals and the file index require no network or viewer\n",
-            # fmt: r
-            r=code(r"""
-                section <- capture.output(utils::RShowDoc(
-                  "R-exts#Package-structure",
-                  type = "html"
-                ))
-                stopifnot(any(grepl("The sources of an R package", section, fixed = TRUE)))
-                index <- capture.output(help.start(
-                  remote = paste0("file://", utils::URLencode(R.home()))
-                ))
-                stopifnot(
-                  any(grepl("Statistical Data Analysis", index, fixed = TRUE)),
-                  any(grepl("../manual/R-exts.html", index, fixed = TRUE)),
-                  tools:::httpdPort() == 0L
-                )
-                cat("manuals and the file index require no network or viewer\n")
-                """),
-        )
-        return client.finish()
-
-
-@requires(R, r_html_manuals())
-@executions(DIRECT, SANDBOXED)
-@execution_snapshots  # The help server needs an explicit sandbox network grant.
-def test_manuals_and_documentation_index(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with documentation_client(binary, execution, network=True) as client:
-        client.expect(
-            "installed manual and section are capturable without a viewer\n",
-            # fmt: r
-            r=code(r"""
-                full <- capture.output(returned <- withVisible(RShowDoc("R-exts")))
-                stopifnot(
-                  !returned$visible,
-                  identical(returned$value, file.path(R.home("doc"), "manual", "R-exts.html")),
-                  any(grepl("Writing R Extensions", full, fixed = TRUE)),
-                  identical(full, capture.output(utils::RShowDoc("R-exts", type = "html")))
-                )
-                section <- capture.output(utils::RShowDoc("R-exts#Package-structure"))
-                stopifnot(
-                  length(section) < length(full),
-                  any(grepl("1.1 Package structure", section, fixed = TRUE)),
-                  any(grepl("The sources of an R package", section, fixed = TRUE)),
-                  any(grepl("#The-DESCRIPTION-file", section, fixed = TRUE)),
-                  !any(grepl("### 1.2 Configure and cleanup", section, fixed = TRUE))
-                )
-                # Exercise a heading target as well as a section container.
-                installed <- readLines(file.path(R.home("doc"), "manual", "R-exts.html"))
-                headings <- grep('<h[1-6][^>]*id="[^"]+"', installed, value = TRUE)
-                heading <- headings[grepl("Package structure", headings, fixed = TRUE)][[1L]]
-                target <- sub('.*id="([^"]+)".*', "\\1", heading)
-                subsection <- capture.output(utils::RShowDoc(paste0("R-exts#", target)))
-                stopifnot(
-                  any(grepl("The sources of an R package", subsection, fixed = TRUE)),
-                  !any(grepl("### 1.2 Configure and cleanup", subsection, fixed = TRUE))
-                )
-                cat("installed manual and section are capturable without a viewer\n")
-                """),
-        )
-        client.expect(
-            "local help-server URLs retain the installed index and section\n",
-            # fmt: r
-            r=code(r"""
-                local_index <- capture.output(utils::browseURL(paste0(
-                  "file://",
-                  utils::URLencode(file.path(R.home("doc"), "html", "index.html"))
-                )))
-                index <- capture.output(suppressMessages(help.start()))
-                stopifnot(
-                  any(grepl("Manuals", index, fixed = TRUE)),
-                  any(grepl("../manual/R-exts.html", index, fixed = TRUE)),
-                  any(grepl("Statistical Data Analysis", index, fixed = TRUE))
-                )
-                # Windows help.start() also prints its native browser notice.
-                stopifnot(identical(tail(index, length(local_index)), local_index))
-                port <- tools:::httpdPort()
-                stopifnot(port > 0L)
-                for (host in c("127.0.0.1", "localhost")) {
-                  url <- paste0(
-                    "http://",
-                    host,
-                    ":",
-                    port,
-                    "/doc/manual/R-exts.html#Package-structure"
-                  )
-                  stopifnot(identical(capture.output(utils::browseURL(url)), section))
-                }
-                for (url in c(
-                  "https://example.invalid/must-not-fetch",
-                  paste0("http://127.0.0.1:", port + 1L, "/doc/html/index.html")
-                )) {
-                  error <- tryCatch(utils::browseURL(url), error = identity)
-                  stopifnot(
-                    inherits(error, "error"),
-                    grepl(
-                      "local installed R HTML documentation",
-                      conditionMessage(error),
-                      fixed = TRUE
-                    )
-                  )
-                }
-                error <- tryCatch(utils::RShowDoc("R-exts#missing-section"), error = identity)
-                stopifnot(
-                  inherits(error, "error"),
-                  grepl(
-                    "HTML section not found: missing-section",
-                    conditionMessage(error),
-                    fixed = TRUE
-                  )
-                )
-                cat("local help-server URLs retain the installed index and section\n")
-                """),
-        )
-        client.expect(
-            "later browser overrides retain manual URLs and section targets\n",
-            # fmt: r
-            r=code(r"""
-                options(browser = function(url) {
-                  stopifnot(endsWith(url, "R-exts.html#Package-structure"))
-                  cat("user browser\n")
-                })
-                stopifnot(identical(
-                  capture.output(utils::RShowDoc("R-exts#Package-structure")),
-                  "user browser"
-                ))
-                stopifnot(identical(
-                  capture.output(RShowDoc("R-exts#Package-structure")),
-                  "user browser"
-                ))
-                cat("later browser overrides retain manual URLs and section targets\n")
-                """),
-        )
-        return client.finish()
-
-
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_documentation_startup_restart_and_overrides(
@@ -539,6 +387,9 @@ def test_documentation_startup_restart_and_overrides(
         check = code(r"""
             stopifnot(identical(ls(all.names = TRUE), character()))
             stopifnot(length(capture.output(?consolehelp::topic)) > 10L)
+            browser_error <- tryCatch(getOption("browser")(), error = identity)
+            stopifnot(identical(conditionMessage(browser_error), "browser invoked"))
+            rm(browser_error)
             cat("documentation defaults installed after native profiles\n")
             """)
         client.expect(

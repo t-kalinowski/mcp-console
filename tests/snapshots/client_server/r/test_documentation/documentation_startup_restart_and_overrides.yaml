@@ -5,6 +5,9 @@ send:
   r: |
     stopifnot(identical(ls(all.names = TRUE), character()))
     stopifnot(length(capture.output(?consolehelp::topic)) > 10L)
+    browser_error <- tryCatch(getOption("browser")(), error = identity)
+    stopifnot(identical(conditionMessage(browser_error), "browser invoked"))
+    rm(browser_error)
     cat("documentation defaults installed after native profiles\n")
 result:
   content:
@@ -141,6 +144,9 @@ send:
   r: |
     stopifnot(identical(ls(all.names = TRUE), character()))
     stopifnot(length(capture.output(?consolehelp::topic)) > 10L)
+    browser_error <- tryCatch(getOption("browser")(), error = identity)
+    stopifnot(identical(conditionMessage(browser_error), "browser invoked"))
+    rm(browser_error)
     cat("documentation defaults installed after native profiles\n")
 result:
   content:

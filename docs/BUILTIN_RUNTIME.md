@@ -63,15 +63,7 @@ That view omits evaluated results and figures; source must be installed as UTF-8
 HTML must be installed as UTF-8; conversion failures and missing source are errors.
 The worker converts HTML with Rust's `html2text` crate, without Pandoc, knitr, rmarkdown, or a browser.
 
-Use `RShowDoc("R-exts", type = "html")` or `utils::RShowDoc("R-exts#Package-structure", type = "html")` to read a built-in manual or section installed with the running R version.
-`help.start()` prints that installation's documentation index.
-Starting R's local help server requires network permission, such as `-c sandbox.network=enabled`; use `help.start(remote = paste0("file://", utils::URLencode(R.home())))` to read the installed index without starting the server.
-Console's function-valued `browser` option recognizes local HTML URLs beneath `R.home("doc")`, including `/doc/` URLs on R's own local help server, and reads their installed files without making HTTP requests.
-Existing link fragments remain visible; a requested `#section` selects its section and subsections, and a missing section is an error.
-The default browser rejects other URLs rather than launching an external viewer.
-Manual access requires installed HTML; PDF conversion is unavailable.
-
-Console installs text help, pager, and browser defaults after native R startup, once per worker.
+Console installs text help and pager defaults after native R startup, once per worker.
 Later changes to R options or print methods remain in effect until restart.
 
 ## Python
