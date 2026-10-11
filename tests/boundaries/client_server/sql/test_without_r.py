@@ -90,6 +90,8 @@ def extension_cache(root: Path, execution: Execution) -> Path:
     )
 
 
+# SANDBOXED selects the shared Seatbelt/bubblewrap fixtures. Native Windows
+# sandbox coverage uses its separate acceptance suite.
 @requires(POSIX, SQL)
 @executions(SANDBOXED)
 def test_prepares_builtin_extensions_without_downloads(
