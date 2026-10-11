@@ -92,6 +92,19 @@ send:
         charToRaw(paste(captured, collapse = "\n")),
         charToRaw(paste(text, collapse = "\n"))
       ))
+      library <- rawToChar(charToRaw(enc2utf8("library-café")))
+      stopifnot(dir.create(library))
+      stopifnot(file.copy(saved$Dir, library, recursive = TRUE))
+      native <- utils::vignette(
+        "rendered",
+        package = "consolehelp",
+        lib.loc = library
+      )
+      native_text <- capture.output(print(native))
+      stopifnot(identical(
+        charToRaw(paste(native_text, collapse = "\n")),
+        charToRaw(paste(text, collapse = "\n"))
+      ))
     })
     cat("rendered structure, capture, metadata, and return value retained\n")
 result:

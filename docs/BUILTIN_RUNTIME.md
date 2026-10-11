@@ -60,8 +60,8 @@ Use `capture.output(print(vignette("topic", package = "pkg")))` to capture its t
 
 PDF-only, source-only, and other non-HTML vignettes retain the installed source view, labeled `Vignette source:`.
 That view omits evaluated results and figures; source must be installed as UTF-8 or ASCII.
-HTML must be installed as UTF-8; conversion failures and missing source are errors.
-The worker converts HTML with Rust's `html2text` crate, without Pandoc, knitr, rmarkdown, or a browser.
+HTML contents must be UTF-8; conversion failures and missing source are errors.
+R opens the installed file using its native filename handling and passes its bytes to a native callback using Rust's `html2text` crate, without Pandoc, knitr, rmarkdown, or a browser.
 
 Console installs text help and pager defaults after native R startup, once per worker.
 Later changes to R options or print methods remain in effect until restart.

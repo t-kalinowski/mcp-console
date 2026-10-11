@@ -3,10 +3,10 @@ use libr::SEXP;
 
 #[allow(clippy::result_large_err)]
 #[harp::register]
-pub extern "C-unwind" fn mcp_console_documentation_html(path: SEXP) -> harp::Result<SEXP> {
-    let path = String::try_from(RObject::view(path))?;
+pub extern "C-unwind" fn mcp_console_documentation_html(html: SEXP) -> harp::Result<SEXP> {
+    let html = Vec::<u8>::try_from(&RObject::view(html))?;
     let convert = || -> anyhow::Result<String> {
-        let html = std::fs::read_to_string(&path)?;
+        let html = std::str::from_utf8(&html)?;
         let config = html2text::config::plain().no_link_wrapping();
         let dom = config.parse_html(html.as_bytes())?;
 
@@ -34,8 +34,6 @@ pub extern "C-unwind" fn mcp_console_documentation_html(path: SEXP) -> harp::Res
         let tree = config.dom_to_render_tree(&dom)?;
         Ok(config.render_to_string(tree, 80)?)
     };
-    let text = convert().map_err(|error| {
-        harp::anyhow!("Unable to convert installed HTML documentation {path}: {error}")
-    })?;
+    let text = convert().map_err(|error| harp::anyhow!("{error}"))?;
     Ok(RObject::from(text).sexp)
 }

@@ -16,7 +16,7 @@ from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_trailing_spaces
 from support.r import FIXTURES, r_test_environment
 from support.records import Transcript
-from support.requirements import R, requires
+from support.requirements import NON_UTF8_FILENAMES, R, requires
 from support.resolvers import bare_runtime_environment
 
 
@@ -258,6 +258,19 @@ def test_vignette_rendered_html(binary: Path, execution: Execution) -> Transcrip
                     charToRaw(paste(captured, collapse = "\n")),
                     charToRaw(paste(text, collapse = "\n"))
                   ))
+                  library <- rawToChar(charToRaw(enc2utf8("library-café")))
+                  stopifnot(dir.create(library))
+                  stopifnot(file.copy(saved$Dir, library, recursive = TRUE))
+                  native <- utils::vignette(
+                    "rendered",
+                    package = "consolehelp",
+                    lib.loc = library
+                  )
+                  native_text <- capture.output(print(native))
+                  stopifnot(identical(
+                    charToRaw(paste(native_text, collapse = "\n")),
+                    charToRaw(paste(text, collapse = "\n"))
+                  ))
                 })
                 cat("rendered structure, capture, metadata, and return value retained\n")
                 """),
@@ -284,6 +297,39 @@ def test_vignette_rendered_html(binary: Path, execution: Execution) -> Transcrip
                 error <- tryCatch(print(saved), error = identity)
                 stopifnot(inherits(error, "error"))
                 cat("HTML conversion errors do not switch to source\n")
+                """),
+        )
+        return client.finish()
+
+
+@requires(NON_UTF8_FILENAMES, R)
+@executions(DIRECT, SANDBOXED)
+def test_vignette_non_utf8_library_path(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with documentation_client(binary, execution) as client:
+        client.expect(
+            "rendered vignettes preserve native filename bytes\n",
+            # fmt: r
+            r=code(r"""
+                local({
+                  previous <- Sys.getlocale("LC_CTYPE")
+                  on.exit(Sys.setlocale("LC_CTYPE", previous))
+                  stopifnot(identical(Sys.setlocale("LC_CTYPE", "C"), "C"))
+                  original <- utils::vignette("rendered", package = "consolehelp")
+                  text <- capture.output(print(original))
+                  library <- rawToChar(c(charToRaw("library-"), as.raw(255)))
+                  stopifnot(dir.create(library))
+                  stopifnot(file.copy(original$Dir, library, recursive = TRUE))
+                  saved <- utils::vignette(
+                    "rendered",
+                    package = "consolehelp",
+                    lib.loc = library
+                  )
+                  stopifnot(as.raw(255) %in% charToRaw(saved$Dir))
+                  stopifnot(identical(capture.output(print(saved)), text))
+                  cat("rendered vignettes preserve native filename bytes\n")
+                })
                 """),
         )
         return client.finish()

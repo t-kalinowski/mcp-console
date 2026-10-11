@@ -23,7 +23,26 @@ base::local(
 
     utf8_pager <- function(...) pager(..., encoding = "UTF-8")
     show_html <- function(path, title = "") {
-      text <- .Call("mcp_console_documentation_html", path)
+      # Let R open native paths without translating filename bytes to UTF-8.
+      text <- base::tryCatch(
+        {
+          size <- base::file.info(path)$size
+          if (base::is.na(size)) {
+            base::stop("Installed HTML vignette is unavailable", call. = FALSE)
+          }
+          html <- base::readBin(path, "raw", n = size)
+          .Call("mcp_console_documentation_html", html)
+        },
+        error = function(error) {
+          base::stop(
+            "Unable to convert installed HTML documentation ",
+            path,
+            ": ",
+            base::conditionMessage(error),
+            call. = FALSE
+          )
+        }
+      )
       file <- base::tempfile()
       base::on.exit(base::unlink(file))
       base::writeBin(base::charToRaw(text), file)
