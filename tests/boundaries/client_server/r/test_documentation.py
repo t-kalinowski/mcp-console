@@ -278,7 +278,7 @@ def test_file_show_headers_and_cleanup(
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_vignette_rendered_html(binary: Path, execution: Execution) -> Transcript:
-    with documentation_client(binary, execution) as client:
+    with documentation_client(binary, execution, locale=UTF8_LOCALE) as client:
         client.send(r='vignette("rendered", package = "consolehelp")')
         output = last_tool_text(client)
         assert "42 — evaluated result" in output, output
@@ -326,12 +326,8 @@ def test_vignette_rendered_html(binary: Path, execution: Execution) -> Transcrip
                 local({
                   previous <- Sys.getlocale("LC_CTYPE")
                   on.exit(Sys.setlocale("LC_CTYPE", previous))
-                  stopifnot(identical(Sys.setlocale("LC_CTYPE", "C"), "C"))
-                  captured <- capture.output(print(saved))
-                  stopifnot(identical(
-                    charToRaw(paste(captured, collapse = "\n")),
-                    charToRaw(paste(text, collapse = "\n"))
-                  ))
+                  # Native package lookup needs a locale that can list this filename.
+                  # Prepare the object first, then test its rendering in the C locale.
                   library <- rawToChar(charToRaw(enc2utf8("library-café")))
                   stopifnot(dir.create(library))
                   stopifnot(file.copy(saved$Dir, library, recursive = TRUE))
@@ -340,6 +336,17 @@ def test_vignette_rendered_html(binary: Path, execution: Execution) -> Transcrip
                     package = "consolehelp",
                     lib.loc = library
                   )
+                  # Unix filenames use native bytes; Windows keeps its UTF-8 tag
+                  # for wide-character filenames after the locale changes.
+                  if (.Platform$OS.type != "windows") {
+                    native$Dir <- rawToChar(charToRaw(native$Dir))
+                  }
+                  stopifnot(identical(Sys.setlocale("LC_CTYPE", "C"), "C"))
+                  captured <- capture.output(print(saved))
+                  stopifnot(identical(
+                    charToRaw(paste(captured, collapse = "\n")),
+                    charToRaw(paste(text, collapse = "\n"))
+                  ))
                   native_text <- capture.output(print(native))
                   stopifnot(identical(
                     charToRaw(paste(native_text, collapse = "\n")),
