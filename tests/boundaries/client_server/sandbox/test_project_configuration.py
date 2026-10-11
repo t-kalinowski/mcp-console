@@ -90,6 +90,7 @@ def _snapshot_survives_replacement(
         resolver_capture = host / "resolver-payloads.jsonl"
         environment = {
             **os.environ,
+            "MCP_CONSOLE_LANGUAGES": "python",
             LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "MCP_CONSOLE_TEST_RESOLVER_CONFIGURATION": str(resolver_capture),

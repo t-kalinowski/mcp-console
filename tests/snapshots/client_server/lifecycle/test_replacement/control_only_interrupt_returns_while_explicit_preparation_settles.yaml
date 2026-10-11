@@ -3,6 +3,48 @@
 ---
 send:
   requirements:
+    action: get
+  timeout_ms: 600000
+result:
+  content:
+    - type: text
+      text: |-
+        {
+          "requirements": {
+            "r": [],
+            "python": [],
+            "duckdb": [],
+            "python_version": [],
+            "exclude_newer": null
+          },
+          "prepared": false,
+          "runtime_requirements": {
+            "r": [
+              "DBI",
+              "duckdb",
+              "jsonlite"
+            ],
+            "python": []
+          }
+        }
+  structuredContent:
+    requirements:
+      r: []
+      python: []
+      duckdb: []
+      python_version: []
+      exclude_newer: ~
+    prepared: false
+    runtime_requirements:
+      r:
+        - DBI
+        - duckdb
+        - jsonlite
+      python: []
+  isError: false
+---
+send:
+  requirements:
     r:
       - blocked-standalone-resolver
 result:

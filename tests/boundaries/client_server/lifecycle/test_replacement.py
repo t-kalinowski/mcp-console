@@ -537,6 +537,16 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
         try:
             client.initialize_and_list_tools()
 
+            # Complete cold discovery before timing the resolver checkpoint.
+            # Inspection prepares no packages and admits no worker cell.
+            snapshot = client.send(
+                requirements={"action": "get"},
+                timeout_ms=int(client.response_timeout * 1_000),
+            )
+            assert not snapshot.get("isError"), snapshot
+            assert not snapshot["structuredContent"]["prepared"], snapshot
+            assert not (temporary_path / "ir-counter").exists()
+
             def interrupt_preparation(
                 preparation_arguments: dict[str, object],
                 description: str,

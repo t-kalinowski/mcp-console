@@ -74,6 +74,7 @@ def _writable_roots_reach_every_runner_launch(
         capture = host / "runner-configurations.jsonl"
         environment = {
             **os.environ,
+            "MCP_CONSOLE_LANGUAGES": "python",
             LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "MCP_CONSOLE_TEST_HOST": str(host),

@@ -80,6 +80,7 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
         )
         capture = root / "launches.jsonl"
         environment = os.environ | {
+            "MCP_CONSOLE_LANGUAGES": "python",
             LOADER_VARIABLE: str(build_interposer(root, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "TEST_WORKSPACE": str(host),
