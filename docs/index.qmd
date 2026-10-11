@@ -43,10 +43,11 @@ See [Working with R, Python, and SQL](BUILTIN_RUNTIME.md).
 
 By default, Console prepares packages and extensions for the session:
 
-- **R packages** go into ephemeral libraries layered on top of the host's R libraries.
-- **Python packages** go into an ephemeral Python environment.
+- **R packages** go into managed libraries layered on top of the host's R libraries.
+- **Python packages** go into a managed Python environment.
 - **DuckDB extensions** are installed in a reusable cache for the session's in-memory database.
 
+Console caches these installations for reuse across sessions.
 The agent can request additional packages and extensions as it works.
 You can instead [use a preconfigured Python environment](CONFIGURATION.md#python-environment-selection), which disables managed Python preparation, or [disable R package resolution](CONFIGURATION.md#dependency-resolution-policies).
 See [Get started](getting-started.qmd) for installation prerequisites and client setup, or [Requirements and environments](REQUIREMENTS.md) for package preparation.
