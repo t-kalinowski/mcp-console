@@ -172,6 +172,7 @@ Observing only those hooks and cell end would miss the intermediate publication 
 The device callbacks publish after the backend finalizes each page, without replaying plots or capturing incomplete pages.
 
 The [R bridge](../src/r_graphics/bridge.R) tracks cleanup ownership; explicit user devices remain open and uncaptured, including when a device number is reused.
+The missing device-reuse regression is tracked as [deferred coverage](TODO.md#graphics-coverage).
 The [C trampoline](../src/r_graphics.c) invokes the backend outside Rust lookup/notification frames and locks because R callbacks can `longjmp`; Rust is notified only after normal return.
 Any replacement must preserve these boundaries and the [existing plot contract](BUILTIN_RUNTIME.md#plots-and-images).
 
