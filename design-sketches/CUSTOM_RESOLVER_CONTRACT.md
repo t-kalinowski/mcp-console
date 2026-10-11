@@ -58,13 +58,15 @@ A materialized result would identify its operation and candidate, prepared locat
 Console would reject malformed, mismatched, duplicate, unsolicited, or stale results; output paths alone would not authorize activation.
 Resolver exit status or a claimed successful inspection would not constitute declaration acceptance or cleanup evidence.
 
-The existing [activation contract](../docs/WORKER_PROTOCOL.md#live-python-preparation) would govern acceptance:
+The existing acceptance paths would remain:
 
 - Before interpreter initialization, Console can accept a fully prepared and inspected selection without a live activation receipt.
   Restart prepares and accepts the complete candidate before retiring the old worker; preparation failure preserves the old worker and declaration.
   Failure after retirement cannot restore live state.
-- For live changes, the worker validates and activates the provisional candidate.
+- For live R/Python changes, the worker validates and activates the provisional runtime candidate under the existing [activation contract](../docs/WORKER_PROTOCOL.md#live-python-preparation).
   Only the matching acceptance receipt for the current operation, candidate, and generation can commit the retained declaration; neither resolver nor relay decides that commit.
+- For live DuckDB extension-only changes, the [server](../src/worker_client/environment/preparation.rs) commits the retained extension declaration after successful host preparation and a current-generation check.
+  No worker activation or acceptance receipt is required.
 - R and Python have separate acceptance points.
   Accepted activation survives a later import, package load, cell, or other preparation failure.
   Unaccepted candidates are discarded when their operation ends or generation retires; mixed preparation is not an atomic rollback of accepted runtime effects.
