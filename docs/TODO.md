@@ -37,9 +37,11 @@ Current documentation must continue to state the limits.
 
 ## Graphics coverage
 
-**GR-1 — Deferred device-number-reuse regression (unselected; not a release blocker).** A future public-API case should create a managed plot, close its device, and open an explicit user PNG in the same slot within one cell.
-Verify the number is reused, cell cleanup leaves the user device open and uncaptured, and drawing and explicit closure work in a later cell.
-This would cover the [managed-device ownership invariant](ARCHITECTURE.md#why-native-r-graphics-callbacks); no runtime defect has been demonstrated.
+**GR-1 — Deferred device-reuse coverage and filename collision (unselected; not a release blocker).** A future public-API case should create a managed plot, close its device, and open an explicit user PNG in the same slot within one cell.
+Exercise both a distinct temporary filename template and the original managed template read from `.Devices`.
+The same-template case currently makes cleanup close the explicit device; preserving it would require ownership identity that distinguishes separate device openings with the same number and template.
+For the distinct-template case, verify the number is reused, cell cleanup leaves the user device open and uncaptured, and drawing and explicit closure work in a later cell.
+These cases cover the [managed-device cleanup boundary](ARCHITECTURE.md#why-native-r-graphics-callbacks).
 
 ## Sandbox and platforms
 

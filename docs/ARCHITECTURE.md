@@ -171,8 +171,10 @@ The initial plot and two replays start three pages, but the replay transitions b
 Observing only those hooks and cell end would miss the intermediate publication points and move completed images past intervening R console text.
 The device callbacks publish after the backend finalizes each page, without replaying plots or capturing incomplete pages.
 
-The [R bridge](../src/r_graphics/bridge.R) tracks cleanup ownership; explicit user devices remain open and uncaptured, including when a device number is reused.
-The missing device-reuse regression is tracked as [deferred coverage](TODO.md#graphics-coverage).
+The [R bridge](../src/r_graphics/bridge.R) matches cleanup ownership by device number and filename template.
+An explicit user device that reuses the number with a different template remains open and uncaptured.
+If it also reuses the managed template exposed by `.Devices`, cleanup can mistake it for the managed device and close it.
+Device-reuse coverage and the same-template collision are tracked in [open work](TODO.md#graphics-coverage).
 The [C trampoline](../src/r_graphics.c) invokes the backend outside Rust lookup/notification frames and locks because R callbacks can `longjmp`; Rust is notified only after normal return.
 Any replacement must preserve these boundaries and the [existing plot contract](BUILTIN_RUNTIME.md#plots-and-images).
 
