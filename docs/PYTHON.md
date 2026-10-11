@@ -24,10 +24,10 @@ Use `AsyncMCPConsole` with `async with` and `await` for asynchronous code.
 Enter and close an async connection in the same task.
 Reconnect starts a new session; recreate adapters after reconnecting.
 
-`MCPConsole` performs blocking I/O on the calling thread.
-Use one request at a time per connection; overlapping calls raise `RuntimeError`.
+Both clients use the official MCP Python SDK for transport and protocol handling.
+`MCPConsole` provides blocking calls through an AnyIO background event loop.
+An application can send an interrupt from another thread while a call awaits output.
 Connect and close only when no other call is in progress.
-Use the async client when an application needs to send an interrupt while another call is awaiting output.
 
 Helpers prefer Console in the current Python environment, then PATH, and launch `serve`.
 Override `command`/`args` for another executable.
@@ -69,7 +69,6 @@ If `KeyboardInterrupt` interrupts a synchronous response wait, the client cancel
 An admitted cell keeps running.
 Catch the exception inside the connection's context to poll for its output or call `console.send(control="interrupt")` to interrupt execution explicitly.
 Leaving the context closes the session.
-An interrupt during connection setup or while writing a request closes the connection because the exchange is incomplete.
 
 ## Inspect or replace requirements
 

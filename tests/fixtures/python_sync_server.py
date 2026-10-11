@@ -6,6 +6,7 @@ from pathlib import Path
 import signal
 import socket
 import sys
+from threading import Thread
 
 
 def reply(request: dict, result: dict) -> None:
@@ -17,6 +18,13 @@ def reply(request: dict, result: dict) -> None:
 
 def output(text: str) -> dict:
     return {"content": [{"type": "text", "text": text}], "isError": False}
+
+
+def hold(request: dict) -> None:
+    with socket.create_connection(("127.0.0.1", int(sys.argv[2])), timeout=10) as gate:
+        gate.sendall(b"1")
+        assert gate.recv(1) == b"1"
+    reply(request, output("released"))
 
 
 def main() -> None:
@@ -91,12 +99,7 @@ def main() -> None:
                 tail = encoded[-2:]
                 os.kill(os.getppid(), signal.SIGINT)
             elif source == "hold":
-                with socket.create_connection(
-                    ("127.0.0.1", int(sys.argv[2])), timeout=10
-                ) as gate:
-                    gate.sendall(b"1")
-                    assert gate.recv(1) == b"1"
-                reply(request, output("released"))
+                Thread(target=hold, args=(request,)).start()
             elif source == "rpc error":
                 print(
                     json.dumps(

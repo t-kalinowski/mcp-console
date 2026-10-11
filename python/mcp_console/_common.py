@@ -6,55 +6,12 @@ import shutil
 import sysconfig
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, TypedDict
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult, ContentBlock
 
 Command = str | os.PathLike[str]
-
-
-class Requirements(TypedDict, total=False):
-    """Dependency declarations accepted by the clients' `send(requirements=...)`.
-
-    `add` merges packages into the session declaration. `get` inspects it, `set`
-    replaces it (emptying omitted fields), and `reset` restores startup defaults.
-    Changed replacements of a live worker require `control="restart"`, which
-    also discards its variables. Python packages run in Console's worker
-    environment; installing a framework extra prepares the calling application.
-
-    Attributes:
-        action: `get`, `add` (the default), `set`, or `reset`.
-        python_version: Python version constraints, such as `[">=3.11"]`.
-        exclude_newer: Optional cutoff date for dependency resolution.
-        r: R package requirements.
-        python: Python package requirements.
-        duckdb: DuckDB extensions.
-
-    Examples:
-        Install with `pip install 'mcp-console[client]'`. Add NumPy to Console's
-        managed Python environment and use it in the same call:
-
-        ```python
-        from mcp_console import MCPConsole, Requirements
-
-        requirements: Requirements = {"python": ["numpy"]}
-        with MCPConsole() as console:
-            print(
-                console.send(
-                    requirements=requirements,
-                    python="import numpy as np; np.mean([12, 15, 18, 20, 25])",
-                )
-            )
-        ```
-    """
-
-    action: Literal["get", "add", "set", "reset"]
-    python_version: list[str]
-    exclude_newer: str | None
-    r: list[str]
-    python: list[str]
-    duckdb: list[str]
 
 
 def stdio_command(

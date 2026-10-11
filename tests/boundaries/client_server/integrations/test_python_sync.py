@@ -32,14 +32,12 @@ def client(root: Path, mode: str = "normal", *arguments: str) -> MCPConsole:
     )
 
 
-def test_sync_connection_uses_calling_thread(binary: Path) -> Transcript:
+def test_sync_connection_closes_resources(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         before = set(threading.enumerate())
         with client(root) as console:
-            assert set(threading.enumerate()) == before, (
-                "sync connection started a background thread"
-            )
+            assert console.connect() is console
             assert console.send_tool.name == "send"
             assert console.send(python="hello") == "hello"
             assert console.send(control="interrupt") == "interrupted"
@@ -89,7 +87,7 @@ def test_host_interrupt_cancels_wait_and_discards_partial_reply(
     ]
 
 
-def test_sync_connection_rejects_overlapping_calls(binary: Path) -> Transcript:
+def test_sync_connection_can_interrupt_pending_call(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory, socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen()
@@ -104,22 +102,15 @@ def test_sync_connection_rejects_overlapping_calls(binary: Path) -> Transcript:
                     gate.settimeout(10)
                     assert gate.recv(1) == b"1"
                     try:
-                        other = pool.submit(console.send, python="overlap")
-                        try:
-                            other.result(timeout=5)
-                        except RuntimeError as error:
-                            assert (
-                                str(error) == "MCPConsole already has a pending request"
-                            )
-                        else:
-                            raise AssertionError("overlapping call was accepted")
+                        interrupt = pool.submit(console.send, control="interrupt")
+                        assert interrupt.result(timeout=5) == "interrupted"
                     finally:
                         gate.sendall(b"1")
                 assert pending.result(timeout=5) == "released"
             assert console.send(python="recovered") == "recovered"
     return [
         {
-            "overlap": "MCPConsole already has a pending request",
+            "control": "interrupted",
             "pending": "released",
             "recovery": "recovered",
         }
@@ -159,8 +150,11 @@ def test_failed_sync_connection_reaps_server(binary: Path) -> Transcript:
         root = Path(directory)
         try:
             client(root, "empty-tools").connect()
-        except RuntimeError as error:
-            assert str(error) == "MCP Console did not expose its send tool"
+        except* RuntimeError as errors:
+            _, unexpected = errors.split(
+                lambda error: str(error) == "MCP Console did not expose its send tool"
+            )
+            assert unexpected is None, errors
         else:
             raise AssertionError("connection without send tool succeeded")
         assert (root / "closed").exists()
@@ -175,11 +169,14 @@ def test_sync_negotiates_supported_protocol_versions(binary: Path) -> Transcript
         (root / "closed").unlink()
         try:
             client(root, "unsupported").connect()
-        except RuntimeError as error:
-            assert (
-                str(error)
-                == "Unsupported protocol version from the server: unsupported"
+        except* RuntimeError as errors:
+            _, unexpected = errors.split(
+                lambda error: (
+                    str(error)
+                    == "Unsupported protocol version from the server: unsupported"
+                )
             )
+            assert unexpected is None, errors
         else:
             raise AssertionError("unsupported protocol was accepted")
         assert (root / "closed").exists()
@@ -192,21 +189,21 @@ def test_sync_server_exit_closes_connection(binary: Path) -> Transcript:
         with console:
             try:
                 console.send(python="exit")
-            except RuntimeError as error:
-                assert str(error) == "MCP Console closed its output before replying"
+            except MCPError as error:
+                assert str(error) == "Connection closed"
             else:
                 raise AssertionError("server exit was accepted as a response")
             try:
                 console.send()
-            except RuntimeError as error:
-                assert "not connected" in str(error)
+            except MCPError as error:
+                assert str(error) == "Connection closed"
             else:
                 raise AssertionError("failed connection accepted a call")
         with console:
             assert console.send(python="reconnected") == "reconnected"
     return [
         {
-            "error": "MCP Console closed its output before replying",
+            "error": "Connection closed",
             "reconnect": "reconnected",
         }
     ]
