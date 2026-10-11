@@ -17,6 +17,8 @@ pub(super) const POLLING: &str = "If work is still running, poll with an empty `
 pub(super) const DEFAULTS: &str =
     r#" Defaults: `timeout_ms=60000` (60 seconds), `requirements.action="add"`."#;
 
+pub(super) const POLLING_DEFAULT_TIMEOUT: &str = r#"If work is still running, poll with an empty `send`; do not resubmit the cell. Each call waits for output for up to 60 seconds; it returns early when work finishes or needs input. Expiry returns available output while work continues. Default: `requirements.action="add"`."#;
+
 pub(super) const OUTPUT: &str = "Text results, including notices, have an 8 KiB limit, retaining the beginning and latest tail; images have separate limits. Response notices report state and omitted-output locations.";
 
 pub(super) const CUSTOM_CAPABILITIES: &str = "Language fields describe the configured interface; evaluation, display, SQL, and sharing depend on the worker. Console does not supply built-in runtime packages, import hooks, or a default SQL connection. Managed requirements need compatible worker callbacks; Python requirements are unavailable.";
@@ -47,7 +49,7 @@ pub(super) const CUSTOM_PYTHON: &str = "Evaluate one complete Python cell in the
 
 pub(super) const CUSTOM_SQL: &str = "Evaluate one complete SQL cell; the custom worker supplies the connection, dialect, and display.";
 
-pub(super) const R_RUNTIME: &str = r#"Evaluate one complete R cell in persistent global state. Visible top-level expressions autoprint; leave the primary result last. Load CRAN packages normally through `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; managed sessions prepare missing packages on first use. Avoid availability probes or `install.packages()`. `?pkg::topic` and `help.search()` print installed help; `vignette()` prints installed UTF-8/ASCII source. Capture long help with `text <- capture.output(print(?pkg::topic))`, then print line ranges with `writeLines()`."#;
+pub(super) const R_RUNTIME: &str = r#"Evaluate one complete R cell in persistent global state. Visible top-level expressions autoprint; leave the primary result last. Load CRAN packages normally through `library()`, `require()`, `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; managed sessions prepare missing packages on first use. Avoid availability probes or `install.packages()`. `?pkg::topic` and `help.search()` print installed help; `vignette()` prints rendered HTML text or labeled UTF-8/ASCII source for other formats. Capture long documentation with `text <- capture.output(print(?pkg::topic))`, then print line ranges with `writeLines()`."#;
 
 pub(super) const R_BRIDGE: &str = " Access Python globals through `py$name`.";
 
