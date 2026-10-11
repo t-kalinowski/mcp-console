@@ -96,7 +96,7 @@ def test_prepares_builtin_extensions_without_downloads(
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        uv = expose_uv(root)
+        uv = expose_uv(root).resolve()
         env = dict(
             environment(root),
             MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY=str(root / "extensions"),
@@ -111,9 +111,13 @@ def test_prepares_builtin_extensions_without_downloads(
             )
             client.finish()
         assert not list((root / "extensions").glob("**/json.duckdb_extension"))
-        offline_uv = root / "offline-uv"
-        # Console removes ambient UV_OFFLINE during managed preparation. Use
-        # real uv's flag so even a stale cache cannot trigger metadata downloads.
+        offline_uv = root / UV_NAME
+        offline_uv.unlink()
+        offline_receipt = root / "extensions/offline-uv-used"
+        offline_receipt.parent.mkdir(parents=True, exist_ok=True)
+        # R-free preparation selects uv from PATH and ignores RETICULATE_UV.
+        # Replace the exposed link, delegating to the saved real executable.
+        # Use its flag because Console removes ambient UV_OFFLINE.
         write_python_executable(
             offline_uv,
             # fmt: python
@@ -121,11 +125,12 @@ def test_prepares_builtin_extensions_without_downloads(
                 #!{sys.executable} -S
                 import os
                 import sys
+                from pathlib import Path
 
+                Path({str(offline_receipt)!r}).touch()
                 os.execv({str(uv)!r}, [{str(uv)!r}, "--offline", *sys.argv[1:]])
                 """),
         )
-        env["RETICULATE_UV"] = str(offline_uv)
         config = root / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True, exist_ok=True)
         config.write_text(
@@ -149,6 +154,9 @@ def test_prepares_builtin_extensions_without_downloads(
                 python="_console.sql_connection().execute('SELECT ?::JSON', [retained]).fetchone()",
             )
             assert not list((root / "extensions").glob("**/json.duckdb_extension"))
+            assert offline_receipt.is_file(), (
+                "R-free preparation did not use the offline uv wrapper"
+            )
             return client.finish()
 
 
