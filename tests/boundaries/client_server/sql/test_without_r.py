@@ -23,7 +23,7 @@ from support.linux_sandbox import retain_system_bwrap
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code, normalize_python_resolution_error
 from support.records import Transcript, TranscriptWithCompanions
-from support.resolvers import expose_uv
+from support.resolvers import expose_uv, write_python_executable
 
 UV_NAME = "uv.exe" if os.name == "nt" else "uv"
 
@@ -89,14 +89,14 @@ def extension_cache(root: Path, execution: Execution) -> Path:
     )
 
 
-@requires(SQL)
+@requires(POSIX, SQL)
 @executions(SANDBOXED)
 def test_prepares_builtin_extensions_without_downloads(
     binary: Path, execution: Execution
 ) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        expose_uv(root)
+        uv = expose_uv(root)
         env = dict(
             environment(root),
             MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY=str(root / "extensions"),
@@ -111,6 +111,21 @@ def test_prepares_builtin_extensions_without_downloads(
             )
             client.finish()
         assert not list((root / "extensions").glob("**/json.duckdb_extension"))
+        offline_uv = root / "offline-uv"
+        # Console removes ambient UV_OFFLINE during managed preparation. Use
+        # real uv's flag so even a stale cache cannot trigger metadata downloads.
+        write_python_executable(
+            offline_uv,
+            # fmt: python
+            code(f"""
+                #!{sys.executable} -S
+                import os
+                import sys
+
+                os.execv({str(uv)!r}, [{str(uv)!r}, "--offline", *sys.argv[1:]])
+                """),
+        )
+        env["RETICULATE_UV"] = str(offline_uv)
         config = root / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True, exist_ok=True)
         config.write_text(
@@ -118,7 +133,6 @@ def test_prepares_builtin_extensions_without_downloads(
                 {"resolver": {"sandbox": {"network": {"proxy": {"domains": {}}}}}}
             )
         )
-        env["UV_OFFLINE"] = "1"
         with sql_client(binary, execution, env, root, arguments=arguments) as client:
             client.expect(
                 "42\n",
@@ -134,7 +148,8 @@ def test_prepares_builtin_extensions_without_downloads(
                 "('42',)\n",
                 python="_console.sql_connection().execute('SELECT ?::JSON', [retained]).fetchone()",
             )
-            return client.finish()[3:]
+            assert not list((root / "extensions").glob("**/json.duckdb_extension"))
+            return client.finish()
 
 
 @requires(POSIX, SQL)

@@ -157,9 +157,18 @@ def test_help_lookup_and_capture(binary: Path, execution: Execution) -> Transcri
         assert "https://example.org/console-help" in output, output
         assert "café" in output, output
         assert "\b" not in output, output
-        normalize_trailing_spaces(client)
-        client.expect(output, r="?consolehelp::topic")
-        normalize_trailing_spaces(client)
+        page = normalize_trailing_spaces(client)
+        wait_for_evaluation_output(
+            client,
+            None,
+            "qualified installed help output",
+            completion_timeout_seconds=client.response_timeout,
+            r="?consolehelp::topic",
+        )
+        # Compare complete pages with the same incidental whitespace treatment
+        # used for snapshots, including native blank-line padding.
+        qualified_page = normalize_trailing_spaces(client)
+        assert qualified_page == page, (page, qualified_page)
         client.expect(
             "help capture, aliases, search, and indexes retained\n",
             # fmt: r
