@@ -29,7 +29,7 @@ from support.resolvers import (
     recording_ir_environment,
 )
 from support.suites import run_this_suite
-from boundaries.client_server.python.test_startup import isolated_python
+from support.python import isolated_python
 
 
 def named_requirement_error(requirement: str) -> str:
