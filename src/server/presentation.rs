@@ -2,6 +2,8 @@
 //! Client discovery and truncation rules: docs/TOOL_DESCRIPTIONS.md#deferred-tool-discovery.
 mod requirements;
 mod sections;
+#[cfg(test)]
+mod tests;
 
 use std::sync::Arc;
 
