@@ -1,30 +1,62 @@
 ---
 title: MCP Console
-subtitle: A persistent computational workspace for agents.
+subtitle: Give your agent an interactive workbench for data.
+description: A persistent, sandboxed REPL for AI agents working with data in R, Python, and SQL.
 toc: false
 sidebar: false
 ---
 
-Run R, Python, and SQL through one MCP tool.
-Keep data and models between calls, work across languages, and receive text and plots without filling the model's context with raw output.
+MCP Console provides a live R, Python, and SQL session for data analysis: a place to load data once, explore questions, refine plots, read help, and debug code with the relevant objects still in memory.
+Console brings the interactive tools of a REPL to agents through one compact MCP tool, `send`.
+
+Code runs in an [OS-level sandbox](SANDBOX.md) by default, with controls over filesystem writes and direct network access for long-running and unattended work.
+Automatic environment and package preparation lets you start without a Console configuration file.
 
 ::: {.home-links}
 [Get started](getting-started.qmd){.btn .btn-primary} [Documentation](README.md){.btn .btn-outline-primary}
 :::
 
-## One workspace, three languages
+## Work interactively, keep useful state
 
-Python and SQL work without R.
-With both runtimes available, use reticulate's `r.name` and `py$name` bridges to share objects.
-Sessions support interactive input, package preparation, interruption, and restart.
+Data analysis rarely follows a straight line.
+An agent can keep data, models, and intermediate results in memory, then follow the next useful question instead of rerunning a script from the beginning.
+It can inspect a rendered plot before refining it, or pause in a debugger and evaluate code against live objects.
 
-Read [Working with R, Python, and SQL](BUILTIN_RUNTIME.md), [Configuration](CONFIGURATION.md), or [Recordings and reports](RECORDING.md).
+Long-running computations can continue between tool calls; the agent can collect results later or interrupt the work while keeping the session.
+Output previews limit how much text enters the model's context, while [recordings](RECORDING.md) keep logs and plots available for later inspection.
+
+## R, Python, and SQL, together or separately {#one-workspace-three-languages}
+
+Use the languages a task calls for, individually or in combination.
+The built-in runtimes are embedded in a single worker process, and data can move between languages without intermediate files.
+Explore in one language, query with SQL, and plot in another without rebuilding the dataset at each step.
+See [Working with R, Python, and SQL](BUILTIN_RUNTIME.md).
+
+## Start without a configuration file
+
+Install Console, connect your MCP client, and start working.
+By default, Console prepares a managed Python environment and common data packages, and can resolve additional packages as code needs them.
+You can also [select an existing project environment](CONFIGURATION.md).
+See [Get started](getting-started.qmd) for installation prerequisites and client setup, or [Requirements and environments](REQUIREMENTS.md) for package preparation.
+
+Console uses MCP rather than a provider-specific API.
+Use it with Codex, Claude Code, or another MCP-compatible client without tying the workspace to a model provider.
+
+## Where Console fits
+
+- **Unattended agents:** carry long-running analysis through to results within configured sandbox permissions.
+- **Model evaluations:** give agents a persistent data-analysis environment for realistic evaluation tasks.
+- **Conversational analysis:** let the agent work in its own session while you focus on questions and results, rather than a shared code editor.
+- **Large-data investigations:** load a dataset once and keep intermediate results as new questions arise.
+- **Debugging and package development:** pause execution, inspect live objects, and evaluate code where a failure occurs.
 
 ## Status and trust
 
 Console is a **development preview** for macOS, Linux, and [experimental Windows x64](WINDOWS.md).
 Run it alongside the MCP client on the intended execution host.
 
-The default sandbox restricts writes and direct networking but permits host-file reads, including readable secrets.
+The default sandbox permits regular-file writes only in private temporary storage and restricts direct networking, but permits host-file reads.
+**Readable secrets are not protected.** Project configuration is trusted input and may widen permissions.
 Dependency preparation has a separate policy.
-See [Sandbox and trust](SANDBOX.md).
+Recordings contain input and output without redaction and have no automatic cleanup.
+See [Sandbox and trust](SANDBOX.md) before changing permissions and [Recordings and reports](RECORDING.md) before sharing session files.
