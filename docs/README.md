@@ -29,7 +29,6 @@ Host-specific setup is in [Linux compatibility](LINUX_COMPATIBILITY.md) and [Win
 ## Develop Console
 
 Read [Development](DEVELOPMENT.md) for the local workflow and [Architecture](ARCHITECTURE.md) for state and process ownership.
-[Managed R graphics callbacks](R_GRAPHICS_CALLBACKS.md) explains page and close boundaries and why the C callbacks remain.
 [Relay protocol](RELAY_PROTOCOL.md) and [Worker protocol](WORKER_PROTOCOL.md) are internal integration references, not the public MCP API.
 
 [Tool descriptions](TOOL_DESCRIPTIONS.md) covers agent-facing prose.
