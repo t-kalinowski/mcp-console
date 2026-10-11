@@ -73,6 +73,15 @@ result:
   isError: false
 ---
 send:
+  r: capture.output(utils::vignette(consolehelp::source))
+result:
+  content:
+    - type: text
+      text: |
+        [1] "user vignette"
+  isError: false
+---
+send:
   r: help("topic", package = "consolehelp")
 result:
   content:

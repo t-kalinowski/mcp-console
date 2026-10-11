@@ -309,6 +309,10 @@ def test_documentation_startup_restart_and_overrides(
         client.expect(
             "user vignette\n", r='vignette("source", package = "consolehelp")'
         )
+        client.expect(
+            '[1] "user vignette"\n',
+            r="capture.output(utils::vignette(consolehelp::source))",
+        )
         client.expect("user pager\n", r='help("topic", package = "consolehelp")')
         client.send(control="restart")
         client.expect(

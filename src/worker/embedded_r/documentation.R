@@ -40,10 +40,21 @@ base::local(
       base::invisible(x)
     }
 
-    # capture.output() can dispatch in utils' namespace instead of the S3 table.
+    # capture.output() can dispatch in utils' namespace. Follow S3 overrides there.
     utils_namespace <- base::asNamespace("utils")
     base::unlockBinding("print.vignette", utils_namespace)
-    base::assign("print.vignette", print_vignette, envir = utils_namespace)
+    base::assign(
+      "print.vignette",
+      function(x, ...) {
+        method <- utils::getS3method(
+          "print",
+          "vignette",
+          envir = base::baseenv()
+        )
+        method(x, ...)
+      },
+      envir = utils_namespace
+    )
     base::lockBinding("print.vignette", utils_namespace)
     base::registerS3method(
       "print",
