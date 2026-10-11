@@ -17,7 +17,6 @@ from support.r import r_test_environment
 from support.records import Transcript
 from support.requirements import (
     NATIVE_EURO_LOCALE,
-    POSIX,
     R,
     native_euro_locale,
     r_french_messages,
@@ -92,8 +91,7 @@ def rendered_mean_help(environment: dict[str, str], rscript: Path) -> str:
     )
 
 
-# Native Windows has a GUI default pager; the shared case uses the scoped pager.
-@requires(R, POSIX)
+@requires(R)
 @executions(RUNTIME)
 def test_reads_installed_topic_with_default_pager(
     binary: Path, execution: Execution
@@ -116,8 +114,7 @@ def test_reads_installed_topic_with_default_pager(
         assert "package:base" in text and "Arithmetic Mean" in text, text
         assert "Examples:" in text, text
         assert "[running" not in text and "[input" not in text, text
-        # R's default file.show pager adds a newline after each rendered file.
-        assert text == reference + "\n", repr(text)
+        assert text == reference, repr(text)
         client.transcript[-1]["result"]["content"][0]["text"] = (
             "Installed base::mean text matches Rscript reference.\n"
         )
@@ -135,7 +132,7 @@ def test_reads_installed_topics_and_discovers_candidates(
     reference = rendered_mean_help(environment, rscript)
     with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
-        # Cover the native default (including Windows' GUI pager), then a
+        # Cover Console's default text pager, then a
         # custom viewer that must not be invoked by explicit retrieval.
         for setup in (
             # fmt: r
