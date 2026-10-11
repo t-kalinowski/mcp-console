@@ -30,7 +30,7 @@ The whole cell is parsed before evaluation, so a parse error runs none of it.
 Evaluation or print errors preserve earlier effects and normally leave the worker usable.
 
 R owns its normal startup files and workspace restoration; see [Native R startup](CONFIGURATION.md#native-r-startup).
-Console supplies transport, interrupt, and graphics integration.
+Console supplies transport, interrupt, graphics, and documentation output integration.
 R event handlers, including `later` callbacks, can run while idle and produce output collected by a later call.
 
 Use ordinary package-loading operations.
@@ -39,8 +39,27 @@ A sandboxed R worker also has a temporary writable library; manual installations
 
 ### Installed documentation
 
-Use the [R help recipes](R_HELP.md) for a qualified lookup of installed documentation through an R cell, with a scoped text pager on Windows.
-Optional additions cover capture, installed versions, candidate searches, package indexes, and precise paging without a browser or interactive help menu.
+The [R help recipes](R_HELP.md) provide bounded examples for qualified lookups, capture, installed versions, candidate searches, package indexes, and precise paging.
+
+Use ordinary R help calls such as `?stats::lm`, `help("lm", package = "stats")`, `??lm`, or `help.search("linear models")`.
+Help pages, search results, package indexes, and vignette listings print through Console's text output.
+R retains its lookup and ambiguous-topic selection behavior; answer a selection prompt through `stdin`.
+
+Capture a long page and print the lines you need:
+
+```r
+text <- capture.output(print(?stats::lm))
+writeLines(text[80:120])
+```
+
+`vignette("grid", package = "grid")` prints the installed vignette source, including its prose and code.
+Assignment stays quiet, so you can retain the ordinary vignette object and print it later.
+Source must be installed and encoded as UTF-8 or ASCII; missing source is an error.
+Console does not render HTML, Markdown, or PDF vignettes, or execute their source.
+Generated results and figures are absent from this source view.
+
+Console installs text help and pager defaults after native R startup, once per worker.
+Later changes to R options or print methods remain in effect until restart.
 
 ## Python
 

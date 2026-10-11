@@ -59,6 +59,10 @@ Custom workers remain lazy.
 
 Transport readiness connects command, input, output, and resolver services before built-in interpreter bootstrap.
 It does not mean either interpreter is initialized.
+Unchanged requirements do not wait for bootstrap.
+When R is available, changed requirements wait for built-in bootstrap before reserving environment changes, including replacement of an unused worker.
+This prevents retirement from interrupting a native R startup attempt that began after replacement was selected.
+Python-only workers can replace an unused blocked bootstrap because they cannot enter native R startup.
 Early cells reserve the ordinary evaluation slot; there is no queue.
 Cancelling a call's wait does not cancel shared startup or replay an admitted cell.
 
@@ -94,6 +98,9 @@ An evaluation, input write, control target, resolver callback, candidate, and co
 Old work must never reach or commit into a replacement.
 
 A cell is admitted once.
+Its retained server admission owner exists before a worker does and records pending, dispatched, or withheld code separately from the worker's bootstrap receipt.
+Worker terminal receipts or terminal generation failure settle execution; output observation grace and response delivery do not.
+Completed but unclaimed responses retain the ordinary cell slot until collected.
 Control-and-cell calls retain that admission across their ordered steps.
 Restart input/code targets only the replacement; an interrupt's follow-up cannot silently migrate after a failure.
 [Send operations](SEND_OPERATIONS.md) owns the public ordering and partial-effect rules.
@@ -102,6 +109,10 @@ Restart prepares a changed environment before retiring the current worker.
 Failure before acceptance preserves the old declaration and worker.
 Failure after retirement cannot restore live state.
 An established worker failure can trigger one replacement attempt, but never replay of the failed cell or input.
+
+Interrupt selection retains one resolver operation, startup admission, or worker connection and generation through acknowledgment and observation.
+A selected resolver that already completed does not authorize selecting another target.
+Automatic replacement can reuse a generation, so bundled follow-up work also checks the selected connection and prior cell outcome.
 
 ## Preparation and activation
 
