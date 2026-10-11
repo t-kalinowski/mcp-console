@@ -2035,8 +2035,7 @@ runner: orphan
 
 
 class TranscriptDiscoveryTests(TranscriptRunnerFixture):
-    @unittest.skipUnless(POSIX.available, "requires a POSIX executable script and FIFO")
-    def test_help_discovery_bounds_r_home_lookup(self) -> None:
+    def prepare_help_suite(self) -> str:
         shutil.copytree(
             ROOT / "tests/support",
             self.root / "tests/support",
@@ -2047,186 +2046,141 @@ class TranscriptDiscoveryTests(TranscriptRunnerFixture):
         destination = self.boundaries / f"{suite}.py"
         destination.parent.mkdir(parents=True)
         shutil.copy2(RUNNER.parent / f"{suite}.py", destination)
+        return suite
+
+    @unittest.skipUnless(POSIX.available, "requires POSIX executable scripts")
+    def test_help_discovery_does_not_launch_r(self) -> None:
+        suite = self.prepare_help_suite()
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
         commands = self.root / "commands"
         commands.mkdir()
-        launcher = commands / "R"
-        launcher.write_text(
-            f"#!{sys.executable}\n"
-            # fmt: python
-            + code("""
-                import os
-                import signal
-                import sys
+        selected_home = self.root / "selected-r"
+        selected_bin = selected_home / "bin"
+        selected_bin.mkdir(parents=True)
+        receipt = self.root / "r-launched"
+        for launcher in (commands / "R", selected_bin / "Rscript"):
+            launcher.write_text(
+                f"#!{sys.executable}\n"
+                # fmt: python
+                + code("""
+                    import os
+                    import sys
+                    from pathlib import Path
 
-                assert sys.argv[1:] == ["RHOME"], sys.argv
-                with open(os.environ["MCP_CONSOLE_TEST_R_STARTED"], "wb", buffering=0) as started:
-                    started.write(b"1")
-                signal.pause()
-                """),
-            encoding="utf-8",
-        )
-        launcher.chmod(0o755)
-        checkpoint = self.root / "r-started"
-        os.mkfifo(checkpoint)
-        environment = os.environ | {
-            "PATH": os.pathsep.join((str(commands), os.environ["PATH"])),
+                    with Path(os.environ["MCP_CONSOLE_TEST_R_RECEIPT"]).open("a") as receipt:
+                        receipt.write(Path(sys.argv[0]).name + "\\n")
+                    if sys.argv[1:] == ["RHOME"]:
+                        print(os.environ["MCP_CONSOLE_TEST_R_HOME"])
+                    else:
+                        print("Index :")
+                    """),
+                encoding="utf-8",
+            )
+            launcher.chmod(0o755)
+        environment = self.script_environment(commands) | {
             "MCP_CONSOLE_HOME": str(self.root / "home"),
-            "MCP_CONSOLE_TEST_R_STARTED": str(checkpoint),
+            "MCP_CONSOLE_TEST_R_RECEIPT": str(receipt),
+            "MCP_CONSOLE_TEST_R_HOME": str(selected_home),
         }
-        environment.pop("R_HOME", None)
-        for arguments in (("--list", suite), ("--full", "--list")):
-            with self.subTest(arguments=arguments):
-                started = os.open(checkpoint, os.O_RDWR | os.O_NONBLOCK)
-                process = subprocess.Popen(
-                    [sys.executable, self.boundaries / "_run.py", *arguments],
-                    cwd=self.root,
-                    env=environment,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                )
-                try:
-                    ready, _, _ = select.select([started], [], [], 10)
-                    self.assertTrue(ready, "discovery did not start R-home lookup")
-                    self.assertEqual(os.read(started, 1), b"1")
-                    try:
-                        stdout, stderr = process.communicate(timeout=15)
-                    except subprocess.TimeoutExpired:
-                        self.fail("gated R-home lookup blocked test discovery")
-                    self.assertEqual(process.returncode, 0, stderr)
-                    self.assertIn(f"{suite}::reads_translated_package_index", stdout)
-                    if "--full" in arguments:
-                        self.assertIn(
-                            "client_server/server/test_tools::selected", stdout
+        for explicit_home in (False, True):
+            for declared in (False, True):
+                selected_environment = environment.copy()
+                selected_environment.pop("R_HOME", None)
+                selected_environment.pop("MCP_CONSOLE_TEST_R_FRENCH_MESSAGES", None)
+                if explicit_home:
+                    selected_environment["R_HOME"] = str(selected_home)
+                if declared:
+                    selected_environment["MCP_CONSOLE_TEST_R_FRENCH_MESSAGES"] = "1"
+                for arguments in (("--list", suite), ("--full", "--list")):
+                    with self.subTest(
+                        home=explicit_home, declared=declared, arguments=arguments
+                    ):
+                        receipt.unlink(missing_ok=True)
+                        result = subprocess.run(
+                            [scripts / "test", *arguments],
+                            cwd=self.root,
+                            env=selected_environment,
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
                         )
-                    with self.assertRaises(ProcessLookupError):
-                        os.killpg(process.pid, 0)
-                finally:
-                    with suppress(ProcessLookupError):
-                        os.killpg(process.pid, signal.SIGKILL)
-                    process.communicate(timeout=5)
-                    os.close(started)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stderr, "")
+                        self.assertEqual(
+                            [
+                                line
+                                for line in result.stdout.splitlines()
+                                if line.startswith(suite)
+                            ],
+                            [
+                                f"{suite}::{case}"
+                                for case in (
+                                    "reads_installed_topic_with_default_pager",
+                                    "reads_installed_topics_and_discovers_candidates",
+                                    "reads_translated_package_index",
+                                    "bounds_pages_and_reports_missing_help_without_preparation",
+                                    "preserves_utf8_in_compact_outputs",
+                                )
+                            ],
+                        )
+                        if "--full" in arguments:
+                            self.assertIn(
+                                "client_server/server/test_tools::selected",
+                                result.stdout,
+                            )
+                        self.assertFalse(
+                            receipt.exists(),
+                            receipt.read_text() if receipt.exists() else "",
+                        )
 
     def test_help_discovery_preserves_broken_r_selections(self) -> None:
-        shutil.copytree(
-            ROOT / "tests/support",
-            self.root / "tests/support",
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("__pycache__"),
-        )
-        suite = "client_server/r/test_help_recipes"
-        destination = self.boundaries / f"{suite}.py"
-        destination.parent.mkdir(parents=True)
-        shutil.copy2(RUNNER.parent / f"{suite}.py", destination)
+        suite = self.prepare_help_suite()
         self.suite.write_text(
             PUBLIC_SUITE
             + "\nfrom support.requirements import R, requires\n"
             + "test_selected = requires(R)(test_selected)\n",
             encoding="utf-8",
         )
-        selected_home = self.root / "selected-r"
-        selected_bin = selected_home / "bin"
-        selected_bin.mkdir(parents=True)
         commands = self.root / "commands"
         commands.mkdir()
-        # uv rejects R's arguments and needs no adjacent Python DLLs on Windows.
-        executable = shutil.which("uv")
-        self.assertIsNotNone(executable)
-        shutil.copy2(
-            executable,
-            selected_bin / ("Rscript.exe" if os.name == "nt" else "Rscript"),
-        )
-        shutil.copy2(executable, commands / ("R.exe" if os.name == "nt" else "R"))
+        # A present but unusable PATH selection must remain R-eligible.
+        (commands / ("R.exe" if os.name == "nt" else "R")).touch()
         environment = os.environ | {"MCP_CONSOLE_HOME": str(self.root / "home")}
-        path_selection = environment.copy()
-        path_selection.pop("R_HOME", None)
-        path_selection["PATH"] = os.pathsep.join((str(commands), environment["PATH"]))
+        environment.pop("R_HOME", None)
+        environment.pop("MCP_CONSOLE_TEST_R_FRENCH_MESSAGES", None)
+        environment["PATH"] = str(commands)
         marker = self.root / "selected.marker"
-        selections = [
-            ("missing R_HOME", environment | {"R_HOME": str(self.root / "missing-r")}),
-            ("failing Rscript", environment | {"R_HOME": str(selected_home)}),
-            ("failing R on PATH", path_selection),
-        ]
-        # Executable script fixtures require POSIX shebangs; the launch-failure
-        # selections above also exercise native Windows discovery.
-        if POSIX.available:
-            invalid_home = self.root / "invalid-r"
-            invalid_bin = invalid_home / "bin"
-            invalid_bin.mkdir(parents=True)
-            invalid_commands = self.root / "invalid-commands"
-            invalid_commands.mkdir()
-            for executable in (invalid_bin / "Rscript", invalid_commands / "R"):
-                executable.write_text(
-                    f"#!{sys.executable}\n"
-                    # fmt: python
-                    + code(r"""
-                        import os
-
-                        os.write(int(os.environ["MCP_CONSOLE_TEST_PROBE_STREAM"]), b"\xff")
-                        """),
-                    encoding="utf-8",
-                )
-                executable.chmod(0o755)
-            for stream in (1, 2):
-                invalid_environment = environment | {
-                    "PYTHONUTF8": "1",
-                    "MCP_CONSOLE_TEST_PROBE_STREAM": str(stream),
-                }
-                invalid_path = invalid_environment.copy()
-                invalid_path.pop("R_HOME", None)
-                invalid_path["PATH"] = os.pathsep.join(
-                    (str(invalid_commands), environment["PATH"])
-                )
-                selections.extend(
-                    [
-                        (
-                            f"undecodable Rscript stream {stream}",
-                            invalid_environment | {"R_HOME": str(invalid_home)},
-                        ),
-                        (f"undecodable R on PATH stream {stream}", invalid_path),
-                    ]
-                )
-        for selection, selected_environment in selections:
+        for selection in (
+            {"R_HOME": str(self.root / "missing-r")},
+            {"R_HOME": ""},
+            {},
+            {
+                "R_HOME": str(self.root / "missing-r"),
+                "MCP_CONSOLE_TEST_R_FRENCH_MESSAGES": "true",
+            },
+            {"MCP_CONSOLE_TEST_R_FRENCH_MESSAGES": "1"},
+        ):
             with self.subTest(selection=selection):
-                arguments = [sys.executable, self.boundaries / "_run.py"]
-                listed = subprocess.run(
-                    [*arguments, "--list", suite],
-                    cwd=self.root,
-                    env=selected_environment,
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                self.assertEqual(listed.returncode, 0, listed.stderr)
-                self.assertEqual(
-                    listed.stdout.splitlines(),
-                    [
-                        f"{suite}::{case}"
-                        for case in (
-                            "reads_installed_topic_with_default_pager",
-                            "reads_installed_topics_and_discovers_candidates",
-                            "reads_translated_package_index",
-                            "bounds_pages_and_reports_missing_help_without_preparation",
-                            "preserves_utf8_in_compact_outputs",
-                        )
-                    ],
-                )
                 marker.unlink(missing_ok=True)
                 result = subprocess.run(
                     [
-                        *arguments,
+                        sys.executable,
+                        self.boundaries / "_run.py",
                         f"{suite}::reads_translated_package_index",
                         "client_server/server/test_tools::selected",
                     ],
                     cwd=self.root,
-                    env=selected_environment,
+                    env=environment | selection,
                     capture_output=True,
                     text=True,
                     timeout=10,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(": skipped; R French messages:", result.stdout)
+                self.assertIn("R_HOME", result.stdout)
+                self.assertIn("MCP_CONSOLE_TEST_R_FRENCH_MESSAGES=1", result.stdout)
                 self.assertTrue(marker.exists(), result.stdout)
 
     def test_shared_direct_handshake_precedes_equal_variants(self) -> None:

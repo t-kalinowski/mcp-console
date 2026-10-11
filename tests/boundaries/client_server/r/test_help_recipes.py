@@ -18,8 +18,8 @@ from support.records import Transcript
 from support.requirements import (
     NATIVE_EURO_LOCALE,
     R,
+    R_FRENCH_MESSAGES,
     native_euro_locale,
-    r_french_messages,
     requires,
 )
 from support.suites import run_this_suite
@@ -251,7 +251,7 @@ def test_reads_installed_topics_and_discovers_candidates(
         return client.finish()
 
 
-@requires(R, r_french_messages())
+@requires(R, R_FRENCH_MESSAGES)
 @executions(RUNTIME)
 def test_reads_translated_package_index(
     binary: Path, execution: Execution

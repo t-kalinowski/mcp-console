@@ -47,6 +47,14 @@ R = Requirement(
     ),
     "requires R_HOME or R on PATH",
 )
+# Discovery reads a declaration; the Console case verifies actual translations.
+R_FRENCH_MESSAGES = Requirement(
+    "R French messages",
+    bool(os.environ.get("R_HOME"))
+    and os.environ.get("MCP_CONSOLE_TEST_R_FRENCH_MESSAGES") == "1",
+    "requires explicit R_HOME and MCP_CONSOLE_TEST_R_FRENCH_MESSAGES=1 "
+    "for a known French-translation-enabled R message locale",
+)
 SANDBOX = Requirement(
     "sandbox",
     sys.platform in {"darwin", "linux"},
@@ -194,34 +202,6 @@ def native_euro_locale() -> Requirement:
         locale.setlocale(locale.LC_CTYPE, previous)
     return Requirement(
         "native euro locale", available, f"requires {NATIVE_EURO_LOCALE}"
-    )
-
-
-def r_french_messages() -> Requirement:
-    available = False
-    if R.available:
-        from support.r import r_test_environment
-
-        try:
-            environment, rscript = r_test_environment()
-            result = subprocess.run(
-                [rscript, "--vanilla", "-"],
-                input='writeLines(gettext("Index:", domain = "R-base"))\n',
-                env=environment | {"LANGUAGE": "fr"},
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=10,
-            )
-        except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
-            # Leave broken selections to the R cases, not this optional probe.
-            pass
-        else:
-            available = result.stdout.strip() == "Index :"
-    return Requirement(
-        "R French messages",
-        available,
-        "requires French R-base translations in the selected R message locale",
     )
 
 

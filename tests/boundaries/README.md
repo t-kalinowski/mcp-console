@@ -66,6 +66,21 @@ User cancellation still interrupts active cases and waits for their cleanup.
 ## Requirements and execution modes
 
 Declare capabilities beside cases with `@requires(...)` from `support.requirements`; platform detection belongs in test support.
+
+The optional French R-help index case requires `R_FRENCH_MESSAGES`.
+Set `MCP_CONSOLE_TEST_R_FRENCH_MESSAGES=1` with a nonempty `R_HOME` only when that installation supports French messages in the selected message locale.
+Discovery reads this declaration without launching R; the real Console case asserts the exact French translation before retrieving the index.
+An incorrect declaration fails the case rather than skipping it.
+For a known installation on macOS/Linux with `C.UTF-8` available, run:
+
+```sh
+R_HOME=/path/to/R MCP_CONSOLE_TEST_R_FRENCH_MESSAGES=1 LC_ALL=C.UTF-8 scripts/test client_server/r/test_help_recipes
+```
+
+The case sets `LANGUAGE=fr` before starting Console.
+Use an installed message locale that enables translations; `C` and `POSIX` do not.
+Without the declaration or with PATH-only R selection, the case reports a capability skip; ordinary R cases remain eligible, including broken selections.
+
 Use explicit execution fixtures:
 
 ```python
