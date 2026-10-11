@@ -29,6 +29,17 @@ fn enabled_by_default() -> bool {
 }
 
 impl Tool {
+    pub fn validate(&self, languages: Option<crate::cell::Languages>) -> Result<(), String> {
+        if self.parameters.is_empty() {
+            return Ok(());
+        }
+        let languages = match languages {
+            Some(languages) => languages,
+            None => crate::cell::Languages::from_environment()?,
+        };
+        self.configure_schema(&mut crate::server::parameter_schema(languages))
+    }
+
     pub fn enabled(&self, field: &str) -> bool {
         self.parameters.get(field).is_none_or(|field| field.enabled)
     }

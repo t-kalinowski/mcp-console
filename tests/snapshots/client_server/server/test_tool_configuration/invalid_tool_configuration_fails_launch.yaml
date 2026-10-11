@@ -3,5 +3,6 @@ configuration:
   parameters:
     missing:
       enabled: false
-stderr: |
-  tool.parameters.missing: unknown or unavailable parameter
+stderr: >
+  configuration with CLI overrides: tool.parameters.missing: unknown or
+  unavailable parameter

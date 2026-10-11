@@ -277,6 +277,10 @@ pub fn discover(
             Ok(languages)
         })
         .transpose()?;
+    project
+        .tool
+        .validate(languages)
+        .map_err(|error| format!("{name}: {error}"))?;
     let sandbox_requested = project.sandbox.is_some();
     let resolver_sandbox_requested = project.resolver.sandbox.is_some();
     if cfg!(windows) && resolver_sandbox_requested {

@@ -6,5 +6,6 @@ configuration:
         missing:
           description: unused
 stderr: >
+  configuration with CLI overrides:
   tool.parameters.requirements.parameters.missing: unknown or unavailable
   parameter

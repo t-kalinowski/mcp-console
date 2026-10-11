@@ -151,6 +151,7 @@ Generated timeout guidance follows this choice.
 When hiding other parameters, supply matching description overrides if their generated prose refers to the hidden fields.
 
 Parameter settings apply after `languages`; unknown or unavailable names and nested parameters under scalar fields fail launch.
+Both `serve` and ordinary `sandbox` launches validate these settings before starting a worker or target process.
 These settings customize descriptions and visibility, while parameter names, types, constraints, and runtime defaults retain their existing contracts.
 They use the ordinary configuration merge rules and are captured once per server connection.
 To hide only the timeout through the command line:

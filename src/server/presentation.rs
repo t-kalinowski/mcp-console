@@ -47,46 +47,60 @@ impl ConsoleServer {
                 .unwrap_or_else(|| profile.description(&profile.summary(), policy, no_sandbox))
                 .into(),
         );
-        let schema = Arc::make_mut(&mut send.attr.input_schema);
+        let mut schema = parameter_schema(languages);
         let properties = schema
             .get_mut("properties")
             .and_then(Value::as_object_mut)
             .expect("send schema must have object properties");
-        let control = properties
-            .get_mut("control")
-            .and_then(Value::as_object_mut)
-            .expect("send control schema must be an object");
-        control.insert("type".to_string(), Value::String("string".to_string()));
-        if let Some(values) = control.get_mut("enum").and_then(Value::as_array_mut) {
-            values.retain(|value| !value.is_null());
-        }
-        // Omission carries meaning for get/reset. Do not advertise payload defaults.
-        for property in properties
-            .get_mut("requirements")
-            .and_then(|requirements| requirements.get_mut("properties"))
-            .and_then(Value::as_object_mut)
-            .expect("requirements schema properties")
-            .values_mut()
-        {
-            property
-                .as_object_mut()
-                .expect("requirement property schema")
-                .remove("default");
-        }
-        // Configured fields stay visible even when an interpreter is unavailable.
-        for (field, enabled) in [
-            ("r", languages.r),
-            ("python", languages.python),
-            ("sql", languages.sql),
-        ] {
-            if !enabled {
-                properties.shift_remove(field);
-            }
-        }
         profile.configure_fields(properties);
-        tool.configure_schema(schema)?;
+        tool.configure_schema(&mut schema)?;
+        send.attr.input_schema = Arc::new(schema);
         Ok((router, instructions))
     }
+}
+
+/// Shared by configuration discovery and MCP presentation so both validate the same fields.
+pub(crate) fn parameter_schema(languages: Languages) -> Map<String, Value> {
+    let mut schema =
+        (*rmcp::handler::server::common::schema_for_input::<super::arguments::SendArguments>()
+            .expect("send arguments must have a valid input schema"))
+        .clone();
+    let properties = schema
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+        .expect("send schema must have object properties");
+    let control = properties
+        .get_mut("control")
+        .and_then(Value::as_object_mut)
+        .expect("send control schema must be an object");
+    control.insert("type".to_string(), Value::String("string".to_string()));
+    if let Some(values) = control.get_mut("enum").and_then(Value::as_array_mut) {
+        values.retain(|value| !value.is_null());
+    }
+    // Omission carries meaning for get/reset. Do not advertise payload defaults.
+    for property in properties
+        .get_mut("requirements")
+        .and_then(|requirements| requirements.get_mut("properties"))
+        .and_then(Value::as_object_mut)
+        .expect("requirements schema properties")
+        .values_mut()
+    {
+        property
+            .as_object_mut()
+            .expect("requirement property schema")
+            .remove("default");
+    }
+    // Configured fields stay visible even when an interpreter is unavailable.
+    for (field, enabled) in [
+        ("r", languages.r),
+        ("python", languages.python),
+        ("sql", languages.sql),
+    ] {
+        if !enabled {
+            properties.shift_remove(field);
+        }
+    }
+    schema
 }
 
 impl Profile {

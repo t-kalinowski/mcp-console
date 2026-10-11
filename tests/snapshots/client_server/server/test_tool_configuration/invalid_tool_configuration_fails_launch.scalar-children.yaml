@@ -5,5 +5,6 @@ configuration:
       parameters:
         missing:
           description: unused
-stderr: |
-  tool.parameters.timeout_ms.parameters: this parameter has no nested parameters
+stderr: >
+  configuration with CLI overrides: tool.parameters.timeout_ms.parameters:
+  this parameter has no nested parameters
