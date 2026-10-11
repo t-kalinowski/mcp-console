@@ -97,6 +97,7 @@ def test_reads_installed_topic_with_default_pager(
     binary: Path, execution: Execution
 ) -> Transcript:
     environment, rscript = r_test_environment()
+    environment["LANGUAGE"] = "en"
     reference = rendered_mean_help(environment, rscript)
     with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
@@ -129,6 +130,7 @@ def test_reads_installed_topics_and_discovers_candidates(
     quick_topic = recipe("quick-topic")
     definitions = recipe("definitions")
     environment, rscript = r_test_environment()
+    environment["LANGUAGE"] = "en"
     reference = rendered_mean_help(environment, rscript)
     with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
@@ -283,7 +285,9 @@ def test_bounds_pages_and_reports_missing_help_without_preparation(
     binary: Path, execution: Execution
 ) -> Transcript:
     definitions = recipe("definitions")
-    with McpClient(binary, execution.serve()) as client:
+    environment, _ = r_test_environment()
+    environment["LANGUAGE"] = "en"
+    with McpClient(binary, execution.serve(), environment) as client:
         client.initialize_and_list_tools()
         client.expect(r=definitions)
         client.expect(
@@ -388,6 +392,7 @@ def test_preserves_utf8_in_compact_outputs(
     binary: Path, execution: Execution
 ) -> Transcript:
     environment, rscript = r_test_environment()
+    environment["LANGUAGE"] = "en"
     fixture = Path(__file__).resolve().parents[3] / "fixtures/r_help"
     with tempfile.TemporaryDirectory() as temporary_directory:
         directory = Path(temporary_directory)
