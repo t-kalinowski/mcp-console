@@ -20,7 +20,9 @@ send:
   r: |
     text <- readLines(pending$files, encoding = "UTF-8")
     stopifnot(any(grepl("42 — evaluated result", text, fixed = TRUE)))
-    if (pending$delete.file) unlink(pending$files)
+    if (pending$delete.file) {
+      unlink(pending$files)
+    }
     stopifnot(!file.exists(pending$files))
     options(pager = function(files, header, title, delete.file) {
       failed <<- files
