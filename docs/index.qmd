@@ -21,9 +21,12 @@ By default, Console prepares environments and packages automatically; no Console
 ## Work in a persistent session
 
 Console provides a persistent session—a REPL—through one MCP tool, `send`.
-The agent can:
 
-- Inspect plots and refine code using objects already in memory.
+For example, during exploratory data analysis, the agent can load a dataset, fit a model, and plot the residuals.
+If something looks wrong, it can inspect intermediate results or refine the plot using the data and model already in memory.
+
+The agent can also:
+
 - Read help, pause in a debugger, and evaluate code against live objects.
 - Run long computations across calls and collect output as it arrives.
 - Interrupt work and keep the session, or [restart it](SEND_OPERATIONS.md#explicit-restart) to clear live objects and start fresh.
