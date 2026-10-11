@@ -133,27 +133,54 @@ Resolve configuration once to inspect the generated tool text and all parameter 
 ```r
 config <- resolve_console_config(ConsoleConfig(languages = "r"))
 print(config)
-config$tool$description <- "Run one R cell in a persistent workbench."
-config$tool$parameters$timeout_ms$enabled <- FALSE
-config$tool$parameters$r$description <- "Evaluate a complete R expression."
+config@tool@description <- "Run one R cell in a persistent workbench."
+config@tool@parameters$timeout_ms@enabled <- FALSE
+config@tool@parameters$r@description <- "Evaluate a complete R expression."
 tool <- console_tool(config = config)
 ```
 
-The result is a named list with ordinary `$` editing; `print()` shows its full contents.
+The result is an ordinary S7 `ConsoleConfig`, with nested `ToolConfig` and `ToolParameterConfig` objects; `print()` shows its full contents without truncating descriptions.
 The selected native executable supplies the defaults and schema without starting interpreters or installing packages.
-Pass `path`, `version`, and `project` to `resolve_console_config()` when needed; the result retains those launch choices, and `console_tool(config = config)` does not rediscover global or project configuration.
+Materialization sets `config@discovery` to `NULL`, so `console_tool(config = config)` does not rediscover global or project configuration.
+Executable and launch-directory choices remain arguments to each call: supply `path`, `version`, or `project` to both materialization and launch when needed.
+Use the same project so relative permission paths keep their meaning.
 File discovery remains opt-in through `ConsoleConfig(discovery = ConfigDiscovery())`.
 
 `schema` records read-only parameter types and constraints, with nested fields under `parameters`.
 Use `enabled = FALSE` to hide a field; assigning `NULL` removes an override and restores its default.
 Saved descriptions are literal: changing visibility does not regenerate them.
 Runtime-dependent selections, package defaults, and inherited environment variables remain launch policies.
-`as.list(config)` exposes JSON-ready application settings without the retained executable, project, or sandbox launch flag.
+`as.list(config)` exposes JSON-ready application settings; `config@sandbox` retains `FALSE` for host execution.
+Constructed and materialized configurations use the same validation and command-line override transport.
 
-`tool$instructions` is server guidance returned during MCP initialization, which some clients use for deferred tool discovery.
-`tool$description` and parameter descriptions arrive through `tools/list`.
+This replaces the earlier list result: use `@` for S7 properties and `$` for entries in the named `parameters` list, as above.
+Calls that previously relied on the result retaining `path` or `project` must now supply those launch arguments explicitly:
+
+```r
+config <- resolve_console_config(path = binary, project = project)
+tool <- console_tool(config = config, path = binary, project = project)
+```
+
+`config@tool@instructions` is server guidance returned during MCP initialization, which some clients use for deferred tool discovery.
+`config@tool@description` and parameter descriptions arrive through `tools/list`.
 The ellmer adapter uses the latter tool definition and does not automatically insert server instructions into the chat prompt.
 See [tool presentation and lifecycle](https://t-kalinowski.github.io/mcp-console/CONFIGURATION.html#tool-descriptions-and-parameters).
+
+Python fallback policies and SQL startup source use the same typed constructors when supplied directly or returned by materialization:
+
+```r
+ConsoleConfig(
+  python = FirstAvailablePython(list(
+    ExistingPython(".venv"),
+    "active_venv",
+    ManagedPython(packages = character())
+  )),
+  startup = StartupConfig(
+    language = "python",
+    code = "import sqlite3; _console.sql_connection(sqlite3.connect(':memory:'))"
+  )
+)
+```
 
 ## Sandbox policies
 

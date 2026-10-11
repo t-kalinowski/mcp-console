@@ -17,7 +17,8 @@ ConsoleConfig(
   cache = NULL,
   environment = NULL,
   inherit_environment = NULL,
-  tool = NULL
+  tool = NULL,
+  startup = NULL
 )
 }
 \arguments{
@@ -28,7 +29,8 @@ Both default to \code{TRUE} when \code{ConfigDiscovery()} is explicitly construc
 
 \item{r}{\code{NULL} or an \code{\link[=RConfig]{RConfig()}}.}
 
-\item{python}{\code{NULL}, an \code{\link[=ExistingPython]{ExistingPython()}}, or a \code{\link[=ManagedPython]{ManagedPython()}}.}
+\item{python}{\code{NULL}, an \code{\link[=ExistingPython]{ExistingPython()}}, a \code{\link[=ManagedPython]{ManagedPython()}}, or a
+\code{\link[=FirstAvailablePython]{FirstAvailablePython()}}.}
 
 \item{resolver}{\code{NULL} or a \code{\link[=ResolverConfig]{ResolverConfig()}}.}
 
@@ -48,6 +50,8 @@ of the trusted launch environment. Console retains its owned assignments.}
 
 \item{tool}{\code{NULL} or a \code{\link[=ToolConfig]{ToolConfig()}} customizing descriptions and parameter
 visibility.}
+
+\item{startup}{\code{NULL} or a \code{\link[=StartupConfig]{StartupConfig()}} selecting a SQL connection.}
 }
 \value{
 An S7 configuration object. The constructor is also its S7 class.

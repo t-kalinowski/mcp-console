@@ -146,6 +146,58 @@ ManagedPython <- S7::new_class(
   )
 )
 
+#' @rdname PythonConfig
+#' @param first_available A nonempty list of [ExistingPython()] candidates,
+#'   optionally one `"active_venv"` and a final [ManagedPython()] candidate.
+#'   Only absent paths are skipped; present but unusable environments fail.
+#' @export
+FirstAvailablePython <- S7::new_class(
+  "FirstAvailablePython",
+  parent = PythonConfig,
+  properties = list(
+    first_available = S7::new_property(
+      S7::class_list,
+      validator = function(value) {
+        if (
+          !length(value) ||
+            !all(vapply(
+              value,
+              function(candidate) {
+                identical(candidate, "active_venv") ||
+                  S7::S7_inherits(candidate, ExistingPython) ||
+                  S7::S7_inherits(candidate, ManagedPython)
+              },
+              logical(1)
+            ))
+        ) {
+          "must contain ExistingPython(), active_venv, or ManagedPython() candidates"
+        }
+      }
+    )
+  )
+)
+
+#' Configure session startup source
+#'
+#' Pass this object as `ConsoleConfig(startup = StartupConfig(...))` to select
+#' a user-owned SQL connection before the first SQL cell. The source runs once
+#' per worker generation and must select a connection with
+#' `.console$sql_connection()` in R or `_console.sql_connection()` in Python.
+#' Native Console validates source and platform constraints at launch.
+#'
+#' @param language `"r"` or `"python"`, the interpreter running the source.
+#' @param code One string containing startup source.
+#' @inherit ConsoleConfig return
+#' @export
+StartupConfig <- S7::new_class(
+  "StartupConfig",
+  parent = ConfigNode,
+  properties = list(
+    language = config_choice(c("r", "python")),
+    code = config_scalar()
+  )
+)
+
 #' Configure dependency preparation permissions and environment
 #'
 #' Use this object as `ConsoleConfig(resolver = ResolverConfig(...))`. Worker
@@ -218,6 +270,9 @@ config_parameters <- function() {
 #' @param parameters `NULL` or a named list of [ToolParameterConfig()] objects.
 #'   Nest another `parameters` list to configure fields inside an object parameter.
 #' @param enabled `NULL`, `TRUE`, or `FALSE`; controls parameter visibility.
+#' @param schema `NULL` or a JSON-ready list of read-only type and constraint
+#'   metadata populated by [resolve_console_config()]. Native validation rejects
+#'   changes to the parameter's types or constraints.
 #' @inherit ConsoleConfig return
 #' @examples
 #' ConsoleConfig(tool = ToolConfig(
@@ -235,7 +290,8 @@ ToolParameterConfig <- S7::new_class(
   properties = list(
     description = config_description(),
     enabled = config_flag(),
-    parameters = config_parameters()
+    parameters = config_parameters(),
+    schema = NULL | S7::class_list
   )
 )
 
@@ -288,7 +344,9 @@ ToolConfig <- S7::new_class(
 #'
 #' @param discovery `NULL` (no file discovery), or a [ConfigDiscovery()].
 #' @param r `NULL` or an [RConfig()].
-#' @param python `NULL`, an [ExistingPython()], or a [ManagedPython()].
+#' @param python `NULL`, an [ExistingPython()], a [ManagedPython()], or a
+#'   [FirstAvailablePython()].
+#' @param startup `NULL` or a [StartupConfig()] selecting a SQL connection.
 #' @param resolver `NULL` or a [ResolverConfig()].
 #' @param sandbox `NULL`, a [SandboxPolicy()], or `FALSE` for host execution.
 #' @param languages `NULL` or a character vector selecting `"r"`, `"python"`,
@@ -334,7 +392,8 @@ ConsoleConfig <- S7::new_class(
     cache = config_choice(c("console", "host")),
     environment = config_environment(),
     inherit_environment = config_flag(),
-    tool = NULL | ToolConfig
+    tool = NULL | ToolConfig,
+    startup = NULL | StartupConfig
   ),
   validator = function(self) {
     if (
@@ -350,6 +409,22 @@ ConsoleConfig <- S7::new_class(
 S7::method(as.list, ManagedPython) <- function(x, ...) {
   S7::validate(x)
   list(managed = config_mapping(S7::props(x)))
+}
+
+S7::method(print, ConsoleConfig) <- function(x, ...) {
+  cat(
+    "<ConsoleConfig>\n",
+    jsonlite::toJSON(
+      config_mapping(S7::props(x)),
+      auto_unbox = TRUE,
+      null = "null",
+      pretty = TRUE,
+      digits = NA
+    ),
+    "\n",
+    sep = ""
+  )
+  invisible(x)
 }
 
 S7::method(as.list, ConsoleConfig) <- function(x, ...) {

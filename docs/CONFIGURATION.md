@@ -210,7 +210,9 @@ Exported interpreter paths must be representable as UTF-8; other native paths pr
 Changing `languages` may make saved parameter entries unavailable; resolve the desired language selection before editing the tool.
 
 R provides the same workflow through [`resolve_console_config()`](../r/README.md#inspect-and-edit-configuration).
-It returns a printable, editable list and retains the executable, launch directory, and sandbox choice for `console_tool(config = config)`.
+It returns an ordinary S7 `ConsoleConfig` with populated nested objects, full printing, and file discovery disabled.
+Edit properties with `@`; use `$` to select named parameter entries.
+The sandbox choice remains in the configuration, while executable and launch-directory choices remain explicit arguments to each call.
 
 ## Python environment selection
 

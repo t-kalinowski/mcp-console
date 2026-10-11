@@ -37,6 +37,8 @@ reference:
     - RConfig
     - ExistingPython
     - ManagedPython
+    - FirstAvailablePython
+    - StartupConfig
     - ResolverConfig
   - title: Sandbox configuration
     contents:

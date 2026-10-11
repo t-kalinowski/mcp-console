@@ -87,6 +87,8 @@ test_that("configuration classes have matching uppercase CamelCase names", {
     "RConfig",
     "ManagedPython",
     "ExistingPython",
+    "FirstAvailablePython",
+    "StartupConfig",
     "ResolverConfig",
     "SandboxPolicy",
     "SandboxFilesystem",
@@ -98,6 +100,33 @@ test_that("configuration classes have matching uppercase CamelCase names", {
     class <- getExportedValue("mcp.console", name)
     expect_identical(class@name, name)
   }
+})
+
+test_that("printing ConsoleConfig retains complete descriptions and launch controls", {
+  description <- paste(rep("Complete description.", 50), collapse = "\n")
+  config <- ConsoleConfig(
+    sandbox = FALSE,
+    discovery = ConfigDiscovery(project = FALSE),
+    tool = ToolConfig(description = description)
+  )
+  printed <- capture.output(print(config))
+  expect_identical(printed[[1]], "<ConsoleConfig>")
+  document <- jsonlite::fromJSON(paste(printed[-1], collapse = "\n"))
+  expect_identical(document$tool$description, description)
+  expect_identical(document$sandbox, FALSE)
+  expect_identical(document$discovery, list(global = TRUE, project = FALSE))
+})
+
+test_that("new properties preserve existing positional constructor arguments", {
+  nested <- list(r = ToolParameterConfig(description = "R cell."))
+  parameter <- ToolParameterConfig("Requirements.", FALSE, nested)
+  expect_identical(parameter@parameters, nested)
+  expect_null(parameter@schema)
+  resolver <- ResolverConfig(environment = c(INDEX = "local"))
+  config <- ConsoleConfig(NULL, NULL, NULL, resolver, FALSE)
+  expect_identical(config@resolver, resolver)
+  expect_identical(config@sandbox, FALSE)
+  expect_null(config@startup)
 })
 
 test_that("tool configuration preserves descriptions and nested parameter mappings", {
