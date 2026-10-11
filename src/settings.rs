@@ -189,23 +189,34 @@ pub fn discover(
     read(directory, overrides).map(|(captured, _)| captured)
 }
 
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdapterOverrides {
+    files: Vec<PathBuf>,
+    values: Vec<String>,
+}
+
 pub(crate) fn read(
     directory: &Path,
     overrides: &crate::cli::ConfigOverrides,
 ) -> Result<(Captured, Value), String> {
     // The R adapter transports the same ordered overrides in a file so tool
     // prose and valid startup programs are not bounded by process argv limits.
-    let mut values: Vec<String> = if let Some(path) = &overrides.values_file {
+    let adapter: AdapterOverrides = if let Some(path) = &overrides.values_file {
         let source = std::fs::read(directory.join(path)).map_err(|error| {
             format!("cannot read config overrides '{}': {error}", path.display())
         })?;
         serde_json::from_slice(&source)
             .map_err(|error| format!("invalid config overrides '{}': {error}", path.display()))?
     } else {
-        Vec::new()
+        AdapterOverrides::default()
     };
+    let mut values = adapter.values;
     values.extend(overrides.values.iter().cloned());
-    let mut paths = Vec::new();
+    let mut paths = adapter.files;
+    if !paths.is_empty() && (!overrides.no_config || overrides.config_file.is_some()) {
+        return Err("adapter configuration files require --no-config".into());
+    }
     // Select sources before resolving or inspecting them. Explicit selection and
     // global exclusions must not resolve Console home for configuration discovery.
     if let Some(path) = &overrides.config_file {

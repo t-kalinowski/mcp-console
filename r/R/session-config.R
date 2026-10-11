@@ -327,12 +327,18 @@ ToolConfig <- S7::new_class(
 #' permissions, resolver settings, and tool presentation for [console_tool()].
 #' Constructors have the same field names as Console's application configuration.
 #'
-#' With no configuration, Console uses its built-in defaults without reading
+#' An empty `ConsoleConfig()` uses built-in defaults without reading
 #' global or project configuration files. Workers can read host files, write
 #' private temporary storage, and cannot use the network. Dependency preparation
 #' retains its independent built-in permissions and may download packages.
 #'
 #' @section Discovery and layering:
+#' Prefer [discover_console_config()] to read files once into an inspectable
+#' object, or [materialize_console_config()] to fill defaults without file reads.
+#' [prune_console_config()] produces a compact view of nondefault settings.
+#' [console_tool()] discovers files when `config` is omitted.
+#'
+#' The following launch-time discovery interface is retained for existing callers.
 #' `ConfigDiscovery()` explicitly enables global and project file discovery.
 #' Disable either source with `global = FALSE` or `project = FALSE`. Project
 #' discovery reads `.agents/console/config.yaml` in `console_tool()`'s launch
@@ -451,7 +457,7 @@ S7::method(as.list, ConsoleConfig) <- function(x, ...) {
   config_mapping(fields)
 }
 
-console_cli_arguments <- function(config, file) {
+console_cli_arguments <- function(config, file, files = character()) {
   settings <- S7::props(config)
   discovery <- if (!is.null(settings$discovery)) S7::props(settings$discovery)
   resolver <- if (!is.null(settings$resolver)) S7::props(settings$resolver)
@@ -479,7 +485,7 @@ console_cli_arguments <- function(config, file) {
   )
   writeLines(
     as.character(jsonlite::toJSON(
-      unname(as.list(overrides)),
+      list(files = unname(as.list(files)), values = unname(as.list(overrides))),
       auto_unbox = TRUE
     )),
     file,

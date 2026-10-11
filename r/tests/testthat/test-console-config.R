@@ -238,7 +238,7 @@ test_that("configuration rejects unsupported choices before launching", {
   expect_error(console_tool(project = "missing", path = "missing"), "project")
 })
 
-test_that("console_tool defaults to no discovery and exposes explicit source choices", {
+test_that("explicit configs preserve legacy source choices", {
   with_console_config_probe(function(path, record) {
     choices <- list(
       NULL,
@@ -314,7 +314,11 @@ test_that("project selection changes only the child's launch directory", {
       project <- file.path(getwd(), "project with spaces")
       dir.create(project)
       old <- getwd()
-      tool <- console_tool(path = path, project = project)
+      tool <- console_tool(
+        path = path,
+        project = project,
+        config = ConsoleConfig()
+      )
       expect_identical(
         normalizePath(readLines(paste0(record, ".cwd"))),
         normalizePath(project)

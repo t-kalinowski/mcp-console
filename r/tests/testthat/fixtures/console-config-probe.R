@@ -4,7 +4,7 @@ writeLines(args[-1L], args[[1L]])
 file <- match("--config-overrides-file", args)
 if (!is.na(file)) {
   writeLines(
-    as.character(jsonlite::fromJSON(args[[file + 1L]])),
+    as.character(jsonlite::fromJSON(args[[file + 1L]])$values),
     paste0(args[[1L]], ".overrides")
   )
 }

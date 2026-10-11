@@ -70,7 +70,7 @@ pub struct ConfigOverrides {
     #[arg(short = 'c', long = "config", value_name = "KEY=VALUE")]
     pub values: Vec<String>,
 
-    /// Private R adapter transport: an ordered JSON array of KEY=VALUE overrides
+    /// Private R adapter transport: optional files and ordered KEY=VALUE overrides
     #[arg(long = "config-overrides-file", hide = true)]
     pub values_file: Option<PathBuf>,
 }

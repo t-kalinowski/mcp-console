@@ -25,13 +25,14 @@
 #' @param path `NULL`, or a path to an `mcp-console` executable.
 #' @param version `NULL`, or one published `mcp-console` version, such as
 #'   `"0.0.2"`.
-#' @param config `NULL` (equivalent to an empty [ConsoleConfig()]), or a
-#'   `ConsoleConfig()` combining runtimes, package preparation, permissions,
-#'   and optional discovery. The default skips global and project config files
-#'   and uses built-in permissions: host reads, private temporary writes, and
-#'   no worker networking. Resolver defaults remain independent. The edited
-#'   result of [resolve_console_config()] is also a `ConsoleConfig()`; supply
-#'   the desired `path`, `version`, and `project` here when launching it.
+#' @param config A [ConsoleConfig()]. By default, [discover_console_config()]
+#'   reads optional global/project files once and materializes their settings.
+#'   Pass `ConsoleConfig()` to skip files and use built-in defaults: host reads,
+#'   private temporary writes, and no worker networking. Resolver defaults are
+#'   independent. A supplied config reads no files unless its legacy `discovery`
+#'   property explicitly requests it. Explicit `NULL` retains the old behavior of
+#'   `ConsoleConfig()`. Use the same `path`, `version`, and `project` when
+#'   inspecting and launching a config.
 #' @param project Existing directory to use as the child process's working
 #'   directory, defaulting to `getwd()`. Relative config and runtime paths use
 #'   this directory; the caller's working directory is unchanged.
@@ -53,7 +54,11 @@ console_tool <- function(
   ...,
   path = NULL,
   version = NULL,
-  config = NULL,
+  config = discover_console_config(
+    path = path,
+    version = version,
+    project = project
+  ),
   project = getwd()
 ) {
   if (...length() != 0L) {
