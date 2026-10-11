@@ -194,6 +194,7 @@ The comparison uses the same sandbox choice as the export.
 An unchanged configuration produces `{}`.
 Mappings are pruned recursively; changed arrays and scalar values remain complete, including empty arrays and strings.
 Overrides needed to preserve conditional defaults, such as resolver environment inheritance, remain explicit.
+Tool prose is compared with generated text for the selected languages, permissions, and timeout visibility, retaining explicit text when those conditional defaults differ.
 Use `--full` to include all configuration defaults; it cannot be combined with `--prune`.
 
 The full output contains captured settings, configuration defaults, generated instructions and descriptions, and every parameter selected by `languages`, including disabled parameters.

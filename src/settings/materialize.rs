@@ -10,6 +10,7 @@ pub(crate) fn configuration(
     mut value: Value,
     policy: &SandboxSettings,
     no_sandbox: bool,
+    defaults: Option<&mut Value>,
 ) -> Result<Value, String> {
     if no_sandbox && (captured.sandbox_requested || captured.resolver_sandbox_requested) {
         return Err("explicit sandbox or resolver.sandbox permissions require sandboxing; remove them when using --no-sandbox".into());
@@ -26,7 +27,20 @@ pub(crate) fn configuration(
         .languages
         .map(Ok)
         .unwrap_or_else(crate::cell::Languages::from_environment)?;
-    let tool = crate::server::materialized_tool(languages, policy, no_sandbox, &captured.tool);
+    if let Some(defaults) = defaults {
+        // Removing explicit prose is safe only when this launch would regenerate
+        // the same text. Visibility defaults still remain enabled for pruning.
+        defaults["tool"] = serde_json::to_value(crate::server::materialized_tool(
+            languages,
+            policy,
+            no_sandbox,
+            &captured.tool,
+            false,
+        ))
+        .expect("tool defaults");
+    }
+    let tool =
+        crate::server::materialized_tool(languages, policy, no_sandbox, &captured.tool, true);
     value["tool"] = serde_json::to_value(tool).expect("tool configuration");
     value
         .as_object_mut()

@@ -182,6 +182,79 @@ def test_pruned_tool_settings_round_trip(binary: Path) -> Transcript:
     return [{"pruned_tool_round_trip": True, "empty_strings_preserved": True}]
 
 
+def test_pruning_preserves_explicit_conditional_tool_prose(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        selected = root / "selected.json"
+        for mode in ((), ("--no-sandbox",)):
+            original = resolve(
+                binary, root, "--no-config", *mode, "--full", "--format", "json"
+            )
+            assert original.returncode == 0 and original.stderr == "", original
+            defaults = json.loads(original.stdout)
+            edited = json.loads(original.stdout)
+            edited["tool"]["parameters"]["timeout_ms"]["enabled"] = False
+            languages = {
+                "languages": ["python"],
+                "tool": {
+                    "description": defaults["tool"]["description"],
+                    "instructions": defaults["tool"]["instructions"],
+                    "parameters": {
+                        field: {
+                            "description": defaults["tool"]["parameters"][field][
+                                "description"
+                            ]
+                        }
+                        for field in ("python", "stdin")
+                    },
+                },
+            }
+            cases = [("timeout", edited), ("languages", languages)]
+            if not mode:
+                cases.append(
+                    ("permissions", defaults | {"sandbox": {"network": "enabled"}})
+                )
+            for name, source in cases:
+                for output in ("yaml", "json"):
+                    selected.write_text(json.dumps(source), encoding="utf-8")
+                    expected = resolve(
+                        binary,
+                        root,
+                        "--config-file",
+                        str(selected),
+                        *mode,
+                        "--full",
+                        "--format",
+                        "json",
+                    )
+                    assert expected.returncode == 0 and expected.stderr == "", expected
+                    pruned = resolve(
+                        binary,
+                        root,
+                        "--config-file",
+                        str(selected),
+                        *mode,
+                        "--prune",
+                        "--format",
+                        output,
+                    )
+                    assert pruned.returncode == 0 and pruned.stderr == "", pruned
+                    selected.write_text(pruned.stdout, encoding="utf-8")
+                    again = resolve(
+                        binary,
+                        root,
+                        "--config-file",
+                        str(selected),
+                        *mode,
+                        "--full",
+                        "--format",
+                        "json",
+                    )
+                    assert again.returncode == 0 and again.stderr == "", again
+                    assert json.loads(again.stdout) == json.loads(expected.stdout), name
+    return [{"explicit_tool_prose_preserved": ["timeout", "languages", "permissions"]}]
+
+
 def test_rejects_conflicting_output_modes(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         result = resolve(binary, Path(temporary), "--full", "--prune")

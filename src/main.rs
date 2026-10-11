@@ -164,8 +164,7 @@ fn resolve_configuration(
     } else {
         sandbox::materialize_settings(captured.policy.clone(), Vec::new(), &directory)?
     };
-    let value = settings::materialize::configuration(captured, value, &policy, no_sandbox)?;
-    let defaults = if full {
+    let mut defaults = if full {
         None
     } else {
         let (mut captured, defaults) = settings::read(
@@ -183,9 +182,16 @@ fn resolve_configuration(
         captured.languages = Some(cell::Languages::all());
         let policy = captured.policy.clone();
         Some(settings::materialize::configuration(
-            captured, defaults, &policy, no_sandbox,
+            captured, defaults, &policy, no_sandbox, None,
         )?)
     };
+    let value = settings::materialize::configuration(
+        captured,
+        value,
+        &policy,
+        no_sandbox,
+        defaults.as_mut(),
+    )?;
     settings::materialize::render(value, defaults, format)
 }
 
