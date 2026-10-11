@@ -31,7 +31,8 @@ See [Get started](docs/getting-started.qmd) for prerequisites, optional R instal
 Configure your MCP client to launch `mcp-console serve` over stdio.
 Run the client and Console on the same host, with the client's shell and filesystem tools using the same workspace.
 
-Console prepares common data packages and can resolve additional dependencies as code needs them.
+Console prepares R packages, Python packages, and DuckDB extensions for the session.
+The agent can request more as it works.
 See [Requirements and environments](docs/REQUIREMENTS.md) for details.
 
 Ask your agent:

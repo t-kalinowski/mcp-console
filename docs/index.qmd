@@ -38,8 +38,13 @@ See [Working with R, Python, and SQL](BUILTIN_RUNTIME.md).
 
 ## Environment setup
 
-Console prepares an ephemeral Python environment with a default set of data packages.
-It can install additional packages as code needs them.
+Console prepares a default set of packages and extensions for the session:
+
+- **R packages** go into ephemeral libraries layered on top of the host's R libraries.
+- **Python packages** go into an ephemeral Python environment.
+- **DuckDB extensions** are installed in a reusable cache for the session's in-memory database.
+
+The agent can request additional packages and extensions as it works.
 You can also [use an existing project environment](CONFIGURATION.md).
 See [Get started](getting-started.qmd) for installation prerequisites and client setup, or [Requirements and environments](REQUIREMENTS.md) for package preparation.
 
