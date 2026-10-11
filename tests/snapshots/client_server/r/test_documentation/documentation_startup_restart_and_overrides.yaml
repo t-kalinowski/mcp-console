@@ -41,7 +41,25 @@ result:
   isError: false
 ---
 send:
+  r: vignette("rendered", package = "consolehelp")
+result:
+  content:
+    - type: text
+      text: |
+        user pager
+  isError: false
+---
+send:
   r: capture.output(utils::vignette(consolehelp::source))
+result:
+  content:
+    - type: text
+      text: |
+        [1] "user pager"
+  isError: false
+---
+send:
+  r: capture.output(utils::vignette(consolehelp::rendered))
 result:
   content:
     - type: text
@@ -73,7 +91,25 @@ result:
   isError: false
 ---
 send:
+  r: vignette("rendered", package = "consolehelp")
+result:
+  content:
+    - type: text
+      text: |
+        user vignette
+  isError: false
+---
+send:
   r: capture.output(utils::vignette(consolehelp::source))
+result:
+  content:
+    - type: text
+      text: |
+        [1] "user vignette"
+  isError: false
+---
+send:
+  r: capture.output(utils::vignette(consolehelp::rendered))
 result:
   content:
     - type: text

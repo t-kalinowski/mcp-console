@@ -165,6 +165,33 @@ def command(name: str) -> Requirement:
     )
 
 
+def r_html_manuals() -> Requirement:
+    executable = (
+        str(
+            Path(os.environ["R_HOME"])
+            / "bin"
+            / ("Rscript.exe" if os.name == "nt" else "Rscript")
+        )
+        if "R_HOME" in os.environ
+        else shutil.which("Rscript")
+    )
+    available = False
+    if executable:
+        result = subprocess.run(
+            [
+                executable,
+                "--vanilla",
+                "-e",
+                'cat(file.exists(file.path(R.home("doc"), "manual", "R-exts.html")))',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        available = result.returncode == 0 and result.stdout == "TRUE"
+    return Requirement("R HTML manuals", available, "requires installed R-exts.html")
+
+
 def gnu_tar() -> Requirement:
     executable = shutil.which("tar")
     version = (

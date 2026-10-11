@@ -50,13 +50,28 @@ text <- capture.output(print(?stats::lm))
 writeLines(text[80:120])
 ```
 
-`vignette("grid", package = "grid")` prints the installed vignette source, including its prose and code.
+`vignette()` prints readable text from an installed HTML vignette, including its evaluated results.
+The vignette object's rendered-artifact metadata selects the file; Console does not execute its source or render it again.
+Headings, paragraphs, lists, code indentation, simple tables, link destinations, captions, and available image alt text appear as text.
+Scripts, styles, and embedded image payloads are omitted; linked assets are not fetched.
+Figures appear only through their captions and alt text, and JavaScript-dependent content is unavailable.
 Assignment stays quiet, so you can retain the ordinary vignette object and print it later.
-Source must be installed and encoded as UTF-8 or ASCII; missing source is an error.
-Console does not render HTML, Markdown, or PDF vignettes, or execute their source.
-Generated results and figures are absent from this source view.
+Use `capture.output(print(vignette("topic", package = "pkg")))` to capture its text and print selected line ranges with `writeLines()`.
 
-Console installs text help and pager defaults after native R startup, once per worker.
+PDF-only, source-only, and other non-HTML vignettes retain the installed source view, labeled `Vignette source:`.
+That view omits evaluated results and figures; source must be installed as UTF-8 or ASCII.
+HTML must be installed as UTF-8; conversion failures and missing source are errors.
+The worker converts HTML with Rust's `html2text` crate, without Pandoc, knitr, rmarkdown, or a browser.
+
+Use `RShowDoc("R-exts", type = "html")` or `utils::RShowDoc("R-exts#Package-structure", type = "html")` to read a built-in manual or section installed with the running R version.
+`help.start()` prints that installation's documentation index.
+Starting R's local help server requires network permission, such as `-c sandbox.network=enabled`; use `help.start(remote = paste0("file://", utils::URLencode(R.home())))` to read the installed index without starting the server.
+Console's function-valued `browser` option recognizes local HTML URLs beneath `R.home("doc")`, including `/doc/` URLs on R's own local help server, and reads their installed files without making HTTP requests.
+Existing link fragments remain visible; a requested `#section` selects its section and subsections, and a missing section is an error.
+The default browser rejects other URLs rather than launching an external viewer.
+Manual access requires installed HTML; PDF conversion is unavailable.
+
+Console installs text help, pager, and browser defaults after native R startup, once per worker.
 Later changes to R options or print methods remain in effect until restart.
 
 ## Python
