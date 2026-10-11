@@ -19,16 +19,16 @@ macOS and Linux are supported; Windows x64 support is [experimental](docs/WINDOW
 
 ## Quickstart
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then install Console from source:
+Source installation requires [uv](https://docs.astral.sh/uv/getting-started/installation/), Git, Rust, and platform build tools.
+See [Get started](docs/getting-started.qmd) for prerequisites and optional R installation.
+
+Once these are installed, run:
 
 ```sh
 uv tool install git+https://github.com/t-kalinowski/mcp-console
 ```
 
-Source installation requires Git, Rust, and platform build tools.
-See [Get started](docs/getting-started.qmd) for prerequisites, optional R installation, and client setup.
-
-Configure your MCP client to launch `mcp-console serve` over stdio.
+Configure your MCP client to launch `mcp-console serve` over stdio, following the [client setup examples](docs/getting-started.qmd#connect-your-client).
 Run the client and Console on the same host, with the client's shell and filesystem tools using the same workspace.
 
 By default, Console prepares R packages, Python packages, and DuckDB extensions for the session.
