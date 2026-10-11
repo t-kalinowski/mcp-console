@@ -13,7 +13,9 @@ project:
 
 website:
   title: MCP Console
-  description: A persistent, sandboxed REPL for AI agents working with data in R, Python, and SQL.
+  description: >-
+    An interactive, sandboxed workspace for AI agents working with data in
+    R, Python, and SQL.
   site-url: https://t-kalinowski.github.io/mcp-console/
   repo-url: https://github.com/t-kalinowski/mcp-console
   repo-subdir: docs
