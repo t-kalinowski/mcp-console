@@ -313,15 +313,6 @@ def test_vignette_rendered_html(binary: Path, execution: Execution) -> Transcrip
                 stopifnot(identical(capture.output(writeLines(text[1:5])), text[1:5]))
                 listing <- capture.output(vignette(package = "consolehelp"))
                 stopifnot(any(grepl("Console rendered vignette", listing, fixed = TRUE)))
-                library <- enc2utf8("library-café")
-                stopifnot(dir.create(library))
-                stopifnot(file.copy(saved$Dir, library, recursive = TRUE))
-                native <- utils::vignette(
-                  "rendered",
-                  package = "consolehelp",
-                  lib.loc = library
-                )
-                native$Dir <- enc2utf8(native$Dir)
                 local({
                   previous <- Sys.getlocale("LC_CTYPE")
                   on.exit(Sys.setlocale("LC_CTYPE", previous))
@@ -331,10 +322,19 @@ def test_vignette_rendered_html(binary: Path, execution: Execution) -> Transcrip
                     charToRaw(paste(captured, collapse = "\n")),
                     charToRaw(paste(text, collapse = "\n"))
                   ))
-                  # POSIX filenames are native bytes; Windows uses Unicode paths.
+                  library <- enc2utf8("library-café")
+                  stopifnot(identical(Encoding(library), "UTF-8"))
+                  # Under C, Unix filenames use native bytes; Windows APIs use Unicode.
                   if (.Platform$OS.type == "unix") {
-                    Encoding(native$Dir) <- "unknown"
+                    Encoding(library) <- "unknown"
                   }
+                  stopifnot(dir.create(library))
+                  stopifnot(file.copy(saved$Dir, library, recursive = TRUE))
+                  native <- utils::vignette(
+                    "rendered",
+                    package = "consolehelp",
+                    lib.loc = library
+                  )
                   native_text <- capture.output(print(native))
                   stopifnot(identical(
                     charToRaw(paste(native_text, collapse = "\n")),

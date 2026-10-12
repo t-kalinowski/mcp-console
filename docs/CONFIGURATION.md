@@ -179,7 +179,7 @@ mcp-console serve -c tool.parameters.timeout_ms.enabled=false
 Materialize configuration before editing descriptions or running an evaluation:
 
 ```sh
-mcp-console config resolve > session.yaml
+mcp-console config resolve --full > session.yaml
 # Inspect and edit session.yaml, then launch with that file alone.
 mcp-console serve --config-file session.yaml
 ```
@@ -189,7 +189,15 @@ Use `--no-config` for built-in configuration without discovered files, or `--con
 `--format json` emits JSON instead of YAML.
 The command does not start interpreters, prepare packages, or create session/cache directories.
 
-The output contains captured settings, configuration defaults, generated instructions and descriptions, and every parameter selected by `languages`, including disabled parameters.
+With no output flag, `config resolve` uses `--prune`: it omits settings equal to the binary's built-in defaults, independently of global and project configuration.
+The comparison uses the same sandbox choice as the export.
+An unchanged configuration produces `{}`.
+Mappings are pruned recursively; changed arrays and scalar values remain complete, including empty arrays and strings.
+Overrides needed to preserve conditional defaults, such as resolver environment inheritance, remain explicit.
+Tool prose is compared with generated text for the selected languages, permissions, and timeout visibility, retaining explicit text when those conditional defaults differ.
+Use `--full` to include all configuration defaults; it cannot be combined with `--prune`.
+
+The full output contains captured settings, configuration defaults, generated instructions and descriptions, and every parameter selected by `languages`, including disabled parameters.
 Each parameter has explicit `enabled` and `description` fields, read-only `schema` metadata for its type and constraints, and a `parameters` mapping for nested fields.
 Changes to the `schema` metadata fail validation.
 Use `enabled: false` to hide a parameter while retaining its details for inspection or re-enabling.
@@ -209,8 +217,12 @@ The export does not pin installed dependencies or copy the host environment.
 Exported interpreter paths must be representable as UTF-8; other native paths produce a configuration error.
 Changing `languages` may make saved parameter entries unavailable; resolve the desired language selection before editing the tool.
 
-R provides the same workflow through [`resolve_console_config()`](../r/README.md#inspect-and-edit-configuration).
-It returns a printable, editable list and retains the executable, launch directory, and sandbox choice for `console_tool(config = config)`.
+R exposes these operations through [`discover_console_config()`, `materialize_console_config()`, and `prune_console_config()`](../r/README.md#inspect-and-edit-configuration).
+They return ordinary S7 `ConsoleConfig` objects with file discovery disabled.
+`read_console_config()` imports one required JSON or YAML file; `ConsoleConfig(...)` builds settings directly in R.
+Edit properties with `@`; use `$` to select named parameter entries.
+The sandbox choice remains in the configuration, while executable and launch-directory choices remain explicit arguments to each call.
+`console_tool()` discovers optional files by default; pass `config = ConsoleConfig(...)` to skip them.
 
 ## Python environment selection
 
