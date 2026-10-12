@@ -600,6 +600,7 @@ impl Client {
         defer_idle: bool,
         control: Option<&ControlledSendAdmission>,
     ) -> Result<RestartAttempt, String> {
+        crate::resolver::cache::restore_manual_root(&self.0.sandbox_settings)?;
         let mut restart = if requirements.action == super::RequirementsAction::Add
             && requirements.python_version.is_empty()
             && requirements.exclude_newer.is_none()

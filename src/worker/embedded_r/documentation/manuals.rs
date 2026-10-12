@@ -2,6 +2,7 @@
 //! Only the captured manuals subtree is writable. A content-addressed directory
 //! is published by rename after every projection and the manifest are complete.
 
+use crate::resolver::cache::restore_directory_access;
 use anyhow::{Context, Result, bail, ensure};
 use harp::object::RObject;
 use html2text::render::{RichAnnotation, TaggedLineElement};
@@ -789,20 +790,7 @@ fn remove_entry(path: &Path) -> std::io::Result<()> {
     };
     // Repair directory traversal before descent; never follow cache symlinks.
     if metadata.is_dir() {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(
-                path,
-                fs::Permissions::from_mode(metadata.permissions().mode() | 0o700),
-            )?;
-        }
-        #[cfg(windows)]
-        if metadata.permissions().readonly() {
-            let mut permissions = metadata.permissions();
-            permissions.set_readonly(false);
-            fs::set_permissions(path, permissions)?;
-        }
+        restore_directory_access(path, &metadata)?;
         for entry in fs::read_dir(path)? {
             remove_entry(&entry?.path())?;
         }
@@ -935,7 +923,18 @@ fn materialize(args: &[String]) -> Result<(PathBuf, Prepared, fs::File)> {
     // The host creates this lock outside the worker-writable manuals subtree.
     // Workers need only read access to lock it and cannot replace its inode.
     let lock = fs::File::open(root.with_extension("lock"))?;
-    lock.lock()?;
+    // Shell-capable peers can take an advisory lock. Never let contention
+    // block the interpreter; return an explicit retry error before cache access.
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(fs::TryLockError::WouldBlock) => {
+            bail!("Manual cache is busy; retry the manual operation")
+        }
+        Err(fs::TryLockError::Error(error)) => return Err(error.into()),
+    }
+    let metadata = fs::symlink_metadata(&root)?;
+    ensure!(metadata.is_dir(), "Manual cache root is not a directory");
+    restore_directory_access(&root, &metadata)?;
     let staging = root.join(format!(".{}.incomplete", prepared.identity));
     // A retired publisher may leave staging behind. The shared lock proves no
     // publisher is still using this identity-scoped directory, even on reuse.

@@ -28,6 +28,7 @@ def manual_client(
     *,
     installed: bool = False,
     manuals: Path = FIXTURES / "r_manuals",
+    doc_component: str = "doc",
 ) -> Iterator[tuple[McpClient, Path]]:
     with tempfile.TemporaryDirectory(prefix="console-manuals-café#-") as temporary:
         root = Path(temporary).resolve()
@@ -40,7 +41,7 @@ def manual_client(
         environment.update(
             MCP_CONSOLE_LANGUAGES="r", XDG_CACHE_HOME=str(root / "cache")
         )
-        doc = root / "doc"
+        doc = root / doc_component
         if not installed:
             shutil.copytree(manuals, doc / "manual")
             # A default manual request must prefer HTML when PDF also exists.
@@ -684,27 +685,34 @@ def test_manual_cache_serializes_shared_repairs(
                 client.send(r='RShowDoc("R-exts")')
                 assert "Writing R Extensions" in normalize_paths(client, root)
             collection = completed_collection(root)
-            # Hold the same OS lock as another publisher. Both prepared workers
-            # must wait before checking or replacing the corrupted entry.
+            # A peer can hold an advisory lock indefinitely. Both prepared
+            # workers must report contention without entering cache repair.
             with collection.parent.with_suffix(".lock").open("rb") as gate:
                 fcntl.flock(gate, fcntl.LOCK_EX)
                 (collection / "index.md").write_text("modified collection")
                 for client in (first, peer):
-                    client.send(r='RShowDoc("R-exts")', timeout_ms=0)
-                for client in (first, peer):
-                    client.send(timeout_ms=300)
-                    output = last_tool_text(client)
-                    assert "[running; poll with an empty send]" in output, output
+                    client.send(r='RShowDoc("R-exts")')
+                    output = normalize_paths(client, root)
+                    assert (
+                        "Manual cache is busy; retry the manual operation" in output
+                    ), output
                     assert "Writing R Extensions" not in output, output
+                assert (collection / "index.md").read_text() == "modified collection"
                 fcntl.flock(gate, fcntl.LOCK_UN)
             for client in (first, peer):
-                client.send()
+                client.send(r='RShowDoc("R-exts")')
                 assert "Writing R Extensions" in normalize_paths(client, root)
             assert "modified collection" not in (collection / "index.md").read_text()
             assert completed_collection(root) == collection
             peer.finish()
             first.finish()
-    return [{"shared_repairs_serialized": True, "completed_collection_reused": True}]
+    return [
+        {
+            "shared_repairs_serialized": True,
+            "lock_contention_returns_retry_error": True,
+            "completed_collection_reused": True,
+        }
+    ]
 
 
 @requires(R)
@@ -751,7 +759,11 @@ def test_manual_cache_repairs_directory_permissions(
         client.send(r='RShowDoc("R-exts")')
         normalize_paths(client, root)
         collection = completed_collection(root)
-        for target in ("collection", 'file.path(collection, "R-exts")'):
+        for target in (
+            "dirname(collection)",
+            "collection",
+            'file.path(collection, "R-exts")',
+        ):
             try:
                 client.expect(
                     "directory permissions removed\n",
@@ -764,6 +776,18 @@ def test_manual_cache_repairs_directory_permissions(
                         """).replace("DIRECTORY", target),
                 )
                 normalize_paths(client, root)
+                if target == "dirname(collection)":
+                    client.send(r='utils::RShowDoc("R-exts#Grouped-B")')
+                    output = normalize_paths(client, root)
+                    assert "café λ" in output, output
+                    client.expect(
+                        "root permissions removed again before restart\n",
+                        # fmt: r
+                        r=code(r"""
+                            stopifnot(Sys.chmod(dirname(collection), mode = "000"))
+                            cat("root permissions removed again before restart\n")
+                            """),
+                    )
                 client.send(control="restart")
                 client.send(r='utils::RShowDoc("R-exts#Grouped-B")')
                 output = normalize_paths(client, root)
@@ -771,8 +795,44 @@ def test_manual_cache_repairs_directory_permissions(
                 assert completed_collection(root) == collection
             finally:
                 # Keep failure cleanup possible when exercising the old worker.
+                collection.parent.chmod(0o700)
                 collection.chmod(0o700)
                 (collection / "R-exts").chmod(0o700)
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_navigation_with_manual_like_directory(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution, doc_component="R-old.html#archive") as (
+        client,
+        root,
+    ):
+        client.send(r='RShowDoc("R-exts")')
+        output = normalize_paths(client, root)
+        assert "Writing R Extensions" in output, output
+        client.send(r='utils::RShowDoc("R-exts#Grouped-B")')
+        output = normalize_paths(client, root)
+        assert "café λ" in output, output
+        client.expect(
+            "capture and native return retained\n",
+            # fmt: r
+            r=code(r"""
+                output <- capture.output(
+                  value <- withVisible(utils::RShowDoc(
+                    "R-exts#Grouped-B"
+                  ))
+                )
+                stopifnot(
+                  any(grepl("café λ", output, fixed = TRUE)),
+                  !value$visible,
+                  identical(value$value, file.path(R.home("doc"), "manual", "R-exts.html"))
+                )
+                cat("capture and native return retained\n")
+                """),
+        )
         return client.finish()
 
 

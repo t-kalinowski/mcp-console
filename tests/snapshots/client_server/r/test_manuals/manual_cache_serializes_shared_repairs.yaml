@@ -1,3 +1,4 @@
 ---
 shared_repairs_serialized: true
+lock_contention_returns_retry_error: true
 completed_collection_reused: true

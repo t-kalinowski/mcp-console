@@ -89,7 +89,7 @@ base::local(
         # manual filename, preserving '#' characters in directory names.
         local <- utils::URLdecode(substring(url, 8L))
         path <- sub(
-          "(R-[A-Za-z]+[.]html)#.*$",
+          "([/]R-[A-Za-z]+[.]html)#[^/]*$",
           "\\1",
           local,
           ignore.case = TRUE

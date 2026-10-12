@@ -1,0 +1,66 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/index.md
+
+        # Writing R Extensions
+
+        [Collection](../index.md)
+
+
+        - [Writing R Extensions](00.00-writing-r-extensions-part-001.md#Top)
+          - [1 Small sections](01-small-sections-part-001.md#Small-sections)
+          - [2 Needle examples](02-needle-examples-part-001.md#Needle-examples)
+          - [3 Long Unicode line](03-long-unicode-line-part-001.md#Long-line)
+          - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
+          - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
+
+        Read: `RShowDoc("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC: `.console$manual("R-exts/index.md")`
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts#Grouped-B")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/01-small-sections-part-001.md
+        Location: Writing R Extensions > 1 Small sections > 1.2 Grouped B
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](../R-lang/01-shared-references-part-001.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next section: RShowDoc("R-exts#Needle-examples")
+  isError: false
+---
+send:
+  r: |
+    output <- capture.output(
+      value <- withVisible(utils::RShowDoc(
+        "R-exts#Grouped-B"
+      ))
+    )
+    stopifnot(
+      any(grepl("café λ", output, fixed = TRUE)),
+      !value$visible,
+      identical(value$value, file.path(R.home("doc"), "manual", "R-exts.html"))
+    )
+    cat("capture and native return retained\n")
+result:
+  content:
+    - type: text
+      text: |
+        capture and native return retained
+  isError: false

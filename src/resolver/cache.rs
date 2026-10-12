@@ -156,6 +156,9 @@ fn configure_manuals(
                     .truncate(false)
                     .open(root.with_extension("lock"))
                     .is_ok()
+                && std::fs::symlink_metadata(root).is_ok_and(|metadata| {
+                    metadata.is_dir() && restore_directory_access(root, &metadata).is_ok()
+                })
         });
     let path = match &root {
         Some(root) => root.to_str().ok_or("manual cache paths must be UTF-8")?,
@@ -177,6 +180,46 @@ fn configure_manuals(
         }
     }
     Ok(())
+}
+
+pub(crate) fn restore_directory_access(
+    path: &std::path::Path,
+    metadata: &std::fs::Metadata,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = metadata.permissions().mode();
+        if mode & 0o700 != 0o700 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o700))?;
+        }
+    }
+    #[cfg(windows)]
+    if metadata.permissions().readonly() {
+        let mut permissions = metadata.permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn restore_manual_root(settings: &SandboxSettings) -> Result<(), String> {
+    let Some(root) = settings
+        .get("environment")
+        .and_then(|environment| environment.get("MCP_CONSOLE_MANUAL_CACHE"))
+        .and_then(Value::as_str)
+        .filter(|root| !root.is_empty())
+    else {
+        return Ok(());
+    };
+    let root = std::path::Path::new(root);
+    let metadata = std::fs::symlink_metadata(root).map_err(|error| error.to_string())?;
+    if !metadata.is_dir() {
+        return Err("Manual cache root is not a directory".into());
+    }
+    // The native runner can inspect protected descendants during replacement.
+    // Restore only the captured manual root before retiring the old worker.
+    restore_directory_access(root, &metadata).map_err(|error| error.to_string())
 }
 
 fn environment_path(settings: &SandboxSettings, name: &str) -> Option<PathBuf> {

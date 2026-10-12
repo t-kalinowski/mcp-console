@@ -31,6 +31,77 @@ send:
   r: |
     discard <- capture.output(path <- .console$manual("R-exts"))
     collection <- dirname(dirname(path))
+    stopifnot(Sys.chmod(dirname(collection), mode = "000"))
+    cat("directory permissions removed\n")
+result:
+  content:
+    - type: text
+      text: |
+        directory permissions removed
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts#Grouped-B")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/01-small-sections-part-001.md
+        Location: Writing R Extensions > 1 Small sections > 1.2 Grouped B
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](../R-lang/01-shared-references-part-001.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next section: RShowDoc("R-exts#Needle-examples")
+  isError: false
+---
+send:
+  r: |
+    stopifnot(Sys.chmod(dirname(collection), mode = "000"))
+    cat("root permissions removed again before restart\n")
+result:
+  content:
+    - type: text
+      text: |
+        root permissions removed again before restart
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts#Grouped-B")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/01-small-sections-part-001.md
+        Location: Writing R Extensions > 1 Small sections > 1.2 Grouped B
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](../R-lang/01-shared-references-part-001.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next section: RShowDoc("R-exts#Needle-examples")
+  isError: false
+---
+send:
+  r: |
+    discard <- capture.output(path <- .console$manual("R-exts"))
+    collection <- dirname(dirname(path))
     stopifnot(Sys.chmod(collection, mode = "000"))
     cat("directory permissions removed\n")
 result:
