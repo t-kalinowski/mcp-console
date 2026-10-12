@@ -35,12 +35,6 @@ Per-output caps are not a total disk budget.
 Choose a concrete user need before adding cleanup or artifact APIs; protect active sessions and user-managed files.
 Current documentation must continue to state the limits.
 
-## Graphics coverage
-
-**GR-1 — Completed ([OSS-203](https://linear.app/t-kalinowski/issue/OSS-203/preserve-user-png-devices-that-reuse-a-managed-device-slot-and)).** Public device-reuse cases cover distinct and original managed filename templates, drawing and explicit closure in a later cell, and subsequent managed plotting.
-Cleanup now uses native registration ownership, preserving explicit devices that reuse both the number and template.
-See the [managed-device cleanup boundary](ARCHITECTURE.md#why-native-r-graphics-callbacks).
-
 ## Sandbox and platforms
 
 **SP-1 — Review evidence for macOS policy exceptions.** Check each application extension against the actual sandboxed workflow and selected native pin.
@@ -75,7 +69,7 @@ A lightweight regression/check for important defaults and pin-specific links is 
 Do not build a general documentation-generation framework without a demonstrated need.
 
 DX-2 is an editorial follow-up proposed by this pass; it is not a previously committed implementation task.
-Updating completed entries and links should be part of the change that resolves them.
+Delete completed entries and empty sections as part of the change that resolves them, and update related links.
 
 ## Unselected proposals, not release blockers
 
