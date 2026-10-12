@@ -63,8 +63,11 @@ base::local(
       if (is.null(path)) {
         stop("managed plot device did not expose its output path")
       }
-      devices[[length(devices) + 1L]] <<- list(device = device, path = path)
-      invisible(.Call("mcp_console_plot_started", path))
+      devices[[length(devices) + 1L]] <<- list(
+        device = device,
+        id = device_counter
+      )
+      invisible(.Call("mcp_console_plot_started", path, device_counter))
     }
 
     begin <- function() {
@@ -80,7 +83,9 @@ base::local(
       opened <- rev(devices)
       devices <<- list()
       for (device in opened) {
-        if (identical(device_path(device$device), device$path)) {
+        # The native close callback retires this registration even if a user
+        # device immediately reuses both its number and filename template.
+        if (.Call("mcp_console_plot_is_open", device$id)) {
           grDevices::dev.off(which = device$device)
         }
       }
