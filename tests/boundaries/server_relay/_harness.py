@@ -129,6 +129,12 @@ class ServerRelayClient:
         self.root = Path(self._temporary.name)
         environment = os.environ.copy() if environment is None else environment.copy()
         environment["TMPDIR"] = str(self.root)
+        # Scripted relays do not reuse real dependency caches. Keep native
+        # mount targets private to this fixture so parallel cache activity
+        # cannot remove protected metadata during resolver launch.
+        environment["XDG_CACHE_HOME"] = str(self.root / "cache")
+        environment["R_USER_CACHE_DIR"] = str(self.root / "cache")
+        environment["RENV_PATHS_ROOT"] = str(self.root / "cache/R/renv")
         environment[SCENARIO_ENV] = scenario
         if scenario == "stdin_forwarding_failure":
             environment[STDIN_FAILURE_RELEASED_ENV] = str(
