@@ -113,7 +113,8 @@ Compact TOC continuations use positions within that displayed outline.
 Reading and search work with `capture.output()`.
 
 `.console$manual_search(query, manual = "", start = 1L, limit = 5L)` performs local, case-insensitive literal matching.
-Whitespace is normalized for matching, so phrases can span rendered line wraps; read commands retain document coordinates.
+Matching ignores inline formatting and link destinations and normalizes whitespace, so phrases can span rendered line wraps; literal code remains searchable.
+Read commands retain document coordinates.
 This searches manual bodies; `help.search()` and `??` retain their package-documentation metadata searches.
 An empty `manual` searches the collection.
 Heading matches come first; each logical section appears at most once, with its section number, heading path, a body excerpt, and a read command.

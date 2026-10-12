@@ -75,20 +75,64 @@ struct Block {
     anchors: Vec<String>,
     row_anchors: Vec<String>,
     text: String,
+    // Visible HTML text with byte coordinates in the Markdown projection.
+    // Decorations and link destinations are never searchable prose.
+    visible: VisibleText,
     links: Vec<String>,
+}
+
+#[derive(Clone, Default)]
+struct VisibleText {
+    text: String,
+    offsets: Vec<usize>,
+}
+
+impl VisibleText {
+    fn push(&mut self, text: &str, offset: usize) {
+        self.text.push_str(text);
+        for (index, character) in text.char_indices() {
+            self.offsets
+                .extend(std::iter::repeat_n(offset + index, character.len_utf8()));
+        }
+    }
+
+    fn append(&mut self, other: &Self, offset: usize) {
+        self.text.push_str(&other.text);
+        self.offsets
+            .extend(other.offsets.iter().map(|index| offset + index));
+    }
+
+    fn shift(&mut self, offset: usize) {
+        self.offsets.iter_mut().for_each(|index| *index += offset);
+    }
+
+    fn replace(&mut self, markdown: &mut String, from: &str, to: &str) {
+        let matches = markdown
+            .match_indices(from)
+            .map(|(start, _)| start)
+            .collect::<Vec<_>>();
+        for offset in &mut self.offsets {
+            let preceding = matches.partition_point(|start| *start <= *offset);
+            let delta = to.len() as isize - from.len() as isize;
+            if let Some(start) = preceding.checked_sub(1).map(|i| matches[i])
+                && *offset < start + from.len()
+            {
+                *offset = start
+                    .checked_add_signed((preceding - 1) as isize * delta)
+                    .expect("visible text coordinate");
+            } else {
+                *offset = offset
+                    .checked_add_signed(preceding as isize * delta)
+                    .expect("visible text coordinate");
+            }
+        }
+        *markdown = markdown.replace(from, to);
+    }
 }
 
 impl Block {
     fn all_anchors(&self) -> impl Iterator<Item = &String> {
         self.anchors.iter().chain(&self.row_anchors)
-    }
-
-    fn visible(&self, text: &str) -> String {
-        let mut text = text.to_string();
-        for anchor in &self.row_anchors {
-            text = text.replace(&anchor_html(anchor), "");
-        }
-        text
     }
 }
 
@@ -149,7 +193,7 @@ fn plain(node: &Handle, width: usize) -> Result<String> {
 
 // Link destinations remain typed slots until the complete collection has an
 // anchor map. This avoids parsing renderer-specific heading slugs or Markdown.
-fn inline(node: &Handle, links: &mut Vec<String>, width: usize) -> Result<(String, String)> {
+fn inline(node: &Handle, links: &mut Vec<String>, width: usize) -> Result<(String, VisibleText)> {
     let dom = RcDom::default();
     if matches!(tag(node), "td" | "th") {
         // html2text renders cells only inside a table. Render their inline
@@ -164,14 +208,15 @@ fn inline(node: &Handle, links: &mut Vec<String>, width: usize) -> Result<(Strin
     let config = html2text::config::rich().allow_width_overflow();
     let lines = config.render_to_lines(config.dom_to_render_tree(&dom)?, width)?;
     let mut output = String::new();
-    let mut label = String::new();
+    let mut label = VisibleText::default();
     for line in lines {
         for item in line.iter() {
             if let TaggedLineElement::Str(span) = item {
-                label.push_str(&span.s);
                 let mut text = span.s.clone();
+                let mut leading = 0;
                 if span.tag.contains(&RichAnnotation::Code) {
                     let fence = "`".repeat(text.chars().filter(|c| *c == '`').count() + 1);
+                    leading += fence.len() + usize::from(text.contains('`'));
                     text = if text.contains('`') {
                         format!("{fence} {text} {fence}")
                     } else {
@@ -179,9 +224,11 @@ fn inline(node: &Handle, links: &mut Vec<String>, width: usize) -> Result<(Strin
                     };
                 }
                 if span.tag.contains(&RichAnnotation::Strong) {
+                    leading += 2;
                     text = format!("**{text}**");
                 }
                 if span.tag.contains(&RichAnnotation::Emphasis) {
+                    leading += 1;
                     text = format!("*{text}*");
                 }
                 if let Some(RichAnnotation::Link(url)) = span
@@ -191,15 +238,19 @@ fn inline(node: &Handle, links: &mut Vec<String>, width: usize) -> Result<(Strin
                 {
                     let slot = links.len();
                     links.push(url.clone());
+                    leading += 1;
                     text = format!("[{text}](\u{1f}{slot}\u{1f})");
                 }
+                label.push(&span.s, output.len() + leading);
                 output.push_str(&text);
             }
         }
+        label.push("\n", output.len());
         output.push('\n');
-        label.push('\n');
     }
-    Ok((output.trim_end().into(), label.trim_end().into()))
+    label.text.truncate(label.text.trim_end().len());
+    label.offsets.truncate(label.text.len());
+    Ok((output.trim_end().into(), label))
 }
 
 fn descendants(node: &Handle, names: &[&str], output: &mut Vec<Handle>) {
@@ -222,7 +273,7 @@ fn remove_self_links(node: &Handle) {
     }
 }
 
-fn table(node: &Handle, links: &mut Vec<String>) -> Result<(String, Vec<String>)> {
+fn table(node: &Handle, links: &mut Vec<String>) -> Result<(String, VisibleText, Vec<String>)> {
     let mut rows = Vec::new();
     descendants(node, &["tr"], &mut rows);
     let mut rendered = Vec::new();
@@ -234,31 +285,43 @@ fn table(node: &Handle, links: &mut Vec<String>) -> Result<(String, Vec<String>)
         let mut row = cells
             .iter()
             .map(|cell| {
-                Ok(inline(cell, links, 100_000)?
-                    .0
-                    .replace('|', "\\|")
-                    .replace('\n', "<br>"))
+                let (mut text, mut visible) = inline(cell, links, 100_000)?;
+                visible.replace(&mut text, "|", "\\|");
+                visible.replace(&mut text, "\n", "<br>");
+                Ok((text, visible))
             })
             .collect::<Result<Vec<_>>>()?;
         if let Some(first) = row.first_mut() {
             // Keep an index letter or entry beside its original row, while
             // preserving the entire table as one indivisible body block.
             let markers = row_ids.iter().map(|id| anchor_html(id)).collect::<String>();
-            first.insert_str(0, &markers);
+            first.0.insert_str(0, &markers);
+            first.1.shift(markers.len());
             row_anchors.extend(row_ids);
         }
         rendered.push(row);
     }
     let columns = rendered.iter().map(Vec::len).max().unwrap_or(0);
     let mut text = String::new();
+    let mut visible = VisibleText::default();
     for (i, mut row) in rendered.into_iter().enumerate() {
-        row.resize(columns, String::new());
-        text.push_str(&format!("| {} |\n", row.join(" | ")));
+        row.resize(columns, (String::new(), VisibleText::default()));
+        text.push_str("| ");
+        for (column, (cell, label)) in row.iter().enumerate() {
+            if column > 0 {
+                visible.push(" ", text.len());
+                text.push_str(" | ");
+            }
+            visible.append(label, text.len());
+            text.push_str(cell);
+        }
+        text.push_str(" |\n");
+        visible.push("\n", text.len() - 1);
         if i == 0 {
             text.push_str(&format!("| {} |\n", vec!["---"; columns].join(" | ")));
         }
     }
-    Ok((text.trim_end().into(), row_anchors))
+    Ok((text.trim_end().into(), visible, row_anchors))
 }
 
 fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result<()> {
@@ -293,8 +356,9 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
         // html2text consumes child handles. Obtain the visible heading and its
         // Markdown links in one pass rather than rendering the node twice.
         let mut links = Vec::new();
-        let (heading, title) = inline(node, &mut links, 100_000)?;
-        let title = title
+        let (heading, label) = inline(node, &mut links, 100_000)?;
+        let title = label
+            .text
             .trim_start_matches('#')
             .trim()
             .trim_end_matches('¶')
@@ -322,6 +386,8 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
             // which have no original HTML anchor. Original IDs stay unchanged.
             pending.push(format!("console-section-{section}"));
         }
+        let mut visible = VisibleText::default();
+        visible.push(&title, level + 1);
         manual.blocks.push(Block {
             section,
             heading: true,
@@ -332,6 +398,7 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
                 "#".repeat(level),
                 heading.trim_start_matches('#').trim()
             ),
+            visible,
             links,
         });
     } else if matches!(
@@ -348,7 +415,7 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
         pending.dedup();
         let mut links = Vec::new();
         let mut row_anchors = Vec::new();
-        let text = match name {
+        let (text, visible) = match name {
             "pre" => {
                 let body = plain(node, 100_000)?;
                 let fence = "`".repeat(
@@ -359,15 +426,17 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
                         .max(2)
                         + 1,
                 );
-                format!("{fence}\n{body}\n{fence}")
+                let mut visible = VisibleText::default();
+                visible.push(&body, fence.len() + 1);
+                (format!("{fence}\n{body}\n{fence}"), visible)
             }
             "table" => {
-                let (text, embedded) = table(node, &mut links)?;
+                let (text, visible, embedded) = table(node, &mut links)?;
                 pending.retain(|anchor| !embedded.contains(anchor));
                 row_anchors = embedded;
-                text
+                (text, visible)
             }
-            _ => inline(node, &mut links, 80)?.0,
+            _ => inline(node, &mut links, 80)?,
         };
         manual.blocks.push(Block {
             section,
@@ -375,6 +444,7 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
             anchors: std::mem::take(pending),
             row_anchors,
             text,
+            visible,
             links,
         });
     } else {
@@ -399,12 +469,15 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
             if !text.is_empty()
                 && let Some(section) = manual.sections.len().checked_sub(1)
             {
+                let mut visible = VisibleText::default();
+                visible.push(&text, 0);
                 manual.blocks.push(Block {
                     section,
                     heading: false,
                     anchors: std::mem::take(pending),
                     row_anchors: Vec::new(),
                     text,
+                    visible,
                     links: Vec::new(),
                 });
             }
@@ -488,14 +561,16 @@ fn location(collection: &Collection, current: &Manual, url: &str) -> String {
     format!("unavailable local target: {url}")
 }
 
-fn project(collection: &Collection, manual: &Manual, block: &Block) -> String {
+fn project(collection: &Collection, manual: &Manual, block: &Block) -> (String, Vec<usize>) {
     let mut text = block.text.clone();
+    let mut visible = block.visible.clone();
     for (i, link) in block.links.iter().enumerate() {
         let destination = location(collection, manual, link);
-        text = text.replace(&format!("\u{1f}{i}\u{1f}"), &destination);
+        visible.replace(&mut text, &format!("\u{1f}{i}\u{1f}"), &destination);
     }
     // Unavailable local destinations remain readable, without a broken link.
-    text = text.replace(
+    visible.replace(
+        &mut text,
         "](unavailable local target: ",
         "] [unavailable local target: ",
     );
@@ -504,7 +579,7 @@ fn project(collection: &Collection, manual: &Manual, block: &Block) -> String {
         .iter()
         .filter(|link| location(collection, manual, link).starts_with("unavailable local target: "))
     {
-        text = text.replace(&format!("{link})"), &format!("{link}]"));
+        visible.replace(&mut text, &format!("{link})"), &format!("{link}]"));
     }
     let anchors = block
         .anchors
@@ -513,9 +588,10 @@ fn project(collection: &Collection, manual: &Manual, block: &Block) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     if anchors.is_empty() {
-        format!("{text}\n\n")
+        (format!("{text}\n\n"), visible.offsets)
     } else {
-        format!("{anchors}\n{text}\n\n")
+        visible.shift(anchors.len() + 1);
+        (format!("{anchors}\n{text}\n\n"), visible.offsets)
     }
 }
 
@@ -604,8 +680,10 @@ fn projected_files(collection: &mut Collection) -> Result<Files> {
             text.push('\n');
             line += 1;
             let mut positions = Vec::new();
+            let mut visible_offsets = Vec::new();
             for block in &manual.blocks {
-                let rendered = project(collection, manual, block);
+                let (rendered, offsets) = project(collection, manual, block);
+                visible_offsets.push(offsets);
                 for anchor in block.all_anchors() {
                     let offset = rendered
                         .lines()
@@ -618,10 +696,15 @@ fn projected_files(collection: &mut Collection) -> Result<Files> {
                 line = end;
                 text.push_str(&rendered);
             }
-            (text, positions, anchors)
+            (text, positions, anchors, visible_offsets)
         })
         .collect::<Vec<_>>();
-    for (manual, (text, positions, anchors)) in collection.manuals.iter_mut().zip(documents) {
+    for (manual, (text, positions, anchors, visible_offsets)) in
+        collection.manuals.iter_mut().zip(documents)
+    {
+        for (block, offsets) in manual.blocks.iter_mut().zip(visible_offsets) {
+            block.visible.offsets = offsets;
+        }
         for (anchor, line) in anchors {
             manual.anchors.get_mut(&anchor).unwrap().line = line;
         }
@@ -841,12 +924,18 @@ fn materialize(args: &[String]) -> Result<(PathBuf, Prepared, fs::File)> {
     Ok((directory, prepared, lock))
 }
 
+struct Preview {
+    response: Vec<String>,
+    // One-based source coordinates, independent of presentation text.
+    next: (usize, usize),
+}
+
 fn read(
     collection: &Collection,
     files: &Files,
     directory: &Path,
     args: &[String],
-) -> Result<Vec<String>> {
+) -> Result<Preview> {
     let topic = &args[4];
     let (name, anchor) = topic.split_once('#').unwrap_or((topic, ""));
     let manual = collection
@@ -1034,15 +1123,15 @@ fn read(
             format!("{}#{}", manual.name, section_anchor(manual, next_section))
         ));
     }
-    Ok(vec![
-        directory.join(relative).to_string_lossy().into(),
-        output,
-    ])
+    Ok(Preview {
+        response: vec![directory.join(relative).to_string_lossy().into(), output],
+        next: (next + 1, next_column + 1),
+    })
 }
 
 // Match rendered prose independently of line wrapping, retaining coordinates
 // in the original document for exact reading commands and Unicode case changes.
-fn matching_offset(text: &str, query: &str) -> Option<usize> {
+fn matching_range(text: &str, query: &str) -> Option<std::ops::Range<usize>> {
     let mut normalized = String::new();
     let mut offsets = Vec::new();
     for (offset, character) in text.char_indices() {
@@ -1058,9 +1147,11 @@ fn matching_offset(text: &str, query: &str) -> Option<usize> {
             }
         }
     }
-    normalized
-        .find(query)
-        .and_then(|offset| offsets.get(offset).copied())
+    normalized.find(query).map(|offset| {
+        let start = offsets[offset];
+        let last = offsets[offset + query.len() - 1];
+        start..last + text[last..].chars().next().unwrap().len_utf8()
+    })
 }
 
 fn search_hit(
@@ -1092,18 +1183,10 @@ fn search_hit(
     let document = files[&format!("{}.md", manual.name)]
         .lines()
         .collect::<Vec<_>>();
-    let body = excerpt_block
-        .visible(&document[manual.positions[excerpt_index].clone()].join("\n"))
-        .lines()
-        .skip(excerpt_block.anchors.len())
-        .collect::<Vec<_>>()
-        .join("\n");
+    let body = &excerpt_block.visible.text;
     let excerpt = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    let offset = excerpt.to_lowercase().find(&query).map_or(0, |offset| {
-        excerpt.to_lowercase()[..offset]
-            .chars()
-            .count()
-            .saturating_sub(60)
+    let offset = matching_range(&excerpt, &query).map_or(0, |range| {
+        excerpt[..range.start].chars().count().saturating_sub(60)
     });
     let mut excerpt = excerpt.chars().skip(offset).take(400).collect::<String>();
     if offset > 0 {
@@ -1129,6 +1212,29 @@ fn search_hit(
     }
     let anchor = section_anchor(manual, i);
     let section = format!("{}#{anchor}", manual.name);
+    let rendered = document[manual.positions[block_index].clone()].join("\n");
+    let coordinates = |offset: usize| {
+        let before = &rendered[..offset];
+        let mut line = before.rsplit('\n').next().unwrap().to_string();
+        for anchor in &block.row_anchors {
+            line = line.replace(&anchor_html(anchor), "");
+        }
+        (
+            manual.positions[block_index].start
+                + before.bytes().filter(|c| *c == b'\n').count()
+                + 1,
+            line.chars().count() + 1,
+        )
+    };
+    let matched = (!heading).then(|| {
+        let range = matching_range(&block.visible.text, &query).unwrap();
+        let start = block.visible.offsets[range.start];
+        let last = block.visible.offsets[range.end - 1];
+        (
+            coordinates(start),
+            coordinates(last + rendered[last..].chars().next().unwrap().len_utf8()),
+        )
+    });
     let command = if heading || {
         let mut request = args.to_vec();
         request[4] = section.clone();
@@ -1136,31 +1242,11 @@ fn search_hit(
         request[7] = "0".into();
         request[8] = "1".into();
         let preview = read(collection, files, directory, &request)?;
-        let body = preview[1].split_once("\n\n").unwrap().1;
-        let body = body
-            .lines()
-            .filter(|line| {
-                !line.starts_with("Continue: ")
-                    && !line.starts_with("Next section: ")
-                    && !line.starts_with("Next file: ")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        matching_offset(&body, &query).is_some()
+        matched.unwrap().1 <= preview.next
     } {
         format!("RShowDoc({section:?})")
     } else {
-        let mut line = manual.positions[block_index].start + block.anchors.len() + 1;
-        let offset = matching_offset(&body, &query).unwrap();
-        let mut column: usize = 1;
-        for (_, character) in body.char_indices().take_while(|(index, _)| *index < offset) {
-            if character == '\n' {
-                line += 1;
-                column = 1;
-            } else {
-                column += 1;
-            }
-        }
+        let (line, column) = matched.unwrap().0;
         let column = column.saturating_sub(60).max(1);
         let column = if column > 1 {
             format!(", column = {column}")
@@ -1207,29 +1293,16 @@ fn search(
         .iter()
         .filter(|m| args[4].is_empty() || m.name == args[4])
     {
-        let document = files[&format!("{}.md", manual.name)]
-            .lines()
-            .collect::<Vec<_>>();
         for (i, section) in manual.sections.iter().enumerate() {
-            let heading = matching_offset(&section.title, &query).is_some();
-            if let Some((block_index, _)) =
-                manual.blocks.iter().enumerate().find(|(block_index, b)| {
-                    b.section == i
-                        && (if heading {
-                            b.heading
-                        } else {
-                            !b.heading
-                                && matching_offset(
-                                    &b.visible(
-                                        &document[manual.positions[*block_index].clone()]
-                                            .join("\n"),
-                                    ),
-                                    &query,
-                                )
-                                .is_some()
-                        })
-                })
-            {
+            let heading = matching_range(&section.title, &query).is_some();
+            if let Some((block_index, _)) = manual.blocks.iter().enumerate().find(|(_, b)| {
+                b.section == i
+                    && (if heading {
+                        b.heading
+                    } else {
+                        !b.heading && matching_range(&b.visible.text, &query).is_some()
+                    })
+            }) {
                 results.push((!heading, manual, block_index));
             }
         }
@@ -1296,7 +1369,7 @@ pub extern "C-unwind" fn mcp_console_manual(request: SEXP) -> harp::Result<SEXP>
         let (directory, prepared, _lock) = materialize(&args)?;
         let collection = &prepared.collection;
         match args[3].as_str() {
-            "read" => read(collection, &prepared.files, &directory, &args),
+            "read" => Ok(read(collection, &prepared.files, &directory, &args)?.response),
             "search" => search(collection, &prepared.files, &directory, &args),
             _ => bail!("unknown manual operation"),
         }

@@ -1,0 +1,235 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: .console$manual_search("Follow back to the extensions manual")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "Follow back to the extensions manual"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 1 Shared reference
+          Follow back to the extensions manual.
+          Read: RShowDoc("R-exts#Shared-reference")
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#Shared-reference")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Shared reference
+
+        ## 1 Shared reference
+
+        Follow back to [the extensions manual](#Deep-reference).
+
+        A *formatted café λ* and `inline code` reference.
+
+        ```
+        literal *stars* and [link](destination)
+        ```
+
+
+        Next section: RShowDoc("R-exts#Deep-reference")
+  isError: false
+---
+send:
+  r: .console$manual_search("A formatted café λ and inline code reference")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "A formatted café λ and inline code reference"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 1 Shared reference
+          A formatted café λ and inline code reference.
+          Read: RShowDoc("R-exts#Shared-reference")
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#Shared-reference")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Shared reference
+
+        ## 1 Shared reference
+
+        Follow back to [the extensions manual](#Deep-reference).
+
+        A *formatted café λ* and `inline code` reference.
+
+        ```
+        literal *stars* and [link](destination)
+        ```
+
+
+        Next section: RShowDoc("R-exts#Deep-reference")
+  isError: false
+---
+send:
+  r: .console$manual_search("literal *stars* and [link](destination)")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "literal *stars* and [link](destination)"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 1 Shared reference
+          literal *stars* and [link](destination)
+          Read: RShowDoc("R-exts#Shared-reference")
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#Shared-reference")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Shared reference
+
+        ## 1 Shared reference
+
+        Follow back to [the extensions manual](#Deep-reference).
+
+        A *formatted café λ* and `inline code` reference.
+
+        ```
+        literal *stars* and [link](destination)
+        ```
+
+
+        Next section: RShowDoc("R-exts#Deep-reference")
+  isError: false
+---
+send:
+  r: >-
+    .console$manual_search("late formatted café λ and linked reference
+    together")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "late formatted café λ and linked reference together"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 2 Deep reference
+          Read the late formatted café λ and linked reference together.
+          Read: .console$manual("R-exts#Deep-reference", start = 118)
+  isError: false
+---
+send:
+  r: .console$manual("R-exts#Deep-reference", start = 118)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 2 Deep reference
+
+        Read the **late formatted café λ** and [linked reference](#Shared-reference) together.
+
+        | First | Second |
+        | --- | --- |
+        | literal \| pipe | A *formatted table* reference. |
+  isError: false
+---
+send:
+  r: .console$manual_search("literal | pipe")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "literal | pipe"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 2 Deep reference
+          First Second literal | pipe A formatted table reference.
+          Read: .console$manual("R-exts#Deep-reference", start = 122)
+  isError: false
+---
+send:
+  r: .console$manual("R-exts#Deep-reference", start = 122)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 2 Deep reference
+
+        | literal \| pipe | A *formatted table* reference. |
+  isError: false
+---
+send:
+  r: .console$manual_search("A formatted table reference")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "A formatted table reference"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 2 Deep reference
+          First Second literal | pipe A formatted table reference.
+          Read: .console$manual("R-exts#Deep-reference", start = 122)
+  isError: false
+---
+send:
+  r: .console$manual("R-exts#Deep-reference", start = 122)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 2 Deep reference
+
+        | literal \| pipe | A *formatted table* reference. |
+  isError: false
+---
+send:
+  r: .console$manual_search("destination")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "destination"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 1 Shared reference
+          literal *stars* and [link](destination)
+          Read: RShowDoc("R-exts#Shared-reference")
+  isError: false
+---
+send:
+  r: .console$manual_search("#Shared-reference")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "#Shared-reference"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        No matches.
+  isError: false

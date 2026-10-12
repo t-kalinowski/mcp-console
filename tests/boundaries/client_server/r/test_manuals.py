@@ -302,6 +302,49 @@ def test_manual_search_budget(binary: Path, execution: Execution) -> Transcript:
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+def test_manual_search_visible_prose(binary: Path, execution: Execution) -> Transcript:
+    with manual_client(binary, execution, manuals=FIXTURES / "r_manuals_search") as (
+        client,
+        root,
+    ):
+        for query in (
+            "Follow back to the extensions manual",
+            "A formatted café λ and inline code reference",
+            "literal *stars* and [link](destination)",
+            "late formatted café λ and linked reference together",
+            "literal | pipe",
+            "A formatted table reference",
+        ):
+            client.send(
+                r=f".console$manual_search({json.dumps(query, ensure_ascii=False)})"
+            )
+            output = normalize_paths(client, root)
+            assert "1 matching sections" in output, output
+            assert query in output, output
+            command = re.search(r"  Read: (.+)", output)[1]
+            client.send(r=command)
+            preview = normalize_paths(client, root)
+            assert "Writing R Extensions" in preview, preview
+            if "late" in query:
+                assert '.console$manual("R-exts#Deep-reference", start = ' in command
+                assert (
+                    "late formatted café λ" in preview and "linked reference" in preview
+                ), preview
+            if "table" in query:
+                assert "formatted table" in preview, preview
+            if "pipe" in query:
+                assert "literal \\| pipe" in preview, preview
+        client.send(r='.console$manual_search("destination")')
+        assert "1 matching sections" in normalize_paths(client, root), (
+            "literal code stays searchable"
+        )
+        client.send(r='.console$manual_search("#Shared-reference")')
+        assert "No matches" in normalize_paths(client, root)
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
 def test_manual_long_unicode_line(binary: Path, execution: Execution) -> Transcript:
     with manual_client(binary, execution) as (client, root):
         client.send(r='.console$manual("R-exts#Long-line")')

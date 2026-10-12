@@ -16,7 +16,7 @@ result:
           Read: RShowDoc("R-exts#Needle-examples")
 
         R-exts: Writing R Extensions > 1 Small sections > 1.1 Grouped A
-          A short needle introduction. See [B](#Grouped-B), [language](R-lang.md#Shared-anchor), and [external](https://example.org/external).
+          A short needle introduction. See B, language, and external.
           Read: RShowDoc("R-exts#Grouped-A")
 
         Continue: .console$manual_search("needle", manual = "", start = 3, limit = 2)
@@ -33,7 +33,7 @@ result:
         4 matching sections; results 3–4
 
         R-exts: Writing R Extensions > 1 Small sections > 1.2 Grouped B
-          A second needle introduction with café λ. [Reference](R-lang.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+          A second needle introduction with café λ. Reference. Missing local reference.
           Read: RShowDoc("R-exts#Grouped-B")
 
         R-exts: Writing R Extensions > 2 Needle examples > 2.1 Large section
@@ -252,7 +252,7 @@ result:
         1 matching sections; results 1–1
 
         R-exts: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
-          … <- "example output stays indented and complete" code-line-159 <- "example output stays indented and complete" ```
+          … <- "example output stays indented and complete" code-line-159 <- "example output stays indented and complete"
           Read: .console$manual("R-exts#Oversized-example", start = 552)
   isError: false
 ---
@@ -287,7 +287,7 @@ result:
         1 matching sections; results 1–1
 
         R-exts: Writing R Extensions > 3 Long Unicode line
-          … λéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéwide-end ```
+          … λéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéwide-end
           Read: .console$manual("R-exts#Long-line", start = 562, column = 6951)
   isError: false
 ---
