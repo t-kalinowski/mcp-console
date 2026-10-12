@@ -17,7 +17,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import FIXTURES, r_test_environment
 from support.records import Transcript
-from support.requirements import R, requires
+from support.requirements import POSIX, R, requires
 from support.resolvers import bare_runtime_environment
 
 
@@ -27,6 +27,7 @@ def manual_client(
     execution: Execution,
     *,
     installed: bool = False,
+    manuals: Path = FIXTURES / "r_manuals",
 ) -> Iterator[tuple[McpClient, Path]]:
     with tempfile.TemporaryDirectory(prefix="console-manuals-café#-") as temporary:
         root = Path(temporary).resolve()
@@ -41,7 +42,7 @@ def manual_client(
         )
         doc = root / "doc"
         if not installed:
-            shutil.copytree(FIXTURES / "r_manuals", doc / "manual")
+            shutil.copytree(manuals, doc / "manual")
             # A default manual request must prefer HTML when PDF also exists.
             (doc / "manual/R-exts.pdf").write_text("PDF viewer sentinel\n")
             (doc / "COPYING").write_text("Plain text still uses the pager.\n")
@@ -575,3 +576,126 @@ def test_manual_cache_rejects_unprojected_files(
             for p in files
         )
         return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_table_rows_and_unanchored_headings(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution, manuals=FIXTURES / "r_manuals_anchors") as (
+        client,
+        root,
+    ):
+        client.send(
+            r='.console$manual_search("Unanchored reference", manual = "R-exts")'
+        )
+        output = normalize_paths(client, root)
+        command = re.search(r"  Read: (.+)", output)[1]
+        assert command != 'RShowDoc("R-exts#")', command
+        client.send(r=command)
+        output = normalize_paths(client, root)
+        assert "Unanchored reference" in output and "Reference body." in output, output
+        client.send(r='utils::RShowDoc("R-exts#letter-R")')
+        output = normalize_paths(client, root)
+        assert "R-only cell" in output and "A-only cell" not in output, output
+        assert "<a id=" not in output, output
+        client.send(r='RShowDoc("R-exts#child")')
+        normalize_paths(client, root)
+        collection = completed_collection(root)
+        files = list((collection / "R-exts").glob("*.md"))
+        body = "\n".join(file.read_text(encoding="utf-8") for file in files)
+        row = next(line for line in body.splitlines() if "R-only cell" in line)
+        assert '<a id="letter-R"></a>' in row, row
+        assert re.search(r"\[Parent\]\([^)]*#console-section-\d+\)", body), body
+        client.send(r='.console$manual_export("R-exts")')
+        normalize_paths(client, root)
+        complete = (collection / "exports/R-exts.md").read_text(encoding="utf-8")
+        assert '<a id="letter-R"></a>' in next(
+            line for line in complete.splitlines() if "R-only cell" in line
+        )
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_cache_repairs_file_identity(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.send(r='RShowDoc("R-exts")')
+        normalize_paths(client, root)
+        client.expect(
+            "identity replaced by a file\n",
+            # fmt: r
+            r=code(r"""
+                discard <- capture.output(path <- .console$manual("R-exts"))
+                collection <- dirname(dirname(path))
+                unlink(collection, recursive = TRUE)
+                writeLines("invalid identity", collection)
+                cat("identity replaced by a file\n")
+                """),
+        )
+        client.send(r='RShowDoc("R-exts#Grouped-B")')
+        assert "café λ" in normalize_paths(client, root)
+        assert completed_collection(root).is_dir()
+        return client.finish()
+
+
+@requires(POSIX, R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_cache_serializes_shared_repairs(
+    binary: Path, execution: Execution
+) -> Transcript:
+    import fcntl
+
+    with manual_client(binary, execution) as (first, root):
+        environment, _ = r_test_environment()
+        environment = bare_runtime_environment(environment, root / "library")
+        environment.update(
+            MCP_CONSOLE_LANGUAGES="r",
+            XDG_CACHE_HOME=str(root / "cache"),
+            CONSOLE_TEST_DOC=str(root / "doc"),
+            R_PROFILE_USER=str(root / "workspace/.Rprofile"),
+        )
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c",
+                "cache=host",
+                *(
+                    ("--writable-root", str(root / "workspace"))
+                    if execution == SANDBOXED
+                    else ()
+                ),
+            ),
+            environment,
+            current_directory=root / "workspace",
+            use_r_startup_files=True,
+        ) as peer:
+            peer.initialize_and_list_tools()
+            for client in (first, peer):
+                client.send(r='RShowDoc("R-exts")')
+                assert "Writing R Extensions" in normalize_paths(client, root)
+            collection = completed_collection(root)
+            # Hold the same OS lock as another publisher. Both prepared workers
+            # must wait before checking or replacing the corrupted entry.
+            with (collection.parent / f".{collection.name}.lock").open("wb") as gate:
+                fcntl.flock(gate, fcntl.LOCK_EX)
+                (collection / "index.md").write_text("modified collection")
+                for client in (first, peer):
+                    client.send(r='RShowDoc("R-exts")', timeout_ms=0)
+                for client in (first, peer):
+                    client.send(timeout_ms=300)
+                    output = last_tool_text(client)
+                    assert "[running; poll with an empty send]" in output, output
+                    assert "Writing R Extensions" not in output, output
+                fcntl.flock(gate, fcntl.LOCK_UN)
+            for client in (first, peer):
+                client.send()
+                assert "Writing R Extensions" in normalize_paths(client, root)
+            assert "modified collection" not in (collection / "index.md").read_text()
+            assert completed_collection(root) == collection
+            peer.finish()
+            first.finish()
+    return [{"shared_repairs_serialized": True, "completed_collection_reused": True}]

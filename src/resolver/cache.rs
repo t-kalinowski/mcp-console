@@ -144,12 +144,12 @@ fn configure_manuals(
     let root = console_root(resolver)
         .ok()
         .map(|root| root.join("manuals"))
-        .filter(|root| root.to_str().is_some());
+        .filter(|root| root.to_str().is_some())
+        // Visibility does not imply an available R runtime. An unavailable
+        // documentation cache is diagnosed only when a manual is requested.
+        .filter(|root| std::fs::create_dir_all(root).is_ok());
     let path = match &root {
-        Some(root) => {
-            std::fs::create_dir_all(root).map_err(|error| error.to_string())?;
-            root.to_str().ok_or("manual cache paths must be UTF-8")?
-        }
+        Some(root) => root.to_str().ok_or("manual cache paths must be UTF-8")?,
         // Missing or non-UTF-8 host-cache locations do not prevent unrelated
         // runtime use. Manual access reports the unavailable location on use.
         None => "",

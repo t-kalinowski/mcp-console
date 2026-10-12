@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 // Bump when conversion or projection changes, including chunking defaults.
-const FORMAT: u32 = 6;
+const FORMAT: u32 = 7;
 const TARGET: usize = 4096;
 const BODY_MAX: usize = 5400; // Leave room for hierarchy and navigation.
 const READ_BUDGET: usize = 5000; // Paths, commands, and notices fit below 8 KiB.
@@ -61,8 +61,23 @@ struct Block {
     section: usize,
     heading: bool,
     anchors: Vec<String>,
+    row_anchors: Vec<String>,
     text: String,
     links: Vec<String>,
+}
+
+impl Block {
+    fn all_anchors(&self) -> impl Iterator<Item = &String> {
+        self.anchors.iter().chain(&self.row_anchors)
+    }
+
+    fn visible(&self, text: &str) -> String {
+        let mut text = text.to_string();
+        for anchor in &self.row_anchors {
+            text = text.replace(&anchor_html(anchor), "");
+        }
+        text
+    }
 }
 
 #[derive(Serialize)]
@@ -202,14 +217,16 @@ fn remove_self_links(node: &Handle) {
     }
 }
 
-fn table(node: &Handle, links: &mut Vec<String>) -> Result<String> {
+fn table(node: &Handle, links: &mut Vec<String>) -> Result<(String, Vec<String>)> {
     let mut rows = Vec::new();
     descendants(node, &["tr"], &mut rows);
     let mut rendered = Vec::new();
+    let mut row_anchors = Vec::new();
     for row in rows {
+        let row_ids = anchors(&row);
         let mut cells = Vec::new();
         descendants(&row, &["td", "th"], &mut cells);
-        let row = cells
+        let mut row = cells
             .iter()
             .map(|cell| {
                 Ok(inline(cell, links, 100_000)?
@@ -218,6 +235,13 @@ fn table(node: &Handle, links: &mut Vec<String>) -> Result<String> {
                     .replace('\n', "<br>"))
             })
             .collect::<Result<Vec<_>>>()?;
+        if let Some(first) = row.first_mut() {
+            // Keep an index letter or entry beside its original row, while
+            // preserving the entire table as one indivisible body block.
+            let markers = row_ids.iter().map(|id| anchor_html(id)).collect::<String>();
+            first.insert_str(0, &markers);
+            row_anchors.extend(row_ids);
+        }
         rendered.push(row);
     }
     let columns = rendered.iter().map(Vec::len).max().unwrap_or(0);
@@ -229,7 +253,7 @@ fn table(node: &Handle, links: &mut Vec<String>) -> Result<String> {
             text.push_str(&format!("| {} |\n", vec!["---"; columns].join(" | ")));
         }
     }
-    Ok(text.trim_end().into())
+    Ok((text.trim_end().into(), row_anchors))
 }
 
 fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result<()> {
@@ -286,10 +310,16 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
         }
         pending.sort();
         pending.dedup();
+        if pending.is_empty() {
+            // Cache-local identity for headings such as installed Footnotes
+            // which have no original HTML anchor. Original IDs stay unchanged.
+            pending.push(format!("console-section-{section}"));
+        }
         manual.blocks.push(Block {
             section,
             heading: true,
             anchors: std::mem::take(pending),
+            row_anchors: Vec::new(),
             text: format!(
                 "{} {}",
                 "#".repeat(level),
@@ -310,6 +340,7 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
         pending.sort();
         pending.dedup();
         let mut links = Vec::new();
+        let mut row_anchors = Vec::new();
         let text = match name {
             "pre" => {
                 let body = plain(node, 100_000)?;
@@ -323,13 +354,19 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
                 );
                 format!("{fence}\n{body}\n{fence}")
             }
-            "table" => table(node, &mut links)?,
+            "table" => {
+                let (text, embedded) = table(node, &mut links)?;
+                pending.retain(|anchor| !embedded.contains(anchor));
+                row_anchors = embedded;
+                text
+            }
             _ => inline(node, &mut links, 80)?.0,
         };
         manual.blocks.push(Block {
             section,
             heading: false,
             anchors: std::mem::take(pending),
+            row_anchors,
             text,
             links,
         });
@@ -359,6 +396,7 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
                     section,
                     heading: false,
                     anchors: std::mem::take(pending),
+                    row_anchors: Vec::new(),
                     text,
                     links: Vec::new(),
                 });
@@ -458,7 +496,7 @@ fn chunk(manual: &mut Manual) {
             count
         );
         for block in &manual.blocks[start..end] {
-            for anchor in &block.anchors {
+            for anchor in block.all_anchors() {
                 manual.anchors.insert(anchor.clone(), file.clone());
             }
         }
@@ -684,10 +722,20 @@ fn block_positions(
     positions
 }
 
-fn anchor_positions(manual: &Manual, chunk: &Chunk, lines: &[usize]) -> BTreeMap<String, usize> {
+fn anchor_positions(
+    collection: &Collection,
+    manual: &Manual,
+    chunk: &Chunk,
+    lines: &[usize],
+) -> BTreeMap<String, usize> {
     let mut positions = BTreeMap::new();
     for (block, line) in manual.blocks[chunk.start..chunk.end].iter().zip(lines) {
-        for (offset, anchor) in block.anchors.iter().enumerate() {
+        let projected = project(collection, manual, block, false);
+        for anchor in block.all_anchors() {
+            let offset = projected
+                .lines()
+                .position(|text| text.contains(&anchor_html(anchor)))
+                .unwrap();
             positions.insert(anchor.clone(), line + offset);
         }
     }
@@ -770,12 +818,10 @@ fn complete(directory: &Path, prepared: &Prepared) -> std::io::Result<bool> {
     Ok(expected.is_empty())
 }
 
-fn materialize(args: &[String]) -> Result<(PathBuf, Prepared)> {
+fn materialize(args: &[String]) -> Result<(PathBuf, Prepared, fs::File)> {
     let root = std::env::var_os("MCP_CONSOLE_MANUAL_CACHE")
         .filter(|s| !s.is_empty())
-        .context(
-            "Manual cache requires a UTF-8 absolute HOME or XDG_CACHE_HOME at server launch",
-        )?;
+        .context("Installed manual cache is unavailable; check the host cache location")?;
     let source =
         fs::canonicalize(&args[1]).context("Installed HTML manual directory is unavailable")?;
     let mut paths = fs::read_dir(&source)?
@@ -836,9 +882,23 @@ fn materialize(args: &[String]) -> Result<(PathBuf, Prepared)> {
         }
         cached.as_ref().unwrap().clone()
     };
+    let lock = fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(
+            directory
+                .parent()
+                .unwrap()
+                .join(format!(".{}.lock", prepared.identity)),
+        )?;
+    lock.lock()?;
+    // Cooperating sessions serialize validation, repair, and publication. The
+    // stable lock file lives beside entries and is never removed on unlock.
     let complete = || complete(&directory, &prepared).unwrap_or(false);
     if complete() {
-        return Ok((directory, prepared));
+        return Ok((directory, prepared, lock));
     }
     let temporary = tempfile::Builder::new()
         .prefix(".incomplete-")
@@ -848,18 +908,14 @@ fn materialize(args: &[String]) -> Result<(PathBuf, Prepared)> {
         fs::create_dir_all(path.parent().unwrap())?;
         fs::write(path, text)?;
     }
-    if directory.exists() {
-        if complete() {
-            return Ok((directory, prepared));
-        }
-        fs::remove_dir_all(&directory)?;
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(&directory)?,
+        Ok(_) => fs::remove_file(&directory)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
     }
-    if let Err(error) = fs::rename(temporary.path(), &directory) {
-        // A concurrent publisher is acceptable only if its complete entry
-        // matches the same source-derived projections, including the manifest.
-        ensure!(complete(), "Cannot publish manual cache: {error}");
-    }
-    Ok((directory, prepared))
+    fs::rename(temporary.path(), &directory)?;
+    Ok((directory, prepared, lock))
 }
 
 fn read(
@@ -934,7 +990,7 @@ fn read(
                 .find(|(_, c)| relative == format!("{}/{}", manual.name, c.file))
                 .unwrap();
             let block_lines = block_positions(collection, manual, chunk, index);
-            positions = anchor_positions(manual, chunk, &block_lines);
+            positions = anchor_positions(collection, manual, chunk, &block_lines);
             section_lines = block_lines
                 .into_iter()
                 .zip(&manual.blocks[chunk.start..chunk.end])
@@ -971,7 +1027,7 @@ fn read(
         let current = manual
             .blocks
             .iter()
-            .position(|b| b.anchors.iter().any(|a| a == anchor))
+            .position(|b| b.all_anchors().any(|a| a == anchor))
             .unwrap();
         if let Some(block) = manual.blocks[current + 1..].iter().find(|b| b.heading)
             && let Some(line) = block
@@ -1001,7 +1057,7 @@ fn read(
         let section = if let Some(block) = manual
             .blocks
             .iter()
-            .find(|b| !anchor.is_empty() && b.anchors.iter().any(|a| a == anchor))
+            .find(|b| !anchor.is_empty() && b.all_anchors().any(|a| a == anchor))
         {
             Some(block.section)
         } else {
@@ -1022,15 +1078,23 @@ fn read(
     let mut next = start;
     let mut next_column = column;
     for (i, line) in lines.iter().enumerate().take(end).skip(start) {
+        let mut visible = (*line).to_string();
         if markers.contains(&i) {
-            next = i + 1;
-            next_column = 0;
-            continue;
+            for (anchor, position) in &positions {
+                if *position == i {
+                    visible = visible.replace(&anchor_html(anchor), "");
+                }
+            }
+            if visible.trim().is_empty() {
+                next = i + 1;
+                next_column = 0;
+                continue;
+            }
         }
         let part = if i == start {
-            line.chars().skip(column).collect::<String>()
+            visible.chars().skip(column).collect::<String>()
         } else {
-            (*line).into()
+            visible
         };
         let available = budget.saturating_sub(output.len());
         if part.len() + 1 > available {
@@ -1107,7 +1171,7 @@ fn search(collection: &Collection, directory: &Path, args: &[String]) -> Result<
                     && (if heading {
                         b.heading
                     } else {
-                        !b.heading && b.text.to_lowercase().contains(&query)
+                        !b.heading && b.visible(&b.text).to_lowercase().contains(&query)
                     })
             }) {
                 let chunk = manual
@@ -1115,7 +1179,9 @@ fn search(collection: &Collection, directory: &Path, args: &[String]) -> Result<
                     .iter()
                     .find(|c| c.start <= block_index && block_index < c.end)
                     .unwrap();
-                let body = project(collection, manual, block, false)
+                let projected = project(collection, manual, block, false);
+                let body = block
+                    .visible(&projected)
                     .lines()
                     .skip(block.anchors.len())
                     .collect::<Vec<_>>()
@@ -1279,7 +1345,7 @@ pub extern "C-unwind" fn mcp_console_manual(request: SEXP) -> harp::Result<SEXP>
     let args = Vec::<String>::try_from(&RObject::view(request))?;
     let run = || -> Result<Vec<String>> {
         ensure!(args.len() == 10, "invalid manual request");
-        let (directory, prepared) = materialize(&args)?;
+        let (directory, prepared, _lock) = materialize(&args)?;
         let collection = &prepared.collection;
         match args[3].as_str() {
             "read" => read(collection, &prepared.files, &directory, &args),

@@ -39,7 +39,7 @@ result:
 
         R-data: R Data Import/Export > Function and variable index
           -spreadsheets-part-001.md#Reading-Excel-spreadsheets) | | [`read.csv2`](02.01-variations-on-read-table-part-002.md#index-read_002ecsv2) | [Variations on read.ta
-          Read: .console$manual("R-data/99.042-function-and-variable-index-part-002.md", start = 98)
+          Read: .console$manual("R-data/99.042-function-and-variable-index-part-002.md", start = 80)
   isError: false
 ---
 send:
@@ -204,7 +204,7 @@ result:
            this easier.
            
            The hard part is to know what file encoding to use. For use on Windows, it is
-           best to use what Windows calls ‘Unicode’[²](99.043-concept-index-part-003.md#FOOT2), that is `"UTF-16LE"`. Using UTF-8 is
+           best to use what Windows calls ‘Unicode’[²](99.043-concept-index-part-002.md#FOOT2), that is `"UTF-16LE"`. Using UTF-8 is
            a good way to make portable files that will not easily be confused with any
            other encoding, but even macOS applications (where UTF-8 is the system
            encoding) may not recognize them, and Windows applications are most unlikely

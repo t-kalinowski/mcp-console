@@ -118,9 +118,12 @@ Changed inputs select a new entry; old entries remain inspectable.
 On first manual use, each worker derives its model and expected files from the installed sources, then reuses that model while the inputs are unchanged.
 Before reuse, Console checks the directory contents and compares cached files, including the manifest and any complete exports, with those source-derived projections.
 Missing, modified, or unexpected entries cause the collection to be regenerated.
+An identity replaced by a file is also removed and regenerated.
+Sessions serialize validation, repair, publication, and export through a stable per-identity OS file lock beside the completed entry.
 R reading and search use the source-derived model, so concurrent cache edits cannot replace the displayed documentation.
 The [platform cache policy](RESOLVER.md#cache-locations) determines the root, independently of `MCP_CONSOLE_HOME`.
 The worker can write this manual subtree without write access to the broader Console cache.
+An unavailable manual cache does not prevent Console startup; manual access reports the unavailable location on use.
 Treat completed entries as immutable; removing an entry regenerates it on next use.
 
 Each manual directory contains a TOC and descriptive, numbered Markdown files with parent/previous/next links.
@@ -128,6 +131,7 @@ Short sections can share files; large sections split at headings or paragraphs w
 Code blocks and tables remain whole, so individual files can exceed the usual roughly 4–6 KiB size.
 The R reader still provides bounded access to them.
 Explicit HTML anchors preserve original identities, and relative links connect grouped sections and other installed manuals.
+Table anchors stay beside their original rows; headings without an HTML identity receive a cache-local anchor for TOCs, parent links, and heading search.
 External links remain intact; unavailable local targets are labeled rather than linked to invented files.
 Source HTML must be UTF-8; scripts and styles are excluded and assets are not fetched or executed.
 

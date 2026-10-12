@@ -617,3 +617,36 @@ def cache_locations(
             "restart_retains_selection": True,
         }
     ]
+
+
+@executions(DIRECT, SANDBOXED)
+def test_unavailable_r_does_not_require_manual_cache(
+    binary: Path, execution: Execution
+) -> Transcript:
+    for resolution in ("disabled", "automatic"):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            cache = root / "cache"
+            cache.write_text("cache parent cannot be a directory\n")
+            env = environment(root)
+            env.update(XDG_CACHE_HOME=str(cache), RETICULATE_PYTHON=sys.executable)
+            for name in CACHE_VARIABLES:
+                env[name] = str(root / "host-caches" / name)
+            env["MPLCONFIGDIR"] = str(root / "host-caches/matplotlib")
+            env.pop("MCP_CONSOLE_LANGUAGES", None)
+            with McpClient(
+                binary,
+                execution.serve("-c", "cache=host", "-c", f"r.resolution={resolution}"),
+                env,
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                client.request("ping")
+                client.finish()
+            assert cache.read_text() == "cache parent cannot be a directory\n"
+    return [
+        {
+            "unavailable_r_requires_manual_cache": False,
+            "resolution": ["disabled", "automatic"],
+        }
+    ]
