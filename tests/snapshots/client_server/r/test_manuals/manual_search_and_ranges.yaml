@@ -123,17 +123,14 @@ result:
           code-line-066 <- "example output stays indented and complete"
           code-line-067 <- "example output stays indented and complete"
           code-line-068 <- "example output stays indented and complete"
-          code-line-069 <- "example output stays indented and complete"
-          code-line-070 <- "example output stays indented and complete"
-          code-line-071 <- "example output stays indented and complete"
 
-        Continue: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 83, column = 1)
+        Continue: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 80, column = 1)
   isError: false
 ---
 send:
   r: >-
     .console$manual("R-exts/02.02-oversized-example-part-001.md", start =
-    83, column = 1)
+    80, column = 1)
 result:
   content:
     - type: text
@@ -142,6 +139,9 @@ result:
         File: R-exts/02.02-oversized-example-part-001.md
         Location: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
 
+          code-line-069 <- "example output stays indented and complete"
+          code-line-070 <- "example output stays indented and complete"
+          code-line-071 <- "example output stays indented and complete"
           code-line-072 <- "example output stays indented and complete"
           code-line-073 <- "example output stays indented and complete"
           code-line-074 <- "example output stays indented and complete"
@@ -209,14 +209,8 @@ result:
           code-line-136 <- "example output stays indented and complete"
           code-line-137 <- "example output stays indented and complete"
           code-line-138 <- "example output stays indented and complete"
-          code-line-139 <- "example output stays indented and complete"
-          code-line-140 <- "example output stays indented and complete"
-          code-line-141 <- "example output stays indented and complete"
-          code-line-142 <- "example output stays indented and complete"
-          code-line-143 <- "example output stays indented and complete"
-          code-line-144 <- "example output stays indented and complete"
 
-        Continue: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 156, column = 1)
+        Continue: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 150, column = 1)
   isError: false
 ---
 send:
@@ -282,7 +276,7 @@ result:
         1 matching sections; results 1–1
 
         R-exts: Writing R Extensions > 3 Long Unicode line
-          … ```
+          … λéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéwide-end ```
           Read: .console$manual("R-exts/03-long-unicode-line-part-001.md", start = 11, column = 6951)
   isError: false
 ---

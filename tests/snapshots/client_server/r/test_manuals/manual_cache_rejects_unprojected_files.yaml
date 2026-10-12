@@ -71,6 +71,7 @@ send:
       file <- file.path(collection, name)
       dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
       writeLines("INJECTED-CACHE-TEXT", file)
+      Sys.chmod(file, mode = "444")
     }
     cat("added unprojected files\n")
 result:

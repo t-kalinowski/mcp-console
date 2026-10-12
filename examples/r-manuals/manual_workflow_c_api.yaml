@@ -156,10 +156,8 @@ result:
         aspects of R.
 
         **Work in progress:** Currently Entry points in the API are identified in the source
-        for this document with `@apifun`, `@eapifun`, and `@embfun` entries. Similarly,
-        `@apivar`, `@eapivar`, and `@embvar` identify variables, and `@apihdr`, `@eapihdr`, and
 
-        Continue: .console$manual("R-exts/06-the-r-api-entry-points-for-c-code-part-002.md", start = 9, column = 1)
+        Continue: .console$manual("R-exts/06-the-r-api-entry-points-for-c-code-part-002.md", start = 7, column = 1)
   isError: false
 ---
 send:

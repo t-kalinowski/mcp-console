@@ -88,11 +88,8 @@ result:
         Reference context. Reference context. Reference context. Reference context.
         Reference context. Reference context. Reference context. Reference context.
         Reference context. Reference context. Reference context. Reference context.
-        Reference context. Reference context. Reference context. Reference context.
-        Reference context. Reference context. Reference context. Reference context.
 
-
-        Next section: RShowDoc("R-exts#child")
+        Continue: .console$manual("R-exts/02-unanchored-reference-part-001.md", start = 69, column = 1)
   isError: false
 ---
 send:

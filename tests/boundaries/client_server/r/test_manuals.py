@@ -17,7 +17,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import FIXTURES, r_test_environment
 from support.records import Transcript
-from support.requirements import POSIX, R, requires
+from support.requirements import POSIX, R, UNPRIVILEGED, requires
 from support.resolvers import bare_runtime_environment
 
 
@@ -212,6 +212,11 @@ def test_manual_search_and_ranges(binary: Path, execution: Execution) -> Transcr
         for query in ("code-line-159", "wide-end"):
             client.send(r=f'.console$manual_search("{query}")')
             output = normalize_paths(client, root)
+            assert any(
+                query in line
+                for line in output.splitlines()
+                if line.startswith("  ") and not line.startswith("  Read:")
+            ), output
             command = re.search(r"  Read: (.+)", output)[1]
             client.send(r=command)
             matched = normalize_paths(client, root)
@@ -318,7 +323,7 @@ def cache_entries(root: Path) -> list[Path]:
     # Native sandboxes can add protected metadata mounts at a writable root.
     # The public cache entries are the source-identity directories.
     entries = sorted(p for p in cache.iterdir() if re.fullmatch("[a-f0-9]{64}", p.name))
-    assert not list(cache.glob(".incomplete-*")), (
+    assert not list(cache.glob(".*.incomplete")), (
         "publication left an incomplete collection"
     )
     assert all((p / "manifest.json").is_file() for p in entries), entries
@@ -559,6 +564,7 @@ def test_manual_cache_rejects_unprojected_files(
                   file <- file.path(collection, name)
                   dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
                   writeLines("INJECTED-CACHE-TEXT", file)
+                  Sys.chmod(file, mode = "444")
                 }
                 cat("added unprojected files\n")
                 """),
@@ -680,7 +686,7 @@ def test_manual_cache_serializes_shared_repairs(
             collection = completed_collection(root)
             # Hold the same OS lock as another publisher. Both prepared workers
             # must wait before checking or replacing the corrupted entry.
-            with (collection.parent / f".{collection.name}.lock").open("wb") as gate:
+            with collection.parent.with_suffix(".lock").open("rb") as gate:
                 fcntl.flock(gate, fcntl.LOCK_EX)
                 (collection / "index.md").write_text("modified collection")
                 for client in (first, peer):
@@ -734,3 +740,141 @@ def test_manual_section_reads_across_files(
         output = normalize_paths(client, root)
         assert 'Read: RShowDoc("R-exts#Export")' in output, output
         return client.finish()
+
+
+@requires(UNPRIVILEGED, R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_cache_repairs_directory_permissions(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.send(r='RShowDoc("R-exts")')
+        normalize_paths(client, root)
+        collection = completed_collection(root)
+        for target in ("collection", 'file.path(collection, "R-exts")'):
+            try:
+                client.expect(
+                    "directory permissions removed\n",
+                    # fmt: r
+                    r=code(r"""
+                        discard <- capture.output(path <- .console$manual("R-exts"))
+                        collection <- dirname(dirname(path))
+                        stopifnot(Sys.chmod(DIRECTORY, mode = "000"))
+                        cat("directory permissions removed\n")
+                        """).replace("DIRECTORY", target),
+                )
+                normalize_paths(client, root)
+                client.send(control="restart")
+                client.send(r='utils::RShowDoc("R-exts#Grouped-B")')
+                output = normalize_paths(client, root)
+                assert "café λ" in output, output
+                assert completed_collection(root) == collection
+            finally:
+                # Keep failure cleanup possible when exercising the old worker.
+                collection.chmod(0o700)
+                (collection / "R-exts").chmod(0o700)
+        return client.finish()
+
+
+@requires(R)
+@executions(SANDBOXED)
+def test_manual_cache_lock_is_host_owned(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.send(r='RShowDoc("R-exts")')
+        normalize_paths(client, root)
+        collection = completed_collection(root)
+        lock = collection.parent.with_suffix(".lock")
+        assert lock.is_file(), "publication lock must live outside the writable subtree"
+        client.expect(
+            "host lock cannot be replaced\n",
+            # fmt: r
+            r=code(r"""
+                discard <- capture.output(path <- .console$manual("R-exts"))
+                lock <- paste0(dirname(dirname(dirname(path))), ".lock")
+                stopifnot(unlink(lock) != 0L, file.exists(lock))
+                cat("host lock cannot be replaced\n")
+                """),
+        )
+        client.send(control="restart")
+        client.send(r='RShowDoc("R-exts#Grouped-B")')
+        assert "café λ" in normalize_paths(client, root)
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_cache_reclaims_abandoned_publication(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.send(r='RShowDoc("R-exts")')
+        normalize_paths(client, root)
+        collection = completed_collection(root)
+        staging = collection.with_name(f".{collection.name}.incomplete")
+        shutil.copytree(collection, staging)
+        client.send(control="restart")
+        client.send(r='RShowDoc("R-exts")')
+        assert "Writing R Extensions" in normalize_paths(client, root)
+        assert not staging.exists(), (
+            "retry must reclaim abandoned staging even on reuse"
+        )
+        # Repeat with the final entry missing, as after interrupted first use.
+        shutil.copytree(collection, staging)
+        shutil.rmtree(collection)
+        client.send(control="restart")
+        client.send(r='RShowDoc("R-exts")')
+        assert "Writing R Extensions" in normalize_paths(client, root)
+        assert not staging.exists()
+        assert completed_collection(root) == collection
+        return client.finish()
+
+
+@requires(POSIX, R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_cache_repairs_sparse_files(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.send(r='cat(Sys.getpid(), "\\n")')
+        pid = int(normalize_paths(client, root).strip())
+        client.send(r='RShowDoc("R-exts")')
+        normalize_paths(client, root)
+        collection = completed_collection(root)
+        client.send(r='.console$manual_export("R-exts")')
+        normalize_paths(client, root)
+        manifest = json.loads((collection / "manifest.json").read_text())
+        manual = next(m for m in manifest["manuals"] if m["name"] == "R-exts")
+        paths = (
+            collection / "manifest.json",
+            collection / "R-exts" / manual["anchors"]["Grouped-B"],
+            collection / "exports/R-exts.md",
+        )
+        original = [path.read_bytes() for path in paths]
+        # Linux direct execution can cap the worker's address space for a safe
+        # red run: an unbounded 16 GiB read fails without exhausting the host.
+        limits = None
+        if sys.platform == "linux" and execution == DIRECT:
+            import resource
+
+            status = Path(f"/proc/{pid}/status").read_text()
+            virtual = int(re.search(r"VmSize:\s+(\d+)", status)[1]) * 1024
+            limits = resource.prlimit(pid, resource.RLIMIT_AS)
+            resource.prlimit(
+                pid, resource.RLIMIT_AS, (virtual + 128 * 1024**2, limits[1])
+            )
+        try:
+            for path, expected in zip(paths, original, strict=True):
+                with path.open("wb") as file:
+                    file.truncate(16 * 1024**3)
+                client.send(r='.console$manual_export("R-exts")')
+                normalize_paths(client, root)
+                assert path.read_bytes() == expected
+        finally:
+            if limits is not None:
+                try:
+                    resource.prlimit(pid, resource.RLIMIT_AS, limits)
+                except ProcessLookupError:
+                    pass
+        return [{"oversized_manifest_chunk_and_export_repaired": True}]

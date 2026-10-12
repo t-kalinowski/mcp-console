@@ -125,7 +125,8 @@ On first manual use, each worker derives its model and expected files from the i
 Before reuse, Console checks the directory contents and compares cached files, including the manifest and any complete exports, with those source-derived projections.
 Missing, modified, or unexpected entries cause the collection to be regenerated.
 An identity replaced by a file is also removed and regenerated.
-Sessions serialize validation, repair, publication, and export through a stable per-identity OS file lock beside the completed entry.
+Sessions serialize validation, repair, publication, and export through a host-created OS file lock outside the worker-writable manuals subtree.
+Cache comparisons bound reads to the expected content length; repair restores directory access before removal and reclaims abandoned staging for the requested identity.
 R reading and search use the source-derived model, so concurrent cache edits cannot replace the displayed documentation.
 The [platform cache policy](RESOLVER.md#cache-locations) determines the root, independently of `MCP_CONSOLE_HOME`.
 The worker can write this manual subtree without write access to the broader Console cache.

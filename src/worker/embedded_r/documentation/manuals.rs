@@ -11,6 +11,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -19,6 +20,7 @@ const FORMAT: u32 = 7;
 const TARGET: usize = 4096;
 const BODY_MAX: usize = 5400; // Leave room for hierarchy and navigation.
 const READ_BUDGET: usize = 5000; // Paths, commands, and notices fit below 8 KiB.
+const READ_BODY_BUDGET: usize = 4500; // Ordinary host paths do not change continuations.
 
 #[derive(Serialize)]
 struct Collection {
@@ -767,6 +769,55 @@ fn projected_files(collection: &Collection) -> Result<Files> {
     Ok(files)
 }
 
+fn matches_file(path: &Path, expected: &str) -> std::io::Result<bool> {
+    let file = fs::File::open(path)?;
+    if file.metadata()?.len() != expected.len() as u64 {
+        return Ok(false);
+    }
+    // Bound the read as well: submitted code can grow a file after metadata.
+    let mut actual = Vec::new();
+    file.take(expected.len() as u64 + 1)
+        .read_to_end(&mut actual)?;
+    Ok(actual == expected.as_bytes())
+}
+
+fn remove_entry(path: &Path) -> std::io::Result<()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    // Repair directory traversal before descent; never follow cache symlinks.
+    if metadata.is_dir() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(
+                path,
+                fs::Permissions::from_mode(metadata.permissions().mode() | 0o700),
+            )?;
+        }
+        #[cfg(windows)]
+        if metadata.permissions().readonly() {
+            let mut permissions = metadata.permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(path, permissions)?;
+        }
+        for entry in fs::read_dir(path)? {
+            remove_entry(&entry?.path())?;
+        }
+        fs::remove_dir(path)
+    } else {
+        #[cfg(windows)]
+        if metadata.is_file() && metadata.permissions().readonly() {
+            let mut permissions = metadata.permissions();
+            permissions.set_readonly(false);
+            fs::set_permissions(path, permissions)?;
+        }
+        fs::remove_file(path)
+    }
+}
+
 fn complete(directory: &Path, prepared: &Prepared) -> std::io::Result<bool> {
     if !fs::symlink_metadata(directory)?.is_dir() {
         return Ok(false);
@@ -795,15 +846,13 @@ fn complete(directory: &Path, prepared: &Prepared) -> std::io::Result<bool> {
                 pending.push(relative);
             } else if kind.is_file() {
                 if let Some(text) = expected.remove(&relative) {
-                    if fs::read(entry.path())? != text.as_bytes() {
+                    if !matches_file(&entry.path(), text)? {
                         return Ok(false);
                     }
                 } else if let Some(manual) = prepared.collection.manuals.iter().find(|manual| {
                     relative == Path::new("exports").join(format!("{}.md", manual.name))
                 }) {
-                    if fs::read(entry.path())?
-                        != export_text(&prepared.collection, manual).as_bytes()
-                    {
+                    if !matches_file(&entry.path(), &export_text(&prepared.collection, manual))? {
                         return Ok(false);
                     }
                 } else {
@@ -863,7 +912,8 @@ fn materialize(args: &[String]) -> Result<(PathBuf, Prepared, fs::File)> {
         inputs.push((name, bytes));
     }
     let identity = fingerprint(&serde_json::to_vec(&collection)?);
-    let directory = PathBuf::from(root).join(&identity);
+    let root = PathBuf::from(root);
+    let directory = root.join(&identity);
     let prepared = {
         let mut cached = PREPARED.lock().expect("manual source model lock");
         if cached
@@ -882,39 +932,26 @@ fn materialize(args: &[String]) -> Result<(PathBuf, Prepared, fs::File)> {
         }
         cached.as_ref().unwrap().clone()
     };
-    let lock = fs::File::options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(
-            directory
-                .parent()
-                .unwrap()
-                .join(format!(".{}.lock", prepared.identity)),
-        )?;
+    // The host creates this lock outside the worker-writable manuals subtree.
+    // Workers need only read access to lock it and cannot replace its inode.
+    let lock = fs::File::open(root.with_extension("lock"))?;
     lock.lock()?;
-    // Cooperating sessions serialize validation, repair, and publication. The
-    // stable lock file lives beside entries and is never removed on unlock.
+    let staging = root.join(format!(".{}.incomplete", prepared.identity));
+    // A retired publisher may leave staging behind. The shared lock proves no
+    // publisher is still using this identity-scoped directory, even on reuse.
+    remove_entry(&staging)?;
     let complete = || complete(&directory, &prepared).unwrap_or(false);
     if complete() {
         return Ok((directory, prepared, lock));
     }
-    let temporary = tempfile::Builder::new()
-        .prefix(".incomplete-")
-        .tempdir_in(directory.parent().unwrap())?;
+    fs::create_dir(&staging)?;
     for (name, text) in prepared.files.iter() {
-        let path = temporary.path().join(name);
+        let path = staging.join(name);
         fs::create_dir_all(path.parent().unwrap())?;
         fs::write(path, text)?;
     }
-    match fs::symlink_metadata(&directory) {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(&directory)?,
-        Ok(_) => fs::remove_file(&directory)?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    fs::rename(temporary.path(), &directory)?;
+    remove_entry(&directory)?;
+    fs::rename(&staging, &directory)?;
     Ok((directory, prepared, lock))
 }
 
@@ -1132,7 +1169,7 @@ fn read(
         }
     }
     output.push('\n');
-    let budget = READ_BUDGET.max(output.len());
+    let budget = output.len() + READ_BODY_BUDGET.min(READ_BUDGET.saturating_sub(output.len()));
     let mut next = start;
     let mut next_column = column;
     for (i, line) in lines.iter().enumerate().take(end).skip(start) {
@@ -1261,9 +1298,13 @@ fn search_hit(
             .saturating_sub(60)
     });
     let mut excerpt = excerpt.chars().skip(offset).take(400).collect::<String>();
-    if offset > 0
-        && let Some(boundary) = excerpt.find(char::is_whitespace)
-    {
+    if offset > 0 {
+        // Trim only the leading context, never a long word containing the hit.
+        let boundary = excerpt
+            .char_indices()
+            .take(60)
+            .find(|(_, c)| c.is_whitespace())
+            .map_or(0, |(boundary, _)| boundary);
         excerpt = format!("… {}", excerpt[boundary..].trim_start());
     }
     if body
@@ -1376,7 +1417,7 @@ fn search(
     {
         for (i, section) in manual.sections.iter().enumerate() {
             let heading = section.title.to_lowercase().contains(&query);
-            if let Some((block_index, block)) = manual.blocks.iter().enumerate().find(|(_, b)| {
+            if let Some((block_index, _)) = manual.blocks.iter().enumerate().find(|(_, b)| {
                 b.section == i
                     && (if heading {
                         b.heading
@@ -1465,13 +1506,18 @@ fn export(collection: &Collection, directory: &Path, name: &str) -> Result<Vec<S
     fs::create_dir_all(&exports)?;
     let path = exports.join(format!("{name}.md"));
     let text = export_text(collection, manual);
-    if !fs::read(&path).is_ok_and(|actual| actual == text.as_bytes()) {
-        // Keep partial exports outside the completed entry that peers verify.
-        let temporary = tempfile::Builder::new()
-            .prefix(".incomplete-export-")
-            .tempfile_in(directory.parent().unwrap())?;
-        fs::write(temporary.path(), text)?;
-        temporary.persist(&path).map_err(|error| error.error)?;
+    if !matches_file(&path, &text).unwrap_or(false) {
+        // Share the reclaimable identity-scoped staging directory. The caller
+        // holds the publication lock until this complete export is renamed.
+        let staging = directory.with_file_name(format!(
+            ".{}.incomplete",
+            directory.file_name().unwrap().to_string_lossy()
+        ));
+        fs::create_dir(&staging)?;
+        let temporary = staging.join("export.md");
+        fs::write(&temporary, text)?;
+        fs::rename(&temporary, &path)?;
+        fs::remove_dir(&staging)?;
     }
     Ok(vec![
         path.to_string_lossy().into(),
