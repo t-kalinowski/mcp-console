@@ -1,8 +1,8 @@
 ---
-title: An overnight report
+title: An autonomous report
 output: rmarkdown::html_vignette
 vignette: |
-  %\VignetteIndexEntry{An overnight report}
+  %\VignetteIndexEntry{An autonomous report}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -11,9 +11,9 @@ vignette: |
 knitr::opts_chunk$set(eval = FALSE)
 ```
 
-A scheduled report needs a predictable configuration: which R to use, which packages to prepare, where it can write, and which hosts it can contact.
+A report that runs autonomously needs a predictable configuration: which R to use, which packages to prepare, where it can write, and which hosts it can contact.
 This walkthrough builds that configuration in R, adds permissions, inspects both its complete and compact forms, and registers Console with an ellmer chat.
-The chat writes report files and returns a summary that the surrounding job can send by email.
+The chat writes report files and returns a summary that the surrounding job can send by email, for example as a daily sales update.
 
 The examples are displayed without execution when this vignette is built.
 To run them, choose an existing project directory containing your report data, replace the example domains with your services, and use a matching Console executable.

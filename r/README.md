@@ -208,12 +208,12 @@ See [tool presentation and lifecycle](https://t-kalinowski.github.io/mcp-console
 
 ## Configure a scheduled report
 
-[An overnight report](https://t-kalinowski.github.io/mcp-console/r/articles/overnight-report.html) walks through explicit settings, permission edits, full and pruned inspection, and launching an ellmer chat.
+[An autonomous report](https://t-kalinowski.github.io/mcp-console/r/articles/autonomous-report.html) walks through explicit settings, permission edits, full and pruned inspection, and launching an ellmer chat.
 It uses `RConfig(executable = current_r())` to select the R installation running the script on every platform.
 Open it from an installed package with:
 
 ```r
-vignette("overnight-report", package = "mcp.console")
+vignette("autonomous-report", package = "mcp.console")
 ```
 
 ## Existing callers

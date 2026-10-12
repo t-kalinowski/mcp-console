@@ -63,7 +63,7 @@ resolve_console_config <- function(
 #' lists, and runtime-owned cache paths remain launch policies; these operations
 #' do not create a dependency lock or snapshot the process environment.
 #'
-#' See `vignette("overnight-report", package = "mcp.console")` for a
+#' See `vignette("autonomous-report", package = "mcp.console")` for a
 #' scheduled-report workflow using these operations.
 #'
 #' @param config A [ConsoleConfig()]. In discovery and file reads, its settings

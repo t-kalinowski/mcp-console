@@ -122,9 +122,9 @@ class WebsiteTests(unittest.TestCase):
         self.assertFalse((self.site / "templates").exists())
 
     def test_r_report_vignette_is_discoverable(self) -> None:
-        article = self.site / "r/articles/overnight-report.html"
-        self.assertIn(article, self.pages, "overnight report vignette is missing")
-        self.assertIn("An overnight report", self.pages[article].title)
+        article = self.site / "r/articles/autonomous-report.html"
+        self.assertIn(article, self.pages, "autonomous report vignette is missing")
+        self.assertIn("An autonomous report", self.pages[article].title)
         for source in ("index", "reference/console_tool", "reference/config-workflow"):
             page = self.site / f"r/{source}.html"
             with self.subTest(source=source):
@@ -136,7 +136,7 @@ class WebsiteTests(unittest.TestCase):
                 self.assertIn(article, destinations)
         search = json.loads((self.site / "r/search.json").read_text())
         self.assertIn(
-            "https://t-kalinowski.github.io/mcp-console/r/articles/overnight-report.html",
+            "https://t-kalinowski.github.io/mcp-console/r/articles/autonomous-report.html",
             {entry["path"] for entry in search},
         )
 

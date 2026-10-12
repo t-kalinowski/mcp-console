@@ -11,7 +11,7 @@
 #' With `ConsoleConfig(sandbox = FALSE)`, worker descendants may survive
 #' server shutdown.
 #'
-#' See `vignette("overnight-report", package = "mcp.console")` for an explicit
+#' See `vignette("autonomous-report", package = "mcp.console")` for an explicit
 #' configuration, permission edits, inspection, and an ellmer launch.
 #'
 #' @section Executable resolution:
