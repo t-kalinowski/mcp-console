@@ -202,6 +202,36 @@ def test_reports_discovery_failure_without_losing_mcp(binary: Path) -> Transcrip
 
 
 @requires(POSIX)
+def test_standalone_requirements_wait_for_discovery(binary: Path) -> Transcript:
+    with gated_discovery(binary) as (client, release):
+        client.transcript.append(
+            {
+                "scenario": "Standalone preparation waits for initial discovery even with timeout_ms=0.",
+                "fixture": "The R discovery probe is held at a FIFO and fails after release.",
+            }
+        )
+        client.initialize_and_list_tools()
+        pending = client.start_send(
+            requirements={"action": "set", "r": ["must-not-resolve"]},
+            timeout_ms=0,
+        )
+        # Discovery remains causally blocked. Check the absence of a response,
+        # then retain the complete startup failure after releasing the probe.
+        if select.select([client.stdout], [], [], 0.25)[0]:
+            client.receive(pending)
+            raise AssertionError(
+                f"standalone preparation returned during discovery: {pending}"
+            )
+        release.release()
+        client.receive(pending)
+        assert pending["result"]["isError"] is True, pending
+        assert "fixture R discovery failed" in last_result_text(client)
+        transcript, errors = client.finish_with_standard_error(expected_exit_status=1)
+        assert "fixture R discovery failed" in errors, errors
+        return transcript + [{"stderr": errors}]
+
+
+@requires(POSIX)
 def test_failed_handshake_cancels_discovery_with_input_open(binary: Path) -> Transcript:
     with gated_discovery(binary) as (client, _):
         client.start_request("tools/list")
