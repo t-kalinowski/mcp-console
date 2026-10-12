@@ -41,7 +41,12 @@ def test_sync_connection_closes_resources(binary: Path) -> Transcript:
             assert console.send_tool.name == "send"
             assert console.send(python="hello") == "hello"
             assert console.send(control="interrupt") == "interrupted"
+            connection_threads = set(threading.enumerate()) - before
         assert (root / "closed").exists()
+        # AnyIO signals its pool workers to stop when the portal's root task
+        # finishes. Join their retirement before checking for leaked resources.
+        for thread in connection_threads:
+            thread.join(timeout=5)
         assert set(threading.enumerate()) == before
     return [{"output": "hello", "control": "interrupted", "closed": True}]
 
