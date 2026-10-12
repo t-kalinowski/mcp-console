@@ -1,0 +1,158 @@
+---
+title: An overnight report
+output: rmarkdown::html_vignette
+vignette: |
+  %\VignetteIndexEntry{An overnight report}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+A scheduled report needs a predictable configuration: which R to use, which packages to prepare, where it can write, and which hosts it can contact.
+This walkthrough builds that configuration in R, adds permissions, inspects both its complete and compact forms, and registers Console with an ellmer chat.
+The chat writes report files and returns a summary that the surrounding job can send by email.
+
+The examples are displayed without execution when this vignette is built.
+To run them, choose an existing project directory containing your report data, replace the example domains with your services, and use a matching Console executable.
+The final step also requires an ellmer provider and its credentials.
+
+## Start with explicit settings
+
+```{r paths}
+library(mcp.console)
+
+project <- normalizePath("/path/to/report", mustWork = TRUE)
+binary <- Sys.which("mcp-console")
+stopifnot(nzchar(binary))
+```
+
+Use the same `binary` and `project` for inspection and launch.
+All relative configuration paths below are relative to `project`.
+During development, set `binary` to the current checkout's executable; older releases may not support these configuration operations.
+
+```{r config}
+config <- ConsoleConfig(
+  languages = "r",
+  inherit_environment = FALSE,
+  environment = c(TZ = "UTC"),
+  r = RConfig(
+    executable = current_r(),
+    vanilla = TRUE,
+    packages = c("rmarkdown", "httr2"),
+    resolution = "startup_only"
+  ),
+  sandbox = SandboxPolicy(
+    filesystem = SandboxFilesystem(
+      read_only = "./data",
+      read_write = "./reports",
+      deny = path.expand("~/.ssh")
+    ),
+    network = SandboxNetwork(
+      proxy = SandboxProxy(
+        domains = SandboxDomains(allow = "api.example.com")
+      )
+    )
+  )
+)
+```
+
+`ConsoleConfig()` reads no configuration files, and passing this object to `console_tool()` skips global and project configuration discovery.
+`current_r()` selects the installation running this script, including the Windows architecture directory and executable suffix.
+Console starts a separate R session; `vanilla = TRUE` skips R startup files, and `startup_only` prepares the declared packages without allowing later package additions.
+
+`inherit_environment = FALSE` excludes inherited worker and resolver environment variables; Console still supplies its owned runtime variables.
+The launcher uses its trusted host environment to locate executables and prepare dependencies.
+Configure provider credentials in the parent R process for ellmer; they are not forwarded to Console's workers unless you explicitly include them in the configuration.
+
+## Add a writable directory and an allowed domain
+
+S7 properties use `@`.
+Append values to extend an existing grant:
+
+```{r permissions}
+config@sandbox@filesystem@read_write <- c(
+  config@sandbox@filesystem@read_write,
+  "./figures"
+)
+config@sandbox@network@proxy@domains@allow <- c(
+  config@sandbox@network@proxy@domains@allow,
+  "data.example.com"
+)
+
+for (directory in config@sandbox@filesystem@read_write) {
+  destination <- file.path(project, directory)
+  if (!dir.exists(destination)) {
+    stopifnot(dir.create(destination, recursive = TRUE))
+  }
+}
+```
+
+Create writable directories before launching Console.
+The filesystem policy retains Console's host-read baseline: `read_only = "./data"` does not hide other readable host files.
+Use `deny` for sensitive locations.
+Proxy rules allow hostnames or IP patterns; they do not constrain URL paths or email recipients.
+
+Dependency preparation has separate permissions and may download packages.
+See [Resolver configuration](https://t-kalinowski.github.io/mcp-console/RESOLVER.html) when preparation needs a different policy; explicit resolver sandbox policies are unsupported on Windows.
+
+## Inspect the complete and compact configurations
+
+```{r inspect}
+full <- materialize_console_config(config, path = binary, project = project)
+print(full)
+
+compact <- prune_console_config(full, path = binary, project = project)
+print(compact)
+```
+
+Both results are ordinary, editable `ConsoleConfig` objects.
+`full` includes native defaults, the tool description, and parameter descriptions and schema metadata.
+`compact` shows settings that differ from those defaults, retaining meaningful empty values.
+These operations validate configuration without starting interpreters or installing packages.
+
+Review the permissions and generated tool guidance before launch.
+Printing a config includes its configured environment values, so inspect it before adding secrets if the output will be shared.
+For structural comparisons, use `as.list(full)`, `as.list(compact)`, or `all.equal()` on two such lists.
+
+Launch `full` to keep its materialized defaults and descriptions.
+Launching `compact` instead lets omitted settings follow the defaults of the selected Console binary.
+Neither form locks package versions or snapshots the host environment.
+If you later edit permissions or parameter visibility in `full`, set affected tool descriptions to `NULL` before materializing again so Console can regenerate them.
+
+## Launch the report
+
+```{r launch}
+send <- console_tool(config = full, path = binary, project = project)
+
+chat <- ellmer::chat_openai(
+  system_prompt = paste(
+    "Use the console to prepare the scheduled report.",
+    "Read input files from data/ and write the report to reports/.",
+    "Write figures to figures/ and explain any missing inputs."
+  )
+)
+chat$register_tool(send)
+summary <- chat$chat(
+  paste(
+    "Summarize the latest data in data/sales.csv.",
+    "Save reports/sales-summary.md and a sales trend plot in figures/.",
+    "Return a short summary and the paths of the files you created."
+  )
+)
+cat(summary)
+```
+
+Replace the input filename and task with your report's requirements.
+The permission policy is enforced by Console; the prompt describes the task.
+Keep `send` and `chat` reachable until the job finishes.
+Your surrounding R script can deliver the summary or report through its existing email workflow, with the recipient specified in that script.
+
+Save the code in a script such as `report.R` and have your scheduler run `Rscript --vanilla report.R`.
+For scheduled runs, the R installation that runs that script is the one selected by `current_r()`.
+You can save an inspected configuration with `saveRDS(full, "report-config.rds")` and load it with `readRDS()`; continue to supply the intended `binary` and `project` at launch.
+
+For a workflow that starts from files, use `discover_console_config()` to read optional global/project files explicitly, or `read_console_config()` to require one JSON or YAML file.
+See `?config-workflow` for those operations and `?console_tool` for launch options.

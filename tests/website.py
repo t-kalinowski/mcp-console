@@ -121,6 +121,25 @@ class WebsiteTests(unittest.TestCase):
             self.assertIn((self.site / name).resolve(), self.pages)
         self.assertFalse((self.site / "templates").exists())
 
+    def test_r_report_vignette_is_discoverable(self) -> None:
+        article = self.site / "r/articles/overnight-report.html"
+        self.assertIn(article, self.pages, "overnight report vignette is missing")
+        self.assertIn("An overnight report", self.pages[article].title)
+        for source in ("index", "reference/console_tool", "reference/config-workflow"):
+            page = self.site / f"r/{source}.html"
+            with self.subTest(source=source):
+                destinations = {
+                    (page.parent / unquote(urlsplit(link).path)).resolve()
+                    for link in self.pages[page].links
+                    if not urlsplit(link).scheme and not urlsplit(link).netloc
+                }
+                self.assertIn(article, destinations)
+        search = json.loads((self.site / "r/search.json").read_text())
+        self.assertIn(
+            "https://t-kalinowski.github.io/mcp-console/r/articles/overnight-report.html",
+            {entry["path"] for entry in search},
+        )
+
     def test_r_package_subsite(self) -> None:
         home = (self.site / "r/index.html").resolve()
         reference = (self.site / "r/reference/console_tool.html").resolve()
