@@ -74,7 +74,7 @@ def _writable_roots_reach_every_runner_launch(
         capture = host / "runner-configurations.jsonl"
         environment = {
             **os.environ,
-            "MCP_CONSOLE_LANGUAGES": "python",
+            "XDG_CACHE_HOME": str(host / "console-cache"),
             LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "MCP_CONSOLE_TEST_HOST": str(host),
@@ -179,7 +179,7 @@ def _writable_roots_reach_every_runner_launch(
                 "path": {"type": "special", "value": {"kind": "root"}},
                 "access": "read",
             }
-            assert entries[1:] == (
+            expected = (
                 [
                     {"path": {"type": "path", "path": str(root)}, "access": "write"}
                     for root in [*roots, future]
@@ -187,6 +187,19 @@ def _writable_roots_reach_every_runner_launch(
                 if scenario != "sandbox defaults"
                 else []
             )
+            if scenario.startswith("serve"):
+                manual_cache = str(host / "console-cache/mcp-console/manuals")
+                expected.insert(
+                    0,
+                    {"path": {"type": "path", "path": manual_cache}, "access": "write"},
+                )
+                assert (
+                    payload["environment"]["MCP_CONSOLE_MANUAL_CACHE"] == manual_cache
+                )
+                payload["environment"]["MCP_CONSOLE_MANUAL_CACHE"] = (
+                    manual_cache.replace(str(host), "<host directory>")
+                )
+            assert entries[1:] == expected, payload
             assert ("macos_seatbelt_profile_extension" in payload) == macos
             parent = payload["lifecycle"].get("parent_pid")
             assert parent == (
