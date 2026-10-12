@@ -8,23 +8,22 @@ result:
     - type: text
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/index.md
+        File: R-exts.md
 
         # Writing R Extensions
 
-        [Collection](../index.md)
+        [Collection](index.md)
 
-
-        - [Writing R Extensions](00.00-writing-r-extensions-part-001.md#Top)
-          - [1 Small sections](01-small-sections-part-001.md#Small-sections)
-          - [2 Needle examples](02-needle-examples-part-001.md#Needle-examples)
-          - [3 Long Unicode line](03-long-unicode-line-part-001.md#Long-line)
-          - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
-          - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
+        - [Writing R Extensions](R-exts.md#Top)
+          - [1 Small sections](R-exts.md#Small-sections)
+          - [2 Needle examples](R-exts.md#Needle-examples)
+          - [3 Long Unicode line](R-exts.md#Long-line)
+          - [4 HTML and Markdown examples](R-exts.md#Code-anchors)
+          - [Appendix B Fixture reference](R-exts.md#Appendix-B)
 
         Read: `RShowDoc("R-exts#original-anchor")`
         Search: `.console$manual_search("phrase", manual = "R-exts")`
-        Full TOC: `.console$manual("R-exts/index.md")`
+        Full TOC and document: `.console$manual("R-exts.md")`
   isError: false
 ---
 send:
@@ -34,23 +33,22 @@ result:
     - type: text
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/index.md
+        File: R-exts.md
 
         # Writing R Extensions
 
-        [Collection](../index.md)
+        [Collection](index.md)
 
-
-        - [Writing R Extensions](00.00-writing-r-extensions-part-001.md#Top)
-          - [1 Small sections](01-small-sections-part-001.md#Small-sections)
-          - [2 Needle examples](02-needle-examples-part-001.md#Needle-examples)
-          - [3 Long Unicode line](03-long-unicode-line-part-001.md#Long-line)
-          - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
-          - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
+        - [Writing R Extensions](R-exts.md#Top)
+          - [1 Small sections](R-exts.md#Small-sections)
+          - [2 Needle examples](R-exts.md#Needle-examples)
+          - [3 Long Unicode line](R-exts.md#Long-line)
+          - [4 HTML and Markdown examples](R-exts.md#Code-anchors)
+          - [Appendix B Fixture reference](R-exts.md#Appendix-B)
 
         Read: `RShowDoc("R-exts#original-anchor")`
         Search: `.console$manual_search("phrase", manual = "R-exts")`
-        Full TOC: `.console$manual("R-exts/index.md")`
+        Full TOC and document: `.console$manual("R-exts.md")`
   isError: false
 ---
 send:
@@ -71,23 +69,22 @@ result:
     - type: text
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/index.md
+        File: R-exts.md
 
         # Writing R Extensions
 
-        [Collection](../index.md)
+        [Collection](index.md)
 
-
-        - [Writing R Extensions](00.00-writing-r-extensions-part-001.md#Top)
-          - [1 Small sections](01-small-sections-part-001.md#Small-sections)
-          - [2 Needle examples](02-needle-examples-part-001.md#Needle-examples)
-          - [3 Long Unicode line](03-long-unicode-line-part-001.md#Long-line)
-          - [4 HTML and Markdown examples](04-html-and-markdown-examples-part-001.md#Code-anchors)
-          - [Appendix B Fixture reference](B-fixture-reference-part-001.md#Appendix-B)
+        - [Writing R Extensions](R-exts.md#Top)
+          - [1 Small sections](R-exts.md#Small-sections)
+          - [2 Needle examples](R-exts.md#Needle-examples)
+          - [3 Long Unicode line](R-exts.md#Long-line)
+          - [4 HTML and Markdown examples](R-exts.md#Code-anchors)
+          - [Appendix B Fixture reference](R-exts.md#Appendix-B)
 
         Read: `RShowDoc("R-exts#original-anchor")`
         Search: `.console$manual_search("phrase", manual = "R-exts")`
-        Full TOC: `.console$manual("R-exts/index.md")`
+        Full TOC and document: `.console$manual("R-exts.md")`
   isError: false
 ---
 send:
@@ -97,15 +94,23 @@ result:
     - type: text
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/01-small-sections-part-001.md
+        File: R-exts.md
         Location: Writing R Extensions > 1 Small sections
 
         ## 1 Small sections
 
         Changed source text.
 
+        ### 1.1 Grouped A
 
-        Next section: RShowDoc("R-exts#Grouped-A")
+        A short needle introduction. See [B](#Grouped-B), [language](R-lang.md#Shared-anchor), and [external](https://example.org/external).
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](R-lang.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next section: RShowDoc("R-exts#Needle-examples")
   isError: false
 ---
 send:

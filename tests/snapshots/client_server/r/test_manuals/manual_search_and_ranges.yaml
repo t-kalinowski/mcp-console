@@ -16,7 +16,7 @@ result:
           Read: RShowDoc("R-exts#Needle-examples")
 
         R-exts: Writing R Extensions > 1 Small sections > 1.1 Grouped A
-          A short needle introduction. See [B](01-small-sections-part-001.md#Grouped-B), [language](../R-lang/01-shared-references-part-001.md#Shared-anchor), and [external](https://example.org/external).
+          A short needle introduction. See [B](#Grouped-B), [language](R-lang.md#Shared-anchor), and [external](https://example.org/external).
           Read: RShowDoc("R-exts#Grouped-A")
 
         Continue: .console$manual_search("needle", manual = "", start = 3, limit = 2)
@@ -33,7 +33,7 @@ result:
         4 matching sections; results 3–4
 
         R-exts: Writing R Extensions > 1 Small sections > 1.2 Grouped B
-          A second needle introduction with café λ. [Reference](../R-lang/01-shared-references-part-001.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+          A second needle introduction with café λ. [Reference](R-lang.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
           Read: RShowDoc("R-exts#Grouped-B")
 
         R-exts: Writing R Extensions > 2 Needle examples > 2.1 Large section
@@ -48,7 +48,7 @@ result:
     - type: text
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/02.02-oversized-example-part-001.md
+        File: R-exts.md
         Location: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
 
         ### 2.2 Oversized example
@@ -123,22 +123,22 @@ result:
           code-line-066 <- "example output stays indented and complete"
           code-line-067 <- "example output stays indented and complete"
           code-line-068 <- "example output stays indented and complete"
+        ```
 
-        Continue: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 80, column = 1)
+        Continue: .console$manual("R-exts#Oversized-example", start = 462, column = 1)
   isError: false
 ---
 send:
-  r: >-
-    .console$manual("R-exts/02.02-oversized-example-part-001.md", start =
-    80, column = 1)
+  r: .console$manual("R-exts#Oversized-example", start = 462, column = 1)
 result:
   content:
     - type: text
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/02.02-oversized-example-part-001.md
+        File: R-exts.md
         Location: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
 
+        ```
           code-line-069 <- "example output stays indented and complete"
           code-line-070 <- "example output stays indented and complete"
           code-line-071 <- "example output stays indented and complete"
@@ -209,18 +209,28 @@ result:
           code-line-136 <- "example output stays indented and complete"
           code-line-137 <- "example output stays indented and complete"
           code-line-138 <- "example output stays indented and complete"
+        ```
 
-        Continue: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 150, column = 1)
+        Continue: .console$manual("R-exts#Oversized-example", start = 532, column = 1)
   isError: false
 ---
 send:
   r: |
+    discard <- capture.output(path <- .console$manual("R-exts#Oversized-example"))
+    start <- grep(
+      "code-line-000",
+      readLines(path, encoding = "UTF-8"),
+      fixed = TRUE
+    )
     a <- capture.output(.console$manual(
       "R-exts#Oversized-example",
-      start = 15L,
+      start = start,
       lines = 4L
     ))
-    stopifnot(length(a) < 12L, any(grepl("code-line-", a, fixed = TRUE)))
+    stopifnot(
+      sum(grepl("code-line-", a, fixed = TRUE)) == 4L,
+      sum(a == "```") == 2L
+    )
     b <- capture.output(.console$manual_search("absent search phrase"))
     stopifnot(any(grepl("No matches", b, fixed = TRUE)))
     cat("bounded reading and capture retained\n")
@@ -243,26 +253,27 @@ result:
 
         R-exts: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
           … <- "example output stays indented and complete" code-line-159 <- "example output stays indented and complete" ```
-          Read: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 170)
+          Read: .console$manual("R-exts#Oversized-example", start = 552)
   isError: false
 ---
 send:
-  r: >-
-    .console$manual("R-exts/02.02-oversized-example-part-001.md", start =
-    170)
+  r: .console$manual("R-exts#Oversized-example", start = 552)
 result:
   content:
     - type: text
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/02.02-oversized-example-part-001.md
+        File: R-exts.md
         Location: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
 
+        ```
           code-line-159 <- "example output stays indented and complete"
         ```
 
+        After the complete coherent code example.
 
-        Next file: .console$manual("R-exts/02.02-oversized-example-part-002.md")
+
+        Next section: RShowDoc("R-exts#Long-line")
   isError: false
 ---
 send:
@@ -277,26 +288,27 @@ result:
 
         R-exts: Writing R Extensions > 3 Long Unicode line
           … λéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéwide-end ```
-          Read: .console$manual("R-exts/03-long-unicode-line-part-001.md", start = 11, column = 6951)
+          Read: .console$manual("R-exts#Long-line", start = 562, column = 6951)
   isError: false
 ---
 send:
-  r: >-
-    .console$manual("R-exts/03-long-unicode-line-part-001.md", start = 11,
-    column = 6951)
+  r: .console$manual("R-exts#Long-line", start = 562, column = 6951)
 result:
   content:
     - type: text
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/03-long-unicode-line-part-001.md
+        File: R-exts.md
         Location: Writing R Extensions > 3 Long Unicode line
 
+        ```
         λéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéwide-end
         ```
 
+        After the wide line.
 
-        Next file: .console$manual("R-exts/03-long-unicode-line-part-002.md")
+
+        Next section: RShowDoc("R-exts#Code-anchors")
   isError: false
 ---
 send:

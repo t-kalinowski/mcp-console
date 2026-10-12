@@ -126,8 +126,7 @@ result:
     - type: text
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-lang/04.03.01-evaluation-environment-part-001.md
-        Also read: R-lang/04.03.03-argument-evaluation-part-001.md
+        File: R-lang.md
         Location: The R Language Definition > 4 Functions > 4.3 Evaluation > 4.3.3 Argument evaluation
 
         #### 4.3.3 Argument evaluation

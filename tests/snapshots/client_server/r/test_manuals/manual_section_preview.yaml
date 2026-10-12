@@ -8,8 +8,7 @@ result:
     - type: text
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/00.00-writing-r-extensions-part-001.md
-        Also read: R-exts/01.02-export-guidance-part-001.md
+        File: R-exts.md
         Location: Writing R Extensions > 1 Introduction > 1.2 Export guidance
 
         ### 1.2 Export guidance
@@ -82,4 +81,71 @@ result:
         R-exts: Writing R Extensions > 1 Introduction > 1.2 Export guidance
           * Semicolon separators and decimal commas need matching import and export functions. Use the documented CSV defaults rather than reconstructing them by hand. Keep related settings and examples together. Keep related settings and examples together. Keep related settings and examples together. Keep related settings and examples together. Keep related settings and examples together. Keep related …
           Read: RShowDoc("R-exts#Export")
+  isError: false
+---
+send:
+  r: .console$manual_search("This introduction", manual = "R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "This introduction"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 1 Introduction > 1.2 Export guidance
+          … output format for the application that will consume it. This introduction is deliberately beside earlier background material in the physical cache file.
+          Read: RShowDoc("R-exts#Export")
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#Export")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Introduction > 1.2 Export guidance
+
+        ### 1.2 Export guidance
+
+        Choose the output format for the application that will consume it. This
+        introduction is deliberately beside earlier background material in the physical
+        cache file.
+
+        * Semicolon separators and decimal commas need matching import and export
+          functions. Use the documented CSV defaults rather than reconstructing them by
+          hand. Keep related settings and examples together. Keep related settings and
+          examples together. Keep related settings and examples together. Keep related
+          settings and examples together. Keep related settings and examples together.
+          Keep related settings and examples together. Keep related settings and
+          examples together. Keep related settings and examples together. Keep related
+          settings and examples together. Keep related settings and examples together.
+          Keep related settings and examples together. Keep related settings and
+          examples together. Keep related settings and examples together. Keep related
+          settings and examples together. Keep related settings and examples together.
+          Keep related settings and examples together. Keep related settings and
+          examples together. Keep related settings and examples together. Keep related
+          settings and examples together. Keep related settings and examples together.
+          Keep related settings and examples together. Keep related settings and
+          examples together. Keep related settings and examples together. Keep related
+          settings and examples together. Keep related settings and examples together.
+          Keep related settings and examples together. Keep related settings and
+          examples together. Keep related settings and examples together. Keep related
+          settings and examples together. Keep related settings and examples together.
+          Keep related settings and examples together. Keep related settings and
+          examples together. Keep related settings and examples together. Keep related
+          settings and examples together. Keep related settings and examples together.
+          Keep related settings and examples together. Keep related settings and
+          examples together. Keep related settings and examples together. Keep related
+          settings and examples together. Keep related settings and examples together.
+          Keep related settings and examples together. Keep related settings and
+          examples together. Keep related settings and examples together. Keep related
+          settings and examples together. Keep related settings and examples together.
+
+        A later example remains part of this logical section.
+
+
+        Next section: RShowDoc("R-exts#Next")
   isError: false

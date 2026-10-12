@@ -1,6 +1,7 @@
 """Installed manuals share a persistent, navigable Markdown representation."""
 
 import json
+import os
 import re
 import shutil
 import sys
@@ -13,11 +14,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.assertions import last_tool_text
 from support.client import McpClient
+from support.checkpoints import wait_for_path
+from support.native import LOADER_VARIABLE, build_interposer
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import FIXTURES, r_test_environment
 from support.records import Transcript
-from support.requirements import POSIX, R, UNPRIVILEGED, requires
+from support.requirements import POSIX, R, UNPRIVILEGED, command, requires
 from support.resolvers import bare_runtime_environment
 
 
@@ -29,6 +32,7 @@ def manual_client(
     installed: bool = False,
     manuals: Path = FIXTURES / "r_manuals",
     doc_component: str = "doc",
+    cache_race: bool = False,
 ) -> Iterator[tuple[McpClient, Path]]:
     with tempfile.TemporaryDirectory(prefix="console-manuals-café#-") as temporary:
         root = Path(temporary).resolve()
@@ -38,6 +42,10 @@ def manual_client(
         library = root / "library"
         library.mkdir()
         environment = bare_runtime_environment(environment, library)
+        if cache_race:
+            environment[LOADER_VARIABLE] = str(
+                build_interposer(root, "manual_cache_fifo")
+            )
         environment.update(
             MCP_CONSOLE_LANGUAGES="r", XDG_CACHE_HOME=str(root / "cache")
         )
@@ -68,6 +76,14 @@ def manual_client(
             execution.serve(
                 "-c",
                 "cache=host",
+                *(
+                    (
+                        "-c",
+                        f"environment.{LOADER_VARIABLE}={json.dumps(environment[LOADER_VARIABLE])}",
+                    )
+                    if cache_race
+                    else ()
+                ),
                 *(
                     ("--writable-root", str(workspace))
                     if execution == SANDBOXED
@@ -198,12 +214,21 @@ def test_manual_search_and_ranges(binary: Path, execution: Execution) -> Transcr
             "bounded reading and capture retained\n",
             # fmt: r
             r=code(r"""
+                discard <- capture.output(path <- .console$manual("R-exts#Oversized-example"))
+                start <- grep(
+                  "code-line-000",
+                  readLines(path, encoding = "UTF-8"),
+                  fixed = TRUE
+                )
                 a <- capture.output(.console$manual(
                   "R-exts#Oversized-example",
-                  start = 15L,
+                  start = start,
                   lines = 4L
                 ))
-                stopifnot(length(a) < 12L, any(grepl("code-line-", a, fixed = TRUE)))
+                stopifnot(
+                  sum(grepl("code-line-", a, fixed = TRUE)) == 4L,
+                  sum(a == "```") == 2L
+                )
                 b <- capture.output(.console$manual_search("absent search phrase"))
                 stopifnot(any(grepl("No matches", b, fixed = TRUE)))
                 cat("bounded reading and capture retained\n")
@@ -339,63 +364,157 @@ def completed_collection(root: Path) -> Path:
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-def test_manual_files_and_export(binary: Path, execution: Execution) -> Transcript:
+def test_manual_single_document_previews(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.send(r='RShowDoc("R-exts#Small-sections")')
+        output = normalize_paths(client, root)
+        collection = completed_collection(root)
+        document = collection / "R-exts.md"
+        assert document.is_file(), "each manual must have one complete Markdown file"
+        assert {p.name for p in collection.glob("*.md")} == {
+            "index.md",
+            "R-exts.md",
+            "R-lang.md",
+        }
+        assert "1.1 Grouped A" in output and "1.2 Grouped B" in output, output
+        manifest = json.loads((collection / "manifest.json").read_text())
+        manual = next(m for m in manifest["manuals"] if m["name"] == "R-exts")
+        text = document.read_text(encoding="utf-8")
+        assert text.count("\n# Writing R Extensions\n") == 1
+        for anchor, location in manual["anchors"].items():
+            assert f'<a id="{anchor}"></a>' in text.splitlines()[location["line"] - 1]
+        client.send(r='RShowDoc("R-exts#Large-section")')
+        output = normalize_paths(client, root)
+        assert len(re.findall(r"paragraph-\d+", output)) == len(
+            re.findall(r"without\s+overlapping\s+any\s+body\s+text[.]", output)
+        ), "ordinary paragraphs must remain complete within a preview"
+        client.send(r='utils::RShowDoc("R-exts#Oversized-example")')
+        pages = []
+        for _ in range(20):
+            output = normalize_paths(client, root)
+            assert len(output.encode("utf-8")) < 8192, output
+            assert "File: R-exts.md" in output, output
+            if "code-line-" in output:
+                assert len(re.findall(r"(?m)^```$", output)) == 2, output
+            pages.append(output.split("\n\n", 1)[1].split("\nContinue:", 1)[0])
+            continuation = re.search(r"Continue: (.+)", output)
+            if not continuation:
+                break
+            assert '"R-exts#Oversized-example"' in continuation[1], continuation[1]
+            client.send(r=continuation[1])
+        else:
+            raise AssertionError("manual continuation did not finish")
+        assert len(pages) > 1
+        body = "\n".join(pages)
+        assert re.findall(r"code-line-(\d+)", body) == [f"{i:03}" for i in range(160)]
+        assert "Budgetmatch" not in body, "continuation escaped its requested section"
+        assert text.count("```\n") >= 2, "the complete file must preserve code fences"
+        client.expect(
+            "one file supports capture and ordinary line reads\n",
+            # fmt: r
+            r=code(r"""
+                preview <- capture.output(path <- .console$manual("R-exts#Grouped-B"))
+                text <- readLines(path, encoding = "UTF-8")
+                stopifnot(
+                  basename(path) == "R-exts.md",
+                  any(grepl("café λ", preview, fixed = TRUE)),
+                  any(grepl("code-line-159", text, fixed = TRUE))
+                )
+                cat("one file supports capture and ordinary line reads\n")
+                """),
+        )
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_preview_block_boundaries(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution, manuals=FIXTURES / "r_manuals_preview") as (
+        client,
+        root,
+    ):
+        client.send(r='RShowDoc("R-exts#Paragraphs")')
+        pages = []
+        for _ in range(4):
+            output = normalize_paths(client, root)
+            assert len(re.findall(r"Paragraph \d", output)) == output.count(
+                "This paragraph ends here."
+            ), "a paragraph that fits the next preview must not be split"
+            assert len(output.encode("utf-8")) < 8192
+            pages.append(output)
+            continuation = re.search(r"Continue: (.+)", output)
+            if not continuation:
+                break
+            client.send(r=continuation[1])
+        assert len(pages) == 2
+        assert re.findall(r"Paragraph \d", "\n".join(pages)) == [
+            "Paragraph 1",
+            "Paragraph 2",
+            "Paragraph 3",
+        ]
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_files_and_links(binary: Path, execution: Execution) -> Transcript:
     with manual_client(binary, execution) as (client, root):
         client.send(r=".console$manual()")
         normalize_paths(client, root)
         collection = completed_collection(root)
         manifest = json.loads((collection / "manifest.json").read_text())
-        assert manifest["format"] >= 1 and manifest["r_version"].startswith("R version")
+        assert manifest["format"] >= 8 and manifest["r_version"].startswith("R version")
         manual = next(m for m in manifest["manuals"] if m["name"] == "R-exts")
-        assert manual["anchors"]["Grouped-A"] == manual["anchors"]["Grouped-B"]
-        assert manual["anchors"]["Grouped-B"] == manual["anchors"]["Grouped-B-1"]
-        assert manual["anchors"]["inline-anchor"] == manual["anchors"]["Grouped-B"]
-        assert manual["anchors"]["Appendix-B"].startswith("B-fixture-reference-")
-        files = sorted((collection / "R-exts").glob("*.md"))
-        bodies = "\n".join(p.read_text() for p in files if p.name != "index.md")
-        assert len(files) > 5, files
+        assert (
+            manual["anchors"]["Grouped-A"]["line"]
+            < manual["anchors"]["Grouped-B"]["line"]
+        )
+        assert (
+            manual["anchors"]["Grouped-B"]["section"]
+            == manual["anchors"]["Grouped-B-1"]["section"]
+        )
+        assert (
+            manual["anchors"]["inline-anchor"]["section"]
+            == manual["anchors"]["Grouped-B"]["section"]
+        )
+        files = sorted(collection.glob("R-*.md"))
+        assert [p.name for p in files] == ["R-exts.md", "R-lang.md"]
+        body = (collection / "R-exts.md").read_text(encoding="utf-8")
         for i in range(80):
-            assert bodies.count(f"paragraph-{i:03}:") == 1, i
+            assert body.count(f"paragraph-{i:03}:") == 1, i
         for i in range(160):
-            assert bodies.count(f"code-line-{i:03}") == 1, i
-        assert "keep <- function(x) {\n  x + 1L\n}" in bodies
-        assert "| Name | Value |" in bodies and "| café | 42 |" in bodies
-        assert "Example table" in bodies
-        assert "[(1)](01-small-sections-part-001.md#Grouped-B)" in bodies
-        assert "hidden-script" not in bodies and "hidden-style" not in bodies
-        assert "unwanted navigation repetition" not in bodies
-        assert "https://example.org/external" in bodies
-        assert "unavailable local target: missing.html#absent" in bodies
-        for file in files:
+            assert body.count(f"code-line-{i:03}") == 1, i
+        assert "keep <- function(x) {\n  x + 1L\n}" in body
+        assert "| Name | Value |" in body and "| café | 42 |" in body
+        assert "Example table" in body
+        assert "[(1)](#Grouped-B)" in body
+        assert "hidden-script" not in body and "hidden-style" not in body
+        assert "unwanted navigation repetition" not in body
+        assert "https://example.org/external" in body
+        assert "unavailable local target: missing.html#absent" in body
+        for file in [collection / "index.md", *files]:
             for destination in re.findall(r"\]\(([^)]+)\)", file.read_text()):
                 if ":" in destination:
                     continue
                 target, _, anchor = destination.partition("#")
-                selected = file.parent / target
+                selected = file.parent / target if target else file
                 assert selected.is_file(), (file, destination)
                 if anchor:
                     assert f'<a id="{anchor}"></a>' in selected.read_text(), (
                         file,
                         destination,
                     )
-        coherent = collection / "R-exts" / manual["anchors"]["Oversized-example"]
-        code_files = [p for p in files if "code-line-000" in p.read_text()]
-        assert len(code_files) == 1 and "code-line-159" in code_files[0].read_text()
-        assert code_files[0].stat().st_size > 6144
-        assert coherent.is_file()
-        # A recursive filesystem search must find each body only in its chunk.
+        # Ordinary recursive text search must find each body in one document.
         matches = [
-            p.relative_to(collection).as_posix()
+            p.name
             for p in collection.rglob("*")
             if p.is_file() and "Parent-only text." in p.read_text(encoding="utf-8")
         ]
-        assert matches == ["R-exts/" + manual["anchors"]["Small-sections"]], matches
-        client.send(r='.console$manual_export("R-exts")')
-        normalize_paths(client, root)
-        complete = (collection / "exports/R-exts.md").read_text()
-        assert "](#Grouped-B)" in complete and "](../R-lang/" in complete
-        assert "[(1)](#Grouped-B)" in complete
-        assert all(complete.count(f"paragraph-{i:03}:") == 1 for i in range(80))
+        assert matches == ["R-exts.md"], matches
         client.expect(
             "file access and R navigation use the same cache\n",
             # fmt: r
@@ -403,6 +522,7 @@ def test_manual_files_and_export(binary: Path, execution: Execution) -> Transcri
                 discard <- capture.output(path <- .console$manual("R-exts#Grouped-B"))
                 text <- readLines(path, encoding = "UTF-8")
                 stopifnot(
+                  basename(path) == "R-exts.md",
                   any(grepl('<a id="Grouped-B"></a>', text, fixed = TRUE)),
                   any(grepl("café λ", text, fixed = TRUE)),
                   any(grepl("needle", text, ignore.case = TRUE))
@@ -468,10 +588,10 @@ def test_manual_cache_repairs_modified_outputs(
             if p.is_file()
         }
         client.expect(
-            "modified chunk and manifest\n",
+            "modified document and manifest\n",
             # fmt: r
             r=code(r"""
-                manifest <- file.path(dirname(dirname(path)), "manifest.json")
+                manifest <- file.path(dirname(path), "manifest.json")
                 for (file in c(path, manifest)) {
                   text <- readLines(file, encoding = "UTF-8", warn = FALSE)
                   text <- sub("Small sections", "INJECTED-CACHE-TEXT", text, fixed = TRUE)
@@ -481,7 +601,7 @@ def test_manual_cache_repairs_modified_outputs(
                     useBytes = TRUE
                   )
                 }
-                cat("modified chunk and manifest\n")
+                cat("modified document and manifest\n")
                 """),
         )
         client.send(r='.console$manual_search("INJECTED-CACHE-TEXT")')
@@ -498,12 +618,11 @@ def test_manual_cache_repairs_modified_outputs(
         assert original == {p: (collection / p).read_bytes() for p in original}
         client.expect(
             "[done]",
-            r='discard <- capture.output(complete <- .console$manual_export("R-exts")); writeLines("INJECTED-CACHE-TEXT", complete)',
+            r='discard <- capture.output(path <- .console$manual("R-exts")); writeLines("INJECTED-CACHE-TEXT", file.path(dirname(path), "R-lang.md"))',
         )
-        client.send(r='.console$manual_export("R-exts")')
+        client.send(r='RShowDoc("R-lang#Shared-anchor")')
         normalize_paths(client, root)
-        exported = (collection / "exports/R-exts.md").read_text()
-        assert "INJECTED-CACHE-TEXT" not in exported and "Parent-only text." in exported
+        assert original == {p: (collection / p).read_bytes() for p in original}
         return client.finish()
 
 
@@ -536,8 +655,6 @@ def test_manual_cache_rejects_unprojected_files(
         )
         normalize_paths(client, root)
         collection = completed_collection(root)
-        client.send(r='.console$manual_export("R-exts")')
-        normalize_paths(client, root)
         original = {
             p.relative_to(collection): (p.read_bytes(), p.stat().st_mtime_ns)
             for p in collection.rglob("*")
@@ -549,18 +666,17 @@ def test_manual_cache_rejects_unprojected_files(
         assert original == {
             p: ((collection / p).read_bytes(), (collection / p).stat().st_mtime_ns)
             for p in original
-        }, "valid exports must not invalidate a completed collection"
+        }, "valid documents must not invalidate a completed collection"
         client.expect(
             "added unprojected files\n",
             # fmt: r
             r=code(r"""
                 discard <- capture.output(path <- .console$manual("R-exts#Small-sections"))
-                collection <- dirname(dirname(path))
+                collection <- dirname(path)
                 for (name in c(
                   "unexpected.md",
-                  "R-exts/unexpected.md",
-                  "R-exts/extra/injected.md",
-                  "exports/unexpected.md"
+                  "unexpected/injected.md",
+                  "nested/deeper/injected.md"
                 )) {
                   file <- file.path(collection, name)
                   dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
@@ -576,8 +692,8 @@ def test_manual_cache_rejects_unprojected_files(
         files = {
             p.relative_to(collection) for p in collection.rglob("*") if p.is_file()
         }
-        assert files == {p for p in original if p.parts[0] != "exports"}, files
-        assert not (collection / "R-exts/extra").exists()
+        assert files == set(original), files
+        assert not (collection / "nested").exists()
         assert not any(
             "INJECTED-CACHE-TEXT" in (collection / p).read_text(encoding="utf-8")
             for p in files
@@ -610,17 +726,13 @@ def test_manual_table_rows_and_unanchored_headings(
         client.send(r='RShowDoc("R-exts#child")')
         normalize_paths(client, root)
         collection = completed_collection(root)
-        files = list((collection / "R-exts").glob("*.md"))
-        body = "\n".join(file.read_text(encoding="utf-8") for file in files)
+        body = (collection / "R-exts.md").read_text(encoding="utf-8")
         row = next(line for line in body.splitlines() if "R-only cell" in line)
         assert '<a id="letter-R"></a>' in row, row
-        assert re.search(r"\[Parent\]\([^)]*#console-section-\d+\)", body), body
-        client.send(r='.console$manual_export("R-exts")')
-        normalize_paths(client, root)
-        complete = (collection / "exports/R-exts.md").read_text(encoding="utf-8")
-        assert '<a id="letter-R"></a>' in next(
-            line for line in complete.splitlines() if "R-only cell" in line
-        )
+        manifest = json.loads((collection / "manifest.json").read_text())
+        sections = manifest["manuals"][0]["sections"]
+        child = next(section for section in sections if "Child" in section["title"])
+        assert sections[child["parent"]]["title"] == "2 Unanchored reference"
         return client.finish()
 
 
@@ -637,7 +749,7 @@ def test_manual_cache_repairs_file_identity(
             # fmt: r
             r=code(r"""
                 discard <- capture.output(path <- .console$manual("R-exts"))
-                collection <- dirname(dirname(path))
+                collection <- dirname(path)
                 unlink(collection, recursive = TRUE)
                 writeLines("invalid identity", collection)
                 cat("identity replaced by a file\n")
@@ -717,9 +829,7 @@ def test_manual_cache_serializes_shared_repairs(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
-def test_manual_section_reads_across_files(
-    binary: Path, execution: Execution
-) -> Transcript:
+def test_manual_section_preview(binary: Path, execution: Execution) -> Transcript:
     with manual_client(binary, execution, manuals=FIXTURES / "r_manuals_reading") as (
         client,
         root,
@@ -730,15 +840,10 @@ def test_manual_section_reads_across_files(
         assert "A later example" in output, output
         assert "Unrelated next-topic text" not in output, output
         collection = completed_collection(root)
-        files = list((collection / "R-exts").glob("*.md"))
-        intro = next(
-            file for file in files if "Choose the output format" in file.read_text()
-        )
-        details = next(
-            file for file in files if "Semicolon separators" in file.read_text()
-        )
-        assert intro != details, "fixture must span physical files"
-        assert details.name in output, output
+        body = (collection / "R-exts.md").read_text(encoding="utf-8")
+        assert "Earlier background material" in body and "A later example" in body
+        assert "Earlier background material" not in output, output
+        assert "File: R-exts.md" in output, output
         client.send(r='.console$manual_search("Export guidance", manual = "R-exts")')
         output = normalize_paths(client, root)
         assert "Choose the output format" in output, output
@@ -747,6 +852,13 @@ def test_manual_section_reads_across_files(
         )
         output = normalize_paths(client, root)
         assert 'Read: RShowDoc("R-exts#Export")' in output, output
+        client.send(r='.console$manual_search("This introduction", manual = "R-exts")')
+        output = normalize_paths(client, root)
+        assert "1.2 Export guidance" in output, output
+        assert "This introduction" in output, output
+        command = re.search(r"  Read: (.+)", output)[1]
+        client.send(r=command)
+        assert re.search(r"This\s+introduction", normalize_paths(client, root))
         return client.finish()
 
 
@@ -762,7 +874,7 @@ def test_manual_cache_repairs_directory_permissions(
         for target in (
             "dirname(collection)",
             "collection",
-            'file.path(collection, "R-exts")',
+            'file.path(collection, "unexpected")',
         ):
             try:
                 client.expect(
@@ -770,8 +882,12 @@ def test_manual_cache_repairs_directory_permissions(
                     # fmt: r
                     r=code(r"""
                         discard <- capture.output(path <- .console$manual("R-exts"))
-                        collection <- dirname(dirname(path))
-                        stopifnot(Sys.chmod(DIRECTORY, mode = "000"))
+                        collection <- dirname(path)
+                        directory <- DIRECTORY
+                        if (!dir.exists(directory)) {
+                          dir.create(directory)
+                        }
+                        stopifnot(Sys.chmod(directory, mode = "000"))
                         cat("directory permissions removed\n")
                         """).replace("DIRECTORY", target),
                 )
@@ -797,7 +913,8 @@ def test_manual_cache_repairs_directory_permissions(
                 # Keep failure cleanup possible when exercising the old worker.
                 collection.parent.chmod(0o700)
                 collection.chmod(0o700)
-                (collection / "R-exts").chmod(0o700)
+                if (collection / "unexpected").exists():
+                    (collection / "unexpected").chmod(0o700)
         return client.finish()
 
 
@@ -852,7 +969,7 @@ def test_manual_cache_lock_is_host_owned(
             # fmt: r
             r=code(r"""
                 discard <- capture.output(path <- .console$manual("R-exts"))
-                lock <- paste0(dirname(dirname(dirname(path))), ".lock")
+                lock <- paste0(dirname(dirname(path)), ".lock")
                 stopifnot(unlink(lock) != 0L, file.exists(lock))
                 cat("host lock cannot be replaced\n")
                 """),
@@ -922,6 +1039,44 @@ def test_manual_cache_reclaims_abandoned_publication(
         return client.finish()
 
 
+@requires(POSIX, R, command("cc"))
+@executions(DIRECT, SANDBOXED)
+def test_manual_cache_fifo_replacement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution, cache_race=True) as (client, root):
+        client.send(r='discard <- capture.output(path <- .console$manual("R-exts"))')
+        normalize_paths(client, root)
+        path = completed_collection(root) / "R-exts.md"
+        marker = root / "workspace/cache-file-replaced"
+        client.send(
+            # fmt: r
+            r=code(r"""
+                Sys.setenv(
+                  CONSOLE_TEST_CACHE_OPEN_TARGET = path,
+                  CONSOLE_TEST_CACHE_OPEN_MARKER = file.path(getwd(), "cache-file-replaced")
+                )
+                """),
+        )
+        try:
+            pending = client.start_send(
+                r='RShowDoc("R-exts#Grouped-B")', timeout_ms=10000
+            )
+            wait_for_path(marker, "cache entry replaced at open", client=client)
+            client.receive(pending)
+            assert "café λ" in normalize_paths(client, root), (
+                "a FIFO replacement must be repaired without waiting for a writer"
+            )
+            assert path.is_file()
+        finally:
+            # Release a blocking old implementation after the public timeout;
+            # the successful implementation repairs the FIFO before responding.
+            if path.is_fifo():
+                descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+                os.close(descriptor)
+        return client.finish()
+
+
 @requires(POSIX, R)
 @executions(DIRECT, SANDBOXED)
 def test_manual_cache_repairs_sparse_files(
@@ -933,14 +1088,10 @@ def test_manual_cache_repairs_sparse_files(
         client.send(r='RShowDoc("R-exts")')
         normalize_paths(client, root)
         collection = completed_collection(root)
-        client.send(r='.console$manual_export("R-exts")')
-        normalize_paths(client, root)
-        manifest = json.loads((collection / "manifest.json").read_text())
-        manual = next(m for m in manifest["manuals"] if m["name"] == "R-exts")
         paths = (
             collection / "manifest.json",
-            collection / "R-exts" / manual["anchors"]["Grouped-B"],
-            collection / "exports/R-exts.md",
+            collection / "R-exts.md",
+            collection / "R-lang.md",
         )
         original = [path.read_bytes() for path in paths]
         # Linux direct execution can cap the worker's address space for a safe
@@ -959,7 +1110,7 @@ def test_manual_cache_repairs_sparse_files(
             for path, expected in zip(paths, original, strict=True):
                 with path.open("wb") as file:
                     file.truncate(16 * 1024**3)
-                client.send(r='.console$manual_export("R-exts")')
+                client.send(r='RShowDoc("R-exts")')
                 normalize_paths(client, root)
                 assert path.read_bytes() == expected
         finally:
@@ -968,4 +1119,4 @@ def test_manual_cache_repairs_sparse_files(
                     resource.prlimit(pid, resource.RLIMIT_AS, limits)
                 except ProcessLookupError:
                     pass
-        return [{"oversized_manifest_chunk_and_export_repaired": True}]
+        return [{"oversized_manifest_and_documents_repaired": True}]

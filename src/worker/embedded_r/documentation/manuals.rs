@@ -1,4 +1,4 @@
-//! Installed HTML -> one logical model -> chunks, TOCs, search, and exports.
+//! Installed HTML -> one Markdown document and navigation index per manual.
 //! Only the captured manuals subtree is writable. A content-addressed directory
 //! is published by rename after every projection and the manifest are complete.
 
@@ -10,16 +10,15 @@ use html2text::{Handle, RcDom};
 use libr::SEXP;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-// Bump when conversion or projection changes, including chunking defaults.
-const FORMAT: u32 = 7;
-const TARGET: usize = 4096;
-const BODY_MAX: usize = 5400; // Leave room for hierarchy and navigation.
+// Bump when conversion or its derived navigation index changes.
+const FORMAT: u32 = 8;
+const SEARCH_BUDGET: usize = 4096;
 const READ_BUDGET: usize = 5000; // Paths, commands, and notices fit below 8 KiB.
 const READ_BODY_BUDGET: usize = 4500; // Ordinary host paths do not change continuations.
 
@@ -48,8 +47,9 @@ struct Manual {
     // The manifest records navigation metadata, never a second body copy.
     #[serde(skip)]
     blocks: Vec<Block>,
-    chunks: Vec<Chunk>,
-    anchors: BTreeMap<String, String>,
+    #[serde(skip)]
+    positions: Vec<std::ops::Range<usize>>,
+    anchors: BTreeMap<String, Anchor>,
     toc_anchors: Vec<String>,
 }
 
@@ -58,6 +58,15 @@ struct Section {
     title: String,
     level: usize,
     parent: Option<usize>,
+    // Inclusive, one-based Markdown line ranges, including subsections.
+    start: usize,
+    end: usize,
+}
+
+#[derive(Serialize)]
+struct Anchor {
+    line: usize,
+    section: Option<usize>,
 }
 
 struct Block {
@@ -81,13 +90,6 @@ impl Block {
         }
         text
     }
-}
-
-#[derive(Serialize)]
-struct Chunk {
-    file: String,
-    start: usize,
-    end: usize,
 }
 
 type Files = BTreeMap<String, String>;
@@ -307,6 +309,8 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
             title: title.clone(),
             level,
             parent,
+            start: 0,
+            end: 0,
         });
         if manual.title.is_empty() {
             manual.title = title.clone();
@@ -409,107 +413,6 @@ fn walk(node: &Handle, manual: &mut Manual, pending: &mut Vec<String>) -> Result
     Ok(())
 }
 
-fn numbered_title(title: &str) -> Option<(&str, &str)> {
-    let title = title.strip_prefix("Appendix ").unwrap_or(title);
-    let (number, label) = title.split_once(char::is_whitespace)?;
-    let number = number.trim_end_matches('.');
-    let numbered = number.split('.').all(|n| {
-        !n.is_empty()
-            && (n.chars().all(|c| c.is_ascii_digit())
-                || (n.len() == 1 && n.starts_with(|c: char| c.is_ascii_uppercase())))
-    });
-    numbered.then_some((number, label.trim()))
-}
-
-fn prefix(title: &str, section: usize, front: bool) -> String {
-    if front {
-        return format!("00.{section:02}");
-    }
-    if let Some((number, _)) = numbered_title(title) {
-        number
-            .split('.')
-            .filter(|n| !n.is_empty())
-            .map(|n| {
-                n.parse::<usize>()
-                    .map_or_else(|_| n.into(), |n| format!("{n:02}"))
-            })
-            .collect::<Vec<_>>()
-            .join(".")
-    } else {
-        format!("99.{section:03}")
-    }
-}
-
-fn slug(title: &str) -> String {
-    title
-        .to_ascii_lowercase()
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
-}
-
-fn chunk(manual: &mut Manual) {
-    let mut start = 0;
-    let mut size = 0;
-    let mut ranges = Vec::new();
-    for (i, block) in manual.blocks.iter().enumerate() {
-        let bytes =
-            block.text.len() + block.anchors.iter().map(|a| a.len() + 15).sum::<usize>() + 2;
-        let chapter = block.heading && manual.sections[block.section].level <= 2;
-        if i > start && (size + bytes > BODY_MAX || size >= TARGET || chapter) {
-            // Move a heading with its first body block, including an oversized
-            // code example/table. Never leave a heading stranded in a prior file.
-            let cut = if manual.blocks[i - 1].heading {
-                i - 1
-            } else {
-                i
-            };
-            if cut > start {
-                ranges.push((start, cut));
-                start = cut;
-                size = manual.blocks[cut..i]
-                    .iter()
-                    .map(|b| {
-                        b.text.len() + b.anchors.iter().map(|a| a.len() + 15).sum::<usize>() + 2
-                    })
-                    .sum();
-            }
-        }
-        size += bytes;
-    }
-    ranges.push((start, manual.blocks.len()));
-    let mut counts = BTreeMap::new();
-    for (start, end) in ranges {
-        let section = manual.blocks[start].section;
-        let title = &manual.sections[section].title;
-        let count = counts.entry(section).or_insert(0);
-        *count += 1;
-        let numbered = numbered_title(title).filter(|_| section > 0);
-        let label = numbered.map_or(title.as_str(), |(_, label)| label);
-        let front = section == 0
-            || (numbered.is_none()
-                && !manual.sections[..section]
-                    .iter()
-                    .any(|s| numbered_title(&s.title).is_some()));
-        let file = format!(
-            "{}-{}-part-{:03}.md",
-            prefix(title, section, front),
-            slug(label),
-            count
-        );
-        for block in &manual.blocks[start..end] {
-            for anchor in block.all_anchors() {
-                manual.anchors.insert(anchor.clone(), file.clone());
-            }
-        }
-        manual.chunks.push(Chunk { file, start, end });
-    }
-    for anchor in &manual.toc_anchors {
-        manual.anchors.insert(anchor.clone(), "index.md".into());
-    }
-}
-
 fn parse(name: &str, bytes: &[u8]) -> Result<Manual> {
     std::str::from_utf8(bytes).context("installed manual HTML must be UTF-8")?;
     let dom = html2text::config::plain().parse_html(bytes)?;
@@ -525,7 +428,26 @@ fn parse(name: &str, bytes: &[u8]) -> Result<Manual> {
         "installed manual has no content: {name}"
     );
     manual.blocks.last_mut().unwrap().anchors.extend(pending);
-    chunk(&mut manual);
+    for block in &manual.blocks {
+        for anchor in block.all_anchors() {
+            manual.anchors.insert(
+                anchor.clone(),
+                Anchor {
+                    line: 0,
+                    section: Some(block.section),
+                },
+            );
+        }
+    }
+    for anchor in &manual.toc_anchors {
+        manual.anchors.insert(
+            anchor.clone(),
+            Anchor {
+                line: 0,
+                section: None,
+            },
+        );
+    }
     Ok(manual)
 }
 
@@ -539,7 +461,7 @@ fn anchor_html(anchor: &str) -> String {
     )
 }
 
-fn location(collection: &Collection, current: &Manual, url: &str, complete: bool) -> String {
+fn location(collection: &Collection, current: &Manual, url: &str) -> String {
     if url.contains(':') || url.starts_with("//") {
         return url.into();
     }
@@ -549,32 +471,27 @@ fn location(collection: &Collection, current: &Manual, url: &str, complete: bool
     } else {
         file.strip_suffix(".html").unwrap_or(file)
     };
-    if let Some(manual) = collection.manuals.iter().find(|m| m.name == name) {
-        let target = if anchor.is_empty() {
-            Some("index.md")
+    if let Some(manual) = collection.manuals.iter().find(|m| m.name == name)
+        && (anchor.is_empty() || manual.anchors.contains_key(anchor))
+    {
+        let file = if name == current.name && !anchor.is_empty() {
+            String::new()
         } else {
-            manual.anchors.get(anchor).map(String::as_str)
+            format!("{name}.md")
         };
-        if let Some(target) = target {
-            if complete && name == current.name && !anchor.is_empty() {
-                return format!("#{anchor}");
-            }
-            let path = if name == current.name && !complete {
-                target.into()
-            } else {
-                format!("../{name}/{target}")
-            };
-            return format!("{path}#{anchor}");
-        }
+        return if anchor.is_empty() {
+            file
+        } else {
+            format!("{file}#{anchor}")
+        };
     }
-    // A visible diagnostic is preferable to a link to an invented cache file.
     format!("unavailable local target: {url}")
 }
 
-fn project(collection: &Collection, manual: &Manual, block: &Block, complete: bool) -> String {
+fn project(collection: &Collection, manual: &Manual, block: &Block) -> String {
     let mut text = block.text.clone();
     for (i, link) in block.links.iter().enumerate() {
-        let destination = location(collection, manual, link, complete);
+        let destination = location(collection, manual, link);
         text = text.replace(&format!("\u{1f}{i}\u{1f}"), &destination);
     }
     // Unavailable local destinations remain readable, without a broken link.
@@ -582,9 +499,11 @@ fn project(collection: &Collection, manual: &Manual, block: &Block, complete: bo
         "](unavailable local target: ",
         "] [unavailable local target: ",
     );
-    for link in block.links.iter().filter(|link| {
-        location(collection, manual, link, complete).starts_with("unavailable local target: ")
-    }) {
+    for link in block
+        .links
+        .iter()
+        .filter(|link| location(collection, manual, link).starts_with("unavailable local target: "))
+    {
         text = text.replace(&format!("{link})"), &format!("{link}]"));
     }
     let anchors = block
@@ -614,80 +533,40 @@ fn heading_path(manual: &Manual, mut section: usize) -> String {
     path.join(" > ")
 }
 
-fn section_location(manual: &Manual, section: usize) -> (&str, &str) {
-    let block = manual
+fn section_anchor(manual: &Manual, section: usize) -> &str {
+    manual
         .blocks
         .iter()
-        .position(|b| b.section == section)
-        .unwrap();
-    let file = &manual
-        .chunks
-        .iter()
-        .find(|c| c.start <= block && block < c.end)
+        .find(|block| block.heading && block.section == section)
         .unwrap()
-        .file;
-    (
-        file,
-        manual.blocks[block]
-            .anchors
-            .first()
-            .map_or("", String::as_str),
-    )
+        .anchors
+        .first()
+        .unwrap()
 }
 
 fn toc(manual: &Manual, compact: bool) -> String {
-    let mut text = format!("# {}\n\n[Collection](../index.md)\n\n", manual.title);
-    if !compact {
-        for anchor in &manual.toc_anchors {
-            text.push_str(&format!("{}\n", anchor_html(anchor)));
-        }
-    }
-    text.push('\n');
+    // The file's heading tree contains only source headings; its generated TOC
+    // must not introduce a second manual title for ordinary Markdown queries.
+    let title = if compact {
+        format!("# {}", manual.title)
+    } else {
+        format!("**Contents: {}**", manual.title)
+    };
+    let mut text = format!("{title}\n\n[Collection](index.md)\n\n");
     for (i, section) in manual.sections.iter().enumerate() {
         if compact && section.level > 2 {
             continue;
         }
-        let (file, anchor) = section_location(manual, i);
         text.push_str(&format!(
-            "{}- [{}]({file}#{anchor})\n",
+            "{}- [{}]({}.md#{})\n",
             "  ".repeat(section.level.saturating_sub(1)),
-            section.title
+            section.title,
+            manual.name,
+            section_anchor(manual, i)
         ));
     }
-    text.push_str(&format!("\nRead: `RShowDoc(\"{}#original-anchor\")`\nSearch: `.console$manual_search(\"phrase\", manual = \"{}\")`\n", manual.name, manual.name));
     if compact {
-        text.push_str(&format!(
-            "Full TOC: `.console$manual(\"{}/index.md\")`\n",
-            manual.name
-        ));
-    }
-    text
-}
-
-fn content(collection: &Collection, manual: &Manual, chunk: &Chunk, index: usize) -> String {
-    let section = manual.blocks[chunk.start].section;
-    let parent = manual.sections[section]
-        .parent
-        .map(|p| {
-            let (file, anchor) = section_location(manual, p);
-            format!("[Parent]({file}#{anchor})")
-        })
-        .unwrap_or_else(|| "[Parent](index.md)".into());
-    let mut text = format!(
-        "Manual: {} ({})\nLocation: {}\n\n{parent} · [TOC](index.md)",
-        manual.title,
-        manual.name,
-        heading_path(manual, section)
-    );
-    if index > 0 {
-        text.push_str(&format!(" · [Previous]({})", manual.chunks[index - 1].file));
-    }
-    if let Some(next) = manual.chunks.get(index + 1) {
-        text.push_str(&format!(" · [Next]({})", next.file));
-    }
-    text.push_str("\n\n");
-    for block in &manual.blocks[chunk.start..chunk.end] {
-        text.push_str(&project(collection, manual, block, false));
+        text.push_str(&format!("\nRead: `RShowDoc(\"{}#original-anchor\")`\nSearch: `.console$manual_search(\"phrase\", manual = \"{}\")`\nFull TOC and document: `.console$manual(\"{}.md\")`\n", manual.name, manual.name, manual.name));
     }
     text
 }
@@ -699,69 +578,75 @@ fn fingerprint(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn block_positions(
-    collection: &Collection,
-    manual: &Manual,
-    chunk: &Chunk,
-    index: usize,
-) -> Vec<usize> {
-    let prefix = Chunk {
-        file: chunk.file.clone(),
-        start: chunk.start,
-        end: chunk.start,
-    };
-    let mut line = content(collection, manual, &prefix, index)
-        .bytes()
-        .filter(|c| *c == b'\n')
-        .count();
-    let mut positions = Vec::new();
-    for block in &manual.blocks[chunk.start..chunk.end] {
-        positions.push(line);
-        line += project(collection, manual, block, false)
-            .bytes()
-            .filter(|c| *c == b'\n')
-            .count();
-    }
-    positions
-}
-
-fn anchor_positions(
-    collection: &Collection,
-    manual: &Manual,
-    chunk: &Chunk,
-    lines: &[usize],
-) -> BTreeMap<String, usize> {
-    let mut positions = BTreeMap::new();
-    for (block, line) in manual.blocks[chunk.start..chunk.end].iter().zip(lines) {
-        let projected = project(collection, manual, block, false);
-        for anchor in block.all_anchors() {
-            let offset = projected
-                .lines()
-                .position(|text| text.contains(&anchor_html(anchor)))
-                .unwrap();
-            positions.insert(anchor.clone(), line + offset);
-        }
-    }
-    positions
-}
-
-fn projected_files(collection: &Collection) -> Result<Files> {
+fn projected_files(collection: &mut Collection) -> Result<Files> {
     let mut files = Files::new();
     let mut index = format!("# Installed R manuals\n\n{}\n\n", collection.r_version);
-    for manual in &collection.manuals {
+    // Resolve links using the complete original-anchor inventory, then record
+    // line ranges in the rendered document. Queries never reconstruct chunks.
+    let documents = collection
+        .manuals
+        .iter()
+        .map(|manual| {
+            let mut text = format!(
+                "<!-- Installed {}, {}. Converted under the permission notice below. -->\n\n",
+                manual.name, collection.r_version
+            );
+            let mut anchors = BTreeMap::new();
+            let mut line = text.lines().count();
+            for anchor in &manual.toc_anchors {
+                anchors.insert(anchor.clone(), line + 1);
+                text.push_str(&format!("{}\n", anchor_html(anchor)));
+                line += 1;
+            }
+            let contents = toc(manual, false);
+            line += contents.lines().count();
+            text.push_str(&contents);
+            text.push('\n');
+            line += 1;
+            let mut positions = Vec::new();
+            for block in &manual.blocks {
+                let rendered = project(collection, manual, block);
+                for anchor in block.all_anchors() {
+                    let offset = rendered
+                        .lines()
+                        .position(|text| text.contains(&anchor_html(anchor)))
+                        .unwrap();
+                    anchors.insert(anchor.clone(), line + offset + 1);
+                }
+                let end = line + rendered.lines().count();
+                positions.push(line..end);
+                line = end;
+                text.push_str(&rendered);
+            }
+            (text, positions, anchors)
+        })
+        .collect::<Vec<_>>();
+    for (manual, (text, positions, anchors)) in collection.manuals.iter_mut().zip(documents) {
+        for (anchor, line) in anchors {
+            manual.anchors.get_mut(&anchor).unwrap().line = line;
+        }
+        for block in manual
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| block.heading)
+        {
+            manual.sections[block.1.section].start = positions[block.0].start + 1;
+        }
+        for i in 0..manual.sections.len() {
+            manual.sections[i].end = manual.sections[i + 1..]
+                .iter()
+                .find(|section| section.level <= manual.sections[i].level)
+                .map_or(text.lines().count(), |section| section.start - 1);
+        }
+        manual.positions = positions;
         index.push_str(&format!(
-            "- [{} ({})]({}/index.md)\n",
+            "- [{} ({})]({}.md)\n",
             manual.title, manual.name, manual.name
         ));
-        files.insert(format!("{}/index.md", manual.name), toc(manual, false));
-        for (i, chunk) in manual.chunks.iter().enumerate() {
-            files.insert(
-                format!("{}/{}", manual.name, chunk.file),
-                content(collection, manual, chunk, i),
-            );
-        }
+        files.insert(format!("{}.md", manual.name), text);
     }
-    index.push_str("\nRead: `RShowDoc(\"R-exts\")`\nSearch: `.console$manual_search(\"phrase\")`\nExport: `.console$manual_export(\"R-exts\")`\n\nThe per-manual directories contain non-overlapping content files and TOCs.\nComplete exports live separately in `exports/`; exclude them from filesystem searches.\n");
+    index.push_str("\nRead: `RShowDoc(\"R-exts\")`\nSearch: `.console$manual_search(\"phrase\")`\n\nEach manual has one complete Markdown file. The manifest maps original anchors and section ranges into those same files.\n");
     files.insert("index.md".into(), index);
     files.insert(
         "manifest.json".into(),
@@ -771,8 +656,16 @@ fn projected_files(collection: &Collection) -> Result<Files> {
 }
 
 fn matches_file(path: &Path, expected: &str) -> std::io::Result<bool> {
-    let file = fs::File::open(path)?;
-    if file.metadata()?.len() != expected.len() as u64 {
+    let mut options = fs::File::options();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.len() != expected.len() as u64 {
         return Ok(false);
     }
     // Bound the read as well: submitted code can grow a file after metadata.
@@ -817,41 +710,18 @@ fn complete(directory: &Path, prepared: &Prepared) -> std::io::Result<bool> {
         .iter()
         .map(|(name, text)| (PathBuf::from(name), text))
         .collect::<BTreeMap<_, _>>();
-    let mut pending = vec![PathBuf::new()];
-    while let Some(parent) = pending.pop() {
-        for entry in fs::read_dir(directory.join(&parent))? {
-            let entry = entry?;
-            let relative = parent.join(entry.file_name());
-            let kind = entry.file_type()?;
-            if kind.is_dir() {
-                if relative != Path::new("exports")
-                    && !prepared
-                        .collection
-                        .manuals
-                        .iter()
-                        .any(|manual| relative == Path::new(&manual.name))
-                {
-                    return Ok(false);
-                }
-                pending.push(relative);
-            } else if kind.is_file() {
-                if let Some(text) = expected.remove(&relative) {
-                    if !matches_file(&entry.path(), text)? {
-                        return Ok(false);
-                    }
-                } else if let Some(manual) = prepared.collection.manuals.iter().find(|manual| {
-                    relative == Path::new("exports").join(format!("{}.md", manual.name))
-                }) {
-                    if !matches_file(&entry.path(), &export_text(&prepared.collection, manual))? {
-                        return Ok(false);
-                    }
-                } else {
-                    return Ok(false);
-                }
-            } else {
-                // Do not follow links or read special files from a writable cache.
-                return Ok(false);
-            }
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        // A complete collection is flat. Reject links, special files, directories,
+        // and unexpected files before reading any worker-writable contents.
+        if !entry.file_type()?.is_file() {
+            return Ok(false);
+        }
+        let Some(text) = expected.remove(Path::new(&entry.file_name())) else {
+            return Ok(false);
+        };
+        if !matches_file(&entry.path(), text)? {
+            return Ok(false);
         }
     }
     Ok(expected.is_empty())
@@ -913,7 +783,7 @@ fn materialize(args: &[String]) -> Result<(PathBuf, Prepared, fs::File)> {
             for (name, bytes) in inputs {
                 collection.manuals.push(parse(&name, &bytes)?);
             }
-            let files = Arc::new(projected_files(&collection)?);
+            let files = Arc::new(projected_files(&mut collection)?);
             *cached = Some(Prepared {
                 identity,
                 collection: Arc::new(collection),
@@ -963,225 +833,138 @@ fn read(
     args: &[String],
 ) -> Result<Vec<String>> {
     let topic = &args[4];
-    let mut anchor = "";
-    let relative = if topic.is_empty() {
-        "index.md".into()
-    } else if let Some((name, fragment)) = topic.split_once('#') {
-        anchor = fragment;
-        let manual = collection
-            .manuals
-            .iter()
-            .find(|m| m.name == name)
-            .context("Unknown installed manual")?;
-        let file = manual
-            .anchors
-            .get(fragment)
-            .with_context(|| format!("Unknown manual anchor: {topic}"))?;
-        format!("{name}/{file}")
-    } else if collection.manuals.iter().any(|m| m.name == *topic) {
-        format!("{topic}/index.md")
-    } else if collection.manuals.iter().any(|m| {
-        m.chunks
-            .iter()
-            .any(|c| format!("{}/{}", m.name, c.file) == *topic)
-            || format!("{}/index.md", m.name) == *topic
-    }) {
-        topic.clone()
+    let (name, anchor) = topic.split_once('#').unwrap_or((topic, ""));
+    let manual = collection
+        .manuals
+        .iter()
+        .find(|manual| manual.name == name.trim_end_matches(".md"));
+    ensure!(
+        (topic.is_empty() || topic == "index.md") && anchor.is_empty() || manual.is_some(),
+        "Unknown installed manual or content file: {topic}"
+    );
+    let relative = manual.map_or_else(|| "index.md".into(), |manual| format!("{}.md", manual.name));
+    let compact = manual.is_some_and(|manual| topic == &manual.name);
+    let text = if compact {
+        toc(manual.unwrap(), true)
     } else {
-        bail!("Unknown installed manual or content file: {topic}")
+        files[&relative].clone()
     };
-    let path = directory.join(&relative);
-    let mut text = if let Some(manual) = collection.manuals.iter().find(|m| m.name == *topic) {
-        toc(manual, true)
-    } else {
-        // Reading uses the source-derived projection even if another worker
-        // changes a cache file after the integrity check.
-        files
-            .get(&relative)
-            .context("Unknown manual content file")?
-            .clone()
-    };
-    let mut physical_lines = (1..=text.lines().count())
-        .map(|line| (relative.clone(), line))
-        .collect::<Vec<_>>();
-    let mut positions = BTreeMap::new();
-    let mut section_lines = Vec::new();
-    if !collection.manuals.iter().any(|m| m.name == *topic)
-        && let Some(manual) = collection
-            .manuals
-            .iter()
-            .find(|m| relative.starts_with(&format!("{}/", m.name)))
-    {
-        if relative.ends_with("/index.md") {
-            for anchor in &manual.toc_anchors {
-                positions.insert(
-                    anchor.clone(),
-                    text.lines()
-                        .position(|line| line == anchor_html(anchor))
-                        .context("Cached TOC anchor is missing")?,
-                );
-            }
-        } else {
-            let (index, chunk) = manual
-                .chunks
-                .iter()
-                .enumerate()
-                .find(|(_, c)| relative == format!("{}/{}", manual.name, c.file))
-                .unwrap();
-            let block_lines = block_positions(collection, manual, chunk, index);
-            positions = anchor_positions(collection, manual, chunk, &block_lines);
-            section_lines = block_lines
-                .into_iter()
-                .zip(&manual.blocks[chunk.start..chunk.end])
-                .map(|(line, block)| (line, block.section))
-                .collect();
-        }
-    }
-    // Physical cache files are storage boundaries, not reading boundaries.
-    // Extend an initial anchor view to the next logical heading, recording
-    // original file/line coordinates for exact physical continuations.
-    if !anchor.is_empty() && args[6] == "1" && args[8] == "1" && !relative.ends_with("/index.md") {
-        let manual = collection
-            .manuals
-            .iter()
-            .find(|m| relative.starts_with(&format!("{}/", m.name)))
-            .unwrap();
-        let current = manual
-            .blocks
-            .iter()
-            .position(|block| block.all_anchors().any(|id| id == anchor))
-            .unwrap();
-        let end = manual.blocks[current + 1..]
-            .iter()
-            .position(|block| block.heading)
-            .map_or(manual.blocks.len(), |offset| current + offset + 2);
-        let first = manual
-            .chunks
-            .iter()
-            .position(|chunk| relative.ends_with(&chunk.file))
-            .unwrap();
-        for (index, chunk) in manual
-            .chunks
-            .iter()
-            .enumerate()
-            .skip(first + 1)
-            .take_while(|(_, chunk)| chunk.start < end)
-        {
-            let source_lines = block_positions(collection, manual, chunk, index);
-            let file = format!("{}/{}", manual.name, chunk.file);
-            for (block, source) in manual.blocks[chunk.start..chunk.end.min(end)]
-                .iter()
-                .zip(source_lines)
-            {
-                let projected = project(collection, manual, block, false);
-                let line = physical_lines.len();
-                section_lines.push((line, block.section));
-                for id in block.all_anchors() {
-                    let offset = projected
-                        .lines()
-                        .position(|text| text.contains(&anchor_html(id)))
-                        .unwrap();
-                    positions.insert(id.clone(), line + offset);
-                }
-                physical_lines.extend(
-                    (source + 1..=source + projected.lines().count())
-                        .map(|line| (file.clone(), line)),
-                );
-                text.push_str(&projected);
-            }
-        }
-    }
     let lines = text.lines().collect::<Vec<_>>();
-    let markers = positions.values().copied().collect::<BTreeSet<_>>();
     let mut start = args[6].parse::<usize>()? - 1;
     let column = args[8].parse::<usize>()? - 1;
-    if !anchor.is_empty() && start == 0 && column == 0 {
-        start = *positions
+    let mut end = lines.len();
+    let mut section = None;
+    if !anchor.is_empty() {
+        let manual = manual.unwrap();
+        let location = manual
+            .anchors
             .get(anchor)
-            .context("Cached manual anchor is missing")?;
+            .with_context(|| format!("Unknown manual anchor: {topic}"))?;
+        if start == 0 && column == 0 {
+            start = location.line - 1;
+        }
+        section = location.section;
+        end = location
+            .section
+            .map_or(manual.positions[0].start, |section| {
+                manual.sections[section].end
+            });
+        ensure!(
+            start >= location.line - 1,
+            "Line range begins before the requested anchor"
+        );
+    } else if !compact && let Some(manual) = manual {
+        section = manual
+            .sections
+            .iter()
+            .rposition(|section| section.start <= start + 1);
     }
-    ensure!(
-        start < lines.len(),
-        "Line range begins past the end ({} lines)",
-        lines.len()
-    );
+    ensure!(start < end, "Line range begins past the end ({end} lines)");
     let requested = args[7].parse::<usize>()?;
-    let mut end = if requested == 0 {
-        lines.len()
+    let range_end = if requested == 0 {
+        end
     } else {
-        (start + requested).min(lines.len())
+        (start + requested).min(end)
     };
-    let mut following = None;
-    if !anchor.is_empty() && args[6] == "1" && column == 0 && !relative.ends_with("/index.md") {
-        let manual = collection
-            .manuals
-            .iter()
-            .find(|m| relative.starts_with(&format!("{}/", m.name)))
-            .unwrap();
-        let current = manual
-            .blocks
-            .iter()
-            .position(|b| b.all_anchors().any(|a| a == anchor))
-            .unwrap();
-        if let Some(block) = manual.blocks[current + 1..].iter().find(|b| b.heading)
-            && let Some(line) = block
-                .anchors
-                .first()
-                .and_then(|a| positions.get(a))
-                .copied()
-        {
-            end = end.min(line);
-            following = Some((
-                line,
-                format!(
-                    "{}#{}",
-                    manual.name,
-                    block.anchors.first().map_or("", String::as_str)
-                ),
-            ));
-        }
-    }
     let mut output = format!("Cache: {}\nFile: {relative}\n", directory.display());
-    let mut file_metadata_end = output.len();
-    let mut displayed_files = BTreeSet::from([relative.clone()]);
-    if !anchor.is_empty() || start > 0 && !section_lines.is_empty() {
-        let manual = collection
-            .manuals
-            .iter()
-            .find(|m| relative.starts_with(&format!("{}/", m.name)))
-            .unwrap();
-        let section = if let Some(block) = manual
-            .blocks
-            .iter()
-            .find(|b| !anchor.is_empty() && b.all_anchors().any(|a| a == anchor))
-        {
-            Some(block.section)
-        } else {
-            section_lines
-                .iter()
-                .rev()
-                .find(|(line, _)| *line <= start)
-                .map(|(_, section)| *section)
-        };
-        if let Some(section) = section {
-            output.push_str(&format!("Location: {}\n", heading_path(manual, section)));
-        } else {
-            output.push_str(&format!("Location: {} > Table of Contents\n", manual.title));
-        }
+    if let Some(section) = section {
+        output.push_str(&format!(
+            "Location: {}\n",
+            heading_path(manual.unwrap(), section)
+        ));
     }
     output.push('\n');
+    let body_start = output.len();
+    // A preview may begin or end inside an oversized code block. Add only
+    // display fences; continuation coordinates still refer to the document.
+    let fence_at = |line: usize| {
+        manual.filter(|_| !compact).and_then(|manual| {
+            manual
+                .blocks
+                .iter()
+                .zip(&manual.positions)
+                .find_map(|(block, range)| {
+                    let fence = block.text.lines().next()?;
+                    if fence.len() < 3 || !fence.chars().all(|c| c == '`') {
+                        return None;
+                    }
+                    let opening = range.start + block.anchors.len();
+                    let closing = opening + block.text.lines().count() - 1;
+                    (opening < line && line <= closing).then_some(fence)
+                })
+        })
+    };
+    if let Some(fence) = fence_at(start) {
+        output.push_str(fence);
+        output.push('\n');
+    }
     let budget = output.len() + READ_BODY_BUDGET.min(READ_BUDGET.saturating_sub(output.len()));
     let mut next = start;
     let mut next_column = column;
-    for (i, line) in lines.iter().enumerate().take(end).skip(start) {
+    let mut heading_start = None;
+    for (i, line) in lines.iter().enumerate().take(range_end).skip(start) {
+        if requested == 0
+            && !compact
+            && let Some(manual) = manual
+            && let Some((block, range)) = manual
+                .blocks
+                .iter()
+                .zip(&manual.positions)
+                .find(|(_, range)| range.start == i)
+        {
+            if block.heading {
+                heading_start = Some((i, output.len()));
+            } else {
+                let bytes = lines[range.clone()]
+                    .iter()
+                    .map(|line| line.len() + 1)
+                    .sum::<usize>();
+                // Keep ordinary blocks whole once the page has useful context.
+                // Oversized examples still use explicit line/column continuation.
+                if bytes <= READ_BODY_BUDGET
+                    && bytes > budget.saturating_sub(output.len())
+                    && output.len() - body_start >= READ_BODY_BUDGET / 2
+                {
+                    if let Some((line, length)) = heading_start {
+                        output.truncate(length);
+                        next = line;
+                    } else {
+                        next = i;
+                    }
+                    next_column = 0;
+                    break;
+                }
+                heading_start = None;
+            }
+        }
         let mut visible = (*line).to_string();
-        if markers.contains(&i) {
-            for (anchor, position) in &positions {
-                if *position == i {
-                    visible = visible.replace(&anchor_html(anchor), "");
+        if !compact && let Some(manual) = manual {
+            for (id, location) in &manual.anchors {
+                if location.line == i + 1 {
+                    visible = visible.replace(&anchor_html(id), "");
                 }
             }
-            if visible.trim().is_empty() {
+            if visible.trim().is_empty() && !line.trim().is_empty() {
                 next = i + 1;
                 next_column = 0;
                 continue;
@@ -1192,13 +975,7 @@ fn read(
         } else {
             visible
         };
-        let file = &physical_lines[i].0;
-        let metadata = if displayed_files.contains(file) {
-            String::new()
-        } else {
-            format!("Also read: {file}\n")
-        };
-        let available = budget.saturating_sub(output.len() + metadata.len());
+        let available = budget.saturating_sub(output.len());
         if part.len() + 1 > available {
             if i == start {
                 let mut used = 0;
@@ -1215,47 +992,60 @@ fn read(
             }
             break;
         }
-        if !metadata.is_empty() {
-            output.insert_str(file_metadata_end, &metadata);
-            file_metadata_end += metadata.len();
-            displayed_files.insert(file.clone());
-        }
         output.push_str(&part);
         output.push('\n');
         next = i + 1;
         next_column = 0;
     }
-    if let Some((boundary, following)) = following
-        && next == boundary
-    {
-        output.push_str(&format!("\nNext section: RShowDoc({following:?})\n"));
-    } else if next < lines.len() {
+    if let Some(fence) = fence_at(next) {
+        output.push_str(fence);
+        output.push('\n');
+    }
+    if next < end {
         output.push_str(&format!(
-            "\nContinue: .console$manual({:?}, start = {}, column = {})\n",
-            if topic.is_empty() {
-                ""
-            } else {
-                &physical_lines[next].0
-            },
-            physical_lines[next].1,
+            "\nContinue: .console$manual({topic:?}, start = {}, column = {})\n",
+            next + 1,
             next_column + 1
         ));
-    } else if let Some(manual) = collection
-        .manuals
-        .iter()
-        .find(|m| relative.starts_with(&format!("{}/", m.name)))
-        && let Some(index) = manual
-            .chunks
+    } else if !anchor.is_empty()
+        && let Some(manual) = manual
+        && let Some(next_section) = manual
+            .sections
             .iter()
-            .position(|c| relative.ends_with(&c.file))
-        && let Some(chunk) = manual.chunks.get(index + 1)
+            .position(|section| section.start == end + 1)
     {
         output.push_str(&format!(
-            "\nNext file: .console$manual({:?})\n",
-            format!("{}/{}", manual.name, chunk.file)
+            "\nNext section: RShowDoc({:?})\n",
+            format!("{}#{}", manual.name, section_anchor(manual, next_section))
         ));
     }
-    Ok(vec![path.to_string_lossy().into(), output])
+    Ok(vec![
+        directory.join(relative).to_string_lossy().into(),
+        output,
+    ])
+}
+
+// Match rendered prose independently of line wrapping, retaining coordinates
+// in the original document for exact reading commands and Unicode case changes.
+fn matching_offset(text: &str, query: &str) -> Option<usize> {
+    let mut normalized = String::new();
+    let mut offsets = Vec::new();
+    for (offset, character) in text.char_indices() {
+        if character.is_whitespace() {
+            if !normalized.is_empty() && !normalized.ends_with(' ') {
+                normalized.push(' ');
+                offsets.push(offset);
+            }
+        } else {
+            for character in character.to_lowercase() {
+                normalized.push(character);
+                offsets.extend(std::iter::repeat_n(offset, character.len_utf8()));
+            }
+        }
+    }
+    normalized
+        .find(query)
+        .and_then(|offset| offsets.get(offset).copied())
 }
 
 fn search_hit(
@@ -1269,24 +1059,26 @@ fn search_hit(
 ) -> Result<String> {
     let block = &manual.blocks[block_index];
     let i = block.section;
-    let query = args[5].to_lowercase();
-    let chunk = manual
-        .chunks
-        .iter()
-        .find(|c| c.start <= block_index && block_index < c.end)
-        .unwrap();
-    let excerpt_block = if heading {
+    let query = args[5]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let excerpt_index = if heading {
         manual
             .blocks
             .iter()
-            .find(|b| b.section == i && !b.heading)
-            .unwrap_or(block)
+            .position(|block| block.section == i && !block.heading)
+            .unwrap_or(block_index)
     } else {
-        block
+        block_index
     };
-    let projected = project(collection, manual, excerpt_block, false);
+    let excerpt_block = &manual.blocks[excerpt_index];
+    let document = files[&format!("{}.md", manual.name)]
+        .lines()
+        .collect::<Vec<_>>();
     let body = excerpt_block
-        .visible(&projected)
+        .visible(&document[manual.positions[excerpt_index].clone()].join("\n"))
         .lines()
         .skip(excerpt_block.anchors.len())
         .collect::<Vec<_>>()
@@ -1320,7 +1112,7 @@ fn search_hit(
         excerpt.truncate(boundary);
         excerpt.push_str(" …");
     }
-    let (_, anchor) = section_location(manual, i);
+    let anchor = section_anchor(manual, i);
     let section = format!("{}#{anchor}", manual.name);
     let command = if heading || {
         let mut request = args.to_vec();
@@ -1330,44 +1122,23 @@ fn search_hit(
         request[8] = "1".into();
         let preview = read(collection, files, directory, &request)?;
         let body = preview[1].split_once("\n\n").unwrap().1;
-        body.lines()
+        let body = body
+            .lines()
             .filter(|line| {
                 !line.starts_with("Continue: ")
                     && !line.starts_with("Next section: ")
                     && !line.starts_with("Next file: ")
             })
             .collect::<Vec<_>>()
-            .join("\n")
-            .to_lowercase()
-            .contains(&query)
+            .join("\n");
+        matching_offset(&body, &query).is_some()
     } {
         format!("RShowDoc({section:?})")
     } else {
-        let prefix = Chunk {
-            file: chunk.file.clone(),
-            start: chunk.start,
-            end: block_index,
-        };
-        let prefix = content(
-            collection,
-            manual,
-            &prefix,
-            manual
-                .chunks
-                .iter()
-                .position(|c| c.file == chunk.file)
-                .unwrap(),
-        );
-        let mut line = prefix.bytes().filter(|c| *c == b'\n').count() + block.anchors.len() + 1;
-        let offset = body.to_lowercase().find(&query).unwrap_or(0);
-        let mut consumed = 0;
+        let mut line = manual.positions[block_index].start + block.anchors.len() + 1;
+        let offset = matching_offset(&body, &query).unwrap();
         let mut column: usize = 1;
-        for character in body.chars() {
-            let bytes = character.to_lowercase().map(char::len_utf8).sum::<usize>();
-            if consumed + bytes > offset {
-                break;
-            }
-            consumed += bytes;
+        for (_, character) in body.char_indices().take_while(|(index, _)| *index < offset) {
             if character == '\n' {
                 line += 1;
                 column = 1;
@@ -1381,10 +1152,7 @@ fn search_hit(
         } else {
             String::new()
         };
-        format!(
-            ".console$manual({:?}, start = {line}{column})",
-            format!("{}/{}", manual.name, chunk.file)
-        )
+        format!(".console$manual({:?}, start = {line}{column})", section)
     };
     Ok(format!(
         "{}: {}\n  {}\n  Read: {command}\n",
@@ -1404,7 +1172,15 @@ fn search(
         format!("{:?}", args[5]).len() <= 2048,
         "Manual search query must fit a 2048-byte continuation command"
     );
-    let query = args[5].to_lowercase();
+    let query = args[5]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    ensure!(
+        !query.is_empty(),
+        "Manual search queries must contain non-whitespace text"
+    );
     let mut results = Vec::new();
     ensure!(
         args[4].is_empty() || collection.manuals.iter().any(|m| m.name == args[4]),
@@ -1416,16 +1192,29 @@ fn search(
         .iter()
         .filter(|m| args[4].is_empty() || m.name == args[4])
     {
+        let document = files[&format!("{}.md", manual.name)]
+            .lines()
+            .collect::<Vec<_>>();
         for (i, section) in manual.sections.iter().enumerate() {
-            let heading = section.title.to_lowercase().contains(&query);
-            if let Some((block_index, _)) = manual.blocks.iter().enumerate().find(|(_, b)| {
-                b.section == i
-                    && (if heading {
-                        b.heading
-                    } else {
-                        !b.heading && b.visible(&b.text).to_lowercase().contains(&query)
-                    })
-            }) {
+            let heading = matching_offset(&section.title, &query).is_some();
+            if let Some((block_index, _)) =
+                manual.blocks.iter().enumerate().find(|(block_index, b)| {
+                    b.section == i
+                        && (if heading {
+                            b.heading
+                        } else {
+                            !b.heading
+                                && matching_offset(
+                                    &b.visible(
+                                        &document[manual.positions[*block_index].clone()]
+                                            .join("\n"),
+                                    ),
+                                    &query,
+                                )
+                                .is_some()
+                        })
+                })
+            {
                 results.push((!heading, manual, block_index));
             }
         }
@@ -1446,7 +1235,7 @@ fn search(
             "Search range begins past the end ({} results)",
             results.len()
         );
-        let budget = TARGET.min(READ_BUDGET.saturating_sub(output.len() + 100));
+        let budget = SEARCH_BUDGET.min(READ_BUDGET.saturating_sub(output.len() + 100));
         let mut body = String::new();
         let mut next = start;
         for (is_body, manual, block_index) in results.iter().skip(start).take(limit) {
@@ -1483,52 +1272,6 @@ fn search(
     Ok(vec![directory.to_string_lossy().into(), output])
 }
 
-fn export_text(collection: &Collection, manual: &Manual) -> String {
-    let mut text = format!(
-        "<!-- Installed {}, {}. Converted under the permission notice below. -->\n\n",
-        manual.name, collection.r_version
-    );
-    for anchor in &manual.toc_anchors {
-        text.push_str(&format!("{}\n", anchor_html(anchor)));
-    }
-    for block in &manual.blocks {
-        text.push_str(&project(collection, manual, block, true));
-    }
-    text
-}
-
-fn export(collection: &Collection, directory: &Path, name: &str) -> Result<Vec<String>> {
-    let manual = collection
-        .manuals
-        .iter()
-        .find(|m| m.name == name)
-        .context("Unknown installed manual")?;
-    let exports = directory.join("exports");
-    fs::create_dir_all(&exports)?;
-    let path = exports.join(format!("{name}.md"));
-    let text = export_text(collection, manual);
-    if !matches_file(&path, &text).unwrap_or(false) {
-        // Share the reclaimable identity-scoped staging directory. The caller
-        // holds the publication lock until this complete export is renamed.
-        let staging = directory.with_file_name(format!(
-            ".{}.incomplete",
-            directory.file_name().unwrap().to_string_lossy()
-        ));
-        fs::create_dir(&staging)?;
-        let temporary = staging.join("export.md");
-        fs::write(&temporary, text)?;
-        fs::rename(&temporary, &path)?;
-        fs::remove_dir(&staging)?;
-    }
-    Ok(vec![
-        path.to_string_lossy().into(),
-        format!(
-            "Complete Markdown: {}\nRead bounded ranges with readLines(); exports are excluded from manual search.\n",
-            path.display()
-        ),
-    ])
-}
-
 #[allow(clippy::result_large_err)]
 #[harp::register]
 pub extern "C-unwind" fn mcp_console_manual(request: SEXP) -> harp::Result<SEXP> {
@@ -1540,7 +1283,6 @@ pub extern "C-unwind" fn mcp_console_manual(request: SEXP) -> harp::Result<SEXP>
         match args[3].as_str() {
             "read" => read(collection, &prepared.files, &directory, &args),
             "search" => search(collection, &prepared.files, &directory, &args),
-            "export" => export(collection, &directory, &args[4]),
             _ => bail!("unknown manual operation"),
         }
     };

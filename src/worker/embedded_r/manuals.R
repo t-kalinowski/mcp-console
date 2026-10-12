@@ -76,7 +76,6 @@ base::local(
       }
       request("search", manual, query, start, limit = limit)
     }
-    console$manual_export <- function(manual) request("export", manual)
 
     previous_browser <- getOption("browser")
     options(browser = function(url, ...) {

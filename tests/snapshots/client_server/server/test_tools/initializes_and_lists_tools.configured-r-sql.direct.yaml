@@ -86,13 +86,14 @@ result:
               HTML text or labeled UTF-8/ASCII source for other formats. Capture long
               documentation with `text <- capture.output(print(?pkg::topic))`, then
               print line ranges with `writeLines()`. Use manuals for language
-              semantics, the C API, and package authoring. `RShowDoc("R-exts")` opens
-              an installed manual TOC; `RShowDoc("R-exts#original-anchor")` reads a
-              section. Search manual bodies with `.console$manual_search("phrase")`.
-              Follow the printed read/continuation commands; `.console$manual()` lists
-              the collection and cache paths. `.console$sql_connection()` returns the
-              active native DBI connection for DBI/dplyr, or errors if another runtime
-              owns SQL. Select a user-owned DBI connection for SQL cells with
+              semantics, the C API, and package authoring. `RShowDoc("R-exts")` prints
+              an installed manual TOC and the complete Markdown cache path;
+              `RShowDoc("R-exts#original-anchor")` reads a section. Search manual
+              bodies with `.console$manual_search("phrase")`. Follow the printed
+              read/continuation commands; `.console$manual()` lists the collection and
+              cache paths. `.console$sql_connection()` returns the active native DBI
+              connection for DBI/dplyr, or errors if another runtime owns SQL. Select
+              a user-owned DBI connection for SQL cells with
               `.console$sql_connection(connection)`; restore managed DuckDB with
               `.console$sql_connection(NULL)`. Never disconnect the managed
               connection; restore it before disconnecting a selection. Default-device

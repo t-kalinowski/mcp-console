@@ -2,6 +2,8 @@
 
 These YAML recordings show two complete client sessions against the HTML manuals installed with the running R: investigate supported C API entry points, and explain default versus supplied argument evaluation after consulting the function reference.
 Each records the actual R version and full Console responses, with temporary cache paths normalized.
+The C API session follows a bounded chapter continuation and searches its complete Markdown file with `readLines()` and `grep()`.
+The language session uses only Console's R interface.
 The same workflow must produce identical output through direct and sandboxed execution on one host.
 
 Regenerate them after building the checkout:

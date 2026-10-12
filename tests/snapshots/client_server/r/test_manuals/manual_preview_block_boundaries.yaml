@@ -1,0 +1,110 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: RShowDoc("R-exts#Paragraphs")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Coherent paragraphs
+
+        ## 1 Coherent paragraphs
+
+        Paragraph 1. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. This paragraph ends here.
+
+        Paragraph 2. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. This paragraph ends here.
+
+
+        Continue: .console$manual("R-exts#Paragraphs", start = 70, column = 1)
+  isError: false
+---
+send:
+  r: .console$manual("R-exts#Paragraphs", start = 70, column = 1)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Coherent paragraphs
+
+        Paragraph 3. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. A coherent paragraph retains its context. A coherent paragraph
+        retains its context. A coherent paragraph retains its context. A coherent
+        paragraph retains its context. A coherent paragraph retains its context. A
+        coherent paragraph retains its context. A coherent paragraph retains its
+        context. A coherent paragraph retains its context. A coherent paragraph retains
+        its context. This paragraph ends here.
+  isError: false

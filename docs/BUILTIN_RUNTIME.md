@@ -91,41 +91,48 @@ RShowDoc("R-exts#Registering-native-routines")
 ```
 
 `RShowDoc()` shows a compact TOC or resolves an original HTML anchor; qualified `utils::RShowDoc()` calls behave the same way and retain their native invisible return value.
-Section navigation and search hits use `RShowDoc()` when the match is visible in the default section view; Console-specific read commands handle deeper matches, file ranges, and continuations.
+Section navigation and search hits use `RShowDoc()` when the match is visible in the default preview; Console-specific read commands handle deeper matches, document ranges, and continuations.
 Console handles only installed manual HTML through R's browser option.
 On R versions before 4.6, a compatibility adapter selects installed HTML manuals and passes their anchors to the same browser hook.
 Other documentation calls retain their existing behavior, plain text uses the pager, and later browser-option overrides take precedence.
 PDF extraction is unavailable.
 
-`.console$manual(topic = "", start = 1L, lines = 0L, column = 1L)` reads a manual, original anchor, or collection-relative content filename.
+`.console$manual(topic = "", start = 1L, lines = 0L, column = 1L)` reads a manual, original anchor, or collection-relative Markdown filename.
 An empty topic lists the collection; a manual name shows its compact TOC.
-Use the displayed `manual/index.md` command for its full TOC.
-Reading returns the initial cache filename invisibly and prints bounded UTF-8 text with hierarchy context and exact continuation or next-file commands.
-An initial anchor read follows the logical section across physical files, stopping at the next heading or the response budget.
-The displayed `File` and any `Also read` paths are relative to the displayed `Cache` directory.
-`start` and `lines` select physical file lines; `lines = 0L` reads to the response budget.
+Use `.console$manual("R-exts.md")` for the full TOC and document.
+Reading returns the complete cache filename invisibly and prints bounded UTF-8 previews with heading context and an exact continuation command.
+An anchor selects its original location and the rest of that section, including subsections, up to the next heading at the same or higher level.
+Short subsections appear together; larger sections continue through the same topic.
+Previews prefer paragraph and block boundaries, keeping a heading with its following body.
+Previews usually contain up to 4.5 KiB of body text, leaving room for context and commands under Console's 8 KiB response limit.
+The displayed `File` path is relative to the displayed `Cache` directory.
+`start` and `lines` select one-based document lines; `lines = 0L` reads to the response budget.
 `column` is a one-based character position for continuing an unusually long line.
+The complete file preserves code blocks and tables; partial code previews repeat only their enclosing fences.
+Compact TOC continuations use positions within that displayed outline.
 Reading and search work with `capture.output()`.
 
 `.console$manual_search(query, manual = "", start = 1L, limit = 5L)` performs local, case-insensitive literal matching.
+Whitespace is normalized for matching, so phrases can span rendered line wraps; read commands retain document coordinates.
 This searches manual bodies; `help.search()` and `??` retain their package-documentation metadata searches.
 An empty `manual` searches the collection.
 Heading matches come first; each logical section appears at most once, with its section number, heading path, a body excerpt, and a read command.
 Results are bounded; follow the printed continuation command for more matches.
 `limit` accepts 1–20 results, subject to the response budget.
 Queries are limited to 1 KiB of UTF-8 and 2 KiB when quoted in continuation commands.
-Search does not include TOCs, generated navigation, or complete exports.
+Search uses the indexed body ranges in the complete documents, excluding TOCs and generated navigation.
 
 The first manual operation converts the installed collection together; R startup does not render it.
 Console records the R installation and version, source paths and SHA-256 content fingerprints, and conversion-format version in `manifest.json`.
-The manifest includes navigation metadata and anchor locations; manual body text appears only in the content files and optional exports.
+Each manual has one complete Markdown file, such as `R-exts.md`, beside a compact collection `index.md`.
+The manifest contains heading hierarchy, inclusive one-based section line ranges, and original-anchor line locations; it does not duplicate body text.
 Completed entries persist across cells and sessions and are published atomically.
 Changed inputs select a new entry; old entries remain inspectable.
 On first manual use, each worker derives its model and expected files from the installed sources, then reuses that model while the inputs are unchanged.
-Before reuse, Console checks the directory contents and compares cached files, including the manifest and any complete exports, with those source-derived projections.
+Before reuse, Console checks the flat directory inventory and compares every document, the collection index, and the manifest with those source-derived projections.
 Missing, modified, or unexpected entries cause the collection to be regenerated.
 An identity replaced by a file is also removed and regenerated.
-Sessions serialize validation, repair, publication, and export through a host-created OS file lock outside the worker-writable manuals subtree.
+Sessions serialize validation, repair, and publication through a host-created OS file lock outside the worker-writable manuals subtree.
 The lock is advisory: shell-capable submitted code can acquire it, so manual operations report `Manual cache is busy; retry the manual operation` on contention rather than blocking the interpreter.
 Cache comparisons bound reads to the expected content length; repair restores directory access before removal and reclaims abandoned staging for the requested identity.
 Console restores owner access to the manuals root before worker launch and before cache traversal.
@@ -136,19 +143,16 @@ The worker can write this manual subtree without write access to the broader Con
 An unavailable manual cache does not prevent Console startup; manual access reports the unavailable location on use.
 Treat completed entries as immutable; removing an entry regenerates it on next use.
 
-Each manual directory contains a TOC and descriptive, numbered Markdown files with parent/previous/next links.
-Short sections can share files; large sections split at headings or paragraphs without overlapping body text.
-Code blocks and tables remain whole, so individual files can exceed the usual roughly 4–6 KiB size.
-The R reader still provides bounded access to them.
-Explicit HTML anchors preserve original identities, and relative links connect grouped sections and other installed manuals.
+Document size does not determine reading size: Console selects bounded views from the complete Markdown and its derived index.
+Explicit HTML anchors preserve original identities.
+Same-manual links use `#original-anchor`; cross-manual links use `R-lang.md#original-anchor` within the generated collection.
 Table anchors stay beside their original rows; headings without an HTML identity receive a cache-local anchor for TOCs, parent links, and heading search.
 External links remain intact; unavailable local targets are labeled rather than linked to invented files.
 Source HTML must be UTF-8; scripts and styles are excluded and assets are not fetched or executed.
 
 The displayed paths also work with ordinary filesystem tools, `readLines(path, encoding = "UTF-8")`, and `grep()`.
-`.console$manual_export("R-exts")` writes complete Markdown from the same logical content and returns its filename invisibly.
-Same-manual links resolve inside the export; cross-manual links point into the cached collection.
-Exports live in `exports/`, outside the per-manual content directories; exclude that directory from filesystem searches to avoid duplicate hits.
+Each manual's body occurs once in the collection, so ordinary recursive text searches have no chunk or export copies to exclude.
+No separate complete export is needed.
 
 ## Python
 

@@ -58,24 +58,26 @@ def manual_workflow_c_api(binary: Path, execution: Execution) -> Transcript:
         assert "Do not\n  use these in distributed code" in output, output
         assert "#include <R.h>" in output, output
         assert "#API-index)" in output, output
+        continuation = re.search(r"Continue: (.+)", output)
+        assert continuation, "the R API chapter must have a bounded continuation"
+        first_page = output
+        client.send(r=continuation[1])
+        output = normalize_paths(client, root)
+        assert "Location: Writing R Extensions > 6 The R API" in output, output
+        assert len(output.encode("utf-8")) < 8192
+        assert "Do not\n  use these in distributed code" not in output, output
+        assert output != first_page
 
         client.send(
             # fmt: r
             r=code(r"""
                 # Inspect the same cached index with ordinary R file tools.
-                discard <- capture.output(index <- .console$manual("R-exts"))
-                for (path in list.files(
-                  dirname(index),
-                  pattern = "-api-index-",
-                  full.names = TRUE
-                )) {
-                  writeLines(grep(
-                    "`Rf_allocVector`",
-                    readLines(path, encoding = "UTF-8"),
-                    value = TRUE,
-                    fixed = TRUE
-                  ))
-                }
+                discard <- capture.output(path <- .console$manual("R-exts"))
+                writeLines(grep(
+                  "^\\|.*`Rf_allocVector`",
+                  readLines(path, encoding = "UTF-8"),
+                  value = TRUE
+                ))
                 """),
         )
         output = normalize_paths(client, root)
@@ -87,7 +89,7 @@ def manual_workflow_c_api(binary: Path, execution: Execution) -> Transcript:
         assert "5.9.2 Allocating storage" in output, output
         assert "only does so for lists, expressions and character" in output, output
         if "R_alloc" not in output:
-            command = re.search(r"(?:Continue|Next file): (.+)", output)[1]
+            command = re.search(r"Continue: (.+)", output)[1]
             client.send(r=command)
             output = normalize_paths(client, root)
         assert "R_alloc" in output, output
