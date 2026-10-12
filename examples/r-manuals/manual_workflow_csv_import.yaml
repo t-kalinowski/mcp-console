@@ -3,12 +3,21 @@ scenario: >-
   An analyst needs to import a semicolon-separated CSV with decimal commas
   and export it in the same format. Search and read the manual, then
   verify the documented functions on a small example.
-fixture: >-
-  Unmodified R 4.6.1 HTML manuals are exposed as the installed manual
-  directory. This client uses Console's R interface only, without the R
-  client package or external filesystem tools.
+documentation: >-
+  HTML manuals from the running R installation. This client uses Console's
+  R interface only, without the R client package or external filesystem
+  tools.
 ---
 !same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: cat("Installed R:", R.version.string, "\n")
+result:
+  content:
+    - type: text
+      text: |
+        Installed R: R version 4.6.1 (2026-06-24) 
+  isError: false
 ---
 send:
   r: .console$manual_search("read.csv2", manual = "R-data", limit = 3L)

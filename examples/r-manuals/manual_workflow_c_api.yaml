@@ -3,12 +3,20 @@ scenario: >-
   A package author asks whether an exported C symbol is necessarily
   supported, then checks Rf_allocVector in the API index and reads its
   allocation contract.
-fixture: >-
-  Unmodified R 4.6.1 HTML manuals are exposed as the installed manual
-  directory. The running worker uses the ordinary converter and a private
-  cache; external viewers raise errors.
+documentation: >-
+  HTML manuals from the running R installation. The worker uses its
+  ordinary converter and a private cache; external viewers raise errors.
 ---
 !same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: cat("Installed R:", R.version.string, "\n")
+result:
+  content:
+    - type: text
+      text: |
+        Installed R: R version 4.6.1 (2026-06-24) 
+  isError: false
 ---
 send:
   r: RShowDoc("R-exts")
