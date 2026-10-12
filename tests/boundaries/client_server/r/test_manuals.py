@@ -865,6 +865,37 @@ def test_manual_cache_lock_is_host_owned(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+def test_manual_cache_loss_does_not_block_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.expect("[1] 2\n", r="1 + 1")
+        cache = root / "cache/mcp-console"
+        manuals = cache / "manuals"
+        for removed in (manuals, cache):
+            client.send(r="old_session <- TRUE")
+            shutil.rmtree(removed)
+            result = client.send(control="restart")
+            assert not result.get("isError", False), result
+            client.expect(
+                "ordinary R execution works after cache loss\n",
+                # fmt: r
+                r=code(r"""
+                    stopifnot(!exists("old_session"), 1 + 1 == 2)
+                    cat("ordinary R execution works after cache loss\n")
+                    """),
+            )
+            assert manuals.is_dir(), "restart must recreate the cache root"
+            assert manuals.with_suffix(".lock").is_file()
+            assert not cache_entries(root), "materialization must remain lazy"
+            client.send(r='utils::RShowDoc("R-exts#Grouped-B")')
+            assert "café λ" in normalize_paths(client, root)
+            completed_collection(root)
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
 def test_manual_cache_reclaims_abandoned_publication(
     binary: Path, execution: Execution
 ) -> Transcript:

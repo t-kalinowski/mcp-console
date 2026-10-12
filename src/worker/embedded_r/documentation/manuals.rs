@@ -797,6 +797,8 @@ fn remove_entry(path: &Path) -> std::io::Result<()> {
         fs::remove_dir(path)
     } else {
         #[cfg(windows)]
+        // Clearing the Windows read-only attribute leaves ACL permissions intact.
+        #[allow(clippy::permissions_set_readonly_false)]
         if metadata.is_file() && metadata.permissions().readonly() {
             let mut permissions = metadata.permissions();
             permissions.set_readonly(false);

@@ -147,19 +147,7 @@ fn configure_manuals(
         .filter(|root| root.to_str().is_some())
         // Visibility does not imply an available R runtime. An unavailable
         // documentation cache is diagnosed only when a manual is requested.
-        .filter(|root| {
-            std::fs::create_dir_all(root).is_ok()
-                && std::fs::File::options()
-                    .read(true)
-                    .write(true)
-                    .create(true)
-                    .truncate(false)
-                    .open(root.with_extension("lock"))
-                    .is_ok()
-                && std::fs::symlink_metadata(root).is_ok_and(|metadata| {
-                    metadata.is_dir() && restore_directory_access(root, &metadata).is_ok()
-                })
-        });
+        .filter(|root| prepare_manual_root(root).is_ok());
     let path = match &root {
         Some(root) => root.to_str().ok_or("manual cache paths must be UTF-8")?,
         // Missing or non-UTF-8 host-cache locations do not prevent unrelated
@@ -195,12 +183,31 @@ pub(crate) fn restore_directory_access(
         }
     }
     #[cfg(windows)]
+    // Clearing the Windows read-only attribute leaves ACL permissions intact.
+    #[allow(clippy::permissions_set_readonly_false)]
     if metadata.permissions().readonly() {
         let mut permissions = metadata.permissions();
         permissions.set_readonly(false);
         std::fs::set_permissions(path, permissions)?;
     }
     Ok(())
+}
+
+fn prepare_manual_root(root: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(root)?;
+    std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.with_extension("lock"))?;
+    let metadata = std::fs::symlink_metadata(root)?;
+    if !metadata.is_dir() {
+        return Err(std::io::Error::other(
+            "Manual cache root is not a directory",
+        ));
+    }
+    restore_directory_access(root, &metadata)
 }
 
 pub(crate) fn restore_manual_root(settings: &SandboxSettings) -> Result<(), String> {
@@ -212,14 +219,10 @@ pub(crate) fn restore_manual_root(settings: &SandboxSettings) -> Result<(), Stri
     else {
         return Ok(());
     };
-    let root = std::path::Path::new(root);
-    let metadata = std::fs::symlink_metadata(root).map_err(|error| error.to_string())?;
-    if !metadata.is_dir() {
-        return Err("Manual cache root is not a directory".into());
-    }
     // The native runner can inspect protected descendants during replacement.
-    // Restore only the captured manual root before retiring the old worker.
-    restore_directory_access(root, &metadata).map_err(|error| error.to_string())
+    // Restore the captured root before retiring the old worker, recreating the
+    // directory and its host-owned lock if a cache cleaner removed them.
+    prepare_manual_root(std::path::Path::new(root)).map_err(|error| error.to_string())
 }
 
 fn environment_path(settings: &SandboxSettings, name: &str) -> Option<PathBuf> {

@@ -129,6 +129,7 @@ Sessions serialize validation, repair, publication, and export through a host-cr
 The lock is advisory: shell-capable submitted code can acquire it, so manual operations report `Manual cache is busy; retry the manual operation` on contention rather than blocking the interpreter.
 Cache comparisons bound reads to the expected content length; repair restores directory access before removal and reclaims abandoned staging for the requested identity.
 Console restores owner access to the manuals root before worker launch and before cache traversal.
+Restart recreates the root and its host-owned lock if a cache cleaner removed them; the collection still materializes only when requested.
 R reading and search use the source-derived model, so concurrent cache edits cannot replace the displayed documentation.
 The [platform cache policy](RESOLVER.md#cache-locations) determines the root, independently of `MCP_CONSOLE_HOME`.
 The worker can write this manual subtree without write access to the broader Console cache.
