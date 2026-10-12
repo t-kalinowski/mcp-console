@@ -56,5 +56,5 @@ result:
         A second needle introduction with café λ. [Reference](../R-lang/01-shared-references-part-001.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
 
 
-        Next file: .console$manual("R-exts/02-needle-examples-part-001.md")
+        Next section: RShowDoc("R-exts#Needle-examples")
   isError: false

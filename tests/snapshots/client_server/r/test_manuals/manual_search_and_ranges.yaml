@@ -12,12 +12,12 @@ result:
         4 matching sections; results 1–2
 
         R-exts: Writing R Extensions > 2 Needle examples
-          ## 2 Needle examples
+          Needle heading match comes first.
           Read: RShowDoc("R-exts#Needle-examples")
 
         R-exts: Writing R Extensions > 1 Small sections > 1.1 Grouped A
-          A short needle introduction. See [B](01-small-sections-part-001.md#Grouped-B), [language](../R-lang/01-shared-references-part-001.md#Shared-anchor), and [extern
-          Read: .console$manual("R-exts/01-small-sections-part-001.md", start = 16)
+          A short needle introduction. See [B](01-small-sections-part-001.md#Grouped-B), [language](../R-lang/01-shared-references-part-001.md#Shared-anchor), and [external](https://example.org/external).
+          Read: RShowDoc("R-exts#Grouped-A")
 
         Continue: .console$manual_search("needle", manual = "", start = 3, limit = 2)
   isError: false
@@ -33,12 +33,12 @@ result:
         4 matching sections; results 3–4
 
         R-exts: Writing R Extensions > 1 Small sections > 1.2 Grouped B
-          A second needle introduction with café λ. [Reference](../R-lang/01-shared-references-part-001.md#Shared-anchor). [Missing local reference] [unavailable local ta
-          Read: .console$manual("R-exts/01-small-sections-part-001.md", start = 23)
+          A second needle introduction with café λ. [Reference](../R-lang/01-shared-references-part-001.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+          Read: RShowDoc("R-exts#Grouped-B")
 
         R-exts: Writing R Extensions > 2 Needle examples > 2.1 Large section
-          paragraph-000: Needle details about a coherent example and its native interface. This paragraph is intentionally long enough to exercise paragraph boundaries wi
-          Read: .console$manual("R-exts/02-needle-examples-part-001.md", start = 16)
+          paragraph-000: Needle details about a coherent example and its native interface. This paragraph is intentionally long enough to exercise paragraph boundaries without overlapping any body text.
+          Read: RShowDoc("R-exts#Large-section")
   isError: false
 ---
 send:
@@ -117,22 +117,6 @@ result:
           code-line-060 <- "example output stays indented and complete"
           code-line-061 <- "example output stays indented and complete"
           code-line-062 <- "example output stays indented and complete"
-
-        Continue: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 74, column = 1)
-  isError: false
----
-send:
-  r: >-
-    .console$manual("R-exts/02.02-oversized-example-part-001.md", start =
-    74, column = 1)
-result:
-  content:
-    - type: text
-      text: |
-        Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/02.02-oversized-example-part-001.md
-        Location: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
-
           code-line-063 <- "example output stays indented and complete"
           code-line-064 <- "example output stays indented and complete"
           code-line-065 <- "example output stays indented and complete"
@@ -142,6 +126,22 @@ result:
           code-line-069 <- "example output stays indented and complete"
           code-line-070 <- "example output stays indented and complete"
           code-line-071 <- "example output stays indented and complete"
+
+        Continue: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 83, column = 1)
+  isError: false
+---
+send:
+  r: >-
+    .console$manual("R-exts/02.02-oversized-example-part-001.md", start =
+    83, column = 1)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts/02.02-oversized-example-part-001.md
+        Location: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
+
           code-line-072 <- "example output stays indented and complete"
           code-line-073 <- "example output stays indented and complete"
           code-line-074 <- "example output stays indented and complete"
@@ -197,8 +197,26 @@ result:
           code-line-124 <- "example output stays indented and complete"
           code-line-125 <- "example output stays indented and complete"
           code-line-126 <- "example output stays indented and complete"
+          code-line-127 <- "example output stays indented and complete"
+          code-line-128 <- "example output stays indented and complete"
+          code-line-129 <- "example output stays indented and complete"
+          code-line-130 <- "example output stays indented and complete"
+          code-line-131 <- "example output stays indented and complete"
+          code-line-132 <- "example output stays indented and complete"
+          code-line-133 <- "example output stays indented and complete"
+          code-line-134 <- "example output stays indented and complete"
+          code-line-135 <- "example output stays indented and complete"
+          code-line-136 <- "example output stays indented and complete"
+          code-line-137 <- "example output stays indented and complete"
+          code-line-138 <- "example output stays indented and complete"
+          code-line-139 <- "example output stays indented and complete"
+          code-line-140 <- "example output stays indented and complete"
+          code-line-141 <- "example output stays indented and complete"
+          code-line-142 <- "example output stays indented and complete"
+          code-line-143 <- "example output stays indented and complete"
+          code-line-144 <- "example output stays indented and complete"
 
-        Continue: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 138, column = 1)
+        Continue: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 156, column = 1)
   isError: false
 ---
 send:
@@ -230,7 +248,7 @@ result:
         1 matching sections; results 1–1
 
         R-exts: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
-          de-line-158 <- "example output stays indented and complete" code-line-159 <- "example output stays indented and complete" ```
+          … <- "example output stays indented and complete" code-line-159 <- "example output stays indented and complete" ```
           Read: .console$manual("R-exts/02.02-oversized-example-part-001.md", start = 170)
   isError: false
 ---
@@ -264,7 +282,7 @@ result:
         1 matching sections; results 1–1
 
         R-exts: Writing R Extensions > 3 Long Unicode line
-          λéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéλéwide-end ```
+          … ```
           Read: .console$manual("R-exts/03-long-unicode-line-part-001.md", start = 11, column = 6951)
   isError: false
 ---

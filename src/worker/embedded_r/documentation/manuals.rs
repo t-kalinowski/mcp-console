@@ -953,7 +953,7 @@ fn read(
         bail!("Unknown installed manual or content file: {topic}")
     };
     let path = directory.join(&relative);
-    let text = if let Some(manual) = collection.manuals.iter().find(|m| m.name == *topic) {
+    let mut text = if let Some(manual) = collection.manuals.iter().find(|m| m.name == *topic) {
         toc(manual, true)
     } else {
         // Reading uses the source-derived projection even if another worker
@@ -963,7 +963,9 @@ fn read(
             .context("Unknown manual content file")?
             .clone()
     };
-    let lines = text.lines().collect::<Vec<_>>();
+    let mut physical_lines = (1..=text.lines().count())
+        .map(|line| (relative.clone(), line))
+        .collect::<Vec<_>>();
     let mut positions = BTreeMap::new();
     let mut section_lines = Vec::new();
     if !collection.manuals.iter().any(|m| m.name == *topic)
@@ -976,9 +978,8 @@ fn read(
             for anchor in &manual.toc_anchors {
                 positions.insert(
                     anchor.clone(),
-                    lines
-                        .iter()
-                        .position(|line| *line == anchor_html(anchor))
+                    text.lines()
+                        .position(|line| line == anchor_html(anchor))
                         .context("Cached TOC anchor is missing")?,
                 );
             }
@@ -998,6 +999,61 @@ fn read(
                 .collect();
         }
     }
+    // Physical cache files are storage boundaries, not reading boundaries.
+    // Extend an initial anchor view to the next logical heading, recording
+    // original file/line coordinates for exact physical continuations.
+    if !anchor.is_empty() && args[6] == "1" && args[8] == "1" && !relative.ends_with("/index.md") {
+        let manual = collection
+            .manuals
+            .iter()
+            .find(|m| relative.starts_with(&format!("{}/", m.name)))
+            .unwrap();
+        let current = manual
+            .blocks
+            .iter()
+            .position(|block| block.all_anchors().any(|id| id == anchor))
+            .unwrap();
+        let end = manual.blocks[current + 1..]
+            .iter()
+            .position(|block| block.heading)
+            .map_or(manual.blocks.len(), |offset| current + offset + 2);
+        let first = manual
+            .chunks
+            .iter()
+            .position(|chunk| relative.ends_with(&chunk.file))
+            .unwrap();
+        for (index, chunk) in manual
+            .chunks
+            .iter()
+            .enumerate()
+            .skip(first + 1)
+            .take_while(|(_, chunk)| chunk.start < end)
+        {
+            let source_lines = block_positions(collection, manual, chunk, index);
+            let file = format!("{}/{}", manual.name, chunk.file);
+            for (block, source) in manual.blocks[chunk.start..chunk.end.min(end)]
+                .iter()
+                .zip(source_lines)
+            {
+                let projected = project(collection, manual, block, false);
+                let line = physical_lines.len();
+                section_lines.push((line, block.section));
+                for id in block.all_anchors() {
+                    let offset = projected
+                        .lines()
+                        .position(|text| text.contains(&anchor_html(id)))
+                        .unwrap();
+                    positions.insert(id.clone(), line + offset);
+                }
+                physical_lines.extend(
+                    (source + 1..=source + projected.lines().count())
+                        .map(|line| (file.clone(), line)),
+                );
+                text.push_str(&projected);
+            }
+        }
+    }
+    let lines = text.lines().collect::<Vec<_>>();
     let markers = positions.values().copied().collect::<BTreeSet<_>>();
     let mut start = args[6].parse::<usize>()? - 1;
     let column = args[8].parse::<usize>()? - 1;
@@ -1048,6 +1104,8 @@ fn read(
         }
     }
     let mut output = format!("Cache: {}\nFile: {relative}\n", directory.display());
+    let mut file_metadata_end = output.len();
+    let mut displayed_files = BTreeSet::from([relative.clone()]);
     if !anchor.is_empty() || start > 0 && !section_lines.is_empty() {
         let manual = collection
             .manuals
@@ -1074,7 +1132,7 @@ fn read(
         }
     }
     output.push('\n');
-    let budget = output.len() + TARGET.min(READ_BUDGET.saturating_sub(output.len()));
+    let budget = READ_BUDGET.max(output.len());
     let mut next = start;
     let mut next_column = column;
     for (i, line) in lines.iter().enumerate().take(end).skip(start) {
@@ -1096,7 +1154,13 @@ fn read(
         } else {
             visible
         };
-        let available = budget.saturating_sub(output.len());
+        let file = &physical_lines[i].0;
+        let metadata = if displayed_files.contains(file) {
+            String::new()
+        } else {
+            format!("Also read: {file}\n")
+        };
+        let available = budget.saturating_sub(output.len() + metadata.len());
         if part.len() + 1 > available {
             if i == start {
                 let mut used = 0;
@@ -1113,6 +1177,11 @@ fn read(
             }
             break;
         }
+        if !metadata.is_empty() {
+            output.insert_str(file_metadata_end, &metadata);
+            file_metadata_end += metadata.len();
+            displayed_files.insert(file.clone());
+        }
         output.push_str(&part);
         output.push('\n');
         next = i + 1;
@@ -1125,8 +1194,12 @@ fn read(
     } else if next < lines.len() {
         output.push_str(&format!(
             "\nContinue: .console$manual({:?}, start = {}, column = {})\n",
-            if topic.is_empty() { "" } else { &relative },
-            next + 1,
+            if topic.is_empty() {
+                ""
+            } else {
+                &physical_lines[next].0
+            },
+            physical_lines[next].1,
             next_column + 1
         ));
     } else if let Some(manual) = collection
@@ -1147,7 +1220,144 @@ fn read(
     Ok(vec![path.to_string_lossy().into(), output])
 }
 
-fn search(collection: &Collection, directory: &Path, args: &[String]) -> Result<Vec<String>> {
+fn search_hit(
+    collection: &Collection,
+    files: &Files,
+    directory: &Path,
+    manual: &Manual,
+    block_index: usize,
+    heading: bool,
+    args: &[String],
+) -> Result<String> {
+    let block = &manual.blocks[block_index];
+    let i = block.section;
+    let query = args[5].to_lowercase();
+    let chunk = manual
+        .chunks
+        .iter()
+        .find(|c| c.start <= block_index && block_index < c.end)
+        .unwrap();
+    let excerpt_block = if heading {
+        manual
+            .blocks
+            .iter()
+            .find(|b| b.section == i && !b.heading)
+            .unwrap_or(block)
+    } else {
+        block
+    };
+    let projected = project(collection, manual, excerpt_block, false);
+    let body = excerpt_block
+        .visible(&projected)
+        .lines()
+        .skip(excerpt_block.anchors.len())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let excerpt = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let offset = excerpt.to_lowercase().find(&query).map_or(0, |offset| {
+        excerpt.to_lowercase()[..offset]
+            .chars()
+            .count()
+            .saturating_sub(60)
+    });
+    let mut excerpt = excerpt.chars().skip(offset).take(400).collect::<String>();
+    if offset > 0
+        && let Some(boundary) = excerpt.find(char::is_whitespace)
+    {
+        excerpt = format!("… {}", excerpt[boundary..].trim_start());
+    }
+    if body
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .count()
+        > offset + 400
+        && let Some(boundary) = excerpt.rfind(char::is_whitespace)
+    {
+        excerpt.truncate(boundary);
+        excerpt.push_str(" …");
+    }
+    let (_, anchor) = section_location(manual, i);
+    let section = format!("{}#{anchor}", manual.name);
+    let command = if heading || {
+        let mut request = args.to_vec();
+        request[4] = section.clone();
+        request[6] = "1".into();
+        request[7] = "0".into();
+        request[8] = "1".into();
+        let preview = read(collection, files, directory, &request)?;
+        let body = preview[1].split_once("\n\n").unwrap().1;
+        body.lines()
+            .filter(|line| {
+                !line.starts_with("Continue: ")
+                    && !line.starts_with("Next section: ")
+                    && !line.starts_with("Next file: ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+            .to_lowercase()
+            .contains(&query)
+    } {
+        format!("RShowDoc({section:?})")
+    } else {
+        let prefix = Chunk {
+            file: chunk.file.clone(),
+            start: chunk.start,
+            end: block_index,
+        };
+        let prefix = content(
+            collection,
+            manual,
+            &prefix,
+            manual
+                .chunks
+                .iter()
+                .position(|c| c.file == chunk.file)
+                .unwrap(),
+        );
+        let mut line = prefix.bytes().filter(|c| *c == b'\n').count() + block.anchors.len() + 1;
+        let offset = body.to_lowercase().find(&query).unwrap_or(0);
+        let mut consumed = 0;
+        let mut column: usize = 1;
+        for character in body.chars() {
+            let bytes = character.to_lowercase().map(char::len_utf8).sum::<usize>();
+            if consumed + bytes > offset {
+                break;
+            }
+            consumed += bytes;
+            if character == '\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
+        }
+        let column = column.saturating_sub(60).max(1);
+        let column = if column > 1 {
+            format!(", column = {column}")
+        } else {
+            String::new()
+        };
+        format!(
+            ".console$manual({:?}, start = {line}{column})",
+            format!("{}/{}", manual.name, chunk.file)
+        )
+    };
+    Ok(format!(
+        "{}: {}\n  {}\n  Read: {command}\n",
+        manual.name,
+        heading_path(manual, i),
+        excerpt
+    ))
+}
+
+fn search(
+    collection: &Collection,
+    files: &Files,
+    directory: &Path,
+    args: &[String],
+) -> Result<Vec<String>> {
     ensure!(
         format!("{:?}", args[5]).len() <= 2048,
         "Manual search query must fit a 2048-byte continuation command"
@@ -1174,87 +1384,11 @@ fn search(collection: &Collection, directory: &Path, args: &[String]) -> Result<
                         !b.heading && b.visible(&b.text).to_lowercase().contains(&query)
                     })
             }) {
-                let chunk = manual
-                    .chunks
-                    .iter()
-                    .find(|c| c.start <= block_index && block_index < c.end)
-                    .unwrap();
-                let projected = project(collection, manual, block, false);
-                let body = block
-                    .visible(&projected)
-                    .lines()
-                    .skip(block.anchors.len())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let excerpt = body.split_whitespace().collect::<Vec<_>>().join(" ");
-                let offset = excerpt.to_lowercase().find(&query).map_or(0, |offset| {
-                    excerpt.to_lowercase()[..offset]
-                        .chars()
-                        .count()
-                        .saturating_sub(60)
-                });
-                let excerpt = excerpt.chars().skip(offset).take(160).collect::<String>();
-                let command = if heading {
-                    let (_, anchor) = section_location(manual, i);
-                    format!("RShowDoc({:?})", format!("{}#{anchor}", manual.name))
-                } else {
-                    let prefix = Chunk {
-                        file: chunk.file.clone(),
-                        start: chunk.start,
-                        end: block_index,
-                    };
-                    let prefix = content(
-                        collection,
-                        manual,
-                        &prefix,
-                        manual
-                            .chunks
-                            .iter()
-                            .position(|c| c.file == chunk.file)
-                            .unwrap(),
-                    );
-                    let mut line =
-                        prefix.bytes().filter(|c| *c == b'\n').count() + block.anchors.len() + 1;
-                    let offset = body.to_lowercase().find(&query).unwrap_or(0);
-                    let mut consumed = 0;
-                    let mut column: usize = 1;
-                    for character in body.chars() {
-                        let bytes = character.to_lowercase().map(char::len_utf8).sum::<usize>();
-                        if consumed + bytes > offset {
-                            break;
-                        }
-                        consumed += bytes;
-                        if character == '\n' {
-                            line += 1;
-                            column = 1;
-                        } else {
-                            column += 1;
-                        }
-                    }
-                    let column = column.saturating_sub(60).max(1);
-                    let column = if column > 1 {
-                        format!(", column = {column}")
-                    } else {
-                        String::new()
-                    };
-                    format!(
-                        ".console$manual({:?}, start = {line}{column})",
-                        format!("{}/{}", manual.name, chunk.file)
-                    )
-                };
-                results.push((
-                    !heading,
-                    format!(
-                        "{}: {}\n  {}\n  Read: {command}\n",
-                        manual.name,
-                        heading_path(manual, i),
-                        excerpt
-                    ),
-                ));
+                results.push((!heading, manual, block_index));
             }
         }
     }
-    results.sort_by_key(|(body, _)| *body);
+    results.sort_by_key(|(body, _, _)| *body);
     let start = args[6].parse::<usize>()? - 1;
     let limit = args[9].parse::<usize>()?;
     let mut output = format!(
@@ -1273,11 +1407,20 @@ fn search(collection: &Collection, directory: &Path, args: &[String]) -> Result<
         let budget = TARGET.min(READ_BUDGET.saturating_sub(output.len() + 100));
         let mut body = String::new();
         let mut next = start;
-        for (_, result) in results.iter().skip(start).take(limit) {
+        for (is_body, manual, block_index) in results.iter().skip(start).take(limit) {
+            let result = search_hit(
+                collection,
+                files,
+                directory,
+                manual,
+                *block_index,
+                !is_body,
+                args,
+            )?;
             if body.len() + result.len() + 1 > budget {
                 break;
             }
-            body.push_str(result);
+            body.push_str(&result);
             body.push('\n');
             next += 1;
         }
@@ -1349,7 +1492,7 @@ pub extern "C-unwind" fn mcp_console_manual(request: SEXP) -> harp::Result<SEXP>
         let collection = &prepared.collection;
         match args[3].as_str() {
             "read" => read(collection, &prepared.files, &directory, &args),
-            "search" => search(collection, &directory, &args),
+            "search" => search(collection, &prepared.files, &directory, &args),
             "export" => export(collection, &directory, &args[4]),
             _ => bail!("unknown manual operation"),
         }

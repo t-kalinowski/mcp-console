@@ -43,9 +43,13 @@ def manual_workflow_c_api(binary: Path, execution: Execution) -> Transcript:
         client,
         root,
     ):
-        client.send(r='cat("Installed R:", R.version.string, "\\n")')
-        normalize_paths(client, root)
-        client.send(r='RShowDoc("R-exts")')
+        client.send(
+            # fmt: r
+            r=code(r"""
+                cat("Installed R:", R.version.string, "\n")
+                RShowDoc("R-exts")
+                """),
+        )
         output = normalize_paths(client, root)
         assert "6 The R API: entry points for C code" in output, output
 
@@ -55,22 +59,23 @@ def manual_workflow_c_api(binary: Path, execution: Execution) -> Transcript:
         assert "#include <R.h>" in output, output
         assert "#API-index)" in output, output
 
-        client.send(r='RShowDoc("R-exts#API-index")')
-        output = normalize_paths(client, root)
-        assert "intended to be used in distributed packages" in output, output
-        assert "#API-index_ap_letter-R)" in output, output
-
         client.send(
             # fmt: r
             r=code(r"""
                 # Inspect the same cached index with ordinary R file tools.
-                index <- capture.output(path <- .console$manual("R-exts#API-index_ap_letter-R"))
-                writeLines(grep(
-                  "`Rf_allocVector`",
-                  readLines(path, encoding = "UTF-8"),
-                  value = TRUE,
-                  fixed = TRUE
-                ))
+                discard <- capture.output(index <- .console$manual("R-exts"))
+                for (path in list.files(
+                  dirname(index),
+                  pattern = "-api-index-",
+                  full.names = TRUE
+                )) {
+                  writeLines(grep(
+                    "`Rf_allocVector`",
+                    readLines(path, encoding = "UTF-8"),
+                    value = TRUE,
+                    fixed = TRUE
+                  ))
+                }
                 """),
         )
         output = normalize_paths(client, root)
@@ -81,87 +86,65 @@ def manual_workflow_c_api(binary: Path, execution: Execution) -> Transcript:
         output = normalize_paths(client, root)
         assert "5.9.2 Allocating storage" in output, output
         assert "only does so for lists, expressions and character" in output, output
-        command = re.search(r"Next file: (.+)", output)[1]
-        client.send(r=command)
-        output = normalize_paths(client, root)
+        if "R_alloc" not in output:
+            command = re.search(r"(?:Continue|Next file): (.+)", output)[1]
+            client.send(r=command)
+            output = normalize_paths(client, root)
         assert "R_alloc" in output, output
         return [scenario, *client.finish()]
 
 
-def manual_workflow_csv_import(binary: Path, execution: Execution) -> Transcript:
+def manual_workflow_argument_evaluation(
+    binary: Path, execution: Execution
+) -> Transcript:
     scenario = {
         "scenario": (
-            "An analyst needs to import a semicolon-separated CSV with decimal "
-            "commas and export it in the same format. Search and read the manual, "
-            "then verify the documented functions on a small example."
+            "A package author wants to understand why a default argument sees a "
+            "function's local binding, while an explicitly supplied argument "
+            "sees the caller's binding. Start with the function reference, then "
+            "consult the language manual for the evaluation rules and verify them."
         ),
         "documentation": (
-            "HTML manuals from the running R installation. This client uses "
-            "Console's R interface only, without the R client package or "
-            "external filesystem tools."
+            "Function help and HTML manuals from the running R installation. "
+            "This client uses Console's R interface only, without the R client "
+            "package or external filesystem tools."
         ),
     }
-    with manual_client(binary, execution, installed=True) as (
-        client,
-        root,
-    ):
-        client.send(r='cat("Installed R:", R.version.string, "\\n")')
-        normalize_paths(client, root)
-        client.send(
-            r='.console$manual_search("read.csv2", manual = "R-data", limit = 3L)'
-        )
-        output = normalize_paths(client, root)
-        assert "2.1 Variations on read.table" in output, output
-        read = re.search(r"  Read: (.+)", output)[1]
-        location, arguments = (
-            read.removeprefix(".console$manual(").removesuffix(")").split(", ", 1)
-        )
-        client.send(
-            # fmt: r
-            r=code(f"""
-                .console$manual(
-                  {
-                    location
-                  },
-                  {
-                    arguments
-                  },
-                  lines = 5L
-                )
-                """),
-        )
-        output = normalize_paths(client, root)
-        assert "semicolons to separate fields" in " ".join(output.split()), output
-        assert "read.csv2" in output, output
-
-        client.send(
-            r='.console$manual_search("Export to text files", manual = "R-data", limit = 1L)'
-        )
-        output = normalize_paths(client, root)
-        assert "1.2 Export to text files" in output, output
-        command = re.search(r"  Read: (.+)", output)[1]
-        client.send(r=command)
-        output = normalize_paths(client, root)
-        if "write.csv2" not in output:
-            command = re.search(r"(?:Continue|Next file): (.+)", output)[1]
-            client.send(r=command)
-            output = normalize_paths(client, root)
-        assert "write.csv2" in output, output
-        assert 'dec = ","' in output, output
-        assert r'sep = "\t"' in client.transcript[-1]["result"]["content"][0]["text"]
-
+    with manual_client(binary, execution, installed=True) as (client, root):
         client.send(
             # fmt: r
             r=code(r"""
-                csv <- "item;amount\ncoffee;1,25\ntea;2,50"
-                prices <- read.csv2(text = csv)
-                prices
-                write.csv2(prices, row.names = FALSE)
+                cat("Installed R:", R.version.string, "\n")
+                help("function", package = "base")
                 """),
         )
         output = normalize_paths(client, root)
-        assert "coffee   1.25" in output, output
-        assert '"coffee";1,25\n"tea";2,5' in output, output
+        assert "Function Definition" in output and "arglist" in output, output
+        client.send(
+            r='.console$manual_search("default arguments", manual = "R-lang", limit = 2L)'
+        )
+        output = normalize_paths(client, root)
+        assert "4.3.3 Argument evaluation" in output, output
+        command = re.search(r"  Read: (.+)", output)[1]
+        client.send(r=command)
+        output = normalize_paths(client, root)
+        prose = " ".join(output.split())
+        assert "evaluation frame of the calling function" in prose, output
+        assert "evaluation frame of the function" in prose, output
+        assert "lazy evaluation" in prose, output
+        client.send(
+            # fmt: r
+            r=code(r"""
+                y <- 1L
+                f <- function(x = y) {
+                  y <- 2L
+                  x
+                }
+                c(default = f(), supplied = f(y))
+                """),
+        )
+        output = normalize_paths(client, root)
+        assert re.search(r"default\s+supplied\s+2\s+1", output), output
         return [scenario, *client.finish()]
 
 
@@ -184,7 +167,7 @@ if __name__ == "__main__":
         else (DIRECT if options.execution == "direct" else SANDBOXED,)
     )
     reference = root / initialization_reference
-    for workflow in (manual_workflow_c_api, manual_workflow_csv_import):
+    for workflow in (manual_workflow_c_api, manual_workflow_argument_evaluation):
         recordings = []
         for execution in modes:
             print(f"Running {workflow.__name__} [{execution.name}]", flush=True)

@@ -10,20 +10,14 @@ documentation: >-
 !same-as r-only MCP initialization for this execution mode
 ---
 send:
-  r: cat("Installed R:", R.version.string, "\n")
+  r: |
+    cat("Installed R:", R.version.string, "\n")
+    RShowDoc("R-exts")
 result:
   content:
     - type: text
       text: |
         Installed R: R version 4.6.1 (2026-06-24) 
-  isError: false
----
-send:
-  r: RShowDoc("R-exts")
-result:
-  content:
-    - type: text
-      text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
         File: R-exts/index.md
 
@@ -62,6 +56,7 @@ result:
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
         File: R-exts/06-the-r-api-entry-points-for-c-code-part-001.md
+        Also read: R-exts/06-the-r-api-entry-points-for-c-code-part-002.md
         Location: Writing R Extensions > 6 The R API: entry points for C code
 
         ## 6 The R API: entry points for C code
@@ -155,43 +150,34 @@ result:
           keep it separate for now. See [Embedding API index](99.217-embedding-api-index-part-001.md#Embedding-API-index).
 
         If you would like to use an entry point or variable that is not identified as
+        part of the API in this document, or is currently hidden, you can make a request
+        for it to be made available. Entry points or variables not identified as in the
+        API may be changed or removed with no notice as part of efforts to improve
+        aspects of R.
 
-        Continue: .console$manual("R-exts/06-the-r-api-entry-points-for-c-code-part-001.md", start = 104, column = 1)
-  isError: false
----
-send:
-  r: RShowDoc("R-exts#API-index")
-result:
-  content:
-    - type: text
-      text: |
-        Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/99.214-api-index-part-001.md
-        Location: Writing R Extensions > API index
+        **Work in progress:** Currently Entry points in the API are identified in the source
+        for this document with `@apifun`, `@eapifun`, and `@embfun` entries. Similarly,
+        `@apivar`, `@eapivar`, and `@embvar` identify variables, and `@apihdr`, `@eapihdr`, and
 
-        ## API index
-
-        Entry points and variables listed in this index and in header files listed here
-        are intended to be used in distributed packages and ideally will only be changed
-        after deprecation.
-
-        | Jump to: | [**A**](99.214-api-index-part-002.md#API-index_ap_letter-A)   [**B**](99.214-api-index-part-002.md#API-index_ap_letter-B)   [**C**](99.214-api-index-part-002.md#API-index_ap_letter-C)   [**D**](99.214-api-index-part-002.md#API-index_ap_letter-D)   [**E**](99.214-api-index-part-002.md#API-index_ap_letter-E)   [**F**](99.214-api-index-part-002.md#API-index_ap_letter-F)   [**G**](99.214-api-index-part-002.md#API-index_ap_letter-G)   [**I**](99.214-api-index-part-002.md#API-index_ap_letter-I)   [**L**](99.214-api-index-part-002.md#API-index_ap_letter-L)   [**M**](99.214-api-index-part-002.md#API-index_ap_letter-M)   [**N**](99.214-api-index-part-002.md#API-index_ap_letter-N)   [**P**](99.214-api-index-part-002.md#API-index_ap_letter-P)   [**R**](99.214-api-index-part-002.md#API-index_ap_letter-R)   [**S**](99.214-api-index-part-002.md#API-index_ap_letter-S)   [**T**](99.214-api-index-part-002.md#API-index_ap_letter-T)   [**U**](99.214-api-index-part-002.md#API-index_ap_letter-U)   [**V**](99.214-api-index-part-002.md#API-index_ap_letter-V)   [**W**](99.214-api-index-part-002.md#API-index_ap_letter-W)   [**X**](99.214-api-index-part-002.md#API-index_ap_letter-X) |
-        | --- | --- |
-
-
-        Next file: .console$manual("R-exts/99.214-api-index-part-002.md")
+        Continue: .console$manual("R-exts/06-the-r-api-entry-points-for-c-code-part-002.md", start = 9, column = 1)
   isError: false
 ---
 send:
   r: |
     # Inspect the same cached index with ordinary R file tools.
-    index <- capture.output(path <- .console$manual("R-exts#API-index_ap_letter-R"))
-    writeLines(grep(
-      "`Rf_allocVector`",
-      readLines(path, encoding = "UTF-8"),
-      value = TRUE,
-      fixed = TRUE
-    ))
+    discard <- capture.output(index <- .console$manual("R-exts"))
+    for (path in list.files(
+      dirname(index),
+      pattern = "-api-index-",
+      full.names = TRUE
+    )) {
+      writeLines(grep(
+        "`Rf_allocVector`",
+        readLines(path, encoding = "UTF-8"),
+        value = TRUE,
+        fixed = TRUE
+      ))
+    }
 result:
   content:
     - type: text
@@ -211,6 +197,7 @@ result:
       text: |
         Cache: <fixture>/cache/mcp-console/manuals/<identity>
         File: R-exts/05.09.01-handling-the-effects-of-garbage-collection-part-002.md
+        Also read: R-exts/05.09.02-allocating-storage-part-001.md
         Location: Writing R Extensions > 5 System and foreign language interfaces > 5.9 Handling R objects in C > 5.9.2 Allocating storage
 
         One that is commonly used is `Rf_allocVector`, the C-level equivalent of R-level
@@ -219,24 +206,6 @@ result:
         `Rf_allocVector` only does so for lists, expressions and character vectors (the
         cases where the elements are themselves R objects). Other useful allocation
         functions are `Rf_alloc3DArray`, `Rf_allocArray`, and `Rf_allocMatrix`.
-
-
-        Next file: .console$manual("R-exts/05.09.02-allocating-storage-part-001.md")
-  isError: false
----
-send:
-  r: .console$manual("R-exts/05.09.02-allocating-storage-part-001.md")
-result:
-  content:
-    - type: text
-      text: |
-        Cache: <fixture>/cache/mcp-console/manuals/<identity>
-        File: R-exts/05.09.02-allocating-storage-part-001.md
-
-        Manual: Writing R Extensions (R-exts)
-        Location: Writing R Extensions > 5 System and foreign language interfaces > 5.9 Handling R objects in C > 5.9.2 Allocating storage
-
-        [Parent](05.09-handling-r-objects-in-c-part-001.md#Handling-R-objects-in-C) · [TOC](index.md) · [Previous](05.09.01-handling-the-effects-of-garbage-collection-part-002.md) · [Next](05.09.03-details-of-r-types-part-001.md)
 
         When creating new result objects it can be useful to fill them in with values
         from an existing object. The functions `Rf_copyVector` and `Rf_copyMatrix` can be
@@ -248,45 +217,6 @@ result:
         allocation routines do their own error-checking, so the programmer may assume
         that they will raise an error and not return if the memory cannot be allocated.
 
-        #### 5.9.3 Details of R types
 
-        Users of the Rinternals.h macros will need to know how the R types are known
-        internally. The different R data types are represented in C by *SEXPTYPE*. Some of
-        these are familiar from R and some are internal data types. The usual R object
-        modes are given in the table.
-
-        > ────────┬───────────────────────────────
-        > SEXPTYPE│R equivalent                   
-        > ────────┼───────────────────────────────
-        > `REALSXP` │numeric with storage mode      
-        >         │`double`                         
-        > ────────┼───────────────────────────────
-        > `INTSXP`  │integer                        
-        > ────────┼───────────────────────────────
-        > `CPLXSXP` │complex                        
-        > ────────┼───────────────────────────────
-        > `LGLSXP`  │logical                        
-        > ────────┼───────────────────────────────
-        > `STRSXP`  │character                      
-        > ────────┼───────────────────────────────
-        > `VECSXP`  │list (generic vector)          
-        > ────────┼───────────────────────────────
-        > `LISTSXP` │pairlist                       
-        > ────────┼───────────────────────────────
-        > `DOTSXP`  │a ‘…’ object                   
-        > ────────┼───────────────────────────────
-        > `NILSXP`  │NULL                           
-        > ────────┼───────────────────────────────
-        > `SYMSXP`  │name/symbol                    
-        > ────────┼───────────────────────────────
-        > `CLOSXP`  │function or function closure   
-        > ────────┼───────────────────────────────
-        > `ENVSXP`  │environment                    
-        > ────────┴───────────────────────────────
-
-        Among the important internal `SEXPTYPE`s are `LANGSXP`, `CHARSXP`, `PROMSXP`, etc.
-        (**N.B.**: although it is possible to return objects of internal types, it is unsafe
-        to do so as assumptions are made about how they are handled which may be
-
-        Continue: .console$manual("R-exts/05.09.02-allocating-storage-part-001.md", start = 66, column = 1)
+        Next section: RShowDoc("R-exts#Details-of-R-types")
   isError: false

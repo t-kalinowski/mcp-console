@@ -75,6 +75,11 @@ Console removes the temporary file if a function pager raises an error.
 
 ### Built-in R manuals
 
+Use `?pkg::topic` or `help()` for a known function's arguments, defaults, and examples.
+Use `help.search()` or `??` to discover package help by its indexed metadata.
+The manuals provide broader explanations of language semantics, the C API, package authoring, and data interchange.
+For example, the function reference describes function definitions, while the language manual explains how default and supplied arguments are evaluated.
+
 `.console$manual()` lists the installed HTML manuals and the persistent Markdown cache location.
 No R client package or filesystem tool is required.
 For example:
@@ -86,7 +91,7 @@ RShowDoc("R-exts#Registering-native-routines")
 ```
 
 `RShowDoc()` shows a compact TOC or resolves an original HTML anchor; qualified `utils::RShowDoc()` calls behave the same way and retain their native invisible return value.
-Section navigation and heading search hits use `RShowDoc()`; Console-specific read commands handle file ranges and continuations.
+Section navigation and search hits use `RShowDoc()` when the match is visible in the default section view; Console-specific read commands handle deeper matches, file ranges, and continuations.
 Console handles only installed manual HTML through R's browser option.
 On R versions before 4.6, a compatibility adapter selects installed HTML manuals and passes their anchors to the same browser hook.
 Other documentation calls retain their existing behavior, plain text uses the pager, and later browser-option overrides take precedence.
@@ -95,8 +100,9 @@ PDF extraction is unavailable.
 `.console$manual(topic = "", start = 1L, lines = 0L, column = 1L)` reads a manual, original anchor, or collection-relative content filename.
 An empty topic lists the collection; a manual name shows its compact TOC.
 Use the displayed `manual/index.md` command for its full TOC.
-Reading returns the selected cache filename invisibly and prints bounded UTF-8 text with hierarchy context and exact continuation or next-file commands.
-The displayed `File` is relative to the displayed `Cache` directory.
+Reading returns the initial cache filename invisibly and prints bounded UTF-8 text with hierarchy context and exact continuation or next-file commands.
+An initial anchor read follows the logical section across physical files, stopping at the next heading or the response budget.
+The displayed `File` and any `Also read` paths are relative to the displayed `Cache` directory.
 `start` and `lines` select physical file lines; `lines = 0L` reads to the response budget.
 `column` is a one-based character position for continuing an unusually long line.
 Reading and search work with `capture.output()`.
@@ -104,7 +110,7 @@ Reading and search work with `capture.output()`.
 `.console$manual_search(query, manual = "", start = 1L, limit = 5L)` performs local, case-insensitive literal matching.
 This searches manual bodies; `help.search()` and `??` retain their package-documentation metadata searches.
 An empty `manual` searches the collection.
-Heading matches come first; each logical section appears at most once, with its section number, heading path, excerpt, and read command.
+Heading matches come first; each logical section appears at most once, with its section number, heading path, a body excerpt, and a read command.
 Results are bounded; follow the printed continuation command for more matches.
 `limit` accepts 1–20 results, subject to the response budget.
 Queries are limited to 1 KiB of UTF-8 and 2 KiB when quoted in continuation commands.

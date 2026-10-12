@@ -699,3 +699,38 @@ def test_manual_cache_serializes_shared_repairs(
             peer.finish()
             first.finish()
     return [{"shared_repairs_serialized": True, "completed_collection_reused": True}]
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_section_reads_across_files(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution, manuals=FIXTURES / "r_manuals_reading") as (
+        client,
+        root,
+    ):
+        client.send(r='RShowDoc("R-exts#Export")')
+        output = normalize_paths(client, root)
+        assert "Semicolon separators and decimal commas" in output, output
+        assert "A later example" in output, output
+        assert "Unrelated next-topic text" not in output, output
+        collection = completed_collection(root)
+        files = list((collection / "R-exts").glob("*.md"))
+        intro = next(
+            file for file in files if "Choose the output format" in file.read_text()
+        )
+        details = next(
+            file for file in files if "Semicolon separators" in file.read_text()
+        )
+        assert intro != details, "fixture must span physical files"
+        assert details.name in output, output
+        client.send(r='.console$manual_search("Export guidance", manual = "R-exts")')
+        output = normalize_paths(client, root)
+        assert "Choose the output format" in output, output
+        client.send(
+            r='.console$manual_search("Semicolon separators", manual = "R-exts")'
+        )
+        output = normalize_paths(client, root)
+        assert 'Read: RShowDoc("R-exts#Export")' in output, output
+        return client.finish()
