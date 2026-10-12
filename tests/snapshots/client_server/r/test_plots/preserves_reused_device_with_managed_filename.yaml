@@ -27,6 +27,28 @@ result:
 send:
   r: |
     stopifnot(identical(grDevices::dev.cur(), explicit_device))
+    invisible(grDevices::dev.new())
+    next_managed_filename <- attr(.Devices[[grDevices::dev.cur()]], "filepath")
+    stopifnot(
+      !identical(next_managed_filename, managed_filename),
+      !identical(next_managed_filename, explicit_filename)
+    )
+    plot(1:3)
+    invisible(grDevices::dev.set(explicit_device))
+    cat("managed plot used a distinct filename while the user device stayed open\n")
+result:
+  content:
+    - type: text
+      text: |
+        managed plot used a distinct filename while the user device stayed open
+    - type: image
+      data: <PNG byte-identical to live Rscript page 1>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: |
+    stopifnot(identical(grDevices::dev.cur(), explicit_device))
     lines(1:3, col = "red")
     invisible(grDevices::dev.off(which = explicit_device))
     explicit_file <- sprintf(explicit_filename, 1L)

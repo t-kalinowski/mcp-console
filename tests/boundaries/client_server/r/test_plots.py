@@ -441,6 +441,28 @@ def reused_managed_device(
             # fmt: r
             r=code(r"""
                 stopifnot(identical(grDevices::dev.cur(), explicit_device))
+                invisible(grDevices::dev.new())
+                next_managed_filename <- attr(.Devices[[grDevices::dev.cur()]], "filepath")
+                stopifnot(
+                  !identical(next_managed_filename, managed_filename),
+                  !identical(next_managed_filename, explicit_filename)
+                )
+                plot(1:3)
+                invisible(grDevices::dev.set(explicit_device))
+                cat("managed plot used a distinct filename while the user device stayed open\n")
+                """),
+        )
+        assert_result_content(
+            client,
+            [
+                "managed plot used a distinct filename while the user device stayed open\n",
+                expected_plot[0],
+            ],
+        )
+        client.send(
+            # fmt: r
+            r=code(r"""
+                stopifnot(identical(grDevices::dev.cur(), explicit_device))
                 lines(1:3, col = "red")
                 invisible(grDevices::dev.off(which = explicit_device))
                 explicit_file <- sprintf(explicit_filename, 1L)

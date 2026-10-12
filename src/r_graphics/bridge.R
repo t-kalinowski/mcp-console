@@ -2,6 +2,7 @@ base::local(
   {
     active <- FALSE
     devices <- list()
+    # User devices can retain a managed filename template across cells.
     device_counter <- 0L
     directory <- file.path(tempdir(), "mcp-console-plots")
 
@@ -72,7 +73,6 @@ base::local(
 
     begin <- function() {
       stopifnot(!active, length(devices) == 0L)
-      device_counter <<- 0L
       active <<- TRUE
       invisible(0L)
     }
