@@ -1012,6 +1012,33 @@ def test_manual_cache_loss_does_not_block_restart(
 
 
 @requires(R)
+@executions(DIRECT)
+def test_manual_cache_file_does_not_block_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.send(r='discard <- capture.output(path <- .console$manual("R-exts"))')
+        normalize_paths(client, root)
+        client.send(
+            # fmt: r
+            r=code(r"""
+                old_session <- TRUE
+                root <- dirname(dirname(path))
+                unlink(root, recursive = TRUE)
+                writeLines("replaced by submitted code", root)
+                """),
+        )
+        result = client.send(control="restart")
+        assert not result.get("isError", False), result
+        client.expect("[1] 2\n", r='stopifnot(!exists("old_session")); 1 + 1')
+        assert (root / "cache/mcp-console/manuals").is_dir()
+        assert not cache_entries(root), "recovery must keep conversion lazy"
+        client.send(r='utils::RShowDoc("R-exts#Grouped-B")')
+        assert "café λ" in normalize_paths(client, root)
+        return client.finish()
+
+
+@requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_manual_cache_reclaims_abandoned_publication(
     binary: Path, execution: Execution
@@ -1074,6 +1101,52 @@ def test_manual_cache_fifo_replacement(
             if path.is_fifo():
                 descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
                 os.close(descriptor)
+        return client.finish()
+
+
+@requires(POSIX, R, command("cc"))
+@executions(DIRECT, SANDBOXED)
+def test_manual_publication_fifo_replacement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution, cache_race=True) as (client, root):
+        client.send(r='discard <- capture.output(path <- .console$manual("R-exts"))')
+        normalize_paths(client, root)
+        collection = completed_collection(root)
+        staging = collection.with_name(f".{collection.name}.incomplete")
+        path = staging / "R-exts.md"
+        marker = root / "workspace/cache-file-replaced"
+        client.send(
+            # fmt: r
+            r=code(r"""
+                Sys.setenv(
+                  CONSOLE_TEST_CACHE_OPEN_TARGET = file.path(
+                    dirname(dirname(path)),
+                    paste0(".", basename(dirname(path)), ".incomplete"),
+                    "R-exts.md"
+                  ),
+                  CONSOLE_TEST_CACHE_OPEN_MARKER = file.path(getwd(), "cache-file-replaced")
+                )
+                """),
+        )
+        (collection / "R-exts.md").write_text("invalid cache")
+        try:
+            pending = client.start_send(r='RShowDoc("R-exts")', timeout_ms=10000)
+            wait_for_path(marker, "publication file replaced at open", client=client)
+            client.receive(pending)
+            output = normalize_paths(client, root)
+            assert (
+                "Manual publication interrupted; retry the manual operation" in output
+            ), output
+            assert not (collection / "R-exts.md").read_text().startswith("<!--")
+        finally:
+            if path.is_fifo():
+                descriptor = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+                os.close(descriptor)
+        client.send(r='utils::RShowDoc("R-exts#Grouped-B")')
+        assert "café λ" in normalize_paths(client, root)
+        assert not staging.exists()
+        completed_collection(root)
         return client.finish()
 
 

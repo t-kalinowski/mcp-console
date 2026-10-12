@@ -12,7 +12,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -818,8 +818,23 @@ fn materialize(args: &[String]) -> Result<(PathBuf, Prepared, fs::File)> {
     fs::create_dir(&staging)?;
     for (name, text) in prepared.files.iter() {
         let path = staging.join(name);
-        fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(path, text)?;
+        // Create a new regular file without following or waiting on a peer's
+        // replacement. Write only through that verified descriptor.
+        let mut options = fs::File::options();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+        }
+        let mut file = options
+            .open(&path)
+            .context("Manual publication interrupted; retry the manual operation")?;
+        ensure!(
+            file.metadata()?.is_file(),
+            "Manual publication requires a regular file"
+        );
+        file.write_all(text.as_bytes())?;
     }
     remove_entry(&directory)?;
     fs::rename(&staging, &directory)?;

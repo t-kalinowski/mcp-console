@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -15,9 +16,9 @@ static void replace_cache_file(const char *path) {
     const char *target = getenv("CONSOLE_TEST_CACHE_OPEN_TARGET");
     if (replaced || target == NULL || strcmp(path, target) != 0) return;
     replaced = true;
-    // The caller already inspected the regular directory entry. Replace it
-    // exactly at open, so this public regression does not depend on a race loop.
-    if (unlink(path) < 0 || mkfifo(path, 0600) < 0) _exit(125);
+    // Replace an inspected entry or insert one at its first creation exactly
+    // at open, so the public regressions do not depend on a race loop.
+    if ((unlink(path) < 0 && errno != ENOENT) || mkfifo(path, 0600) < 0) _exit(125);
     int marker = open(getenv("CONSOLE_TEST_CACHE_OPEN_MARKER"), O_WRONLY | O_CREAT, 0600);
     if (marker < 0 || write(marker, "1", 1) != 1 || close(marker) < 0) _exit(125);
 }

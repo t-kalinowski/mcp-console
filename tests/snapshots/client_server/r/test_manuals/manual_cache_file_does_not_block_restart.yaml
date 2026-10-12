@@ -1,0 +1,60 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: discard <- capture.output(path <- .console$manual("R-exts"))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    old_session <- TRUE
+    root <- dirname(dirname(path))
+    unlink(root, recursive = TRUE)
+    writeLines("replaced by submitted code", root)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: stopifnot(!exists("old_session")); 1 + 1
+result:
+  content:
+    - type: text
+      text: |
+        [1] 2
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts#Grouped-B")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Small sections > 1.2 Grouped B
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](R-lang.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next section: RShowDoc("R-exts#Needle-examples")
+  isError: false

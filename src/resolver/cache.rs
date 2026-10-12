@@ -194,6 +194,15 @@ pub(crate) fn restore_directory_access(
 }
 
 fn prepare_manual_root(root: &std::path::Path) -> std::io::Result<()> {
+    if let Ok(metadata) = std::fs::symlink_metadata(root)
+        && !metadata.is_dir()
+    {
+        #[cfg(windows)]
+        if metadata.is_file() {
+            restore_directory_access(root, &metadata)?;
+        }
+        std::fs::remove_file(root)?;
+    }
     std::fs::create_dir_all(root)?;
     std::fs::File::options()
         .read(true)
