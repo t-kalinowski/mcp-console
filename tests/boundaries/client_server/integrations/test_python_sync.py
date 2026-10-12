@@ -9,6 +9,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "tests"))
@@ -41,13 +42,14 @@ def test_sync_connection_closes_resources(binary: Path) -> Transcript:
             assert console.send_tool.name == "send"
             assert console.send(python="hello") == "hello"
             assert console.send(control="interrupt") == "interrupted"
-            connection_threads = set(threading.enumerate()) - before
         assert (root / "closed").exists()
-        # AnyIO signals its pool workers to stop when the portal's root task
-        # finishes. Join their retirement before checking for leaked resources.
-        for thread in connection_threads:
-            thread.join(timeout=5)
-        assert set(threading.enumerate()) == before
+        # AnyIO's pool receives stop sentinels when the portal exits, but those
+        # workers are not joined by the portal. Observe their termination before
+        # asserting the same resource inventory, with one bounded wait budget.
+        deadline = time.monotonic() + 5
+        for thread in set(threading.enumerate()) - before:
+            thread.join(max(0, deadline - time.monotonic()))
+        assert set(threading.enumerate()) == before, threading.enumerate()
     return [{"output": "hello", "control": "interrupted", "closed": True}]
 
 
