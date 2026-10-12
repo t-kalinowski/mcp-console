@@ -215,11 +215,17 @@ def preview_ansi_redraw(context: WorkerContext, source: str) -> None:
 
 
 def redraw_across_polls(context: WorkerContext, source: str) -> None:
+    start = context.root / "zod-start-redraw"
+    finish = context.root / "zod-release-redraw"
+    os.mkfifo(start)
+    os.mkfifo(finish)
+    with start.open("rb", buffering=0) as checkpoint:
+        assert checkpoint.read(1) == b"1"
     send_output(context.writer, "output 10%\r")
     wait_for_server_to_process_sideband(context.reader, context.writer)
     publish_marker(context.root / "zod-redraw-ready")
-    while not (context.root / "zod-release-redraw").exists():
-        time.sleep(0.01)
+    with finish.open("rb", buffering=0) as checkpoint:
+        assert checkpoint.read(1) == b"1"
 
     send_output(context.writer, "output 100%\n")
     send(context.writer, {"kind": "completed"})
