@@ -134,3 +134,15 @@ result:
       text: |
         later browser override retained
   isError: false
+---
+send:
+  r: |
+    error <- tryCatch(utils::RShowDoc("R-exts"), error = conditionMessage)
+    stopifnot(identical(error, "document not found"))
+    cat("missing HTML does not invoke a viewer\n")
+result:
+  content:
+    - type: text
+      text: |
+        missing HTML does not invoke a viewer
+  isError: false

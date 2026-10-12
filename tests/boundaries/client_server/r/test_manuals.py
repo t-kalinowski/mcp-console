@@ -39,6 +39,8 @@ def manual_client(
         doc = root / "doc"
         if not installed:
             shutil.copytree(FIXTURES / "r_manuals", doc / "manual")
+            # A default manual request must prefer HTML when PDF also exists.
+            (doc / "manual/R-exts.pdf").write_text("PDF viewer sentinel\n")
             (doc / "COPYING").write_text("Plain text still uses the pager.\n")
             environment["CONSOLE_TEST_DOC"] = str(doc)
         profile = workspace / ".Rprofile"
@@ -137,6 +139,16 @@ def test_manual_navigation(binary: Path, execution: Execution) -> Transcript:
             r=code(r"""
                 options(browser = function(url, ...) cat("later browser override retained\n"))
                 utils::RShowDoc("R-exts#Grouped-B")
+                """),
+        )
+        (root / "doc/manual/R-exts.html").unlink()
+        client.expect(
+            "missing HTML does not invoke a viewer\n",
+            # fmt: r
+            r=code(r"""
+                error <- tryCatch(utils::RShowDoc("R-exts"), error = conditionMessage)
+                stopifnot(identical(error, "document not found"))
+                cat("missing HTML does not invoke a viewer\n")
                 """),
         )
         return client.finish()

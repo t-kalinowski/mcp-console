@@ -127,6 +127,49 @@ base::local(
       }
       utils::browseURL(url, browser = previous_browser, ...)
     })
+
+    # R < 4.6 rejects manual fragments before consulting the browser option
+    # and defaults to PDF even in interactive sessions. Adapt only installed
+    # HTML manuals; keep other requests with the original function.
+    if (getRversion() < "4.6.0") {
+      original_show_doc <- utils::RShowDoc
+      show_doc <- function(what, type = c("pdf", "html", "txt"), package) {
+        if (
+          !missing(what) &&
+            missing(package) &&
+            is.character(what) &&
+            length(what) == 1L &&
+            !is.na(what) &&
+            grepl("^R-[A-Za-z]+(#.*)?$", what) &&
+            (missing(type) || identical(match.arg(type), "html"))
+        ) {
+          type <- "html"
+          name <- sub("#.*", "", what)
+          path <- file.path(R.home("doc"), "manual", paste0(name, ".html"))
+          if (file.exists(path)) {
+            fragment <- substring(what, nchar(name) + 1L)
+            utils::browseURL(paste0(
+              "file://",
+              utils::URLencode(paste0(path, fragment))
+            ))
+            return(invisible(path))
+          }
+        }
+        original_show_doc(what, type, package)
+      }
+      locations <- list(asNamespace("utils"))
+      if ("package:utils" %in% search()) {
+        locations[[2L]] <- as.environment("package:utils")
+      }
+      for (where in locations) {
+        locked <- bindingIsLocked("RShowDoc", where)
+        if (locked) {
+          unlockBinding("RShowDoc", where)
+        }
+        assign("RShowDoc", show_doc, envir = where)
+        if (locked) lockBinding("RShowDoc", where)
+      }
+    }
     invisible(NULL)
   },
   envir = base::new.env(parent = base::baseenv())

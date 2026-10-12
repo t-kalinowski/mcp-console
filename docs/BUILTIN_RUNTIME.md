@@ -88,6 +88,7 @@ RShowDoc("R-exts#Registering-native-routines")
 `RShowDoc()` shows a compact TOC or resolves an original HTML anchor; qualified `utils::RShowDoc()` calls behave the same way and retain their native invisible return value.
 Section navigation and heading search hits use `RShowDoc()`; Console-specific read commands handle file ranges and continuations.
 Console handles only installed manual HTML through R's browser option.
+On R versions before 4.6, a compatibility adapter selects installed HTML manuals and passes their anchors to the same browser hook.
 Other documentation calls retain their existing behavior, plain text uses the pager, and later browser-option overrides take precedence.
 PDF extraction is unavailable.
 
