@@ -89,6 +89,8 @@ def extension_cache(root: Path, execution: Execution) -> Path:
     )
 
 
+# SANDBOXED selects the shared Seatbelt/bubblewrap fixtures. Native Windows
+# sandbox coverage uses its separate acceptance suite.
 @requires(POSIX, SQL)
 @executions(SANDBOXED)
 def test_prepares_builtin_extensions_without_downloads(
@@ -102,8 +104,9 @@ def test_prepares_builtin_extensions_without_downloads(
             MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY=str(root / "extensions"),
         )
         arguments = ("-c", "cache=host")
-        # Prepare the ordinary dependencies before denying downloads. Only
-        # the subsequent built-in extension declaration needs to be offline.
+        # Prepare the ordinary dependencies before denying downloads. Managed
+        # preparation removes UV_OFFLINE, so the fixture supplies --offline
+        # through the real uv command rather than relying on cache freshness.
         with sql_client(binary, execution, env, root, arguments=arguments) as client:
             client.expect(
                 "(42,)\n",
@@ -111,6 +114,7 @@ def test_prepares_builtin_extensions_without_downloads(
             )
             client.finish()
         assert not list((root / "extensions").glob("**/json.duckdb_extension"))
+        assert not list((root / "extensions").glob("**/parquet.duckdb_extension"))
         offline_uv = root / UV_NAME
         offline_uv.unlink()
         offline_receipt = root / "extensions/offline-uv-used"
@@ -157,7 +161,21 @@ def test_prepares_builtin_extensions_without_downloads(
             assert offline_receipt.is_file(), (
                 "R-free preparation did not use the offline uv wrapper"
             )
-            return client.finish()
+            return [
+                {
+                    "scenario": (
+                        "Prepare a built-in DuckDB extension while downloads are "
+                        "denied, preserving Python state."
+                    ),
+                    "fixture": (
+                        "A private PATH hides R. An earlier session prepares the real "
+                        "Python environment; this session wraps real uv with "
+                        "--offline and denies every resolver proxy domain. The "
+                        "json and parquet extensions are not cached, so success "
+                        "cannot depend on downloading either extension."
+                    ),
+                }
+            ] + client.finish()
 
 
 @requires(POSIX, SQL)

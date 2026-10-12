@@ -69,6 +69,10 @@ pub struct ConfigOverrides {
     /// Override layered global and project configuration; repeat for ordered dotted KEY=VALUE assignments
     #[arg(short = 'c', long = "config", value_name = "KEY=VALUE")]
     pub values: Vec<String>,
+
+    /// Private R adapter transport: optional files and ordered KEY=VALUE overrides
+    #[arg(long = "config-overrides-file", hide = true)]
+    pub values_file: Option<PathBuf>,
 }
 
 impl ConfigOverrides {
@@ -78,6 +82,12 @@ impl ConfigOverrides {
         }
         if other.config_file.is_some() {
             self.config_file = other.config_file;
+        }
+        if self.values_file.is_some() && other.values_file.is_some() {
+            return Err("--config-overrides-file may be supplied only once".into());
+        }
+        if other.values_file.is_some() {
+            self.values_file = other.values_file;
         }
         self.values.extend(other.values);
         self.no_project_config |= other.no_project_config;
@@ -188,13 +198,19 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
-    /// Print captured settings and the complete editable tool presentation
+    /// Print resolved configuration
     Resolve {
         #[command(flatten)]
         overrides: ConfigOverrides,
         /// Resolve defaults for a subsequent serve --no-sandbox launch
         #[arg(long)]
         no_sandbox: bool,
+        /// Include all configuration defaults and the complete editable tool presentation
+        #[arg(long, conflicts_with = "prune")]
+        full: bool,
+        /// Include only settings that differ from built-in defaults (the default)
+        #[arg(long)]
+        prune: bool,
         /// Output format
         #[arg(long, value_enum, default_value = "yaml")]
         format: ConfigFormat,
