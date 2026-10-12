@@ -2,7 +2,10 @@
 scenario: >-
   Standalone preparation waits for initial discovery even with
   timeout_ms=0.
-fixture: The R discovery probe is held at a FIFO and fails after release.
+fixture: >-
+  The R discovery probe is held at a FIFO and fails after release. A
+  native checkpoint observes the request recorder returning to its pool
+  before a ping acknowledges readiness-wait dispatch.
 ---
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.direct.yaml
 ---
@@ -19,6 +22,10 @@ result:
         worker R home discovery failed with exit status: 17: fixture R discovery
         failed
   isError: true
+---
+input:
+  method: ping
+result: {}
 ---
 stderr: >
   worker R home discovery failed with exit status: 17: fixture R discovery
