@@ -3,6 +3,7 @@
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -16,14 +17,18 @@ from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import FIXTURES, r_test_environment
-from support.records import Transcript
-from support.requirements import R, requires
+from support.records import Transcript, TranscriptWithCompanions
+from support.requirements import R, command, requires
 from support.resolvers import bare_runtime_environment
 
 
 @contextmanager
 def manual_client(
-    binary: Path, execution: Execution, *, installed: bool = False
+    binary: Path,
+    execution: Execution,
+    *,
+    installed: bool = False,
+    manuals: Path = FIXTURES / "r_manuals",
 ) -> Iterator[tuple[McpClient, Path]]:
     with tempfile.TemporaryDirectory(prefix="console-manuals-café#-") as temporary:
         root = Path(temporary).resolve()
@@ -38,7 +43,7 @@ def manual_client(
         )
         doc = root / "doc"
         if not installed:
-            shutil.copytree(FIXTURES / "r_manuals", doc / "manual")
+            shutil.copytree(manuals, doc / "manual")
             # A default manual request must prefer HTML when PDF also exists.
             (doc / "manual/R-exts.pdf").write_text("PDF viewer sentinel\n")
             (doc / "COPYING").write_text("Plain text still uses the pager.\n")
@@ -77,15 +82,71 @@ def manual_client(
             yield client, root
 
 
-def normalize_paths(client: McpClient, root: Path) -> str:
-    output = last_tool_text(client)
-    assert "[output omitted:" not in output, output
-    text = output.replace(str(root), "<fixture>").replace("\\", "/")
+def normalized_paths(output: str, root: Path) -> str:
+    text = output.replace(str(root), "<fixture>").replace(root.as_posix(), "<fixture>")
+    # Normalize native cache paths without changing backslashes in manual examples.
+    text = re.sub(
+        r"(?m)^(Cache: |Complete Markdown: )(.*)$",
+        lambda match: match[1] + match[2].replace("\\", "/"),
+        text,
+    )
     # The identity includes the running R version and the native source path.
     text = re.sub(r"/manuals/[a-f0-9]{64}", "/manuals/<identity>", text)
     text = re.sub(r"(?m)^R version \d[^\n]*$", "R version <installed>", text)
-    client.transcript[-1]["result"]["content"][0]["text"] = text
+    return text
+
+
+def normalize_paths(client: McpClient, root: Path) -> str:
+    output = last_tool_text(client)
+    assert "[output omitted:" not in output, output
+    client.transcript[-1]["result"]["content"][0]["text"] = normalized_paths(
+        output, root
+    )
     return output
+
+
+def finish_workflow(
+    client: McpClient, root: Path, scenario: dict[str, str]
+) -> TranscriptWithCompanions:
+    transcript = client.finish()
+    (session,) = (root / "workspace/.agents/console/sessions").iterdir()
+    events = [
+        json.loads(line)
+        for line in (session / "internal/events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    markdown = (session / "transcript.md").read_text(encoding="utf-8")
+    markdown = markdown.replace(events[0]["run_id"], "<run ID>")
+    workspace = events[0]["working_directory"]
+    for representation in (workspace, json.dumps(workspace, ensure_ascii=False)[1:-1]):
+        markdown = markdown.replace(representation, "<workspace>")
+    for event in events:
+        markdown = markdown.replace(event["at"], "<UTC timestamp>")
+    markdown = normalized_paths(markdown, root)
+    # The readable projection uses the repository formatter. YAML retains the
+    # complete response bytes, including whitespace in documentation examples.
+    projection = root / "workflow.md"
+    projection.write_text(
+        f"{scenario['scenario']}\n\n{scenario['fixture']}\n\n{markdown}",
+        encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "yamark",
+            "format",
+            "--wrap",
+            "sentence",
+            "--skip-embedded-formatters",
+            str(projection),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return TranscriptWithCompanions(
+        [scenario, *transcript],
+        {"md": projection.read_text(encoding="utf-8")},
+    )
 
 
 @requires(R)
@@ -560,3 +621,146 @@ def test_manual_cache_rejects_unprojected_files(
             for p in files
         )
         return client.finish()
+
+
+@requires(R, command("yamark"))
+@executions(DIRECT, SANDBOXED)
+def test_manual_workflow_c_api(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
+    scenario = {
+        "scenario": (
+            "A package author asks whether an exported C symbol is necessarily "
+            "supported, then checks Rf_allocVector in the API index and reads "
+            "its allocation contract."
+        ),
+        "fixture": (
+            "Unmodified R 4.6.1 HTML manuals are exposed as the installed manual "
+            "directory. The running worker uses the ordinary converter and a "
+            "private cache; external viewers raise errors."
+        ),
+    }
+    with manual_client(binary, execution, manuals=FIXTURES / "r_manuals_real") as (
+        client,
+        root,
+    ):
+        client.send(r='RShowDoc("R-exts")')
+        output = normalize_paths(client, root)
+        assert "6 The R API: entry points for C code" in output, output
+
+        client.send(r='RShowDoc("R-exts#The-R-API")')
+        output = normalize_paths(client, root)
+        assert "Do not\n  use these in distributed code" in output, output
+        assert "#include <R.h>" in output, output
+        assert "#API-index)" in output, output
+
+        client.send(r='RShowDoc("R-exts#API-index")')
+        output = normalize_paths(client, root)
+        assert "intended to be used in distributed packages" in output, output
+        assert "#API-index_ap_letter-R)" in output, output
+
+        client.send(
+            # fmt: r
+            r=code(r"""
+                # Inspect the same cached index with ordinary R file tools.
+                index <- capture.output(path <- .console$manual("R-exts#API-index_ap_letter-R"))
+                writeLines(grep(
+                  "`Rf_allocVector`",
+                  readLines(path, encoding = "UTF-8"),
+                  value = TRUE,
+                  fixed = TRUE
+                ))
+                """),
+        )
+        output = normalize_paths(client, root)
+        assert "#index-Rf_005fallocVector)" in output, output
+        assert "[Allocating storage]" in output, output
+
+        client.send(r='utils::RShowDoc("R-exts#index-Rf_005fallocVector")')
+        output = normalize_paths(client, root)
+        assert "5.9.2 Allocating storage" in output, output
+        assert "only does so for lists, expressions and character" in output, output
+        command = re.search(r"Next file: (.+)", output)[1]
+        client.send(r=command)
+        output = normalize_paths(client, root)
+        assert "R_alloc" in output, output
+        return finish_workflow(client, root, scenario)
+
+
+@requires(R, command("yamark"))
+@executions(DIRECT, SANDBOXED)
+def test_manual_workflow_csv_import(
+    binary: Path, execution: Execution
+) -> TranscriptWithCompanions:
+    scenario = {
+        "scenario": (
+            "An analyst needs to import a semicolon-separated CSV with decimal "
+            "commas and export it in the same format. Search and read the manual, "
+            "then verify the documented functions on a small example."
+        ),
+        "fixture": (
+            "Unmodified R 4.6.1 HTML manuals are exposed as the installed manual "
+            "directory. This client uses Console's R interface only, without "
+            "the R client package or external filesystem tools."
+        ),
+    }
+    with manual_client(binary, execution, manuals=FIXTURES / "r_manuals_real") as (
+        client,
+        root,
+    ):
+        client.send(
+            r='.console$manual_search("read.csv2", manual = "R-data", limit = 3L)'
+        )
+        output = normalize_paths(client, root)
+        assert "2.1 Variations on read.table" in output, output
+        read = re.search(r"  Read: (.+)", output)[1]
+        location, arguments = (
+            read.removeprefix(".console$manual(").removesuffix(")").split(", ", 1)
+        )
+        client.send(
+            # fmt: r
+            r=code(f"""
+                .console$manual(
+                  {
+                    location
+                  },
+                  {
+                    arguments
+                  },
+                  lines = 5L
+                )
+                """),
+        )
+        output = normalize_paths(client, root)
+        assert "semicolons to separate fields" in " ".join(output.split()), output
+        assert "read.csv2" in output, output
+
+        client.send(
+            r='.console$manual_search("Export to text files", manual = "R-data", limit = 1L)'
+        )
+        output = normalize_paths(client, root)
+        assert "1.2 Export to text files" in output, output
+        command = re.search(r"  Read: (.+)", output)[1]
+        client.send(r=command)
+        output = normalize_paths(client, root)
+        if "write.csv2" not in output:
+            command = re.search(r"(?:Continue|Next file): (.+)", output)[1]
+            client.send(r=command)
+            output = normalize_paths(client, root)
+        assert "write.csv2" in output, output
+        assert 'dec = ","' in output, output
+        assert r'sep = "\t"' in client.transcript[-1]["result"]["content"][0]["text"]
+
+        client.send(
+            # fmt: r
+            r=code(r"""
+                csv <- "item;amount\ncoffee;1,25\ntea;2,50"
+                prices <- read.csv2(text = csv)
+                prices
+                write.csv2(prices, row.names = FALSE)
+                """),
+        )
+        output = normalize_paths(client, root)
+        assert "coffee   1.25" in output, output
+        assert '"coffee";1,25\n"tea";2,5' in output, output
+        return finish_workflow(client, root, scenario)
