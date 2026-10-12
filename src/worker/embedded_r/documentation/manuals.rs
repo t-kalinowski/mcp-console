@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 // Bump when conversion or projection changes, including chunking defaults.
-const FORMAT: u32 = 5;
+const FORMAT: u32 = 6;
 const TARGET: usize = 4096;
 const BODY_MAX: usize = 5400; // Leave room for hierarchy and navigation.
 const READ_BUDGET: usize = 5000; // Paths, commands, and notices fit below 8 KiB.
@@ -42,6 +42,8 @@ struct Manual {
     name: String,
     title: String,
     sections: Vec<Section>,
+    // The manifest records navigation metadata, never a second body copy.
+    #[serde(skip)]
     blocks: Vec<Block>,
     chunks: Vec<Chunk>,
     anchors: BTreeMap<String, String>,
@@ -55,7 +57,6 @@ struct Section {
     parent: Option<usize>,
 }
 
-#[derive(Serialize)]
 struct Block {
     section: usize,
     heading: bool,
@@ -718,6 +719,57 @@ fn projected_files(collection: &Collection) -> Result<Files> {
     Ok(files)
 }
 
+fn complete(directory: &Path, prepared: &Prepared) -> std::io::Result<bool> {
+    if !fs::symlink_metadata(directory)?.is_dir() {
+        return Ok(false);
+    }
+    let mut expected = prepared
+        .files
+        .iter()
+        .map(|(name, text)| (PathBuf::from(name), text))
+        .collect::<BTreeMap<_, _>>();
+    let mut pending = vec![PathBuf::new()];
+    while let Some(parent) = pending.pop() {
+        for entry in fs::read_dir(directory.join(&parent))? {
+            let entry = entry?;
+            let relative = parent.join(entry.file_name());
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                if relative != Path::new("exports")
+                    && !prepared
+                        .collection
+                        .manuals
+                        .iter()
+                        .any(|manual| relative == Path::new(&manual.name))
+                {
+                    return Ok(false);
+                }
+                pending.push(relative);
+            } else if kind.is_file() {
+                if let Some(text) = expected.remove(&relative) {
+                    if fs::read(entry.path())? != text.as_bytes() {
+                        return Ok(false);
+                    }
+                } else if let Some(manual) = prepared.collection.manuals.iter().find(|manual| {
+                    relative == Path::new("exports").join(format!("{}.md", manual.name))
+                }) {
+                    if fs::read(entry.path())?
+                        != export_text(&prepared.collection, manual).as_bytes()
+                    {
+                        return Ok(false);
+                    }
+                } else {
+                    return Ok(false);
+                }
+            } else {
+                // Do not follow links or read special files from a writable cache.
+                return Ok(false);
+            }
+        }
+    }
+    Ok(expected.is_empty())
+}
+
 fn materialize(args: &[String]) -> Result<(PathBuf, Prepared)> {
     let root = std::env::var_os("MCP_CONSOLE_MANUAL_CACHE")
         .filter(|s| !s.is_empty())
@@ -784,11 +836,7 @@ fn materialize(args: &[String]) -> Result<(PathBuf, Prepared)> {
         }
         cached.as_ref().unwrap().clone()
     };
-    let complete = || {
-        prepared.files.iter().all(|(name, expected)| {
-            fs::read(directory.join(name)).is_ok_and(|actual| actual == expected.as_bytes())
-        })
-    };
+    let complete = || complete(&directory, &prepared).unwrap_or(false);
     if complete() {
         return Ok((directory, prepared));
     }
@@ -1184,15 +1232,7 @@ fn search(collection: &Collection, directory: &Path, args: &[String]) -> Result<
     Ok(vec![directory.to_string_lossy().into(), output])
 }
 
-fn export(collection: &Collection, directory: &Path, name: &str) -> Result<Vec<String>> {
-    let manual = collection
-        .manuals
-        .iter()
-        .find(|m| m.name == name)
-        .context("Unknown installed manual")?;
-    let exports = directory.join("exports");
-    fs::create_dir_all(&exports)?;
-    let path = exports.join(format!("{name}.md"));
+fn export_text(collection: &Collection, manual: &Manual) -> String {
     let mut text = format!(
         "<!-- Installed {}, {}. Converted under the permission notice below. -->\n\n",
         manual.name, collection.r_version
@@ -1203,8 +1243,24 @@ fn export(collection: &Collection, directory: &Path, name: &str) -> Result<Vec<S
     for block in &manual.blocks {
         text.push_str(&project(collection, manual, block, true));
     }
+    text
+}
+
+fn export(collection: &Collection, directory: &Path, name: &str) -> Result<Vec<String>> {
+    let manual = collection
+        .manuals
+        .iter()
+        .find(|m| m.name == name)
+        .context("Unknown installed manual")?;
+    let exports = directory.join("exports");
+    fs::create_dir_all(&exports)?;
+    let path = exports.join(format!("{name}.md"));
+    let text = export_text(collection, manual);
     if !fs::read(&path).is_ok_and(|actual| actual == text.as_bytes()) {
-        let temporary = tempfile::NamedTempFile::new_in(&exports)?;
+        // Keep partial exports outside the completed entry that peers verify.
+        let temporary = tempfile::Builder::new()
+            .prefix(".incomplete-export-")
+            .tempfile_in(directory.parent().unwrap())?;
         fs::write(temporary.path(), text)?;
         temporary.persist(&path).map_err(|error| error.error)?;
     }

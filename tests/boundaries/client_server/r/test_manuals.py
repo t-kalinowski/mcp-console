@@ -349,6 +349,13 @@ def test_manual_files_and_export(binary: Path, execution: Execution) -> Transcri
         assert len(code_files) == 1 and "code-line-159" in code_files[0].read_text()
         assert code_files[0].stat().st_size > 6144
         assert coherent.is_file()
+        # A recursive filesystem search must find each body only in its chunk.
+        matches = [
+            p.relative_to(collection).as_posix()
+            for p in collection.rglob("*")
+            if p.is_file() and "Parent-only text." in p.read_text(encoding="utf-8")
+        ]
+        assert matches == ["R-exts/" + manual["anchors"]["Small-sections"]], matches
         client.send(r='.console$manual_export("R-exts")')
         normalize_paths(client, root)
         complete = (collection / "exports/R-exts.md").read_text()
@@ -433,6 +440,7 @@ def test_manual_cache_repairs_modified_outputs(
                 manifest <- file.path(dirname(dirname(path)), "manifest.json")
                 for (file in c(path, manifest)) {
                   text <- readLines(file, encoding = "UTF-8", warn = FALSE)
+                  text <- sub("Small sections", "INJECTED-CACHE-TEXT", text, fixed = TRUE)
                   writeLines(
                     sub("Parent-only text.", "INJECTED-CACHE-TEXT", text, fixed = TRUE),
                     file,
@@ -479,5 +487,64 @@ def test_manual_bounded_anchor_continues_current_section(
         output = normalize_paths(client, root)
         assert "1.1 Grouped A" in output and "A short needle introduction." in output, (
             output
+        )
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_manual_cache_rejects_unprojected_files(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        client.send(
+            r='discard <- capture.output(path <- .console$manual("R-exts#Small-sections"))'
+        )
+        normalize_paths(client, root)
+        collection = completed_collection(root)
+        client.send(r='.console$manual_export("R-exts")')
+        normalize_paths(client, root)
+        original = {
+            p.relative_to(collection): (p.read_bytes(), p.stat().st_mtime_ns)
+            for p in collection.rglob("*")
+            if p.is_file()
+        }
+        client.send(control="restart")
+        client.send(r='RShowDoc("R-exts")')
+        normalize_paths(client, root)
+        assert original == {
+            p: ((collection / p).read_bytes(), (collection / p).stat().st_mtime_ns)
+            for p in original
+        }, "valid exports must not invalidate a completed collection"
+        client.expect(
+            "added unprojected files\n",
+            # fmt: r
+            r=code(r"""
+                discard <- capture.output(path <- .console$manual("R-exts#Small-sections"))
+                collection <- dirname(dirname(path))
+                for (name in c(
+                  "unexpected.md",
+                  "R-exts/unexpected.md",
+                  "R-exts/extra/injected.md",
+                  "exports/unexpected.md"
+                )) {
+                  file <- file.path(collection, name)
+                  dir.create(dirname(file), recursive = TRUE, showWarnings = FALSE)
+                  writeLines("INJECTED-CACHE-TEXT", file)
+                }
+                cat("added unprojected files\n")
+                """),
+        )
+        client.send(control="restart")
+        client.send(r='utils::RShowDoc("R-exts#Small-sections")')
+        assert "Parent-only text." in normalize_paths(client, root)
+        files = {
+            p.relative_to(collection) for p in collection.rglob("*") if p.is_file()
+        }
+        assert files == {p for p in original if p.parts[0] != "exports"}, files
+        assert not (collection / "R-exts/extra").exists()
+        assert not any(
+            "INJECTED-CACHE-TEXT" in (collection / p).read_text(encoding="utf-8")
+            for p in files
         )
         return client.finish()

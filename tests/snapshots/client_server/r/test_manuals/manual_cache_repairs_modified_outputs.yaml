@@ -16,6 +16,7 @@ send:
     manifest <- file.path(dirname(dirname(path)), "manifest.json")
     for (file in c(path, manifest)) {
       text <- readLines(file, encoding = "UTF-8", warn = FALSE)
+      text <- sub("Small sections", "INJECTED-CACHE-TEXT", text, fixed = TRUE)
       writeLines(
         sub("Parent-only text.", "INJECTED-CACHE-TEXT", text, fixed = TRUE),
         file,
