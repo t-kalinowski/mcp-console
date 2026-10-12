@@ -206,9 +206,9 @@ Materialization does not lock dependencies or copy inherited environment variabl
 The ellmer adapter uses the latter tool definition and does not automatically insert server instructions into the chat prompt.
 See [tool presentation and lifecycle](https://t-kalinowski.github.io/mcp-console/CONFIGURATION.html#tool-descriptions-and-parameters).
 
-## Configure a scheduled report
+## Give an agent an R session
 
-[An autonomous report](https://t-kalinowski.github.io/mcp-console/r/articles/autonomous-report.html) walks through explicit settings, permission edits, full and pruned inspection, and launching an ellmer chat.
+[Giving an agent an R session](https://t-kalinowski.github.io/mcp-console/r/articles/autonomous-report.html) uses a scheduled report to walk through explicit settings, sandbox permissions, configuration inspection, and launching an ellmer chat.
 It uses `RConfig(executable = current_r())` to select the R installation running the script on every platform.
 Open it from an installed package with:
 

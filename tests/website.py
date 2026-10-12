@@ -124,7 +124,7 @@ class WebsiteTests(unittest.TestCase):
     def test_r_report_vignette_is_discoverable(self) -> None:
         article = self.site / "r/articles/autonomous-report.html"
         self.assertIn(article, self.pages, "autonomous report vignette is missing")
-        self.assertIn("An autonomous report", self.pages[article].title)
+        self.assertIn("Giving an agent an R session", self.pages[article].title)
         for source in ("index", "reference/console_tool", "reference/config-workflow"):
             page = self.site / f"r/{source}.html"
             with self.subTest(source=source):
