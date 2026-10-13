@@ -585,6 +585,7 @@ class WindowsSandbox(unittest.TestCase):
         with workspace() as root:
             policy = {
                 "extends": ":read-only",
+                "windows_backend": "elevated",
                 "windows_state_dir": str(root / "state"),
             }
             result = subprocess.run(
@@ -744,11 +745,111 @@ class WindowsSandbox(unittest.TestCase):
                         self.assertEqual(result.returncode, 1)
                         self.assertEqual(result.stdout, "")
                         self.assertIn(
-                            "managed proxies are not supported", result.stderr
+                            "requires allow_local_binding: true", result.stderr
                         )
                     else:
                         self.assertEqual(result.returncode, 0, result.stderr)
                         self.assertEqual(result.stdout.strip(), "launched")
+
+    def test_mxc_proxy_configuration_round_trips(self):
+        with workspace() as root:
+            for proxy in ({}, {"socks5": "disabled"}, {"mode": "limited"}):
+                with self.subTest(proxy=proxy):
+                    network = {"proxy": proxy, "allow_local_binding": True}
+                    result = subprocess.run(
+                        [
+                            str(BINARY),
+                            "config",
+                            "resolve",
+                            "--no-config",
+                            "--full",
+                            "--format",
+                            "json",
+                            "-c",
+                            "sandbox.network=" + json.dumps(network),
+                        ],
+                        cwd=root,
+                        env=dict(os.environ, MCP_CONSOLE_HOME=str(root / "home")),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    settings = json.loads(result.stdout)
+                    selected = settings["sandbox"]["network"]
+                    self.assertIs(selected["allow_local_binding"], True)
+                    self.assertEqual(
+                        selected["proxy"]["mode"], proxy.get("mode", "full")
+                    )
+                    self.assertEqual(selected["sockets"]["unix_sockets"], [])
+                    if selected["proxy"]["mode"] == "full":
+                        self.assertEqual(
+                            selected["proxy"]["socks5"], proxy.get("socks5", "tcp")
+                        )
+                    self.assertIsNone(settings["resolver"]["sandbox"])
+                    config = root / "resolved.json"
+                    config.write_text(result.stdout, encoding="utf-8")
+                    again = subprocess.run(
+                        [
+                            str(BINARY),
+                            "config",
+                            "resolve",
+                            "--config-file",
+                            str(config),
+                            "--full",
+                            "--format",
+                            "json",
+                        ],
+                        cwd=root,
+                        env=dict(os.environ, MCP_CONSOLE_HOME=str(root / "home")),
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(again.returncode, 0, again.stderr)
+                    self.assertEqual(json.loads(again.stdout), settings)
+
+    def test_mxc_proxy_launch(self):
+        with workspace() as root:
+            result = subprocess.run(
+                [
+                    str(BINARY),
+                    "sandbox",
+                    "--no-config",
+                    "-c",
+                    "sandbox.network={proxy: {}, allow_local_binding: true}",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    # fmt: python
+                    code("""
+                        import os
+                        from pathlib import Path
+
+                        assert os.environ["CODEX_NETWORK_PROXY_ACTIVE"] == "1"
+                        assert os.environ["CODEX_NETWORK_ALLOW_LOCAL_BINDING"] == "1"
+                        assert os.environ["HTTP_PROXY"].startswith("http://")
+                        assert os.environ["ALL_PROXY"].startswith("socks5h://")
+                        assert "MCP_CONSOLE_SANDBOX_CONFIG" not in os.environ
+                        (Path(os.environ["TMP"]) / "probe.txt").write_text("private write")
+                        print("MXC proxy ready")
+                        """),
+                ],
+                cwd=root,
+                env=dict(os.environ, MCP_CONSOLE_HOME=str(root / "home")),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 1 and (
+                "managed proxy configuration is not supported by the legacy Windows sandbox"
+                in result.stderr
+            ):
+                self.skipTest(
+                    "native auto selection chose the legacy backend; MXC is unavailable"
+                )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "MXC proxy ready")
 
     def test_rejects_unsupported_public_permissions(self):
         with workspace() as root:
@@ -775,7 +876,23 @@ class WindowsSandbox(unittest.TestCase):
                     self.assertNotIn("secret sentinel", result.stderr)
                     self.assertNotIn("654987123", result.stderr)
             for override, diagnostic in (
-                ("sandbox.network={proxy: {}}", "sandbox.network.proxy"),
+                ("sandbox.network={proxy: {}}", "requires allow_local_binding: true"),
+                (
+                    "sandbox.network={proxy: {}, allow_local_binding: false}",
+                    "requires allow_local_binding: true",
+                ),
+                (
+                    "sandbox.network={proxy: {socks5: tcp_udp}, allow_local_binding: true}",
+                    "SOCKS5 UDP is not supported on Windows",
+                ),
+                (
+                    "sandbox.network={proxy: {}, allow_local_binding: true, sockets: {unix_sockets: dangerously_allow_all}}",
+                    "Unix sockets are not supported on Windows",
+                ),
+                (
+                    "sandbox.network={proxy: {}, allow_local_binding: true, sockets: {unix_sockets: [C:/service.sock]}}",
+                    "Unix sockets are not supported on Windows",
+                ),
                 ("resolver.sandbox.network=restricted", "resolver.sandbox"),
                 ("resolver.sandbox.filesystem={}", "resolver.sandbox"),
                 ("sandbox.windows_sandbox_level=unelevated", "windows_sandbox_level"),
@@ -823,7 +940,7 @@ class WindowsSandbox(unittest.TestCase):
                     ],
                 },
                 "network": "enabled",
-                "windows_sandbox_level": "unelevated",
+                "windows_backend": "unelevated",
                 "windows_state_dir": str(root / "state"),
             }
             result = subprocess.run(
