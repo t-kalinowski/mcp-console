@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::io::{BufWriter, Write};
 #[cfg(unix)]
@@ -29,6 +30,7 @@ pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
 struct TranscriptState {
     started_at: DateTime<Utc>,
     working_directory: Result<PathBuf, String>,
+    launch_environment: BTreeMap<String, String>,
     dynamic_resolution: bool,
     python_preparation: bool,
     r_available: bool,
@@ -102,6 +104,16 @@ impl Transcript {
             started_at: Utc::now(),
             working_directory: working_directory
                 .map_err(|error| format!("failed to find the current working directory: {error}")),
+            // Capture before lazy recording or runtime discovery. Non-UTF-8
+            // names and values use replacement characters, as diagnostic paths do.
+            launch_environment: std::env::vars_os()
+                .map(|(name, value)| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect(),
             dynamic_resolution,
             python_preparation,
             r_available,
@@ -404,16 +416,7 @@ impl TranscriptState {
 
     fn materialize(&mut self) -> Result<&mut ActiveTranscript, String> {
         if self.active.is_none() {
-            let working_directory = self.working_directory.clone()?;
-            self.active = Some(ActiveTranscript::create(
-                &working_directory,
-                self.started_at,
-                self.dynamic_resolution,
-                self.python_preparation,
-                self.r_available,
-                &self.startup_requirements,
-                self.pending_calls.is_none(),
-            )?);
+            self.active = Some(ActiveTranscript::create(self)?);
         }
         self.active()
     }
@@ -436,20 +439,13 @@ impl TranscriptState {
 }
 
 impl ActiveTranscript {
-    fn create(
-        working_directory: &Path,
-        started_at: DateTime<Utc>,
-        dynamic_resolution: bool,
-        python_preparation: bool,
-        r_available: bool,
-        startup_requirements: &crate::worker_client::Declaration,
-        metadata_known: bool,
-    ) -> Result<Self, String> {
+    fn create(state: &TranscriptState) -> Result<Self, String> {
+        let working_directory = state.working_directory.as_ref().map_err(Clone::clone)?;
         let working_directory_text = working_directory.to_string_lossy();
         // Keep incidental process-ID widths from shifting bounded output previews.
         let run_id = format!(
             "{}-{:010}",
-            started_at.format("%Y%m%dT%H%M%S%.9fZ"),
+            state.started_at.format("%Y%m%dT%H%M%S%.9fZ"),
             std::process::id()
         );
         let project_console = working_directory.join(".agents/console");
@@ -525,9 +521,9 @@ impl ActiveTranscript {
                 markdown,
                 quarto_path,
                 working_directory,
-                dynamic_resolution,
-                r_available,
-                startup_requirements,
+                state.dynamic_resolution,
+                state.r_available,
+                &state.startup_requirements,
             ))
         })();
         let (projections, pending_projection_failure) = match projections {
@@ -546,15 +542,17 @@ impl ActiveTranscript {
             next_call_id: 0,
             next_artifact_id: 0,
         };
+        let metadata_known = state.pending_calls.is_none();
         transcript.append(
             Event::SessionStarted {
                 session: "default",
                 working_directory: &working_directory_text,
-                dynamic_resolution: metadata_known.then_some(dynamic_resolution),
-                python_preparation: metadata_known.then_some(python_preparation),
-                startup_requirements: metadata_known.then_some(startup_requirements),
+                launch_environment: &state.launch_environment,
+                dynamic_resolution: metadata_known.then_some(state.dynamic_resolution),
+                python_preparation: metadata_known.then_some(state.python_preparation),
+                startup_requirements: metadata_known.then_some(&state.startup_requirements),
             },
-            started_at,
+            state.started_at,
         )?;
         Ok(transcript)
     }
