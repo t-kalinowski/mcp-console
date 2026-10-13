@@ -107,7 +107,9 @@ Direct execution reaps its direct worker but does not guarantee descendant clean
 Use Python 3.13 to match CI.
 Full coverage needs R/Python, PATH uv/ir, package repository access, prepared dependencies, and an explicitly provisioned sandbox.
 Native acceptance does not provision the machine itself.
-The MXC proxy launch case reports a skip when native selection chooses a legacy backend; the public proxy configuration checks still run.
+CI runs `scripts/with-checkout.cmd python tests/windows_mxc.py -v` after building Console and before provisioning legacy sandbox accounts.
+This separate acceptance check requires a successful MXC proxy launch; an unavailable native backend or existing legacy accounts fail the check.
+The remaining native suite runs after provisioning and retains the public proxy configuration checks.
 
 ```powershell
 $env:LC_ALL = 'C'
