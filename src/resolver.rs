@@ -64,6 +64,32 @@ pub(crate) fn find_r_path_entry() -> Option<std::path::PathBuf> {
     find_path_entry("R")
 }
 
+pub(crate) fn find_uv() -> Option<std::path::PathBuf> {
+    find_path_entry("uv").or_else(|| {
+        // Follow uv's user executable directory selection without modifying PATH.
+        let directory = std::env::var_os("XDG_BIN_HOME")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| {
+                std::env::var_os("XDG_DATA_HOME")
+                    .map(std::path::PathBuf::from)
+                    .filter(|path| path.is_absolute())
+                    .map(|path| path.join("../bin"))
+            })
+            .or_else(|| {
+                std::env::home_dir()
+                    .filter(|path| path.is_absolute())
+                    .map(|path| path.join(".local/bin"))
+            })?;
+        let executable = directory.join(if cfg!(windows) { "uv.exe" } else { "uv" });
+        // As on PATH, a present but broken installation remains selected and
+        // reports its failure instead of silently choosing another executable.
+        std::fs::symlink_metadata(&executable)
+            .is_ok()
+            .then_some(executable)
+    })
+}
+
 fn find_path_entry_from_names(programs: &[&str]) -> Option<std::path::PathBuf> {
     let path = std::env::var_os("PATH")?;
     // A broken symlink or non-executable entry is a broken installation, not
@@ -171,6 +197,7 @@ esac
                     )
                     .env_remove("R_HOME")
                     .env_remove("R_LIBS")
+                    .env("XDG_BIN_HOME", &empty_path)
                     .env_remove("RETICULATE_UV");
                 if mode == "explicit" {
                     command.env("RETICULATE_UV", &explicit_uv);

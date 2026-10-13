@@ -12,12 +12,14 @@ preparation_error:
   content:
     - type: text
       text: >-
-        Python sessions without R require `uv` on PATH; set python in
-        .agents/console/config.yaml to use an existing environment
+        Python sessions without R require `uv` on PATH or in its default user
+        executable directory; set python in .agents/console/config.yaml to use
+        an existing environment
   isError: true
 stderr: >
-  Python sessions without R require `uv` on PATH; set python in
-  .agents/console/config.yaml to use an existing environment
+  Python sessions without R require `uv` on PATH or in its default user
+  executable directory; set python in .agents/console/config.yaml to use
+  an existing environment
 ---
 languages: r
 language_guidance: >-

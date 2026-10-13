@@ -135,7 +135,7 @@ impl Selection {
             (executable, None)
         } else {
             if !has_uv {
-                return Err("Python sessions without R require `uv` on PATH; set python in .agents/console/config.yaml to use an existing environment".into());
+                return Err("Python sessions without R require `uv` on PATH or in its default user executable directory; set python in .agents/console/config.yaml to use an existing environment".into());
             }
             let managed = resolve(on_started)?;
             (managed.python().to_path_buf(), Some(managed))

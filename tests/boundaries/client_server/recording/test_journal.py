@@ -174,6 +174,7 @@ def test_records_launch_environment_when_startup_fails(
         tools.mkdir()
         environment = os.environ | {
             "PATH": str(tools),
+            "XDG_BIN_HOME": str(root / "unavailable-user-bin"),
             "MCP_CONSOLE_TEST_LAUNCH_VALUE": "failed launch: café\nsecond line",
             "MCP_CONSOLE_TEST_LAUNCH_EMPTY": "",
         }

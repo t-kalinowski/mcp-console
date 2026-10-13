@@ -13,10 +13,14 @@ See [the trust boundary](#trust-boundary).
 
 ## Selecting resolver tools
 
-Without R, managed Python requires `uv` on the launch PATH; there is no managed fallback to a system Python.
+Console looks for `uv` on PATH, then in its default user executable directory: an absolute `XDG_BIN_HOME`, an absolute `XDG_DATA_HOME/../bin`, or `~/.local/bin`.
+On Windows the default home location is `%USERPROFILE%\.local\bin`, with `uv.exe` as the executable name.
+Relative XDG directories are ignored.
+Selecting an unavailable user executable directory does not trigger a search of other user executable directories.
+Without R, managed Python requires a discoverable `uv`; there is no managed fallback to a system Python.
 An [existing Python environment](CONFIGURATION.md#python-environment-selection) bypasses managed Python preparation.
 
-With R, preparation prefers PATH `ir` (at least 0.4.0), then `uv tool run --from r-lib-ir ir`, with reticulate bootstrap when available.
+With R, preparation prefers PATH `ir` (at least 0.4.0), then `uv tool run --from r-lib-ir ir` using a discovered uv, with reticulate bootstrap when available.
 A genuinely unavailable bootstrap can leave a bare R runtime; a selected bootstrap that fails is an error.
 `RETICULATE_UV` affects the R-backed Python preparation path, not R-free preparation.
 

@@ -18,7 +18,7 @@ impl ManagedPythonResolverConfiguration {
         let explicit_uv = std::env::var_os("RETICULATE_UV");
         let reticulate_uv = explicit_uv
             .clone()
-            .or_else(|| super::find_path_entry("uv").map(Into::into));
+            .or_else(|| super::find_uv().map(Into::into));
         let uv = reticulate_uv
             .as_ref()
             .filter(|uv| uv.as_os_str() != OsStr::new("managed"))
@@ -32,9 +32,9 @@ impl ManagedPythonResolverConfiguration {
     }
 
     pub(crate) fn without_r_bootstrap(mut self) -> Self {
-        // Sans-R preparation uses the startup PATH selection. RETICULATE_UV
+        // Sans-R preparation uses ordinary uv discovery. RETICULATE_UV
         // belongs to reticulate's R bootstrap, not this mode.
-        self.uv = super::find_path_entry("uv").map(Into::into);
+        self.uv = super::find_uv().map(Into::into);
         self.reticulate_uv = self.uv.clone();
         self.explicit_uv = None;
         self

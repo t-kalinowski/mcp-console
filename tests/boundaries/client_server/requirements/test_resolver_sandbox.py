@@ -589,6 +589,14 @@ def test_bootstraps_reticulate_uv_with_host_cache_policy(binary: Path) -> Transc
         root = Path(directory).resolve()
         env, _ = r_test_environment()
         env["IR_CACHE_DIR"] = ir_cache_directory(env)
+        env["PATH"] = os.pathsep.join(
+            entry
+            for entry in env["PATH"].split(os.pathsep)
+            if not any(
+                (Path(entry) / (name + (".exe" if os.name == "nt" else ""))).exists()
+                for name in ("uv", "ir")
+            )
+        )
         env.update(XDG_CACHE_HOME=str(root / "cache"), RETICULATE_UV="managed")
         for name in (
             "RETICULATE_PYTHON",

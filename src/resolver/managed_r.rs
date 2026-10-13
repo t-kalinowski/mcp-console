@@ -233,6 +233,7 @@ fn select_ir_command(python: &super::ManagedPythonResolverConfiguration) -> Opti
             .explicit_uv()
             .filter(|uv| *uv != OsStr::new("managed"))
             .map(|uv| IrCommand::through_uv(uv.to_os_string()))
+            .or_else(|| python.selected_uv().map(IrCommand::through_uv))
     }
 }
 

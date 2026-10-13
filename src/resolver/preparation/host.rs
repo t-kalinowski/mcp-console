@@ -229,7 +229,7 @@ impl Context {
             return Err("managed Python requirements are disabled because the session uses a user-selected Python environment".into());
         }
         if !self.python.has_uv() {
-            let r = r.ok_or("Python sessions without R require `uv` on PATH; set python in .agents/console/config.yaml to use an existing environment")?;
+            let r = r.ok_or("Python sessions without R require `uv` on PATH or in its default user executable directory; set python in .agents/console/config.yaml to use an existing environment")?;
             let configuration = self.r.as_ref().ok_or("R bootstrap has not been prepared")?;
             let uv = configuration.resolve_uv(r, &self.python, on_started)?;
             self.python.set_resolved_uv(uv);
