@@ -193,15 +193,30 @@ pub(crate) fn restore_directory_access(
     Ok(())
 }
 
+pub(crate) fn remove_file_or_directory_link(
+    path: &std::path::Path,
+    _metadata: &std::fs::Metadata,
+) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        // Directory symlinks and junctions require directory deletion. Remove
+        // the link itself, without visiting or changing its target.
+        if _metadata.file_type().is_symlink_dir() {
+            return std::fs::remove_dir(path);
+        }
+        if _metadata.is_file() {
+            restore_directory_access(path, _metadata)?;
+        }
+    }
+    std::fs::remove_file(path)
+}
+
 fn prepare_manual_root(root: &std::path::Path) -> std::io::Result<()> {
     if let Ok(metadata) = std::fs::symlink_metadata(root)
         && !metadata.is_dir()
     {
-        #[cfg(windows)]
-        if metadata.is_file() {
-            restore_directory_access(root, &metadata)?;
-        }
-        std::fs::remove_file(root)?;
+        remove_file_or_directory_link(root, &metadata)?;
     }
     std::fs::create_dir_all(root)?;
     std::fs::File::options()

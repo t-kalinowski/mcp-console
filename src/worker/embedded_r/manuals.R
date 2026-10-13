@@ -87,6 +87,8 @@ base::local(
         # RShowDoc encodes the whole path. Separate the fragment after the
         # manual filename, preserving '#' characters in directory names.
         local <- utils::URLdecode(substring(url, 8L))
+        # URLdecode leaves UTF-8 path bytes unmarked under native C locales.
+        Encoding(local) <- "UTF-8"
         path <- sub(
           "([/]R-[A-Za-z]+[.]html)#[^/]*$",
           "\\1",

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator
@@ -801,6 +802,48 @@ def test_manual_cache_repairs_file_identity(
         client.send(r='RShowDoc("R-exts#Grouped-B")')
         assert "café λ" in normalize_paths(client, root)
         assert completed_collection(root).is_dir()
+        return client.finish()
+
+
+@requires(R)
+@executions(DIRECT)
+def test_manual_cache_repairs_directory_links(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        target = root / "workspace/unrelated-directory"
+        target.mkdir()
+        sentinel = target / "keep.txt"
+        sentinel.write_text("unrelated content", encoding="utf-8")
+        client.send(r='discard <- capture.output(path <- .console$manual("R-exts"))')
+        normalize_paths(client, root)
+        collection = completed_collection(root)
+        staging = collection.with_name(f".{collection.name}.incomplete")
+        manuals = collection.parent
+        for entry in (collection, staging, manuals):
+            if entry.exists():
+                shutil.rmtree(entry)
+            if os.name == "nt":
+                # Junctions need no developer mode or symlink privilege.
+                subprocess.run(
+                    ["cmd.exe", "/d", "/c", "mklink", "/J", str(entry), str(target)],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                entry.symlink_to(target, target_is_directory=True)
+            if entry == manuals:
+                result = client.send(control="restart")
+                assert not result.get("isError", False), result
+                client.expect("[1] 2\n", r="1 + 1")
+            client.send(r='utils::RShowDoc("R-exts#Grouped-B")')
+            output = normalize_paths(client, root)
+            assert "café λ" in output, output
+            assert sentinel.read_text(encoding="utf-8") == "unrelated content"
+            assert set(target.iterdir()) == {sentinel}, (
+                "repair must not traverse the link"
+            )
+            completed_collection(root)
         return client.finish()
 
 

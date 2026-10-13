@@ -136,6 +136,7 @@ An identity replaced by a file is also removed and regenerated.
 Sessions serialize validation, repair, and publication through a host-created OS file lock outside the worker-writable manuals subtree.
 The lock is advisory: shell-capable submitted code can acquire it, so manual operations report `Manual cache is busy; retry the manual operation` on contention rather than blocking the interpreter.
 Cache comparisons bound reads to the expected content length; repair restores directory access before removal and reclaims abandoned staging for the requested identity.
+Cache directory links are removed without traversing their targets, including Windows junctions.
 Console restores owner access to the manuals root before worker launch and before cache traversal.
 Restart recreates the root and its host-owned lock if a cache cleaner removed them, and replaces a non-directory root; the collection still materializes only when requested.
 R reading and search use the source-derived model, so concurrent cache edits cannot replace the displayed documentation.

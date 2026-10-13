@@ -2,7 +2,7 @@
 //! Only the captured manuals subtree is writable. A content-addressed directory
 //! is published by rename after every projection and the manifest are complete.
 
-use crate::resolver::cache::restore_directory_access;
+use crate::resolver::cache::{remove_file_or_directory_link, restore_directory_access};
 use anyhow::{Context, Result, bail, ensure};
 use harp::object::RObject;
 use html2text::render::{RichAnnotation, TaggedLineElement};
@@ -772,15 +772,7 @@ fn remove_entry(path: &Path) -> std::io::Result<()> {
         }
         fs::remove_dir(path)
     } else {
-        #[cfg(windows)]
-        // Clearing the Windows read-only attribute leaves ACL permissions intact.
-        #[allow(clippy::permissions_set_readonly_false)]
-        if metadata.is_file() && metadata.permissions().readonly() {
-            let mut permissions = metadata.permissions();
-            permissions.set_readonly(false);
-            fs::set_permissions(path, permissions)?;
-        }
-        fs::remove_file(path)
+        remove_file_or_directory_link(path, &metadata)
     }
 }
 
