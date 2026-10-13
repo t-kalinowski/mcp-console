@@ -14,6 +14,7 @@ See [the trust boundary](#trust-boundary).
 ## Selecting resolver tools
 
 Console looks for `uv` on PATH, then in its default user executable directory: an absolute `XDG_BIN_HOME`, an absolute `XDG_DATA_HOME/../bin`, or `~/.local/bin`.
+The user executable directory is captured from the server's launch environment; preparation cache redirects and resolver environment overrides do not change it.
 On Windows the default home location is `%USERPROFILE%\.local\bin`, with `uv.exe` as the executable name.
 Relative XDG directories are ignored.
 Selecting an unavailable user executable directory does not trigger a search of other user executable directories.

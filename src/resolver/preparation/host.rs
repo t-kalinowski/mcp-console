@@ -23,6 +23,7 @@ impl Context {
     fn discover(
         mode: Mode,
         installation: Option<crate::local_runtime::RInstallation>,
+        user_uv_directory: Option<std::ffi::OsString>,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
         if let Some(installation) = &installation {
@@ -47,8 +48,8 @@ impl Context {
             .is_some_and(|python| !python.is_empty() && python != OsStr::new("managed"));
         let configured_python = configured_python.and_then(|python| python.into_string().ok());
         if !matches!(mode, Mode::R) {
-            let python =
-                resolver::ManagedPythonResolverConfiguration::capture().without_r_bootstrap();
+            let python = resolver::ManagedPythonResolverConfiguration::capture(user_uv_directory)
+                .without_r_bootstrap();
             let has_uv = python.has_uv();
             return Ok((
                 Self {
@@ -71,7 +72,7 @@ impl Context {
                 },
             ));
         }
-        let python = resolver::ManagedPythonResolverConfiguration::capture();
+        let python = resolver::ManagedPythonResolverConfiguration::capture(user_uv_directory);
         let (bootstrap, rscript) = resolver::discover(&python, on_started)?;
         let home = rscript
             .parent()
@@ -145,9 +146,14 @@ impl Context {
                 let r = if let Some(configuration) = &self.r {
                     resolver::resolve_r_with(configuration, requirements, on_started)?
                 } else {
-                    resolver::resolve_r(requirements, on_started, |configuration| {
-                        self.r = Some(configuration);
-                    })?
+                    resolver::resolve_r(
+                        requirements,
+                        self.python.user_uv_directory(),
+                        on_started,
+                        |configuration| {
+                            self.r = Some(configuration);
+                        },
+                    )?
                 };
                 self.rscript = Some(r.rscript().to_path_buf());
                 serde_json::to_value(r).map_err(|error| error.to_string())
@@ -296,7 +302,12 @@ pub(super) fn run() -> Result<(), String> {
     #[cfg(windows)]
     let mut input = BufReader::new(io::stdin());
     let first: Input = super::read_jsonl(&mut input)?;
-    let Input::Open { mode, installation } = first else {
+    let Input::Open {
+        mode,
+        installation,
+        user_uv_directory,
+    } = first
+    else {
         return Err("expected resolver open".into());
     };
     let (events, received) = mpsc::channel();
@@ -347,7 +358,7 @@ pub(super) fn run() -> Result<(), String> {
         let mut context = perform(
             0,
             &job_events,
-            |started| Context::discover(mode, installation, started),
+            |started| Context::discover(mode, installation, user_uv_directory, started),
             |(_, discovery)| serde_json::to_value(discovery).expect("discovery serializes"),
         )?
         .0;

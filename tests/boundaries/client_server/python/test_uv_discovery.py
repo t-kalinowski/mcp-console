@@ -25,7 +25,6 @@ def configure_python(root: Path) -> None:
     config.write_text(
         json.dumps(
             {
-                "cache": "host",
                 "python": {"managed": {"version": "3.13", "packages": []}},
             }
         )
@@ -127,7 +126,9 @@ def test_uses_user_uv_with_r(binary: Path, execution: Execution) -> Transcript:
         uv = expose_uv(user_bin)
         real_uv = uv.resolve()
         uv.unlink()
-        marker = root / "user-uv-used"
+        cache = root / "cache"
+        marker = cache / "mcp-console/dependencies/user-uv-used"
+        marker.parent.mkdir(parents=True)
         uv.write_text(
             # fmt: python
             code(f"""
@@ -151,11 +152,10 @@ def test_uses_user_uv_with_r(binary: Path, execution: Execution) -> Transcript:
             )
         )
         environment["XDG_BIN_HOME"] = str(user_bin)
+        environment["XDG_CACHE_HOME"] = str(cache)
         environment.pop("RETICULATE_UV", None)
         environment.pop("RETICULATE_PYTHON", None)
-        with McpClient(
-            binary, execution.serve("-c", "cache=host"), environment, root
-        ) as client:
+        with McpClient(binary, execution.serve(), environment, root) as client:
             client.initialize_and_list_tools()
             client.expect("[1] 42\n", r="6 * 7")
             assert marker.exists(), "preparation did not use the user-installed uv"

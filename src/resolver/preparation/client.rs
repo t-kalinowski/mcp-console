@@ -237,6 +237,8 @@ impl Preparation {
             Input::Open {
                 mode: Mode::PythonOnly,
                 installation: None,
+                user_uv_directory: crate::resolver::user_uv_directory()
+                    .map(std::path::PathBuf::into_os_string),
             },
             diagnostics,
             on_started,
@@ -304,7 +306,12 @@ impl Preparation {
             command.env_remove("RETICULATE_PYTHON");
         }
         command.arg("resolve");
-        let open = Input::Open { mode, installation };
+        let open = Input::Open {
+            mode,
+            installation,
+            user_uv_directory: crate::resolver::user_uv_directory()
+                .map(std::path::PathBuf::into_os_string),
+        };
         Self::open_with(command, Arc::default(), open, diagnostics, on_started)
     }
 

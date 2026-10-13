@@ -177,12 +177,15 @@ pub(crate) fn discover(
 
 pub(crate) fn resolve_r(
     requirements: Vec<String>,
+    user_uv_directory: Option<&Path>,
     on_started: impl FnOnce(ResolverStopHandle) -> Result<(), String>,
     on_configured: impl FnOnce(ManagedRResolverConfiguration),
 ) -> Result<ManagedR, String> {
     let resolver = ResolverProcess::new();
     let mut on_started = Some(on_started);
-    let mut python = super::ManagedPythonResolverConfiguration::capture();
+    let mut python = super::ManagedPythonResolverConfiguration::capture(
+        user_uv_directory.map(|path| path.as_os_str().to_os_string()),
+    );
     let configuration = discover_r_resolver_with(&resolver, &mut on_started, &mut python)?
         .ok_or_else(|| "dynamic environment resolution requires `ir` or `uv`".to_string())?;
     // Retain the selected executables even when this first manifest fails.

@@ -64,23 +64,27 @@ pub(crate) fn find_r_path_entry() -> Option<std::path::PathBuf> {
     find_path_entry("R")
 }
 
-pub(crate) fn find_uv() -> Option<std::path::PathBuf> {
+pub(crate) fn user_uv_directory() -> Option<std::path::PathBuf> {
+    // Capture uv's directory from the launcher, before preparation redirects XDG data.
+    std::env::var_os("XDG_BIN_HOME")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            std::env::var_os("XDG_DATA_HOME")
+                .map(std::path::PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .map(|path| path.join("../bin"))
+        })
+        .or_else(|| {
+            std::env::home_dir()
+                .filter(|path| path.is_absolute())
+                .map(|path| path.join(".local/bin"))
+        })
+}
+
+pub(crate) fn find_uv(user_directory: Option<&std::path::Path>) -> Option<std::path::PathBuf> {
     find_path_entry("uv").or_else(|| {
-        // Follow uv's user executable directory selection without modifying PATH.
-        let directory = std::env::var_os("XDG_BIN_HOME")
-            .map(std::path::PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .or_else(|| {
-                std::env::var_os("XDG_DATA_HOME")
-                    .map(std::path::PathBuf::from)
-                    .filter(|path| path.is_absolute())
-                    .map(|path| path.join("../bin"))
-            })
-            .or_else(|| {
-                std::env::home_dir()
-                    .filter(|path| path.is_absolute())
-                    .map(|path| path.join(".local/bin"))
-            })?;
+        let directory = user_directory?;
         let executable = directory.join(if cfg!(windows) { "uv.exe" } else { "uv" });
         // As on PATH, a present but broken installation remains selected and
         // reports its failure instead of silently choosing another executable.
@@ -236,7 +240,9 @@ esac
         for executable in ["R", "Rscript", "ir"] {
             assert!(super::find_path_entry(executable).is_none());
         }
-        let configuration = ManagedPythonResolverConfiguration::capture();
+        let configuration = ManagedPythonResolverConfiguration::capture(
+            super::user_uv_directory().map(std::path::PathBuf::into_os_string),
+        );
         if matches!(mode.to_str(), Some("missing" | "managed")) {
             assert!(!configuration.has_uv());
             assert!(resolve_python_version(vec![], &configuration, |_| Ok(())).is_err());
