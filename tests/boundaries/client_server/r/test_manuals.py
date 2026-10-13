@@ -33,7 +33,7 @@ def manual_client(
     installed: bool = False,
     manuals: Path = FIXTURES / "r_manuals",
     doc_component: str = "doc",
-    cache_race: bool = False,
+    cache_race: str = "",
 ) -> Iterator[tuple[McpClient, Path]]:
     with tempfile.TemporaryDirectory(prefix="console-manuals-café#-") as temporary:
         root = Path(temporary).resolve()
@@ -44,9 +44,7 @@ def manual_client(
         library.mkdir()
         environment = bare_runtime_environment(environment, library)
         if cache_race:
-            environment[LOADER_VARIABLE] = str(
-                build_interposer(root, "manual_cache_fifo")
-            )
+            environment[LOADER_VARIABLE] = str(build_interposer(root, cache_race))
         environment.update(
             MCP_CONSOLE_LANGUAGES="r", XDG_CACHE_HOME=str(root / "cache")
         )
@@ -1125,6 +1123,89 @@ def test_manual_cache_file_does_not_block_restart(
 
 
 @requires(R)
+@executions(DIRECT)
+def test_manual_cache_lock_directory_does_not_block_restart(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution) as (client, root):
+        lock = root / "cache/mcp-console/manuals.lock"
+        inode = lock.stat().st_ino
+        client.send(control="restart")
+        assert lock.stat().st_ino == inode, "keep an existing publisher's lock inode"
+        client.send(
+            # fmt: r
+            r=code(r"""
+                old_session <- TRUE
+                lock <- paste0(Sys.getenv("MCP_CONSOLE_MANUAL_CACHE"), ".lock")
+                unlink(lock)
+                stopifnot(dir.create(lock))
+                dir.create(file.path(lock, "unexpected"))
+                writeLines("invalid lock", file.path(lock, "unexpected", "entry"))
+                stopifnot(Sys.chmod(file.path(lock, "unexpected"), mode = "000"))
+                """),
+        )
+        result = client.send(control="restart")
+        assert not result.get("isError", False), result
+        client.expect("[1] 2\n", r='stopifnot(!exists("old_session")); 1 + 1')
+        assert lock.is_file(), "restart must replace the invalid lock"
+        assert not cache_entries(root), "recovery must keep conversion lazy"
+        client.send(r='utils::RShowDoc("R-exts#Grouped-B")')
+        assert "café λ" in normalize_paths(client, root)
+        return client.finish()
+
+
+@requires(POSIX, R, command("cc"))
+@executions(DIRECT, SANDBOXED)
+def test_manual_cache_directory_replacement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with manual_client(binary, execution, cache_race="manual_cache_directory") as (
+        client,
+        root,
+    ):
+        target = root / "workspace/unrelated-directory"
+        target.mkdir()
+        sentinel = target / "keep.txt"
+        sentinel.write_text("unrelated content", encoding="utf-8")
+        client.send(r='discard <- capture.output(path <- .console$manual("R-exts"))')
+        normalize_paths(client, root)
+        collection = completed_collection(root)
+        for directory in (collection, collection / "unexpected"):
+            directory.mkdir(exist_ok=True)
+            (collection / "R-exts.md").write_text("invalid cache")
+            marker = root / "workspace/directory-replaced"
+            marker.unlink(missing_ok=True)
+            client.send(
+                # fmt: r
+                r=code(r"""
+                    Sys.setenv(
+                      CONSOLE_TEST_CACHE_DIRECTORY = if (NESTED) {
+                        file.path(dirname(path), "unexpected")
+                      } else {
+                        dirname(path)
+                      },
+                      CONSOLE_TEST_CACHE_DIRECTORY_SKIP = if (NESTED) "0" else "1",
+                      CONSOLE_TEST_CACHE_LINK_TARGET = file.path(getwd(), "unrelated-directory"),
+                      CONSOLE_TEST_CACHE_DIRECTORY_MARKER = file.path(getwd(), "directory-replaced")
+                    )
+                    """).replace(
+                    "NESTED", "TRUE" if directory != collection else "FALSE"
+                ),
+            )
+            client.send(r='discard <- capture.output(RShowDoc("R-exts"))')
+            assert marker.exists(), "replace the directory at its enumeration boundary"
+            assert sentinel.exists(), "repair must not delete the symlink target"
+            assert sentinel.read_text(encoding="utf-8") == "unrelated content"
+            assert set(target.iterdir()) == {sentinel}
+            # Concurrent replacement may interrupt repair; an explicit retry
+            # must recover without traversing the link or losing source text.
+            client.send(r='utils::RShowDoc("R-exts#Grouped-B")')
+            assert "café λ" in normalize_paths(client, root)
+            completed_collection(root)
+        return client.finish()
+
+
+@requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_manual_cache_reclaims_abandoned_publication(
     binary: Path, execution: Execution
@@ -1157,7 +1238,10 @@ def test_manual_cache_reclaims_abandoned_publication(
 def test_manual_cache_fifo_replacement(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with manual_client(binary, execution, cache_race=True) as (client, root):
+    with manual_client(binary, execution, cache_race="manual_cache_fifo") as (
+        client,
+        root,
+    ):
         client.send(r='discard <- capture.output(path <- .console$manual("R-exts"))')
         normalize_paths(client, root)
         path = completed_collection(root) / "R-exts.md"
@@ -1195,7 +1279,10 @@ def test_manual_cache_fifo_replacement(
 def test_manual_publication_fifo_replacement(
     binary: Path, execution: Execution
 ) -> Transcript:
-    with manual_client(binary, execution, cache_race=True) as (client, root):
+    with manual_client(binary, execution, cache_race="manual_cache_fifo") as (
+        client,
+        root,
+    ):
         client.send(r='discard <- capture.output(path <- .console$manual("R-exts"))')
         normalize_paths(client, root)
         collection = completed_collection(root)

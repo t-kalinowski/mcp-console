@@ -403,6 +403,8 @@ impl TemporaryDirectory {
 
 #[cfg(unix)]
 mod temporary_directories;
+#[cfg(unix)]
+pub(crate) use temporary_directories::unlock as restore_directory_tree_access;
 
 impl Drop for TemporaryDirectory {
     fn drop(&mut self) {

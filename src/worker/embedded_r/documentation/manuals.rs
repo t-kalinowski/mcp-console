@@ -2,7 +2,7 @@
 //! Only the captured manuals subtree is writable. A content-addressed directory
 //! is published by rename after every projection and the manifest are complete.
 
-use crate::resolver::cache::{remove_file_or_directory_link, restore_directory_access};
+use crate::resolver::cache::{remove_entry, restore_directory_access};
 use anyhow::{Context, Result, bail, ensure};
 use harp::object::RObject;
 use html2text::render::{RichAnnotation, TaggedLineElement};
@@ -756,24 +756,6 @@ fn matches_file(path: &Path, expected: &str) -> std::io::Result<bool> {
     file.take(expected.len() as u64 + 1)
         .read_to_end(&mut actual)?;
     Ok(actual == expected.as_bytes())
-}
-
-fn remove_entry(path: &Path) -> std::io::Result<()> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error),
-    };
-    // Repair directory traversal before descent; never follow cache symlinks.
-    if metadata.is_dir() {
-        restore_directory_access(path, &metadata)?;
-        for entry in fs::read_dir(path)? {
-            remove_entry(&entry?.path())?;
-        }
-        fs::remove_dir(path)
-    } else {
-        remove_file_or_directory_link(path, &metadata)
-    }
 }
 
 fn complete(directory: &Path, prepared: &Prepared) -> std::io::Result<bool> {

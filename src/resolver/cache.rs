@@ -176,24 +176,45 @@ pub(crate) fn restore_directory_access(
 ) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
         let mode = metadata.permissions().mode();
         if mode & 0o700 != 0o700 {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode | 0o700))?;
+            let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+            // Match tree-access restoration: chmod must not follow a link
+            // substituted after the caller checked directory metadata.
+            if unsafe {
+                libc::fchmodat(
+                    libc::AT_FDCWD,
+                    path.as_ptr(),
+                    (mode | 0o700) as libc::mode_t,
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            } < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
         }
     }
     #[cfg(windows)]
     // Clearing the Windows read-only attribute leaves ACL permissions intact.
     #[allow(clippy::permissions_set_readonly_false)]
     if metadata.permissions().readonly() {
-        let mut permissions = metadata.permissions();
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_WRITE_ATTRIBUTES,
+        };
+        let file = std::fs::File::options()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)?;
+        let mut permissions = file.metadata()?.permissions();
         permissions.set_readonly(false);
-        std::fs::set_permissions(path, permissions)?;
+        file.set_permissions(permissions)?;
     }
     Ok(())
 }
 
-pub(crate) fn remove_file_or_directory_link(
+fn remove_file_or_directory_link(
     path: &std::path::Path,
     _metadata: &std::fs::Metadata,
 ) -> std::io::Result<()> {
@@ -212,6 +233,24 @@ pub(crate) fn remove_file_or_directory_link(
     std::fs::remove_file(path)
 }
 
+pub(crate) fn remove_entry(path: &std::path::Path) -> std::io::Result<()> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.is_dir() {
+        #[cfg(unix)]
+        crate::local_runtime::restore_directory_tree_access(path)?;
+        // std traverses through no-follow directory handles and deletes relative
+        // to those handles on both Unix and Windows. A peer's replacement of a
+        // checked directory cannot redirect descent to a symlink's target.
+        std::fs::remove_dir_all(path)
+    } else {
+        remove_file_or_directory_link(path, &metadata)
+    }
+}
+
 fn prepare_manual_root(root: &std::path::Path) -> std::io::Result<()> {
     if let Ok(metadata) = std::fs::symlink_metadata(root)
         && !metadata.is_dir()
@@ -219,12 +258,20 @@ fn prepare_manual_root(root: &std::path::Path) -> std::io::Result<()> {
         remove_file_or_directory_link(root, &metadata)?;
     }
     std::fs::create_dir_all(root)?;
+    let lock = root.with_extension("lock");
+    // Preserve a valid lock inode: another live publisher may hold it. Only
+    // host provisioning can replace invalid entries outside the worker grant.
+    if let Ok(metadata) = std::fs::symlink_metadata(&lock)
+        && !metadata.is_file()
+    {
+        remove_entry(&lock)?;
+    }
     std::fs::File::options()
         .read(true)
         .write(true)
         .create(true)
         .truncate(false)
-        .open(root.with_extension("lock"))?;
+        .open(lock)?;
     let metadata = std::fs::symlink_metadata(root)?;
     if !metadata.is_dir() {
         return Err(std::io::Error::other(
