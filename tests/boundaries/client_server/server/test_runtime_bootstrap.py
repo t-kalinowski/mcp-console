@@ -524,17 +524,41 @@ def test_console_startup_resolves_python_version_and_import(
             closing(FifoCheckpoint.create(root / "complete"))
         )
         environment, resolving, resolved = checkpoint_uv_environment(root, "py-yaml12")
+        initializing = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "initializing"))
+        )
+        initialize = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "initialize"))
+        )
+        (root / "sitecustomize.py").write_text(
+            # fmt: python
+            code(f"""
+                import os
+                import sys
+
+                # Embedded CPython has an empty argv[0]; resolver scripts have a path.
+                if sys.argv[0] == "":
+                    descriptor = os.open({str(initializing.path)!r}, os.O_WRONLY | os.O_NONBLOCK)
+                    assert os.write(descriptor, b"1") == 1
+                    os.close(descriptor)
+                    with open({str(initialize.path)!r}, "rb", buffering=0) as stream:
+                        assert stream.read(1) == b"1"
+                """),
+        )
         resources.callback(resolving.close)
         resources.callback(resolved.close)
         r_environment, _ = r_test_environment()
         environment.update(r_environment)
         environment["RETICULATE_PYTHON"] = ""
+        environment["PYTHONPATH"] = str(root)
         install_r_startup(root, environment, R_CHECKPOINT)
         # fmt: r
         source = code("""
             version <- reticulate:::resolve_python_version(">=3.13")
             stopifnot(grepl("^[0-9]+[.][0-9]+[.][0-9]+$", version))
             cat("Python version resolved\\n")
+            invisible(reticulate::py_eval("None"))
+            cat("Python initialized\\n")
             module <- reticulate::import("yaml12", convert = FALSE)
             stopifnot(identical(reticulate::py_to_r(module$`__name__`), "yaml12"))
             cat("Python import resolved\\n")
@@ -578,9 +602,20 @@ def test_console_startup_resolves_python_version_and_import(
                 )
                 client.initialize_and_list_tools()
                 release.release()
+                initializing.wait(
+                    "embedded Python initialization before automatic import",
+                    timeout=client.response_timeout,
+                )
+                initialize.release()
+                # Acknowledge initialization explicitly before starting the
+                # import-resolution checkpoint's bounded wait.
+                bootstrap_output(
+                    client,
+                    "Python version resolved\nPython initialized\n",
+                    timeout_ms=0,
+                )
                 resolving.wait("bootstrap automatic import reaches host resolver")
                 client.request("ping")
-                bootstrap_output(client, "Python version resolved\n", timeout_ms=0)
                 resolved.release()
                 complete.wait("bootstrap import finished", timeout=600)
                 bootstrap_output(
@@ -601,6 +636,7 @@ def test_console_startup_resolves_python_version_and_import(
             finally:
                 release.release()
                 resolved.release()
+                initialize.release()
 
 
 @executions(DIRECT, SANDBOXED)
