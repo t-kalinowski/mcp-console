@@ -1,4 +1,4 @@
-//! Directory-relative permission restoration after direct-worker retirement.
+//! Directory-relative permission restoration for owned runtime and manual storage.
 
 use std::ffi::{CStr, CString};
 use std::io;
@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::NonNull;
 
-pub(super) fn unlock(path: &Path) -> io::Result<()> {
+pub(crate) fn unlock(path: &Path) -> io::Result<()> {
     let parent = CString::new(
         path.parent()
             .expect("temporary directory parent")

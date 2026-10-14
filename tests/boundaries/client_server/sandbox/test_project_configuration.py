@@ -90,6 +90,7 @@ def _snapshot_survives_replacement(
         resolver_capture = host / "resolver-payloads.jsonl"
         environment = {
             **os.environ,
+            "XDG_CACHE_HOME": str(host / "console-cache"),
             LOADER_VARIABLE: str(build_interposer(host, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "MCP_CONSOLE_TEST_RESOLVER_CONFIGURATION": str(resolver_capture),
@@ -164,9 +165,8 @@ def _snapshot_survives_replacement(
         payload = payloads[0]
         assert payload["network"] == "restricted"
         assert (payload.get("proxy") is not None) == configured
-        expected_roots = (
-            ["output café 雪", "CLI cache"] if configured else ["CLI cache"]
-        )
+        expected_roots = ["output café 雪"] if configured else []
+        expected_roots += ["console-cache/mcp-console/manuals", "CLI cache"]
         assert payload["filesystem"]["entries"][1:] == [
             {"path": {"type": "path", "path": str(host / name)}, "access": "write"}
             for name in expected_roots

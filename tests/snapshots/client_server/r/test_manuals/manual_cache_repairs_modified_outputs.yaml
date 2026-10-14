@@ -1,0 +1,149 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: >-
+    discard <- capture.output(path <-
+    .console$manual("R-exts#Small-sections"))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: |
+    manifest <- file.path(dirname(path), "manifest.json")
+    for (file in c(path, manifest)) {
+      text <- readLines(file, encoding = "UTF-8", warn = FALSE)
+      text <- sub("Small sections", "INJECTED-CACHE-TEXT", text, fixed = TRUE)
+      writeLines(
+        sub("Parent-only text.", "INJECTED-CACHE-TEXT", text, fixed = TRUE),
+        file,
+        useBytes = TRUE
+      )
+    }
+    cat("modified document and manifest\n")
+result:
+  content:
+    - type: text
+      text: |
+        modified document and manifest
+  isError: false
+---
+send:
+  r: .console$manual_search("INJECTED-CACHE-TEXT")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "INJECTED-CACHE-TEXT"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        No matches.
+  isError: false
+---
+send:
+  r: unlink(path)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: .console$manual("R-exts#Small-sections")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Small sections
+
+        ## 1 Small sections
+
+        Parent-only text.
+
+        ### 1.1 Grouped A
+
+        A short needle introduction. See [B](#Grouped-B), [language](R-lang.md#Shared-anchor), and [external](https://example.org/external).
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](R-lang.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next section: RShowDoc("R-exts#Needle-examples")
+  isError: false
+---
+send:
+  r: writeLines("invalid manifest", manifest)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+
+        # Writing R Extensions
+
+        [Collection](index.md)
+
+        - [Writing R Extensions](R-exts.md#Top)
+          - [1 Small sections](R-exts.md#Small-sections)
+          - [2 Needle examples](R-exts.md#Needle-examples)
+          - [3 Long Unicode line](R-exts.md#Long-line)
+          - [4 HTML and Markdown examples](R-exts.md#Code-anchors)
+          - [Appendix B Fixture reference](R-exts.md#Appendix-B)
+
+        Read: `RShowDoc("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC and document: `.console$manual("R-exts.md")`
+  isError: false
+---
+send:
+  r: >-
+    discard <- capture.output(path <- .console$manual("R-exts"));
+    writeLines("INJECTED-CACHE-TEXT", file.path(dirname(path), "R-lang.md"))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  r: RShowDoc("R-lang#Shared-anchor")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-lang.md
+        Location: R Language Definition > 1 Shared references > 1.1 Shared anchor
+
+        ### 1.1 Shared anchor
+
+        Follow back to [the extensions manual](R-exts.md#Grouped-B).
+
+
+        Next section: RShowDoc("R-lang#Other-anchor")
+  isError: false

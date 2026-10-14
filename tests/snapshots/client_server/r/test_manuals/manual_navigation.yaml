@@ -1,0 +1,149 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+
+        # Writing R Extensions
+
+        [Collection](index.md)
+
+        - [Writing R Extensions](R-exts.md#Top)
+          - [1 Small sections](R-exts.md#Small-sections)
+          - [2 Needle examples](R-exts.md#Needle-examples)
+          - [3 Long Unicode line](R-exts.md#Long-line)
+          - [4 HTML and Markdown examples](R-exts.md#Code-anchors)
+          - [Appendix B Fixture reference](R-exts.md#Appendix-B)
+
+        Read: `RShowDoc("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC and document: `.console$manual("R-exts.md")`
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#SEC_Contents")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+
+        **Contents: Writing R Extensions**
+
+        [Collection](index.md)
+
+        - [Writing R Extensions](R-exts.md#Top)
+          - [1 Small sections](R-exts.md#Small-sections)
+            - [1.1 Grouped A](R-exts.md#Grouped-A)
+            - [1.2 Grouped B](R-exts.md#Grouped-B)
+          - [2 Needle examples](R-exts.md#Needle-examples)
+            - [2.1 Large section](R-exts.md#Large-section)
+            - [2.2 Oversized example](R-exts.md#Oversized-example)
+          - [3 Long Unicode line](R-exts.md#Long-line)
+          - [4 HTML and Markdown examples](R-exts.md#Code-anchors)
+          - [Appendix B Fixture reference](R-exts.md#Appendix-B)
+                - [(1)](R-exts.md#FOOT1)
+
+
+        Next section: RShowDoc("R-exts#Top")
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts#Grouped-B")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Small sections > 1.2 Grouped B
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](R-lang.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next section: RShowDoc("R-exts#Needle-examples")
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#Grouped-A")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Small sections > 1.1 Grouped A
+
+        ### 1.1 Grouped A
+
+        A short needle introduction. See [B](#Grouped-B), [language](R-lang.md#Shared-anchor), and [external](https://example.org/external).
+
+
+        Next section: RShowDoc("R-exts#Grouped-B")
+  isError: false
+---
+send:
+  r: |
+    discard <- capture.output(
+      value <- withVisible(utils::RShowDoc("R-exts#Grouped-B"))
+    )
+    a <- capture.output(RShowDoc("R-exts#Grouped-B"))
+    b <- capture.output(utils::RShowDoc("R-exts#Grouped-B"))
+    stopifnot(
+      !value$visible,
+      identical(value$value, file.path(R.home("doc"), "manual", "R-exts.html")),
+      identical(a, b),
+      any(grepl("café λ", a, fixed = TRUE)),
+      identical(
+        capture.output(RShowDoc("COPYING")),
+        "Plain text still uses the pager."
+      )
+    )
+    cat("capture, native return, and plain pager retained\n")
+result:
+  content:
+    - type: text
+      text: |
+        capture, native return, and plain pager retained
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#absent-anchor")
+result:
+  content:
+    - type: text
+      text: |
+        Error: Unknown manual anchor: R-exts#absent-anchor
+  isError: false
+---
+send:
+  r: |
+    options(browser = function(url, ...) cat("later browser override retained\n"))
+    utils::RShowDoc("R-exts#Grouped-B")
+result:
+  content:
+    - type: text
+      text: |
+        later browser override retained
+  isError: false
+---
+send:
+  r: |
+    error <- tryCatch(utils::RShowDoc("R-exts"), error = conditionMessage)
+    stopifnot(identical(error, "document not found"))
+    cat("missing HTML does not invoke a viewer\n")
+result:
+  content:
+    - type: text
+      text: |
+        missing HTML does not invoke a viewer
+  isError: false

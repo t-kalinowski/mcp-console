@@ -371,7 +371,15 @@ fn description_for_launch(policy: &SandboxSettings, no_sandbox: bool) -> String 
             if entry.get("access").and_then(Value::as_str) == Some("write")
                 && let Some(path) = entry.get("path").and_then(|path| path.get("path"))
             {
-                writable.push(format!("`{path}`"));
+                if Some(path)
+                    == policy
+                        .get("environment")
+                        .and_then(|e| e.get("MCP_CONSOLE_MANUAL_CACHE"))
+                {
+                    writable.push("Console's manual cache".into());
+                } else {
+                    writable.push(format!("`{path}`"));
+                }
             }
         }
     }

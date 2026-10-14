@@ -1,0 +1,99 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+
+        # Writing R Extensions
+
+        [Collection](index.md)
+
+        - [Writing R Extensions](R-exts.md#Top)
+          - [1 Small sections](R-exts.md#Small-sections)
+          - [2 Needle examples](R-exts.md#Needle-examples)
+          - [3 Long Unicode line](R-exts.md#Long-line)
+          - [4 HTML and Markdown examples](R-exts.md#Code-anchors)
+          - [Appendix B Fixture reference](R-exts.md#Appendix-B)
+
+        Read: `RShowDoc("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC and document: `.console$manual("R-exts.md")`
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+
+        # Writing R Extensions
+
+        [Collection](index.md)
+
+        - [Writing R Extensions](R-exts.md#Top)
+          - [1 Small sections](R-exts.md#Small-sections)
+          - [2 Needle examples](R-exts.md#Needle-examples)
+          - [3 Long Unicode line](R-exts.md#Long-line)
+          - [4 HTML and Markdown examples](R-exts.md#Code-anchors)
+          - [Appendix B Fixture reference](R-exts.md#Appendix-B)
+
+        Read: `RShowDoc("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC and document: `.console$manual("R-exts.md")`
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+
+        # Writing R Extensions
+
+        [Collection](index.md)
+
+        - [Writing R Extensions](R-exts.md#Top)
+          - [1 Small sections](R-exts.md#Small-sections)
+          - [2 Needle examples](R-exts.md#Needle-examples)
+          - [3 Long Unicode line](R-exts.md#Long-line)
+          - [4 HTML and Markdown examples](R-exts.md#Code-anchors)
+          - [Appendix B Fixture reference](R-exts.md#Appendix-B)
+
+        Read: `RShowDoc("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC and document: `.console$manual("R-exts.md")`
+  isError: false

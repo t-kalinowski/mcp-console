@@ -1,0 +1,125 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: .console$manual_search("Unanchored reference", manual = "R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Manual search: "Unanchored reference"
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        1 matching sections; results 1–1
+
+        R-exts: Writing R Extensions > 2 Unanchored reference
+          Reference body.
+          Read: RShowDoc("R-exts#console-section-2")
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#console-section-2")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 2 Unanchored reference
+
+        ## 2 Unanchored reference
+
+        Reference body.
+
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+        Reference context. Reference context. Reference context. Reference context.
+
+        Continue: .console$manual("R-exts#console-section-2", start = 87, column = 1)
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts#letter-R")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Index
+
+        | R-only cell | [Child reference](#child) |
+        | S-only cell | Following row. |
+
+
+        Next section: RShowDoc("R-exts#console-section-2")
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#child")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 2 Unanchored reference > 2.1 Child reference
+
+        ### 2.1 Child reference
+
+        The parent link must identify the unanchored heading.
+  isError: false

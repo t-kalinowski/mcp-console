@@ -4,6 +4,7 @@ validation_launches: 0
 identical_worker_launches: 4
 writable_roots:
   - output café 雪
+  - console-cache/mcp-console/manuals
   - CLI cache
 network: restricted
 proxy:

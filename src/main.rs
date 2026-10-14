@@ -220,10 +220,16 @@ fn run_server(
     if no_sandbox && (sandbox_requested || resolver_sandbox_requested) {
         return Err("explicit sandbox or resolver.sandbox permissions require sandboxing; remove them when using --no-sandbox".into());
     }
+    let r_visible = match languages {
+        Some(languages) => languages.r,
+        None => cell::Languages::from_environment()?.r,
+    };
+    let manuals = worker.is_none() && relay.is_none() && r_visible;
     resolver::cache::configure(
         cache,
         no_sandbox,
         python.as_ref(),
+        manuals,
         &mut resolver,
         &mut policy,
     )?;

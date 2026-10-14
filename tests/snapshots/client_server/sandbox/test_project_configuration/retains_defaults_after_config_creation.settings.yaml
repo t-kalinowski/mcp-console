@@ -3,6 +3,7 @@ initially_configured: false
 validation_launches: 0
 identical_worker_launches: 4
 writable_roots:
+  - console-cache/mcp-console/manuals
   - CLI cache
 network: restricted
 proxy: ~

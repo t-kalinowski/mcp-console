@@ -84,6 +84,8 @@ fn initialize(installation: &RInstallation) -> Result<(), String> {
     }
     crate::python::attach_r_adapter()?;
     crate::sql::attach_r()?;
+    harp::parse_eval_base(include_str!("embedded_r/manuals.R"))
+        .map_err(|error| error.to_string())?;
     interrupt::reinstall().map_err(|error| error.to_string())?;
     crate::python::reinstall_services()?;
     Ok(())

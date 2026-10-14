@@ -188,14 +188,19 @@ transcript_normalization:
 scenario: serve initial worker
 runner_configuration:
   network: restricted
+  environment:
+    MCP_CONSOLE_MANUAL_CACHE: <host directory>/console-cache/mcp-console/manuals
   filesystem:
-    kind: restricted
     entries:
       - path:
           type: special
           value:
             kind: root
         access: read
+      - path:
+          type: path
+          path: <host directory>/console-cache/mcp-console/manuals
+        access: write
       - path:
           type: path
           path: <host directory>/output café 雪
@@ -208,6 +213,7 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
+    kind: restricted
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -289,14 +295,19 @@ transcript_normalization:
 scenario: serve restart
 runner_configuration:
   network: restricted
+  environment:
+    MCP_CONSOLE_MANUAL_CACHE: <host directory>/console-cache/mcp-console/manuals
   filesystem:
-    kind: restricted
     entries:
       - path:
           type: special
           value:
             kind: root
         access: read
+      - path:
+          type: path
+          path: <host directory>/console-cache/mcp-console/manuals
+        access: write
       - path:
           type: path
           path: <host directory>/output café 雪
@@ -309,6 +320,7 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
+    kind: restricted
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT
@@ -390,14 +402,19 @@ transcript_normalization:
 scenario: serve failure replacement
 runner_configuration:
   network: restricted
+  environment:
+    MCP_CONSOLE_MANUAL_CACHE: <host directory>/console-cache/mcp-console/manuals
   filesystem:
-    kind: restricted
     entries:
       - path:
           type: special
           value:
             kind: root
         access: read
+      - path:
+          type: path
+          path: <host directory>/console-cache/mcp-console/manuals
+        access: write
       - path:
           type: path
           path: <host directory>/output café 雪
@@ -410,6 +427,7 @@ runner_configuration:
           type: path
           path: <host directory>/future output
         access: write
+    kind: restricted
   macos_seatbelt_profile_extension: |
     ; MCP Console additions to the pinned native macOS sandbox policy.
     ; SPDX-License-Identifier: MIT

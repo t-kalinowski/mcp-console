@@ -8,6 +8,7 @@ pub(crate) fn configure(
     selection: Option<Cache>,
     no_sandbox: bool,
     python: Option<&crate::settings::PythonChoice>,
+    manuals: bool,
     resolver: &mut SandboxSettings,
     worker: &mut SandboxSettings,
 ) -> Result<(), String> {
@@ -16,13 +17,16 @@ pub(crate) fn configure(
     } else {
         Cache::Console
     });
-    if matches!(selection, Cache::Host) {
-        return Ok(());
-    }
     // Console cache contents may have been produced by sandboxed code. Never
     // reuse them in a local session that removes native enforcement.
-    if no_sandbox {
+    if no_sandbox && matches!(selection, Cache::Console) {
         return Err("cache: console requires sandboxing; use cache: host with --no-sandbox".into());
+    }
+    if manuals {
+        configure_manuals(resolver, worker)?;
+    }
+    if matches!(selection, Cache::Host) {
+        return Ok(());
     }
     let explicit_python = python.map_or_else(
         || {
@@ -129,6 +133,167 @@ fn console_root(settings: &SandboxSettings) -> Result<PathBuf, String> {
     } else {
         ".cache/mcp-console"
     }))
+}
+
+/// Capture before dependency-cache redirection changes XDG_CACHE_HOME. Only
+/// this documentation subtree is worker-writable; companion storage is not.
+fn configure_manuals(
+    resolver: &SandboxSettings,
+    worker: &mut SandboxSettings,
+) -> Result<(), String> {
+    let root = console_root(resolver)
+        .ok()
+        .map(|root| root.join("manuals"))
+        .filter(|root| root.to_str().is_some())
+        // Visibility does not imply an available R runtime. An unavailable
+        // documentation cache is diagnosed only when a manual is requested.
+        .filter(|root| prepare_manual_root(root).is_ok());
+    let path = match &root {
+        Some(root) => root.to_str().ok_or("manual cache paths must be UTF-8")?,
+        // Missing or non-UTF-8 host-cache locations do not prevent unrelated
+        // runtime use. Manual access reports the unavailable location on use.
+        None => "",
+    };
+    let environment = worker.entry("environment").or_insert_with(|| json!({}));
+    if let Value::Object(environment) = environment {
+        environment.insert("MCP_CONSOLE_MANUAL_CACHE".into(), path.into());
+    }
+    if let Some(root) = root {
+        let filesystem = worker.entry("filesystem").or_insert_with(|| json!({}));
+        if let Value::Object(filesystem) = filesystem {
+            let entries = filesystem.entry("entries").or_insert_with(|| json!([]));
+            if let Value::Array(entries) = entries {
+                entries.push(writable_cache_entry(&root)?);
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn restore_directory_access(
+    path: &std::path::Path,
+    metadata: &std::fs::Metadata,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
+        let mode = metadata.permissions().mode();
+        if mode & 0o700 != 0o700 {
+            let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+            // Match tree-access restoration: chmod must not follow a link
+            // substituted after the caller checked directory metadata.
+            if unsafe {
+                libc::fchmodat(
+                    libc::AT_FDCWD,
+                    path.as_ptr(),
+                    (mode | 0o700) as libc::mode_t,
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            } < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+    }
+    #[cfg(windows)]
+    // Clearing the Windows read-only attribute leaves ACL permissions intact.
+    #[allow(clippy::permissions_set_readonly_false)]
+    if metadata.permissions().readonly() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_WRITE_ATTRIBUTES,
+        };
+        let file = std::fs::File::options()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)?;
+        let mut permissions = file.metadata()?.permissions();
+        permissions.set_readonly(false);
+        file.set_permissions(permissions)?;
+    }
+    Ok(())
+}
+
+fn remove_file_or_directory_link(
+    path: &std::path::Path,
+    _metadata: &std::fs::Metadata,
+) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::FileTypeExt;
+        // Directory symlinks and junctions require directory deletion. Remove
+        // the link itself, without visiting or changing its target.
+        if _metadata.file_type().is_symlink_dir() {
+            return std::fs::remove_dir(path);
+        }
+        if _metadata.is_file() {
+            restore_directory_access(path, _metadata)?;
+        }
+    }
+    std::fs::remove_file(path)
+}
+
+pub(crate) fn remove_entry(path: &std::path::Path) -> std::io::Result<()> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.is_dir() {
+        #[cfg(unix)]
+        crate::local_runtime::restore_directory_tree_access(path)?;
+        // std traverses through no-follow directory handles and deletes relative
+        // to those handles on both Unix and Windows. A peer's replacement of a
+        // checked directory cannot redirect descent to a symlink's target.
+        std::fs::remove_dir_all(path)
+    } else {
+        remove_file_or_directory_link(path, &metadata)
+    }
+}
+
+fn prepare_manual_root(root: &std::path::Path) -> std::io::Result<()> {
+    if let Ok(metadata) = std::fs::symlink_metadata(root)
+        && !metadata.is_dir()
+    {
+        remove_file_or_directory_link(root, &metadata)?;
+    }
+    std::fs::create_dir_all(root)?;
+    let lock = root.with_extension("lock");
+    // Preserve a valid lock inode: another live publisher may hold it. Only
+    // host provisioning can replace invalid entries outside the worker grant.
+    if let Ok(metadata) = std::fs::symlink_metadata(&lock)
+        && !metadata.is_file()
+    {
+        remove_entry(&lock)?;
+    }
+    std::fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock)?;
+    let metadata = std::fs::symlink_metadata(root)?;
+    if !metadata.is_dir() {
+        return Err(std::io::Error::other(
+            "Manual cache root is not a directory",
+        ));
+    }
+    restore_directory_access(root, &metadata)
+}
+
+pub(crate) fn restore_manual_root(settings: &SandboxSettings) -> Result<(), String> {
+    let Some(root) = settings
+        .get("environment")
+        .and_then(|environment| environment.get("MCP_CONSOLE_MANUAL_CACHE"))
+        .and_then(Value::as_str)
+        .filter(|root| !root.is_empty())
+    else {
+        return Ok(());
+    };
+    // The native runner can inspect protected descendants during replacement.
+    // Restore the captured root before retiring the old worker, recreating the
+    // directory and its host-owned lock if a cache cleaner removed them.
+    prepare_manual_root(std::path::Path::new(root)).map_err(|error| error.to_string())
 }
 
 fn environment_path(settings: &SandboxSettings, name: &str) -> Option<PathBuf> {

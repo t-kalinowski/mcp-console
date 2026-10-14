@@ -1,0 +1,69 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+
+        # Writing R Extensions
+
+        [Collection](index.md)
+
+        - [Writing R Extensions](R-exts.md#Top)
+          - [1 Small sections](R-exts.md#Small-sections)
+          - [2 Needle examples](R-exts.md#Needle-examples)
+          - [3 Long Unicode line](R-exts.md#Long-line)
+          - [4 HTML and Markdown examples](R-exts.md#Code-anchors)
+          - [Appendix B Fixture reference](R-exts.md#Appendix-B)
+
+        Read: `RShowDoc("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC and document: `.console$manual("R-exts.md")`
+  isError: false
+---
+send:
+  r: |
+    discard <- capture.output(path <- .console$manual("R-exts"))
+    lock <- paste0(dirname(dirname(path)), ".lock")
+    stopifnot(unlink(lock) != 0L, file.exists(lock))
+    cat("host lock cannot be replaced\n")
+result:
+  content:
+    - type: text
+      text: |
+        host lock cannot be replaced
+  isError: false
+---
+send:
+  control: restart
+result:
+  content:
+    - type: text
+      text: |-
+        [worker stopped: in-memory state lost]
+        [starting new worker]
+        [idle]
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#Grouped-B")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Small sections > 1.2 Grouped B
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](R-lang.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next section: RShowDoc("R-exts#Needle-examples")
+  isError: false

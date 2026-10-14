@@ -1,0 +1,343 @@
+---
+scenario: >-
+  A package author asks whether an exported C symbol is necessarily
+  supported, then checks Rf_allocVector in the API index and reads its
+  allocation contract.
+documentation: >-
+  HTML manuals from the running R installation. The worker uses its
+  ordinary converter and a private cache; external viewers raise errors.
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: |
+    cat("Installed R:", R.version.string, "\n")
+    RShowDoc("R-exts")
+result:
+  content:
+    - type: text
+      text: |
+        Installed R: R version 4.6.1 (2026-06-24) 
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+
+        # Writing R Extensions
+
+        [Collection](index.md)
+
+        - [Writing R Extensions](R-exts.md#Top)
+          - [Acknowledgements](R-exts.md#Acknowledgements)
+          - [1 Creating R packages](R-exts.md#Creating-R-packages)
+          - [2 Writing R documentation files](R-exts.md#Writing-R-documentation-files)
+          - [3 Tidying and profiling R code](R-exts.md#Tidying-and-profiling-R-code)
+          - [4 Debugging](R-exts.md#Debugging)
+          - [5 System and foreign language interfaces](R-exts.md#System-and-foreign-language-interfaces)
+          - [6 The R API: entry points for C code](R-exts.md#The-R-API)
+          - [7 Generic functions and methods](R-exts.md#Generic-functions-and-methods)
+          - [8 Linking GUIs and other front-ends to R](R-exts.md#Linking-GUIs-and-other-front_002dends-to-R)
+          - [Function and variable index](R-exts.md#Function-and-variable-index)
+          - [API index](R-exts.md#API-index)
+          - [Fortran API index](R-exts.md#Fortran-API-index)
+          - [Experimental API index](R-exts.md#Experimental-API-index)
+          - [Embedding API index](R-exts.md#Embedding-API-index)
+          - [Concept index](R-exts.md#Concept-index)
+
+        Read: `RShowDoc("R-exts#original-anchor")`
+        Search: `.console$manual_search("phrase", manual = "R-exts")`
+        Full TOC and document: `.console$manual("R-exts.md")`
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#The-R-API")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 6 The R API: entry points for C code
+
+        ## 6 The R API: entry points for C code
+
+        There are a large number of entry points in the R executable/DLL that can be
+        called from C code (and a few that can be called from Fortran code). Only those
+        documented here are stable enough that they will only be changed with
+        considerable notice.
+
+        As explained elsewhere in this manual, these functions should only be called
+        from the main thread of the R process. (Doing otherwise can result in memory
+        corruption and very hard-to-debug segfaults.)
+
+        The recommended procedure to use these is to include the header file R.h in your
+        C code by
+
+        ```
+        #include <R.h>
+        ```
+
+        This will include several other header files from the directory
+        R_INCLUDE_DIR/R_ext, and there are other header files there that can be included
+        too, but many of the features they contain should be regarded as undocumented
+        and unstable.
+
+        Most of these header files, including all those included by R.h, can be used
+        from C++ code. (However, they cannot safely be included in a `extern "C" { }`
+        block as they may include C++ headers when included from C++ code—and whether
+        this succeeds is system-specific).
+
+        > **Note:** Because R re-maps many of its external names to avoid clashes with
+        > system or user code, it is *essential* to include the appropriate header files
+        > when using these entry points.
+
+        This remapping can cause problems[¹⁶⁴](#FOOT164), and can be eliminated by defining
+        `R_NO_REMAP` (before including any R headers) and prepending ‘Rf_’ to *all* the
+        function names used from Rinternals.h and R_ext/Error.h. These problems can
+        usually be avoided by including other headers (such as system headers and those
+        for external software used by the package) before any R headers. (Headers from
+        other packages may include R headers directly or *via* inclusion from further
+        packages, and may define `R_NO_REMAP` with or without including Rinternals.h.)
+
+        As from R 4.5.0, `R_NO_REMAP` is always defined when the R headers are included
+        from C++ code.
+
+        If you decide to define `R_NO_REMAP` in your code, do use something like
+
+        ```
+        #ifndef R_NO_REMAP
+        # define R_NO_REMAP
+        #endif
+        ```
+
+        to avoid distracting compiler warnings.
+
+        Some of these entry points are declared in header Rmath.h, most of which are
+        remapped there. That remapping can be eliminated by defining `R_NO_REMAP_RMATH`
+        (before including any R headers) and prepending ‘Rf_’ to the function names used
+        from that header except
+
+        ```
+        exp_rand norm_rand unif_rand signrank_free wilcox_free
+        ```
+
+        We can classify the entry points as
+
+        *API*
+          Entry points which are documented in this manual and declared in an installed
+          header file. These can be used in distributed packages and ideally will only
+          be changed after deprecation. See [API index](#API-index).
+        *public*
+          Entry points declared in an installed header file that are exported on all R
+          platforms but are not documented and subject to change without notice. Do not
+          use these in distributed code. Their declarations will eventually be moved out
+          of installed header files.
+        *private*
+          Entry points that are used when building R and exported on all R platforms but
+          are not declared in the installed header files. Do not use these in
+          distributed code.
+        *hidden*
+          Entry points that are where possible (Windows and some modern Unix-alike
+          compilers/loaders when using R as a shared library) not exported.
+        *experimental*
+          Entry points declared in an installed header file that are part of an
+          experimental API, such as R_ext/Altrep.h. These are subject to change, so
+          package authors wishing to use these should be prepared to adapt. See
+          [Experimental API index](#Experimental-API-index).
+        *embedding*
+          Entry points intended primarily for embedding and creating new front-ends. It
+          is not clear that this needs to be a separate category but it may be useful to
+          keep it separate for now. See [Embedding API index](#Embedding-API-index).
+
+        If you would like to use an entry point or variable that is not identified as
+        part of the API in this document, or is currently hidden, you can make a request
+        for it to be made available. Entry points or variables not identified as in the
+        API may be changed or removed with no notice as part of efforts to improve
+        aspects of R.
+
+
+        Continue: .console$manual("R-exts#The-R-API", start = 13833, column = 1)
+  isError: false
+---
+send:
+  r: .console$manual("R-exts#The-R-API", start = 13833, column = 1)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 6 The R API: entry points for C code
+
+        **Work in progress:** Currently Entry points in the API are identified in the source
+        for this document with `@apifun`, `@eapifun`, and `@embfun` entries. Similarly,
+        `@apivar`, `@eapivar`, and `@embvar` identify variables, and `@apihdr`, `@eapihdr`, and
+        `@embhdr` identify headers in the API. `@forfun` identifies entry points to be
+        called as Fortran subroutines. This could be used for programmatic extraction,
+        but the specific format is work in progress and even the way this document is
+        produced is subject to change.
+
+        * [Memory allocation](#Memory-allocation)
+        * [Error signaling](#Error-signaling)
+        * [Random number generation](#Random-numbers)
+        * [Missing and IEEE special values](#Missing-and-IEEE-values)
+        * [Printing](#Printing)
+        * [Calling C from Fortran and vice versa](#Calling-C-from-Fortran-and-vice-versa)
+        * [Numerical analysis subroutines](#Numerical-analysis-subroutines)
+        * [Optimization](#Optimization)
+        * [Integration](#Integration)
+        * [Utility functions](#Utility-functions)
+        * [Linear algebra](#Linear-algebra)
+        * [Re-encoding](#Re_002dencoding)
+        * [Condition handling and cleanup code](#Condition-handling-and-cleanup-code)
+        * [Allowing interrupts](#Allowing-interrupts)
+        * [C stack checking](#C-stack-checking)
+        * [Custom serialization input and output](#Custom-serialization-input-and-output)
+        * [Platform and version information](#Platform-and-version-information)
+        * [Inlining C functions](#Inlining-C-functions)
+        * [Controlling visibility](#Controlling-visibility)
+        * [Using these functions in your own C code](#Standalone-Mathlib)
+        * [Organization of header files](#Organization-of-header-files)
+        * [Hash tables](#Hash-tables)
+        * [Moving into C API compliance](#Moving-into-C-API-compliance)
+
+        ### 6.1 Memory allocation
+
+        There are two types of memory allocation available to the C programmer, one in
+        which R manages the clean-up and the other in which users have full control (and
+        responsibility).
+
+        These functions are declared in header R_ext/RS.h which is included by R.h.
+
+        * [Transient storage allocation](#Transient-storage-allocation)
+        * [User-controlled memory](#User_002dcontrolled-memory)
+
+        #### 6.1.1 Transient storage allocation
+
+        Here R will reclaim the memory at the end of the call to `.C`, `.Call` or `.External`.
+        Use
+
+        ```
+        char *R_alloc(size_t n, int size)
+        ```
+
+        which allocates n units of size bytes each. A typical usage (from package **stats**)
+        is
+
+        ```
+        x = (int *) R_alloc(nrows(merge)+2, sizeof(int));
+        ```
+
+        (`size_t` is defined in stddef.h which the header defining `R_alloc` includes.)
+
+        There is a similar call, `S_alloc` (named for compatibility with older versions of
+        S) which zeroes the memory allocated,
+
+        ```
+        char *S_alloc(long n, int size)
+        ```
+
+        and
+
+        ```
+        char *S_realloc(char *p, long new, long old, int size)
+        ```
+
+        which (for `new > old`) changes the allocation size from old to new units, and
+        zeroes the additional units. NB: these calls are best avoided as `long` is
+        insufficient for large memory allocations on 64-bit Windows (where it is limited
+        to 2^31-1 bytes).
+
+        This memory is taken from the heap, and released at the end of the `.C`, `.Call` or
+        `.External` call. Users can also manage it, by noting the current position with a
+        call to `vmaxget` and subsequently clearing memory allocated by a call to `vmaxset`.
+        An example might be
+
+        ```
+        void *vmax = vmaxget()
+        // a loop involving the use of R_alloc at each iteration
+        vmaxset(vmax)
+        ```
+
+        This is only recommended for experts.
+
+        Note that this memory will be freed on error or user interrupt (if allowed: see
+        [Allowing interrupts](#Allowing-interrupts)).
+
+        The memory returned is only guaranteed to be aligned as required for `double`
+        pointers: take precautions if casting to a pointer which needs more. There is
+        also
+
+        ```
+        long double *R_allocLD(size_t n)
+        ```
+
+        which is guaranteed to have the 16-byte alignment needed for `long double`
+        pointers on some platforms.
+
+        These functions should only be used in code called by `.C` etc, never from
+        front-ends. They are not thread-safe.
+
+        #### 6.1.2 User-controlled memory
+
+        The other form of memory allocation is an interface to `malloc`, the interface
+        providing R error signaling. This memory lasts until freed by the user and is
+        additional to the memory allocated for the R workspace.
+
+        The interface macros are
+
+        ```
+        type* R_Calloc(size_t n, type)
+        type* R_Realloc(any *p, size_t n, type)
+        void R_Free(any *p)
+        ```
+
+
+        Continue: .console$manual("R-exts#The-R-API", start = 13979, column = 1)
+  isError: false
+---
+send:
+  r: |
+    # Inspect the same cached index with ordinary R file tools.
+    discard <- capture.output(path <- .console$manual("R-exts"))
+    writeLines(grep(
+      "^\\|.*`Rf_allocVector`",
+      readLines(path, encoding = "UTF-8"),
+      value = TRUE
+    ))
+result:
+  content:
+    - type: text
+      text: |
+        | [`Rf_allocVector`](#index-Rf_005fallocVector-1) | [Allocating storage](#Allocating-storage) |
+        | [`Rf_allocVector`](#index-Rf_005fallocVector) | [Allocating storage](#Allocating-storage) |
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts#index-Rf_005fallocVector")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 5 System and foreign language interfaces > 5.9 Handling R objects in C > 5.9.2 Allocating storage
+
+        One that is commonly used is `Rf_allocVector`, the C-level equivalent of R-level
+        `vector()` and its wrappers such as `integer()` and `character()`. One distinction is
+        that whereas the R functions always initialize the elements of the vector,
+        `Rf_allocVector` only does so for lists, expressions and character vectors (the
+        cases where the elements are themselves R objects). Other useful allocation
+        functions are `Rf_alloc3DArray`, `Rf_allocArray`, and `Rf_allocMatrix`.
+
+        When creating new result objects it can be useful to fill them in with values
+        from an existing object. The functions `Rf_copyVector` and `Rf_copyMatrix` can be
+        used for this. `Rf_copyMostAttributes` can also simplify setting up a result
+        object; it is used internally for results of arithmetic operations.
+
+        If storage is required for C objects during the calculations this is best
+        allocated by calling `R_alloc`; see [Memory allocation](#Memory-allocation). All of these memory
+        allocation routines do their own error-checking, so the programmer may assume
+        that they will raise an error and not return if the memory cannot be allocated.
+
+
+        Next section: RShowDoc("R-exts#Details-of-R-types")
+  isError: false

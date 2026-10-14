@@ -69,6 +69,15 @@ result:
         [running; poll with an empty send]
   isError: false
 ---
+send: {}
+result:
+  content:
+    - type: text
+      text: |-
+        [input requested: "replacement> "]
+        [waiting for stdin]
+  isError: false
+---
 send:
   stdin: |
     replacement still usable
@@ -76,7 +85,6 @@ result:
   content:
     - type: text
       text: |
-        [input requested: "replacement> "]
         'replacement still usable'
   isError: false
 ---

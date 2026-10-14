@@ -70,9 +70,10 @@ result:
         Evaluated code can read host files subject to configured restrictions
         and can access the network subject to the launcher's proxy settings.
         Writable locations: private `TMPDIR`, `"<workspace>/output café 雪"`,
-        `"<writable-root>"`; subject to more specific read/deny rules. Package
-        preparation may execute installation or build code with separate
-        filesystem and network permissions; use only trusted dependencies.
+        Console's manual cache, `"<writable-root>"`; subject to more specific
+        read/deny rules. Package preparation may execute installation or build
+        code with separate filesystem and network permissions; use only trusted
+        dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false
@@ -85,11 +86,17 @@ result:
               CRAN packages normally through `library()`, `require()`,
               `requireNamespace()`, `loadNamespace()`, `::`, or `:::`; managed
               sessions prepare missing packages on first use. Avoid availability
-              probes or `install.packages()`. `?pkg::topic` and `help.search()` print
-              installed help; `vignette()` prints rendered HTML text or labeled
-              UTF-8/ASCII source for other formats. Capture long documentation with
-              `text <- capture.output(print(?pkg::topic))`, then print line ranges
-              with `writeLines()`. Access Python globals through `py$name`.
+              probes or `install.packages()`. `?pkg::topic` reads function reference;
+              `help.search()` discovers package help; `vignette()` prints rendered
+              HTML text or labeled UTF-8/ASCII source for other formats. Capture long
+              documentation with `text <- capture.output(print(?pkg::topic))`, then
+              print line ranges with `writeLines()`. Use manuals for language
+              semantics, the C API, and package authoring. `RShowDoc("R-exts")` prints
+              an installed manual TOC and the complete Markdown cache path;
+              `RShowDoc("R-exts#original-anchor")` reads a section. Search manual
+              bodies with `.console$manual_search("phrase")`. Follow the printed
+              read/continuation commands; `.console$manual()` lists the collection and
+              cache paths. Access Python globals through `py$name`.
               `.console$sql_connection()` returns the active native DBI connection for
               DBI/dplyr, or errors if another runtime owns SQL. Select a user-owned
               DBI connection for SQL cells with `.console$sql_connection(connection)`;

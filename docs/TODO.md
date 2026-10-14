@@ -57,6 +57,10 @@ Audit through full-suite capability diagnostics; see [Windows parity](WINDOWS.md
 Reproduce against current tooling before removing the tested Python 3.13 recommendation.
 This concerns the test runner, not a blanket claim that Console cannot embed later Python versions.
 
+**SP-5 — Preserve Unicode R source literals under the native Windows C locale.** On R 4.6.1 with `LC_ALL=C`, non-ASCII literals submitted through Console can be interpreted as native bytes: the manual-search query `café λ` becomes `cafC) N;`, and comparisons involving those literals fail.
+The manual suite passes with `LC_ALL=.UTF-8`; directory-link repair and qualified manual navigation pass under `C`.
+Investigate R source-string encoding separately from documentation conversion.
+
 ## Documentation and agent usability
 
 **DX-1 — Measure tool-description changes with agent evaluations.** This documentation refactor does not change advertised tool prose.

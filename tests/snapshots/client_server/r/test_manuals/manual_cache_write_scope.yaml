@@ -1,0 +1,15 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: |
+    discard <- capture.output(path <- .console$manual())
+    parent <- dirname(dirname(dirname(path)))
+    stopifnot(!suppressWarnings(file.create(file.path(parent, "write-sentinel"))))
+    cat("manual cache is writable; its parent is read-only\n")
+result:
+  content:
+    - type: text
+      text: |
+        manual cache is writable; its parent is read-only
+  isError: false

@@ -71,6 +71,10 @@ CI pins uv's Python catalogue so interpreter-dependent tracebacks and debugger t
 A focused local pass or capability skip does not validate another platform.
 Report exact commands and missing coverage rather than “all tests pass.”
 
+For installed R manual validation, run `scripts/with-checkout uv run --script tests/manual_workflows.py --output /tmp/console-manual-workflows` after building the checkout.
+It exercises discovery, reading, and search against the running R installation through direct and sandboxed Console sessions, asserts the workflow results, and records complete YAML exchanges.
+The [sample recordings](../examples/r-manuals/README.md) retain the actual documentation version; synthetic fixtures provide deterministic regression snapshots.
+
 ### Selecting and sizing test runs
 
 Selectors retain their scope under every profile.

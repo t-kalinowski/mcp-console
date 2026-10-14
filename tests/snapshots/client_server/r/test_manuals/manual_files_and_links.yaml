@@ -1,0 +1,42 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: .console$manual()
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: index.md
+
+        # Installed R manuals
+
+        R version <installed>
+
+        - [Writing R Extensions (R-exts)](R-exts.md)
+        - [R Language Definition (R-lang)](R-lang.md)
+
+        Read: `RShowDoc("R-exts")`
+        Search: `.console$manual_search("phrase")`
+
+        Each manual has one complete Markdown file. The manifest maps original anchors and section ranges into those same files.
+  isError: false
+---
+send:
+  r: |
+    discard <- capture.output(path <- .console$manual("R-exts#Grouped-B"))
+    text <- readLines(path, encoding = "UTF-8")
+    stopifnot(
+      basename(path) == "R-exts.md",
+      any(grepl('<a id="Grouped-B"></a>', text, fixed = TRUE)),
+      any(grepl("café λ", text, fixed = TRUE)),
+      any(grepl("needle", text, ignore.case = TRUE))
+    )
+    cat("file access and R navigation use the same cache\n")
+result:
+  content:
+    - type: text
+      text: |
+        file access and R navigation use the same cache
+  isError: false

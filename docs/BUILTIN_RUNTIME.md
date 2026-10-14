@@ -73,6 +73,90 @@ Custom pagers receive converted HTML through `file.show()` with its standard enc
 A pager that returns before reading the file must remove it after use.
 Console removes the temporary file if a function pager raises an error.
 
+### Built-in R manuals
+
+Use `?pkg::topic` or `help()` for a known function's arguments, defaults, and examples.
+Use `help.search()` or `??` to discover package help by its indexed metadata.
+The manuals provide broader explanations of language semantics, the C API, package authoring, and data interchange.
+For example, the function reference describes function definitions, while the language manual explains how default and supplied arguments are evaluated.
+
+`.console$manual()` lists the installed HTML manuals and the persistent Markdown cache location.
+No R client package or filesystem tool is required.
+For example:
+
+```r
+RShowDoc("R-exts")
+RShowDoc("R-exts#Registering-native-routines")
+.console$manual_search("native routines", manual = "R-exts")
+```
+
+`RShowDoc()` shows a compact TOC or resolves an original HTML anchor; qualified `utils::RShowDoc()` calls behave the same way and retain their native invisible return value.
+Section navigation and search hits use `RShowDoc()` when the match is visible in the default preview; Console-specific read commands handle deeper matches, document ranges, and continuations.
+Console handles only installed manual HTML through R's browser option.
+On R versions before 4.6, a compatibility adapter selects installed HTML manuals and passes their anchors to the same browser hook.
+Other documentation calls retain their existing behavior, plain text uses the pager, and later browser-option overrides take precedence.
+PDF extraction is unavailable.
+
+`.console$manual(topic = "", start = 1L, lines = 0L, column = 1L)` reads a manual, original anchor, or collection-relative Markdown filename.
+An empty topic lists the collection; a manual name shows its compact TOC.
+Use `.console$manual("R-exts.md")` for the full TOC and document.
+Reading returns the complete cache filename invisibly and prints bounded UTF-8 previews with heading context and an exact continuation command.
+An anchor selects its original location and the rest of that section, including subsections, up to the next heading at the same or higher level.
+Short subsections appear together; larger sections continue through the same topic.
+Previews prefer paragraph and block boundaries, keeping a heading with its following body.
+Previews usually contain up to 4.5 KiB of body text, leaving room for context and commands under Console's 8 KiB response limit.
+The displayed `File` path is relative to the displayed `Cache` directory.
+`start` and `lines` select one-based document lines; `lines = 0L` reads to the response budget.
+`column` is a one-based character position for continuing an unusually long line.
+The complete file preserves code blocks and tables; partial code previews repeat only their enclosing fences.
+Compact TOC continuations use positions within that displayed outline.
+Reading and search work with `capture.output()`.
+
+`.console$manual_search(query, manual = "", start = 1L, limit = 5L)` performs local, case-insensitive literal matching.
+Matching ignores inline formatting and link destinations and normalizes whitespace, so phrases can span rendered line wraps; literal code remains searchable.
+Read commands retain document coordinates.
+This searches manual bodies; `help.search()` and `??` retain their package-documentation metadata searches.
+An empty `manual` searches the collection.
+Heading matches come first; each logical section appears at most once, with its section number, heading path, a body excerpt, and a read command.
+Results are bounded; follow the printed continuation command for more matches.
+`limit` accepts 1–20 results, subject to the response budget.
+Queries are limited to 1 KiB of UTF-8 and 2 KiB when quoted in continuation commands.
+Search uses the indexed body ranges in the complete documents, excluding TOCs and generated navigation.
+
+The first manual operation converts the installed collection together; R startup does not render it.
+Console records the R installation and version, source paths and SHA-256 content fingerprints, and conversion-format version in `manifest.json`.
+Each manual has one complete Markdown file, such as `R-exts.md`, beside a compact collection `index.md`.
+The manifest contains heading hierarchy, inclusive one-based section line ranges, and original-anchor line locations; it does not duplicate body text.
+Completed entries persist across cells and sessions and are published atomically.
+Changed inputs select a new entry; old entries remain inspectable.
+On first manual use, each worker derives its model and expected files from the installed sources, then reuses that model while the inputs are unchanged.
+Before reuse, Console checks the flat directory inventory and compares every document, the collection index, and the manifest with those source-derived projections.
+Missing, modified, or unexpected entries cause the collection to be regenerated.
+An identity replaced by a file is also removed and regenerated.
+Sessions serialize validation, repair, and publication through a host-created OS file lock outside the worker-writable manuals subtree.
+The lock is advisory: shell-capable submitted code can acquire it, so manual operations report `Manual cache is busy; retry the manual operation` on contention rather than blocking the interpreter.
+Cache comparisons bound reads to the expected content length; repair restores directory access before removal and reclaims abandoned staging for the requested identity.
+Cache repair traverses directories through no-follow handles, so concurrent symlink replacements cannot redirect deletion; this includes Windows junctions.
+Console restores owner access to the manuals root before worker launch and before cache traversal.
+Restart recreates the root and its host-owned lock if a cache cleaner removed them, and replaces a non-directory root or non-regular lock; valid lock inodes are preserved for active publishers.
+The collection still materializes only when requested.
+R reading and search use the source-derived model, so concurrent cache edits cannot replace the displayed documentation.
+The [platform cache policy](RESOLVER.md#cache-locations) determines the root, independently of `MCP_CONSOLE_HOME`.
+The worker can write this manual subtree without write access to the broader Console cache.
+An unavailable manual cache does not prevent Console startup; manual access reports the unavailable location on use.
+Treat completed entries as immutable; removing an entry regenerates it on next use.
+
+Document size does not determine reading size: Console selects bounded views from the complete Markdown and its derived index.
+Explicit HTML anchors preserve original identities.
+Same-manual links use `#original-anchor`; cross-manual links use `R-lang.md#original-anchor` within the generated collection.
+Table anchors stay beside their original rows; headings without an HTML identity receive a cache-local anchor for TOCs, parent links, and heading search.
+External links remain intact; unavailable local targets are labeled rather than linked to invented files.
+Source HTML must be UTF-8; scripts and styles are excluded and assets are not fetched or executed.
+
+The displayed paths also work with ordinary filesystem tools, `readLines(path, encoding = "UTF-8")`, and `grep()`.
+Each manual's body occurs once in the collection, so ordinary recursive text searches have no chunk or export copies to exclude.
+No separate complete export is needed.
+
 ## Python
 
 Python cells execute in persistent `__main__.__dict__`; the final expression is displayed.

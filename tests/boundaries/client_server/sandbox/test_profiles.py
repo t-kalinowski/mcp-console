@@ -80,6 +80,7 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
         )
         capture = root / "launches.jsonl"
         environment = os.environ | {
+            "XDG_CACHE_HOME": str(root / "console-cache"),
             LOADER_VARIABLE: str(build_interposer(root, "runner_configuration")),
             "MCP_CONSOLE_TEST_RUNNER_CONFIGURATION": str(capture),
             "TEST_WORKSPACE": str(host),
@@ -125,6 +126,13 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
         assert policy["filesystem"]["entries"][1:] == [
             {"path": {"type": "path", "path": str(host / ".claude")}, "access": "read"},
             {"path": {"type": "path", "path": str(host)}, "access": "write"},
+            {
+                "path": {
+                    "type": "path",
+                    "path": str(root / "console-cache/mcp-console/manuals"),
+                },
+                "access": "write",
+            },
         ], policy
         for entry in transcript:
             if isinstance(result := entry.get("result"), dict):

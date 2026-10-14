@@ -1,0 +1,5 @@
+---
+unavailable_r_requires_manual_cache: false
+resolution:
+  - disabled
+  - automatic

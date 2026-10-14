@@ -622,6 +622,8 @@ def test_compacts_each_polled_output_segment(
             without_elapsed(last_tool_text(client))
             == "\n[running; poll with an empty send]"
         )
+        start = wait_for_marker(temporary_path, "zod-start-redraw", client)
+        release_fixture_checkpoint(start, client=client)
         marker = wait_for_marker(
             temporary_path,
             "zod-redraw-ready",
@@ -638,7 +640,7 @@ def test_compacts_each_polled_output_segment(
             == "\n[running; poll with an empty send]"
         )
 
-        (marker.parent / "zod-release-redraw").touch()
+        release_fixture_checkpoint(marker.parent / "zod-release-redraw", client=client)
         client.send(timeout_ms=3_000)
         assert last_tool_text(client) == "output 100%\n"
         compact_previews(client, "x", "y", "z", "s", "p", "ab")

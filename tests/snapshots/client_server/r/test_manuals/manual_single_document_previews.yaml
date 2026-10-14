@@ -1,0 +1,366 @@
+---
+!same-as r-only MCP initialization for this execution mode
+---
+send:
+  r: RShowDoc("R-exts#Small-sections")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 1 Small sections
+
+        ## 1 Small sections
+
+        Parent-only text.
+
+        ### 1.1 Grouped A
+
+        A short needle introduction. See [B](#Grouped-B), [language](R-lang.md#Shared-anchor), and [external](https://example.org/external).
+
+        ### 1.2 Grouped B
+
+        A second needle introduction with café λ. [Reference](R-lang.md#Shared-anchor). [Missing local reference] [unavailable local target: missing.html#absent].
+
+
+        Next section: RShowDoc("R-exts#Needle-examples")
+  isError: false
+---
+send:
+  r: RShowDoc("R-exts#Large-section")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 2 Needle examples > 2.1 Large section
+
+        ### 2.1 Large section
+
+        paragraph-000: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-001: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-002: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-003: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-004: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-005: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-006: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-007: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-008: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-009: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-010: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-011: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-012: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-013: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-014: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-015: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-016: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-017: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-018: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-019: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-020: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-021: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+        paragraph-022: Needle details about a coherent example and its native interface.
+        This paragraph is intentionally long enough to exercise paragraph boundaries
+        without overlapping any body text.
+
+
+        Continue: .console$manual("R-exts#Large-section", start = 148, column = 1)
+  isError: false
+---
+send:
+  r: utils::RShowDoc("R-exts#Oversized-example")
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
+
+        ### 2.2 Oversized example
+
+        ```
+          code-line-000 <- "example output stays indented and complete"
+          code-line-001 <- "example output stays indented and complete"
+          code-line-002 <- "example output stays indented and complete"
+          code-line-003 <- "example output stays indented and complete"
+          code-line-004 <- "example output stays indented and complete"
+          code-line-005 <- "example output stays indented and complete"
+          code-line-006 <- "example output stays indented and complete"
+          code-line-007 <- "example output stays indented and complete"
+          code-line-008 <- "example output stays indented and complete"
+          code-line-009 <- "example output stays indented and complete"
+          code-line-010 <- "example output stays indented and complete"
+          code-line-011 <- "example output stays indented and complete"
+          code-line-012 <- "example output stays indented and complete"
+          code-line-013 <- "example output stays indented and complete"
+          code-line-014 <- "example output stays indented and complete"
+          code-line-015 <- "example output stays indented and complete"
+          code-line-016 <- "example output stays indented and complete"
+          code-line-017 <- "example output stays indented and complete"
+          code-line-018 <- "example output stays indented and complete"
+          code-line-019 <- "example output stays indented and complete"
+          code-line-020 <- "example output stays indented and complete"
+          code-line-021 <- "example output stays indented and complete"
+          code-line-022 <- "example output stays indented and complete"
+          code-line-023 <- "example output stays indented and complete"
+          code-line-024 <- "example output stays indented and complete"
+          code-line-025 <- "example output stays indented and complete"
+          code-line-026 <- "example output stays indented and complete"
+          code-line-027 <- "example output stays indented and complete"
+          code-line-028 <- "example output stays indented and complete"
+          code-line-029 <- "example output stays indented and complete"
+          code-line-030 <- "example output stays indented and complete"
+          code-line-031 <- "example output stays indented and complete"
+          code-line-032 <- "example output stays indented and complete"
+          code-line-033 <- "example output stays indented and complete"
+          code-line-034 <- "example output stays indented and complete"
+          code-line-035 <- "example output stays indented and complete"
+          code-line-036 <- "example output stays indented and complete"
+          code-line-037 <- "example output stays indented and complete"
+          code-line-038 <- "example output stays indented and complete"
+          code-line-039 <- "example output stays indented and complete"
+          code-line-040 <- "example output stays indented and complete"
+          code-line-041 <- "example output stays indented and complete"
+          code-line-042 <- "example output stays indented and complete"
+          code-line-043 <- "example output stays indented and complete"
+          code-line-044 <- "example output stays indented and complete"
+          code-line-045 <- "example output stays indented and complete"
+          code-line-046 <- "example output stays indented and complete"
+          code-line-047 <- "example output stays indented and complete"
+          code-line-048 <- "example output stays indented and complete"
+          code-line-049 <- "example output stays indented and complete"
+          code-line-050 <- "example output stays indented and complete"
+          code-line-051 <- "example output stays indented and complete"
+          code-line-052 <- "example output stays indented and complete"
+          code-line-053 <- "example output stays indented and complete"
+          code-line-054 <- "example output stays indented and complete"
+          code-line-055 <- "example output stays indented and complete"
+          code-line-056 <- "example output stays indented and complete"
+          code-line-057 <- "example output stays indented and complete"
+          code-line-058 <- "example output stays indented and complete"
+          code-line-059 <- "example output stays indented and complete"
+          code-line-060 <- "example output stays indented and complete"
+          code-line-061 <- "example output stays indented and complete"
+          code-line-062 <- "example output stays indented and complete"
+          code-line-063 <- "example output stays indented and complete"
+          code-line-064 <- "example output stays indented and complete"
+          code-line-065 <- "example output stays indented and complete"
+          code-line-066 <- "example output stays indented and complete"
+          code-line-067 <- "example output stays indented and complete"
+          code-line-068 <- "example output stays indented and complete"
+        ```
+
+        Continue: .console$manual("R-exts#Oversized-example", start = 462, column = 1)
+  isError: false
+---
+send:
+  r: .console$manual("R-exts#Oversized-example", start = 462, column = 1)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
+
+        ```
+          code-line-069 <- "example output stays indented and complete"
+          code-line-070 <- "example output stays indented and complete"
+          code-line-071 <- "example output stays indented and complete"
+          code-line-072 <- "example output stays indented and complete"
+          code-line-073 <- "example output stays indented and complete"
+          code-line-074 <- "example output stays indented and complete"
+          code-line-075 <- "example output stays indented and complete"
+          code-line-076 <- "example output stays indented and complete"
+          code-line-077 <- "example output stays indented and complete"
+          code-line-078 <- "example output stays indented and complete"
+          code-line-079 <- "example output stays indented and complete"
+          code-line-080 <- "example output stays indented and complete"
+          code-line-081 <- "example output stays indented and complete"
+          code-line-082 <- "example output stays indented and complete"
+          code-line-083 <- "example output stays indented and complete"
+          code-line-084 <- "example output stays indented and complete"
+          code-line-085 <- "example output stays indented and complete"
+          code-line-086 <- "example output stays indented and complete"
+          code-line-087 <- "example output stays indented and complete"
+          code-line-088 <- "example output stays indented and complete"
+          code-line-089 <- "example output stays indented and complete"
+          code-line-090 <- "example output stays indented and complete"
+          code-line-091 <- "example output stays indented and complete"
+          code-line-092 <- "example output stays indented and complete"
+          code-line-093 <- "example output stays indented and complete"
+          code-line-094 <- "example output stays indented and complete"
+          code-line-095 <- "example output stays indented and complete"
+          code-line-096 <- "example output stays indented and complete"
+          code-line-097 <- "example output stays indented and complete"
+          code-line-098 <- "example output stays indented and complete"
+          code-line-099 <- "example output stays indented and complete"
+          code-line-100 <- "example output stays indented and complete"
+          code-line-101 <- "example output stays indented and complete"
+          code-line-102 <- "example output stays indented and complete"
+          code-line-103 <- "example output stays indented and complete"
+          code-line-104 <- "example output stays indented and complete"
+          code-line-105 <- "example output stays indented and complete"
+          code-line-106 <- "example output stays indented and complete"
+          code-line-107 <- "example output stays indented and complete"
+          code-line-108 <- "example output stays indented and complete"
+          code-line-109 <- "example output stays indented and complete"
+          code-line-110 <- "example output stays indented and complete"
+          code-line-111 <- "example output stays indented and complete"
+          code-line-112 <- "example output stays indented and complete"
+          code-line-113 <- "example output stays indented and complete"
+          code-line-114 <- "example output stays indented and complete"
+          code-line-115 <- "example output stays indented and complete"
+          code-line-116 <- "example output stays indented and complete"
+          code-line-117 <- "example output stays indented and complete"
+          code-line-118 <- "example output stays indented and complete"
+          code-line-119 <- "example output stays indented and complete"
+          code-line-120 <- "example output stays indented and complete"
+          code-line-121 <- "example output stays indented and complete"
+          code-line-122 <- "example output stays indented and complete"
+          code-line-123 <- "example output stays indented and complete"
+          code-line-124 <- "example output stays indented and complete"
+          code-line-125 <- "example output stays indented and complete"
+          code-line-126 <- "example output stays indented and complete"
+          code-line-127 <- "example output stays indented and complete"
+          code-line-128 <- "example output stays indented and complete"
+          code-line-129 <- "example output stays indented and complete"
+          code-line-130 <- "example output stays indented and complete"
+          code-line-131 <- "example output stays indented and complete"
+          code-line-132 <- "example output stays indented and complete"
+          code-line-133 <- "example output stays indented and complete"
+          code-line-134 <- "example output stays indented and complete"
+          code-line-135 <- "example output stays indented and complete"
+          code-line-136 <- "example output stays indented and complete"
+          code-line-137 <- "example output stays indented and complete"
+          code-line-138 <- "example output stays indented and complete"
+        ```
+
+        Continue: .console$manual("R-exts#Oversized-example", start = 532, column = 1)
+  isError: false
+---
+send:
+  r: .console$manual("R-exts#Oversized-example", start = 532, column = 1)
+result:
+  content:
+    - type: text
+      text: |
+        Cache: <fixture>/cache/mcp-console/manuals/<identity>
+        File: R-exts.md
+        Location: Writing R Extensions > 2 Needle examples > 2.2 Oversized example
+
+        ```
+          code-line-139 <- "example output stays indented and complete"
+          code-line-140 <- "example output stays indented and complete"
+          code-line-141 <- "example output stays indented and complete"
+          code-line-142 <- "example output stays indented and complete"
+          code-line-143 <- "example output stays indented and complete"
+          code-line-144 <- "example output stays indented and complete"
+          code-line-145 <- "example output stays indented and complete"
+          code-line-146 <- "example output stays indented and complete"
+          code-line-147 <- "example output stays indented and complete"
+          code-line-148 <- "example output stays indented and complete"
+          code-line-149 <- "example output stays indented and complete"
+          code-line-150 <- "example output stays indented and complete"
+          code-line-151 <- "example output stays indented and complete"
+          code-line-152 <- "example output stays indented and complete"
+          code-line-153 <- "example output stays indented and complete"
+          code-line-154 <- "example output stays indented and complete"
+          code-line-155 <- "example output stays indented and complete"
+          code-line-156 <- "example output stays indented and complete"
+          code-line-157 <- "example output stays indented and complete"
+          code-line-158 <- "example output stays indented and complete"
+          code-line-159 <- "example output stays indented and complete"
+        ```
+
+        After the complete coherent code example.
+
+
+        Next section: RShowDoc("R-exts#Long-line")
+  isError: false
+---
+send:
+  r: |
+    preview <- capture.output(path <- .console$manual("R-exts#Grouped-B"))
+    text <- readLines(path, encoding = "UTF-8")
+    stopifnot(
+      basename(path) == "R-exts.md",
+      any(grepl("café λ", preview, fixed = TRUE)),
+      any(grepl("code-line-159", text, fixed = TRUE))
+    )
+    cat("one file supports capture and ordinary line reads\n")
+result:
+  content:
+    - type: text
+      text: |
+        one file supports capture and ordinary line reads
+  isError: false

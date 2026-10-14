@@ -1,0 +1,8 @@
+---
+non_r_sessions_require_manual_cache: false
+languages:
+  - python
+  - sql
+sources:
+  - environment
+  - settings
