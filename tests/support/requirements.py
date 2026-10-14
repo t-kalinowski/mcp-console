@@ -1,5 +1,6 @@
 """Capabilities of the implemented runtime and of the host test facilities."""
 
+import locale
 import os
 import platform
 import shutil
@@ -45,6 +46,14 @@ R = Requirement(
         )
     ),
     "requires R_HOME or R on PATH",
+)
+# Discovery reads a declaration; the Console case verifies actual translations.
+R_FRENCH_MESSAGES = Requirement(
+    "R French messages",
+    bool(os.environ.get("R_HOME"))
+    and os.environ.get("MCP_CONSOLE_TEST_R_FRENCH_MESSAGES") == "1",
+    "requires explicit R_HOME and MCP_CONSOLE_TEST_R_FRENCH_MESSAGES=1 "
+    "for a known French-translation-enabled R message locale",
 )
 SANDBOX = Requirement(
     "sandbox",
@@ -175,6 +184,25 @@ def gnu_tar() -> Requirement:
         else ""
     )
     return Requirement("GNU tar", "GNU tar" in version, "requires GNU tar on PATH")
+
+
+NATIVE_EURO_LOCALE = (
+    "English_United States.1252" if os.name == "nt" else "en_US.ISO8859-15"
+)
+
+
+def native_euro_locale() -> Requirement:
+    previous = locale.setlocale(locale.LC_CTYPE)
+    try:
+        locale.setlocale(locale.LC_CTYPE, NATIVE_EURO_LOCALE)
+        available = True
+    except locale.Error:
+        available = False
+    finally:
+        locale.setlocale(locale.LC_CTYPE, previous)
+    return Requirement(
+        "native euro locale", available, f"requires {NATIVE_EURO_LOCALE}"
+    )
 
 
 def joblib_processes() -> Requirement:

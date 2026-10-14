@@ -2035,6 +2035,154 @@ runner: orphan
 
 
 class TranscriptDiscoveryTests(TranscriptRunnerFixture):
+    def prepare_help_suite(self) -> str:
+        shutil.copytree(
+            ROOT / "tests/support",
+            self.root / "tests/support",
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        suite = "client_server/r/test_help_recipes"
+        destination = self.boundaries / f"{suite}.py"
+        destination.parent.mkdir(parents=True)
+        shutil.copy2(RUNNER.parent / f"{suite}.py", destination)
+        return suite
+
+    @unittest.skipUnless(POSIX.available, "requires POSIX executable scripts")
+    def test_help_discovery_does_not_launch_r(self) -> None:
+        suite = self.prepare_help_suite()
+        scripts = self.root / "scripts"
+        scripts.mkdir()
+        shutil.copy2(ROOT / "scripts/test", scripts / "test")
+        commands = self.root / "commands"
+        commands.mkdir()
+        selected_home = self.root / "selected-r"
+        selected_bin = selected_home / "bin"
+        selected_bin.mkdir(parents=True)
+        receipt = self.root / "r-launched"
+        for launcher in (commands / "R", selected_bin / "Rscript"):
+            launcher.write_text(
+                f"#!{sys.executable}\n"
+                # fmt: python
+                + code("""
+                    import os
+                    import sys
+                    from pathlib import Path
+
+                    with Path(os.environ["MCP_CONSOLE_TEST_R_RECEIPT"]).open("a") as receipt:
+                        receipt.write(Path(sys.argv[0]).name + "\\n")
+                    if sys.argv[1:] == ["RHOME"]:
+                        print(os.environ["MCP_CONSOLE_TEST_R_HOME"])
+                    else:
+                        print("Index :")
+                    """),
+                encoding="utf-8",
+            )
+            launcher.chmod(0o755)
+        environment = self.script_environment(commands) | {
+            "MCP_CONSOLE_HOME": str(self.root / "home"),
+            "MCP_CONSOLE_TEST_R_RECEIPT": str(receipt),
+            "MCP_CONSOLE_TEST_R_HOME": str(selected_home),
+        }
+        for explicit_home in (False, True):
+            for declared in (False, True):
+                selected_environment = environment.copy()
+                selected_environment.pop("R_HOME", None)
+                selected_environment.pop("MCP_CONSOLE_TEST_R_FRENCH_MESSAGES", None)
+                if explicit_home:
+                    selected_environment["R_HOME"] = str(selected_home)
+                if declared:
+                    selected_environment["MCP_CONSOLE_TEST_R_FRENCH_MESSAGES"] = "1"
+                for arguments in (("--list", suite), ("--full", "--list")):
+                    with self.subTest(
+                        home=explicit_home, declared=declared, arguments=arguments
+                    ):
+                        receipt.unlink(missing_ok=True)
+                        result = subprocess.run(
+                            [scripts / "test", *arguments],
+                            cwd=self.root,
+                            env=selected_environment,
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stderr, "")
+                        self.assertEqual(
+                            [
+                                line
+                                for line in result.stdout.splitlines()
+                                if line.startswith(suite)
+                            ],
+                            [
+                                f"{suite}::{case}"
+                                for case in (
+                                    "reads_installed_topic_with_default_pager",
+                                    "reads_installed_topics_and_discovers_candidates",
+                                    "reads_translated_package_index",
+                                    "bounds_pages_and_reports_missing_help_without_preparation",
+                                    "preserves_utf8_in_compact_outputs",
+                                )
+                            ],
+                        )
+                        if "--full" in arguments:
+                            self.assertIn(
+                                "client_server/server/test_tools::selected",
+                                result.stdout,
+                            )
+                        self.assertFalse(
+                            receipt.exists(),
+                            receipt.read_text() if receipt.exists() else "",
+                        )
+
+    def test_help_discovery_preserves_broken_r_selections(self) -> None:
+        suite = self.prepare_help_suite()
+        self.suite.write_text(
+            PUBLIC_SUITE
+            + "\nfrom support.requirements import R, requires\n"
+            + "test_selected = requires(R)(test_selected)\n",
+            encoding="utf-8",
+        )
+        commands = self.root / "commands"
+        commands.mkdir()
+        # A present but unusable PATH selection must remain R-eligible.
+        (commands / ("R.exe" if os.name == "nt" else "R")).touch()
+        environment = os.environ | {"MCP_CONSOLE_HOME": str(self.root / "home")}
+        environment.pop("R_HOME", None)
+        environment.pop("MCP_CONSOLE_TEST_R_FRENCH_MESSAGES", None)
+        environment["PATH"] = str(commands)
+        marker = self.root / "selected.marker"
+        for selection in (
+            {"R_HOME": str(self.root / "missing-r")},
+            {"R_HOME": ""},
+            {},
+            {
+                "R_HOME": str(self.root / "missing-r"),
+                "MCP_CONSOLE_TEST_R_FRENCH_MESSAGES": "true",
+            },
+            {"MCP_CONSOLE_TEST_R_FRENCH_MESSAGES": "1"},
+        ):
+            with self.subTest(selection=selection):
+                marker.unlink(missing_ok=True)
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        self.boundaries / "_run.py",
+                        f"{suite}::reads_translated_package_index",
+                        "client_server/server/test_tools::selected",
+                    ],
+                    cwd=self.root,
+                    env=environment | selection,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(": skipped; R French messages:", result.stdout)
+                self.assertIn("R_HOME", result.stdout)
+                self.assertIn("MCP_CONSOLE_TEST_R_FRENCH_MESSAGES=1", result.stdout)
+                self.assertTrue(marker.exists(), result.stdout)
+
     def test_shared_direct_handshake_precedes_equal_variants(self) -> None:
         self.suite.write_text(
             PUBLIC_SUITE

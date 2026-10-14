@@ -39,6 +39,8 @@ A sandboxed R worker also has a temporary writable library; manual installations
 
 ### Installed documentation
 
+The [R help recipes](R_HELP.md) provide bounded examples for qualified lookups, capture, installed versions, candidate searches, package indexes, and precise paging.
+
 Use ordinary R help calls such as `?stats::lm`, `help("lm", package = "stats")`, `??lm`, or `help.search("linear models")`.
 Help pages, search results, package indexes, and vignette listings print through Console's text output.
 R retains its lookup and ambiguous-topic selection behavior; answer a selection prompt through `stdin`.
