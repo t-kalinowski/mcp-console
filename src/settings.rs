@@ -10,7 +10,10 @@ pub(crate) mod materialize;
 mod python;
 mod resolution;
 mod sandbox;
-pub(crate) use sandbox::Tempdir;
+pub(crate) use sandbox::{
+    Tempdir, materialize_settings as materialize_sandbox, resolve_writable_root,
+};
+pub(crate) const SANDBOX_MARKER: &str = "MCP_CONSOLE_SANDBOX";
 pub(crate) const MANAGED_TEMPDIR_ENVIRONMENT: &str = "MCP_CONSOLE_MANAGED_TEMPDIR";
 mod tool;
 pub(crate) use python::Managed as ManagedPythonSettings;

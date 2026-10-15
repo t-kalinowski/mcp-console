@@ -1,4 +1,6 @@
-//! Human-facing permissions, compiled once after generic configuration layering.
+//! Human-facing permissions and execution-host additions after configuration layering.
+
+use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, de::Error as _};
 use serde_json::{Value, json};
@@ -418,6 +420,80 @@ impl Sandbox {
         }
         Ok(policy)
     }
+}
+
+/// Apply execution-host additions to an explicitly selected policy. No discovery.
+pub(crate) fn materialize_settings(
+    mut settings: SandboxSettings,
+    roots: Vec<PathBuf>,
+    workspace: &std::path::Path,
+) -> Result<SandboxSettings, String> {
+    let writable_roots = roots
+        .into_iter()
+        .map(|path| resolve_writable_root(path, workspace))
+        .collect::<Result<Vec<_>, _>>()?;
+    settings.entry("filesystem").or_insert_with(|| json!({}));
+    let mut restricted = false;
+    if let Some(Value::Object(filesystem)) = settings.get_mut("filesystem") {
+        restricted = crate::settings::native_variant_name(
+            filesystem
+                .entry("kind")
+                .or_insert_with(|| "restricted".into()),
+        ) == Some("restricted");
+        if restricted || !writable_roots.is_empty() {
+            filesystem.entry("entries").or_insert_with(|| json!([]));
+        }
+        if let Some(Value::Array(entries)) = filesystem.get_mut("entries") {
+            for entry in entries.iter_mut() {
+                if entry.pointer("/path/type").and_then(Value::as_str) == Some("path")
+                    && let Some(Value::String(path)) = entry.pointer_mut("/path/path")
+                {
+                    *path = resolve_writable_root(PathBuf::from(&*path), workspace)?;
+                }
+            }
+            if restricted {
+                entries.insert(
+                    0,
+                    json!({
+                        "path": {"type": "special", "value": {"kind": "root"}},
+                        "access": "read",
+                    }),
+                );
+            }
+            entries.extend(writable_roots.into_iter().map(|root| {
+                json!({
+                    "path": {"type": "path", "path": root},
+                    "access": "write",
+                })
+            }));
+        }
+    }
+    settings
+        .entry("network")
+        .or_insert_with(|| "restricted".into());
+    if cfg!(target_os = "macos") && restricted {
+        settings
+            .entry("macos_seatbelt_profile_extension")
+            .or_insert_with(|| include_str!("../sandbox/policy_extensions.sbpl").into());
+    }
+    super::preserve_environment(
+        &mut settings,
+        [(super::SANDBOX_MARKER.as_ref(), Some("1".as_ref()))],
+    )?;
+    Ok(settings)
+}
+
+/// Capture launch-relative paths without hiding symlinks from runner validation.
+pub(crate) fn resolve_writable_root(
+    path: PathBuf,
+    workspace: &std::path::Path,
+) -> Result<String, String> {
+    let root = std::path::absolute(workspace.join(&path))
+        .map_err(|error| format!("cannot resolve writable root '{}': {error}", path.display()))?;
+    // The runner configuration carries paths as JSON strings.
+    root.into_os_string()
+        .into_string()
+        .map_err(|_| format!("writable root '{}' is not valid UTF-8", path.display()))
 }
 
 fn validate_domain(host: &str) -> Result<(), &'static str> {
