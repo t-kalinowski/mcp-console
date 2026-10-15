@@ -861,6 +861,7 @@ dependencies = [
  "signal-hook",
  "tempfile",
  "tokio",
+ "url",
  "windows-sys 0.61.2",
 ]
 

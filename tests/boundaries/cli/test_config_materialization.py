@@ -35,6 +35,52 @@ def resolve(
     )
 
 
+def test_client_sandbox_inheritance_materializes_and_prunes(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        result = resolve(binary, root, "--no-config", "--full", "--format", "json")
+        assert result.returncode == 0 and result.stderr == "", result
+        assert json.loads(result.stdout)["sandbox"]["inherit_from_codex"] is False
+        result = resolve(
+            binary,
+            root,
+            "--no-config",
+            "--format",
+            "json",
+            "-c",
+            "sandbox.inherit_from_codex=true",
+        )
+        assert result.returncode == 0 and result.stderr == "", result
+        enabled = json.loads(result.stdout)
+        assert enabled == {"sandbox": {"inherit_from_codex": True}}, enabled
+        selected = root / "config.json"
+        selected.write_text(json.dumps(enabled))
+        result = resolve(
+            binary, root, "--config-file", str(selected), "--full", "--format", "json"
+        )
+        assert result.returncode == 0 and result.stderr == "", result
+        assert json.loads(result.stdout)["sandbox"]["inherit_from_codex"] is True
+        assert (
+            "inherited from Codex" in json.loads(result.stdout)["tool"]["description"]
+        )
+        for value in ("null", "yes", "1"):
+            result = resolve(
+                binary, root, "--no-config", "-c", f"sandbox.inherit_from_codex={value}"
+            )
+            assert result.returncode != 0 and "inherit_from_codex" in result.stderr, (
+                result
+            )
+        result = resolve(
+            binary,
+            root,
+            "--no-config",
+            "-c",
+            "resolver.sandbox.inherit_from_codex=true",
+        )
+        assert result.returncode != 0 and "inherit_from_codex" in result.stderr, result
+    return [enabled]
+
+
 def test_prunes_builtin_defaults_by_default(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()

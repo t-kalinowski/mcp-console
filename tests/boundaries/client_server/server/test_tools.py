@@ -139,6 +139,9 @@ def test_initializes_and_lists_tools(
         ),
     }
     if execution == SANDBOXED:
+        companions["client-sandbox.yaml"] = _initializes_and_lists_tools(
+            binary, execution, inherit_from_codex=True
+        )
         companions["proxy.yaml"] = _initializes_and_lists_tools(
             binary, execution, proxy=True
         )
@@ -174,6 +177,7 @@ def _initializes_and_lists_tools(
     proxy: bool = False,
     workspace_profile: bool = False,
     writable: bool = False,
+    inherit_from_codex: bool = False,
     bootstrap_languages: str | None = None,
     languages: tuple[str, ...] | None = None,
 ) -> Transcript:
@@ -234,6 +238,9 @@ def _initializes_and_lists_tools(
                 if languages is not None
                 else (),
                 *("--writable-root", str(workspace)) if writable else (),
+                *("-c", "sandbox.inherit_from_codex=true")
+                if inherit_from_codex
+                else (),
             ),
             environment,
             workspace,

@@ -2,6 +2,7 @@
 
 The public schema applies to both `sandbox` (evaluated code) and `resolver.sandbox` (dependency preparation).
 Their permissions are independent.
+`sandbox.inherit_from_codex` is a session setting and is not accepted under `resolver.sandbox`.
 [Configuration](CONFIGURATION.md) defines discovery and merge rules.
 
 To permit workspace writes and one API host:
@@ -22,6 +23,56 @@ Read [Sandbox and trust](SANDBOX.md) before granting access.
 Set either whole permission node to `null` to clear inherited settings and restore that context's built-in defaults.
 This does not disable sandboxing; `serve --no-sandbox` disables enforcement after both permission nodes have been omitted or cleared.
 Child nodes such as `filesystem` and `network.proxy` still require their documented types.
+
+## Inherit permissions from Codex
+
+```yaml
+sandbox:
+  inherit_from_codex: true
+```
+
+The default is `false`: client metadata has no effect on Console's permissions or startup.
+Enable this setting only when the MCP client is trusted to configure Console's sandbox, including disabling it.
+It applies to `serve`; the standalone `sandbox` command has no MCP calls to inherit from.
+In R, use `SandboxPolicy(inherit_from_codex = TRUE)`.
+
+When enabled, Console advertises the experimental `codex/sandbox-state` capability and its older `codex/sandbox-state-meta` alias.
+It reads that key from the first `send` call's `_meta`, before runtime discovery, dependency preparation, or worker startup.
+Initialization, tool discovery, and pings remain available while waiting for that call.
+Metadata belongs to the MCP request, outside the tool's `arguments`.
+
+Console translates the current `permissionProfile` and uses `sandboxCwd` to resolve symbolic project roots:
+
+| Client permissions                 | Console behavior                                                                                                    |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Managed, restricted filesystem     | Add recognized read, write, and deny entries to the configured Console policy, including additional writable roots. |
+| Managed, unrestricted filesystem   | Permit host filesystem access while retaining Console's native supervision and selected networking.                 |
+| External filesystem enforcement    | Use unrestricted filesystem access within Console's runner; Console does not verify the external boundary.          |
+| Disabled enforcement (full access) | Disable Console's worker and preparation sandboxes, as with `--no-sandbox`.                                         |
+| Restricted or enabled network      | Apply that worker network mode unless an explicit Console managed proxy is configured.                              |
+
+Concrete paths accept absolute native paths or local `file:` URIs.
+Symbolic project roots use the client's sandbox working directory, which can differ from Console's launch directory; inheritance does not change the worker's working directory.
+Root, minimal, and temporary-path entries use Console's corresponding native permissions.
+Existing local grants and denials retain their normal specificity and conflict precedence.
+Console's host-read baseline and temporary-storage setting remain in effect for restricted profiles.
+This translates permissions rather than reproducing every Codex restriction.
+
+The current Codex metadata does not contain proxy endpoints, destination rules, credentials, or proxy approval settings.
+Console retains an explicitly configured managed proxy, including its destination rules and `allow_upstream_proxy` choice.
+Proxy environment variables passed to the server follow the ordinary environment-inheritance rules; metadata alone cannot reconstruct the client's proxy.
+Dependency preparation retains its separate resolver policy unless inherited full access disables sandboxing.
+Full access defaults to host caches; explicit `cache: console` remains invalid without sandboxing.
+
+Missing metadata, an unsupported profile, or an invalid profile shape leaves Console's configured policy in place.
+Unknown fields, unsupported path forms such as globs, and client backend or launcher selections are ignored.
+Console always uses its own pinned runner; metadata cannot select an executable or change its backend.
+Supported translated permissions still undergo ordinary native validation.
+
+The first `send` captures the translated policy for the connection, including when it uses local permissions because metadata is unavailable.
+Workers and explicit restarts retain that policy.
+Later calls without usable metadata keep it; later calls with different recognized permissions fail before submitting code, with a request to reconnect.
+Reconnect after changing the client's permissions so Console can prepare its runtimes under the new policy.
 
 ## Profiles and temporary storage
 

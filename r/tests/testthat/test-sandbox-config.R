@@ -2,6 +2,19 @@ policy_json <- function(x) {
   as.character(jsonlite::toJSON(as.list(x), auto_unbox = TRUE))
 }
 
+test_that("client sandbox inheritance is an explicit optional boolean", {
+  expect_identical(
+    as.list(SandboxPolicy(inherit_from_codex = TRUE)),
+    list(inherit_from_codex = TRUE)
+  )
+  expect_identical(
+    as.list(SandboxPolicy(inherit_from_codex = FALSE)),
+    list(inherit_from_codex = FALSE)
+  )
+  expect_null(SandboxPolicy()@inherit_from_codex)
+  expect_error(SandboxPolicy(inherit_from_codex = "true"), "inherit_from_codex")
+})
+
 test_that("workspace and tempdir selectors preserve their public wire shape", {
   policy <- SandboxPolicy(profile = "workspace", tempdir = "read_write")
   expect_identical(

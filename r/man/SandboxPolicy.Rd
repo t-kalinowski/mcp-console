@@ -32,7 +32,8 @@ SandboxPolicy(
   filesystem = NULL,
   network = NULL,
   profile = NULL,
-  tempdir = NULL
+  tempdir = NULL,
+  inherit_from_codex = NULL
 )
 }
 \arguments{
@@ -94,6 +95,13 @@ cleanup, or \code{"read_only"} to omit automatic temp grants. Explicit filesyste
 permissions still apply. Without an active sandbox and managed storage,
 Console adds no temporary-directory cleanup guarantees; R uses its normal
 best-effort session-tempdir cleanup.}
+
+\item{inherit_from_codex}{Optional logical. Set \code{TRUE} to inherit supported
+sandbox permissions from the first MCP \code{send} call's Codex metadata.
+Full access disables worker and preparation sandboxing. Missing or
+unsupported metadata retains local permissions; changed permissions require
+reconnecting. The native default is \code{FALSE}. This session setting is not
+accepted in \code{ResolverConfig(sandbox = ...)}.}
 }
 \value{
 An S7 configuration object. The constructor is also its S7 class.

@@ -53,6 +53,8 @@ where
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Sandbox {
+    #[serde(deserialize_with = "supplied")]
+    pub(super) inherit_from_codex: Option<bool>,
     profile: Option<Profile>,
     tempdir: Tempdir,
     #[serde(deserialize_with = "supplied_mapping")]
@@ -264,6 +266,9 @@ impl<'de> Deserialize<'de> for UnixSockets {
 
 impl Sandbox {
     pub(super) fn compile(self, resolver: bool) -> Result<SandboxSettings, String> {
+        if resolver && self.inherit_from_codex.is_some() {
+            return Err("resolver.sandbox.inherit_from_codex is unsupported; configure sandbox.inherit_from_codex on the session".into());
+        }
         let prefix = if resolver {
             "resolver.sandbox"
         } else {

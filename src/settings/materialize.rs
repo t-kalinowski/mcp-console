@@ -34,13 +34,20 @@ pub(crate) fn configuration(
             languages,
             policy,
             no_sandbox,
+            captured.inherit_from_codex,
             &captured.tool,
             false,
         ))
         .expect("tool defaults");
     }
-    let tool =
-        crate::server::materialized_tool(languages, policy, no_sandbox, &captured.tool, true);
+    let tool = crate::server::materialized_tool(
+        languages,
+        policy,
+        no_sandbox,
+        captured.inherit_from_codex,
+        &captured.tool,
+        true,
+    );
     value["tool"] = serde_json::to_value(tool).expect("tool configuration");
     value
         .as_object_mut()
@@ -94,7 +101,9 @@ pub(crate) fn configuration(
     value["sandbox"] = if no_sandbox {
         Value::Null
     } else {
-        permissions(&captured.policy)
+        let mut permissions = permissions(&captured.policy);
+        permissions["inherit_from_codex"] = json!(captured.inherit_from_codex);
+        permissions
     };
     value["resolver"] = json!({
         "inherit_environment": captured.resolver.get("inherit_environment") != Some(&Value::Bool(false)),

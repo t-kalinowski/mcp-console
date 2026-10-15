@@ -428,6 +428,12 @@ SandboxNetwork <- S7::new_class(
 #'   permissions still apply. Without an active sandbox and managed storage,
 #'   Console adds no temporary-directory cleanup guarantees; R uses its normal
 #'   best-effort session-tempdir cleanup.
+#' @param inherit_from_codex Optional logical. Set `TRUE` to inherit supported
+#'   sandbox permissions from the first MCP `send` call's Codex metadata.
+#'   Full access disables worker and preparation sandboxing. Missing or
+#'   unsupported metadata retains local permissions; changed permissions require
+#'   reconnecting. The native default is `FALSE`. This session setting is not
+#'   accepted in `ResolverConfig(sandbox = ...)`.
 #' @export
 SandboxPolicy <- S7::new_class(
   "SandboxPolicy",
@@ -448,7 +454,8 @@ SandboxPolicy <- S7::new_class(
       }
     ),
     profile = config_choice("workspace"),
-    tempdir = config_choice(c("managed", "read_write", "read_only"))
+    tempdir = config_choice(c("managed", "read_write", "read_only")),
+    inherit_from_codex = config_flag()
   )
 )
 

@@ -214,6 +214,7 @@ fn environment<'de, D: serde::Deserializer<'de>>(
 
 #[derive(Default)]
 pub(crate) struct Captured {
+    pub inherit_from_codex: bool,
     pub tool: Tool,
     pub startup: Option<startup::Startup>,
     pub cache: Option<Cache>,
@@ -355,6 +356,11 @@ pub(crate) fn read(
         .validate(languages)
         .map_err(|error| format!("{name}: {error}"))?;
     let sandbox_requested = project.sandbox.is_some();
+    let inherit_from_codex = project
+        .sandbox
+        .as_ref()
+        .and_then(|sandbox| sandbox.inherit_from_codex)
+        .unwrap_or(false);
     let resolver_sandbox_requested = project.resolver.sandbox.is_some();
     if cfg!(windows) && resolver_sandbox_requested {
         return Err(format!(
@@ -416,6 +422,7 @@ pub(crate) fn read(
     }
     Ok((
         Captured {
+            inherit_from_codex,
             tool: project.tool,
             r: project.r,
             startup: project.startup,
