@@ -32,6 +32,11 @@ WORKER = Requirement(
     sys.platform in {"darwin", "linux", "win32"},
     "requires a supported local worker",
 )
+USER_UV = Requirement(
+    "user uv",
+    (Path.home() / ".local/bin" / ("uv.exe" if os.name == "nt" else "uv")).is_file(),
+    "requires uv installed in the default user executable directory",
+)
 # Match runtime selection so invalid R_HOME and broken PATH entries report errors.
 R = Requirement(
     "R",

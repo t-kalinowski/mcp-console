@@ -230,8 +230,10 @@ fn native_python_setup_runs_cells_without_r() {
 #[test]
 fn native_python_activation_preserves_runtime_without_r() {
     let storage = PythonFixture::new();
-    let resolver =
-        crate::resolver::ManagedPythonResolverConfiguration::capture().without_r_bootstrap();
+    let resolver = crate::resolver::ManagedPythonResolverConfiguration::capture(
+        crate::resolver::user_uv_directory().map(std::path::PathBuf::into_os_string),
+    )
+    .without_r_bootstrap();
     let manifest = |packages| crate::worker_protocol::PythonRequirementManifest {
         packages,
         python_version: vec![],

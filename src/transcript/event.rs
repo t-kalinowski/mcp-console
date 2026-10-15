@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use rmcp::{
     ErrorData,
     model::{Annotations, CallToolRequestParams, ContentBlock, MetaObject, RequestId, TextContent},
@@ -20,6 +22,7 @@ pub(super) enum Event<'a> {
     SessionStarted {
         session: &'a str,
         working_directory: &'a str,
+        launch_environment: &'a BTreeMap<String, String>,
         dynamic_resolution: Option<bool>,
         python_preparation: Option<bool>,
         startup_requirements: Option<&'a crate::worker_client::Declaration>,

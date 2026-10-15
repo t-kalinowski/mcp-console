@@ -21,7 +21,7 @@ from support.suites import run_this_suite
 
 LANGUAGES = ("r,python,sql", "r", "python", "sql", "r,python", "r,sql", "python,sql")
 MISSING_UV = (
-    "Python sessions without R require `uv` on PATH; "
+    "Python sessions without R require `uv` on PATH or in its default user executable directory; "
     "set python in .agents/console/config.yaml to use an existing environment"
 )
 R_SCRIPT_GUIDANCE = (
@@ -41,7 +41,12 @@ def _configured_language_matrix(binary: Path) -> Transcript:
     for enabled in languages:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            environment = dict(os.environ, PATH="", MCP_CONSOLE_LANGUAGES=enabled)
+            environment = dict(
+                os.environ,
+                PATH="",
+                XDG_BIN_HOME=str(root / "unavailable-user-bin"),
+                MCP_CONSOLE_LANGUAGES=enabled,
+            )
             for name in ("R_HOME", "RETICULATE_PYTHON", "RETICULATE_UV"):
                 environment.pop(name, None)
             with McpClient(

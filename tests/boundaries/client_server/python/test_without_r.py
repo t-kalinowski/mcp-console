@@ -40,7 +40,9 @@ from support.python import runtime_source_line, write_test_wheel
 
 def environment(path: Path) -> dict[str, str]:
     retain_system_bwrap(path)
-    env = dict(os.environ, PATH=str(path))
+    env = dict(
+        os.environ, PATH=str(path), XDG_BIN_HOME=str(path / "unavailable-user-bin")
+    )
     for name in (
         "R_HOME",
         "R_LIBS",
@@ -2325,7 +2327,11 @@ def test_resolver_failure_does_not_fall_back(
         uv.chmod(0o755)
         if os.name != "nt":
             (path / "python3").symlink_to(sys.executable)
-        with McpClient(binary, execution.serve(), environment(path)) as client:
+        user_bin = path / "user-bin"
+        user_bin.mkdir()
+        expose_uv(user_bin)
+        env = environment(path) | {"XDG_BIN_HOME": str(user_bin)}
+        with McpClient(binary, execution.serve(), env) as client:
             error = client.startup_error()
             assert "fixture uv resolution failed" in error, error
             client.finish_with_standard_error(expected_exit_status=1)

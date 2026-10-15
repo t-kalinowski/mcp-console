@@ -107,6 +107,7 @@ enum Input {
         mode: Mode,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         installation: Option<crate::local_runtime::RInstallation>,
+        user_uv_directory: Option<std::ffi::OsString>,
     },
     Run {
         id: u64,

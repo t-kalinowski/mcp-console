@@ -425,6 +425,7 @@ def bare_runtime_environment(
     environment: dict[str, str], library: Path
 ) -> dict[str, str]:
     environment = environment.copy()
+    environment["XDG_BIN_HOME"] = str(library / "unavailable-user-bin")
     environment["PATH"] = os.pathsep.join(
         entry
         for entry in environment["PATH"].split(os.pathsep)

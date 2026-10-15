@@ -2,6 +2,7 @@
 - event: session_started
   session: default
   working_directory: <workspace>
+  launch_environment: <launch environment>
   dynamic_resolution: true
   python_preparation: false
   startup_requirements:

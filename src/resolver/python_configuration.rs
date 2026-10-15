@@ -1,30 +1,33 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
+use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct ManagedPythonResolverConfiguration {
     environment: Arc<BTreeMap<OsString, OsString>>,
+    user_uv_directory: Option<OsString>,
     explicit_uv: Option<OsString>,
     reticulate_uv: Option<OsString>,
     uv: Option<OsString>,
 }
 
 impl ManagedPythonResolverConfiguration {
-    pub(crate) fn capture() -> Self {
+    pub(crate) fn capture(user_uv_directory: Option<OsString>) -> Self {
         let environment = std::env::vars_os()
             .filter(|(name, _)| is_uv_environment_variable(name) && name != "UV_OFFLINE")
             .collect::<BTreeMap<_, _>>();
         let explicit_uv = std::env::var_os("RETICULATE_UV");
-        let reticulate_uv = explicit_uv
-            .clone()
-            .or_else(|| super::find_path_entry("uv").map(Into::into));
+        let reticulate_uv = explicit_uv.clone().or_else(|| {
+            super::find_uv(user_uv_directory.as_deref().map(Path::new)).map(Into::into)
+        });
         let uv = reticulate_uv
             .as_ref()
             .filter(|uv| uv.as_os_str() != OsStr::new("managed"))
             .cloned();
         Self {
             environment: Arc::new(environment),
+            user_uv_directory,
             explicit_uv,
             reticulate_uv,
             uv,
@@ -32,9 +35,9 @@ impl ManagedPythonResolverConfiguration {
     }
 
     pub(crate) fn without_r_bootstrap(mut self) -> Self {
-        // Sans-R preparation uses the startup PATH selection. RETICULATE_UV
+        // Sans-R preparation uses ordinary uv discovery. RETICULATE_UV
         // belongs to reticulate's R bootstrap, not this mode.
-        self.uv = super::find_path_entry("uv").map(Into::into);
+        self.uv = super::find_uv(self.user_uv_directory()).map(Into::into);
         self.reticulate_uv = self.uv.clone();
         self.explicit_uv = None;
         self
@@ -42,6 +45,10 @@ impl ManagedPythonResolverConfiguration {
 
     pub(super) fn explicit_uv(&self) -> Option<&OsStr> {
         self.explicit_uv.as_deref()
+    }
+
+    pub(super) fn user_uv_directory(&self) -> Option<&Path> {
+        self.user_uv_directory.as_deref().map(Path::new)
     }
 
     pub(super) fn uv(&self) -> Result<&OsStr, String> {

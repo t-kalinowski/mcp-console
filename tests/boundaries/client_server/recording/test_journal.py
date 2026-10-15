@@ -96,9 +96,19 @@ def test_materializes_records_only_for_console_use(
 
         workspace = temporary / "send"
         workspace.mkdir()
+        environment = os.environ | {
+            "MCP_CONSOLE_TEST_LAUNCH_VALUE": "launch value: café\nsecond line",
+            "MCP_CONSOLE_TEST_LAUNCH_EMPTY": "",
+        }
         client = McpClient(
             binary,
-            execution.serve("--worker", str(zod)),
+            execution.serve(
+                "--worker",
+                str(zod),
+                "-c",
+                "environment.MCP_CONSOLE_TEST_LAUNCH_VALUE=worker value",
+            ),
+            environment=environment,
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
@@ -125,6 +135,22 @@ def test_materializes_records_only_for_console_use(
             "tool_result",
         ], events
         assert events[1]["request"]["name"] == "send", events[1]
+        launch_environment = events[0]["launch_environment"]
+        expected_environment = (
+            environment
+            | {"MCP_CONSOLE_HOME": client.console_home.name}
+            | dict.fromkeys(
+                ("R_ENVIRON", "R_ENVIRON_USER", "R_PROFILE", "R_PROFILE_USER"),
+                os.devnull,
+            )
+        )
+        for name, value in expected_environment.items():
+            assert launch_environment[name] == value, name
+        for projection in ("transcript.md", "transcript.qmd"):
+            text = (sessions[0] / projection).read_text(encoding="utf-8")
+            assert "launch_environment" not in text
+            assert "MCP_CONSOLE_TEST_LAUNCH_VALUE" not in text
+            assert environment["MCP_CONSOLE_TEST_LAUNCH_VALUE"] not in text
         client.finish()
 
         transcript.append(
@@ -136,6 +162,57 @@ def test_materializes_records_only_for_console_use(
             }
         )
         return transcript
+
+
+@executions(DIRECT)
+def test_records_launch_environment_when_startup_fails(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        tools = root / "empty-tools"
+        tools.mkdir()
+        environment = os.environ | {
+            "PATH": str(tools),
+            "XDG_BIN_HOME": str(root / "unavailable-user-bin"),
+            "MCP_CONSOLE_TEST_LAUNCH_VALUE": "failed launch: café\nsecond line",
+            "MCP_CONSOLE_TEST_LAUNCH_EMPTY": "",
+        }
+        for name in ("R_HOME", "RHOME", "RETICULATE_PYTHON"):
+            environment.pop(name, None)
+        with McpClient(binary, execution.serve(), environment, root) as client:
+            expected_environment = (
+                environment
+                | {"MCP_CONSOLE_HOME": client.console_home.name}
+                | dict.fromkeys(
+                    ("R_ENVIRON", "R_ENVIRON_USER", "R_PROFILE", "R_PROFILE_USER"),
+                    os.devnull,
+                )
+            )
+            if os.name == "nt" and "TMPDIR" in environment:
+                expected_environment.update(
+                    TEMP=environment["TMPDIR"], TMP=environment["TMPDIR"]
+                )
+            error = client.startup_error()
+            assert "require `uv` on PATH" in error, error
+            client.finish_with_standard_error(expected_exit_status=1)
+        (session,) = (root / ".agents/console/sessions").iterdir()
+        events = [
+            json.loads(line)
+            for line in (session / "internal/events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        assert events[0]["event"] == "session_started"
+        for name, value in expected_environment.items():
+            assert events[0]["launch_environment"][name] == value, name
+        assert any(event["event"] == "startup_failed" for event in events)
+        for projection in ("transcript.md", "transcript.qmd"):
+            text = (session / projection).read_text(encoding="utf-8")
+            assert "launch_environment" not in text
+            assert "MCP_CONSOLE_TEST_LAUNCH_VALUE" not in text
+            assert environment["MCP_CONSOLE_TEST_LAUNCH_VALUE"] not in text
+        return [{"failed_launch_environment_recorded_only_in_journal": True}]
 
 
 @requires(POSIX)
@@ -551,6 +628,7 @@ def test_records_tool_calls_and_images(
             if "request_id" in event:
                 event["request_id"] = "<request ID>"
         events[0]["working_directory"] = "<workspace>"
+        events[0]["launch_environment"] = "<launch environment>"
         assert journal_text.endswith("\n"), journal_text
         assert markdown_text.endswith("\n"), markdown_text
         assert quarto_text.endswith("\n"), quarto_text

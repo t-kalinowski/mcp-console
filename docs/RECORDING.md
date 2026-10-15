@@ -1,6 +1,6 @@
 # Recordings and reports
 
-Recordings live on the Console host and contain source, stdin, requirements, output, and artifacts **without redaction**.
+Recordings live on the Console host and contain the launch environment, source, stdin, requirements, output, and artifacts **without redaction**.
 There is no aggregate quota or automatic cleanup.
 Review files before sharing them and remove old sessions deliberately.
 
@@ -11,6 +11,8 @@ Otherwise they use `~/.agents/console/sessions/<run-id>/`; `MCP_CONSOLE_HOME` re
 Console does not create a project `.agents` directory merely to select project storage.
 
 Recording begins when the first call, startup output, or startup failure needs it.
+The `session_started` event retains the server's launch environment, including when startup fails.
+These environment variables appear only in `internal/events.jsonl`, not in the Markdown or QMD projections.
 
 | File                      | Purpose                                                    |
 | ------------------------- | ---------------------------------------------------------- |
