@@ -11,6 +11,7 @@ mod config;
 mod console_paths;
 #[cfg(unix)]
 mod input_watch;
+mod install;
 #[cfg(any(unix, windows))]
 mod jsonl;
 mod local_runtime;
@@ -62,6 +63,13 @@ fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let mut overrides = cli.overrides;
     match cli.command {
+        cli::Command::Install(options) => match install::run(&options) {
+            Ok(output) => {
+                print!("{output}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => exit_with_error(error),
+        },
         cli::Command::Config {
             command:
                 cli::ConfigCommand::Resolve {

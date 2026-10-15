@@ -29,7 +29,16 @@ PyPI provides wheels for macOS and Linux on ARM64 and x86-64, plus experimental 
 Linux wheels require glibc 2.35 or later and the runtime libraries listed in [Get started](docs/getting-started.qmd).
 That guide also covers optional R installation and [building from source](docs/getting-started.qmd#build-from-source).
 
-Configure your MCP client to launch `mcp-console serve` over stdio, following the [client setup examples](docs/getting-started.qmd#connect-your-client).
+Register Console with your client:
+
+```sh
+mcp-console install codex
+# Or: mcp-console install claude
+```
+
+This configures the client to launch `uvx mcp-console serve` and load Console tools up front.
+Use `--dry-run` to preview the settings or `--no-auto-load` to keep the client's default tool discovery.
+See [client setup](docs/getting-started.qmd#connect-your-client) for project/global scope and other clients.
 Run the client and Console on the same host, with the client's shell and filesystem tools using the same workspace.
 
 By default, Console prepares R packages, Python packages, and DuckDB extensions for the session.

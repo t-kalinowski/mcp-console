@@ -1,0 +1,8 @@
+---
+client: codex
+symlink: preserved
+permissions: "0640"
+---
+client: claude
+symlink: preserved
+permissions: "0640"

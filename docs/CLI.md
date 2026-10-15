@@ -4,6 +4,52 @@ Run `mcp-console --help` or a subcommand's `--help` for the installed build's co
 The website's [CLI help](cli-help.qmd) shows the printouts checked by the CLI tests.
 Console runs commands on the local host; it does not create remote connections.
 
+## Install into a client
+
+```sh
+mcp-console install codex
+mcp-console install claude
+mcp-console install codex --scope global
+mcp-console install claude --scope project --dry-run
+mcp-console install claude --no-auto-load
+```
+
+`install` registers a stdio MCP server named `console` that launches `uvx mcp-console serve`.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) so `uvx` is on the client's `PATH`.
+The client itself does not need to be installed when writing its configuration.
+
+The default `--scope auto` uses the nearest ancestor with a `.git` directory or worktree marker file.
+Outside Git, it selects global scope.
+`--scope project` uses that Git root, or the current directory outside Git.
+`--scope global` selects global scope regardless of the current directory.
+
+| Client      | Project configuration | Global configuration                                        |
+| ----------- | --------------------- | ----------------------------------------------------------- |
+| Codex       | `.codex/config.toml`  | `$CODEX_HOME/config.toml`, default `~/.codex/config.toml`   |
+| Claude Code | `.mcp.json`           | `$CLAUDE_CONFIG_DIR/.claude.json`, default `~/.claude.json` |
+
+The command prints the selected scope, file path, and fields it sets.
+Use `--dry-run` to preview those settings without creating or changing files, or to apply them manually.
+Existing settings outside the printed fields are preserved, including other servers, environment variables, and client preferences.
+TOML comments are preserved; JSON is formatted on write.
+Malformed configuration and an existing remote server named `console` cause an error without overwriting the file.
+
+By default, installation also requests that Console tools be visible without a tool search:
+
+- Codex: `enabled = true` and `omit_tools_from = ["deferred"]` in `[mcp_servers.console]`.
+- Claude Code: [`alwaysLoad: true`](https://code.claude.com/docs/en/mcp#exempt-a-server-from-deferral) in `mcpServers.console`.
+
+`--no-auto-load` writes `omit_tools_from = []` for Codex or `alwaysLoad: false` for Claude Code, leaving tool discovery to the client.
+These settings affect only Console.
+Client startup limits still apply; a cold `uvx` launch can delay tool availability.
+Codex's Strict Code Mode Only controls tool exposure independently and overrides the visibility setting.
+Use a current client version that supports the respective setting.
+
+Restart the client after installation.
+Codex requires project trust before loading project configuration, and Claude Code may ask you to approve a project server.
+Installation leaves these client approvals and tool permissions unchanged.
+Legacy Claude Code `.config.json` layouts are not supported by this command.
+
 ## MCP server
 
 ```sh

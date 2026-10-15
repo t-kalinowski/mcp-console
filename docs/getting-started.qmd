@@ -62,34 +62,37 @@ This command builds Console and its sandbox runner from source.
 
 ## Connect your client
 
-Configure a stdio MCP server with command `mcp-console` and arguments `["serve"]`.
-For clients using an `mcpServers` mapping:
+Register Console with Codex or Claude Code:
+
+```sh
+mcp-console install codex
+mcp-console install claude
+```
+
+Run the command for the client you use.
+Inside a Git repository, it writes project configuration at the repository root; elsewhere, it writes global configuration.
+Use `--scope project` or `--scope global` to choose explicitly.
+The command prints the settings it writes, and `--dry-run` previews them without changing files.
+By default, it also configures Console tools to load up front; `--no-auto-load` keeps the client's default discovery.
+Restart the client and approve project configuration if prompted.
+See [client installation](CLI.md#install-into-a-client) for paths and visibility settings.
+
+For other clients, configure a stdio MCP server with command `uvx` and arguments `["mcp-console", "serve"]`.
+For an `mcpServers` mapping:
 
 ```json
 {
   "mcpServers": {
     "console": {
-      "command": "mcp-console",
-      "args": ["serve"]
+      "command": "uvx",
+      "args": ["mcp-console", "serve"]
     }
   }
 }
 ```
 
-For Codex:
-
-```sh
-codex mcp add console -- mcp-console serve
-```
-
-For Claude Code:
-
-```sh
-claude mcp add --transport stdio console -- mcp-console serve
-```
-
-A launcher that uses `uvx mcp-console serve` may run a published version rather than your source installation.
-Use the installed command above when reviewing current development behavior.
+`uvx mcp-console serve` runs the published package.
+When reviewing a source installation, configure the client to launch that installation's `mcp-console` executable with arguments `["serve"]` instead.
 
 Confirm that the client exposes `send`.
 Tool discovery can finish before runtime preparation; the first call may report that work is still running.

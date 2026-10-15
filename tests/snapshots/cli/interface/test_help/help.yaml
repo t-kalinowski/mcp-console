@@ -8,6 +8,7 @@ stderr: |
   Usage: mcp-console [OPTIONS] <COMMAND>
 
   Commands:
+    install  Register Console with an MCP client using uvx
     config   Inspect configuration without starting interpreters or preparing
              packages
     serve    Run the MCP server over standard input and output
@@ -30,6 +31,7 @@ stderr: |
     -V, --version             Print version
 
   Examples:
+    mcp-console install codex
     mcp-console serve
     mcp-console sandbox -- python -c 'print("hello")'
 ---
@@ -40,6 +42,7 @@ stdout: |
   Usage: mcp-console [OPTIONS] <COMMAND>
 
   Commands:
+    install  Register Console with an MCP client using uvx
     config   Inspect configuration without starting interpreters or preparing
              packages
     serve    Run the MCP server over standard input and output
@@ -79,6 +82,7 @@ stdout: |
             Print version
 
   Examples:
+    mcp-console install codex
     mcp-console serve
     mcp-console sandbox -- python -c 'print("hello")'
 ---
@@ -145,6 +149,24 @@ stdout: |
 
     -h, --help
             Print help (see a summary with '-h')
+---
+command: mcp-console install --help
+stdout: |
+  Register Console with an MCP client using uvx
+
+  Usage: mcp-console install [OPTIONS] <CLIENT>
+
+  Arguments:
+    <CLIENT>  Client to configure [possible values: codex, claude]
+
+  Options:
+        --scope <SCOPE>  Install in the nearest Git project or, outside Git,
+                         globally [default: auto] [possible values: auto, project,
+                         global]
+        --no-auto-load   Keep the client's default tool discovery instead of
+                         loading Console tools up front
+        --dry-run        Print the proposed settings without changing any files
+    -h, --help           Print help
 ---
 command: mcp-console serve --help
 stdout: |

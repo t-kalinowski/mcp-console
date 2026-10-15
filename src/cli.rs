@@ -10,6 +10,7 @@ Global settings supply defaults, not a mandatory security ceiling; projects may 
 
 const ROOT_EXAMPLES: &str = "\
 Examples:
+  mcp-console install codex
   mcp-console serve
   mcp-console sandbox -- python -c 'print(\"hello\")'";
 
@@ -84,6 +85,9 @@ impl ConfigOverrides {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Register Console with an MCP client using uvx
+    Install(InstallOptions),
+
     /// Inspect configuration without starting interpreters or preparing packages
     Config {
         #[command(subcommand)]
@@ -195,4 +199,36 @@ pub enum ConfigCommand {
 pub enum ConfigFormat {
     Yaml,
     Json,
+}
+
+#[derive(Debug, Args)]
+pub struct InstallOptions {
+    /// Client to configure
+    #[arg(value_enum)]
+    pub client: InstallClient,
+
+    /// Install in the nearest Git project or, outside Git, globally
+    #[arg(long, value_enum, default_value = "auto")]
+    pub scope: InstallScope,
+
+    /// Keep the client's default tool discovery instead of loading Console tools up front
+    #[arg(long)]
+    pub no_auto_load: bool,
+
+    /// Print the proposed settings without changing any files
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum InstallClient {
+    Codex,
+    Claude,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+pub enum InstallScope {
+    Auto,
+    Project,
+    Global,
 }
