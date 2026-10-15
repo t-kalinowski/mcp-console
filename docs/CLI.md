@@ -4,19 +4,38 @@ Run `mcp-console --help` or a subcommand's `--help` for the installed build's co
 The website's [CLI help](cli-help.qmd) shows the printouts checked by the CLI tests.
 Console runs commands on the local host; it does not create remote connections.
 
-## Install into a client
+## Configure a client
 
 ```sh
-mcp-console install codex
-mcp-console install claude
-mcp-console install codex --scope global
-mcp-console install claude --scope project --dry-run
-mcp-console install claude --no-auto-load
+uvx mcp-console configure-client codex claude
+mcp-console configure-client codex --scope global
+mcp-console configure-client claude --scope project --dry-run
+mcp-console configure-client claude --no-auto-load
+mcp-console configure-client codex --pin-version v0.0.5
+mcp-console configure-client claude --no-uvx
+mcp-console configure-client codex --name console-local -- --writable-root /data
 ```
 
-`install` registers a stdio MCP server named `console` that launches `uvx mcp-console serve`.
+`configure-client` registers a stdio MCP server named `console` that launches `uvx mcp-console serve`.
+Pass one or more client names; all options apply to every selected client, and repeated client names are configured once.
+Use separate invocations for different settings per client.
+`--name NAME` changes the server name; arguments after `--` are appended after `serve`.
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) so `uvx` is on the client's `PATH`.
 The client itself does not need to be installed when writing its configuration.
+
+The default uvx command has no version suffix.
+`--pin-version VERSION` appends the supplied suffix after `@`, for example `mcp-console@v0.0.5` or `mcp-console@latest`.
+Use uvx's exact-version syntax or `latest`; version ranges are not supported by this suffix.
+An unqualified uvx command may reuse an installed or cached version; `latest` requests the latest available release at launch.
+
+`--no-uvx` configures an absolute path to the running executable instead.
+Invoke the desired installation to select it, for example `/opt/mcp-console/bin/mcp-console configure-client claude --no-uvx`.
+When the executable is inside a disposable cache, the command first runs `uv tool install mcp-console@VERSION`, using the version running setup, and configures the absolute launcher path reported by `uv tool dir --bin`.
+This includes temporary `uvx --no-cache` runs and custom uv cache locations.
+The persistent installation requires `uv` during setup; subsequent client launches use the saved executable directly.
+The command prints the installation command and executable path before installing.
+It leaves existing-tool conflicts to uv and does not force replacement of executable files.
+`--no-uvx` conflicts with `--pin-version`; select the desired version before configuring a direct executable.
 
 The default `--scope auto` uses the nearest ancestor with a `.git` directory or worktree marker file.
 Outside Git, it selects global scope.
@@ -29,12 +48,15 @@ Outside Git, it selects global scope.
 | Claude Code | `.mcp.json`           | `$CLAUDE_CONFIG_DIR/.claude.json`, default `~/.claude.json` |
 
 The command prints the selected scope, file path, and fields it sets.
-Use `--dry-run` to preview those settings without creating or changing files, or to apply them manually.
+Use `--dry-run` to preview those settings and any persistent installation without writing files or installing, or to apply them manually.
 Existing settings outside the printed fields are preserved, including other servers, environment variables, and client preferences.
 TOML comments are preserved; JSON is formatted on write.
-Malformed configuration and an existing remote server named `console` cause an error without overwriting the file.
+Malformed configuration and an existing remote server with the selected name cause an error without overwriting the file.
+Every selected client's configuration is parsed before installation or writes begin.
+Each file is replaced atomically, preserving symlinks and existing permissions; a later write failure can leave earlier files changed, and their completed actions remain in stdout.
+Configuration edits assume no concurrent client or setup writer.
 
-By default, installation also requests that Console tools be visible without a tool search:
+By default, configuration also requests that Console tools be visible without a tool search:
 
 - Codex: `enabled = true` and `omit_tools_from = ["deferred"]` in `[mcp_servers.console]`.
 - Claude Code: [`alwaysLoad: true`](https://code.claude.com/docs/en/mcp#exempt-a-server-from-deferral) in `mcpServers.console`.
@@ -45,9 +67,9 @@ Client startup limits still apply; a cold `uvx` launch can delay tool availabili
 Codex's Strict Code Mode Only controls tool exposure independently and overrides the visibility setting.
 Use a current client version that supports the respective setting.
 
-Restart the client after installation.
+Restart the client after configuration.
 Codex requires project trust before loading project configuration, and Claude Code may ask you to approve a project server.
-Installation leaves these client approvals and tool permissions unchanged.
+Configuration leaves these client approvals and tool permissions unchanged.
 Legacy Claude Code `.config.json` layouts are not supported by this command.
 
 ## MCP server

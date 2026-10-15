@@ -32,12 +32,14 @@ That guide also covers optional R installation and [building from source](docs/g
 Register Console with your client:
 
 ```sh
-mcp-console install codex
-# Or: mcp-console install claude
+mcp-console configure-client codex
+# Or: mcp-console configure-client claude
 ```
 
 This configures the client to launch `uvx mcp-console serve` and load Console tools up front.
 Use `--dry-run` to preview the settings or `--no-auto-load` to keep the client's default tool discovery.
+You can also start with `uvx mcp-console configure-client codex claude` to configure both clients without first installing Console.
+Use `--pin-version VERSION` to append a uvx version suffix, or `--no-uvx` to configure an absolute executable path.
 See [client setup](docs/getting-started.qmd#connect-your-client) for project/global scope and other clients.
 Run the client and Console on the same host, with the client's shell and filesystem tools using the same workspace.
 

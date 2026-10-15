@@ -6,3 +6,5 @@ permissions: "0640"
 client: claude
 symlink: preserved
 permissions: "0640"
+---
+later_write_failure: earlier change remains reported

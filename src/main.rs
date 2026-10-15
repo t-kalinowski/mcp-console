@@ -8,10 +8,10 @@ mod windows;
 mod cell;
 mod cli;
 mod config;
+mod configure_client;
 mod console_paths;
 #[cfg(unix)]
 mod input_watch;
-mod install;
 #[cfg(any(unix, windows))]
 mod jsonl;
 mod local_runtime;
@@ -63,11 +63,8 @@ fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let mut overrides = cli.overrides;
     match cli.command {
-        cli::Command::Install(options) => match install::run(&options) {
-            Ok(output) => {
-                print!("{output}");
-                ExitCode::SUCCESS
-            }
+        cli::Command::ConfigureClient(options) => match configure_client::run(&options) {
+            Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
         },
         cli::Command::Config {

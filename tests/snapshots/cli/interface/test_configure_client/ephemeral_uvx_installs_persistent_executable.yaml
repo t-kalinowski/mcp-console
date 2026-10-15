@@ -1,0 +1,7 @@
+---
+fixture: >-
+  Local binary-only Console wheel, real uv, isolated tools and cache, no
+  registry access
+temporary_run: promoted to a persistent executable
+dry_run: no install or configuration writes
+installation_failure: no configuration writes
