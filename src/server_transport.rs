@@ -57,8 +57,10 @@ struct ResponseDeliveryState {
     admission_tail: Option<Arc<ResponseDeliveryAdmissionNode>>,
     /// Physical EOF is insufficient until the transport exhausts buffered requests.
     input_drained: bool,
-    /// The latest bootstrap message received a complete response. rmcp may
-    /// answer discovery or ping without selecting a session lifecycle.
+    /// The latest message received a complete response. Used only before run()
+    /// obtains an rmcp service, when discovery/ping can remain stateless.
+    /// A legacy InitializeResult completes SDK startup immediately; the
+    /// initialized notification does not gate it.
     bootstrap_response_delivered: bool,
     closed: bool,
 }
