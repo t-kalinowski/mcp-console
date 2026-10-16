@@ -102,8 +102,9 @@ impl Launch {
 
 fn installed_requirement(environment: &Path) -> Result<String, String> {
     // Let uv reconstruct its installed requirement, including direct URLs,
-    // archive hashes, and resolved Git commits. A version alone loses the
-    // source selected by uvx --from. Never guess when metadata is unavailable.
+    // archive hashes, and resolved Git commits. Index installs record only a
+    // version, losing CLI-only resolver options. Never resolve that version
+    // again through a potentially different index or --find-links source.
     let output = Command::new("uv")
         .args(["pip", "freeze", "--python"])
         .arg(environment)
@@ -120,18 +121,15 @@ fn installed_requirement(environment: &Path) -> Result<String, String> {
         ));
     }
     let requirements = String::from_utf8(output.stdout).map_err(|error| error.to_string())?;
-    requirements
-        .lines()
-        .find_map(|requirement| {
-            if let Some(version) = requirement.strip_prefix("mcp-console==") {
-                Some(format!("mcp-console@{version}"))
-            } else if requirement.starts_with("mcp-console @ ") {
-                Some(requirement.to_owned())
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| "Cannot identify this temporary tool's source; install Console persistently with uv tool install <SOURCE> before using --no-uvx".into())
+    for requirement in requirements.lines() {
+        if requirement.starts_with("mcp-console==") {
+            return Err("Cannot recover this temporary tool's index or --find-links source from its installed version; install Console persistently with uv tool install using the same resolver options, then run configure-client --no-uvx".into());
+        }
+        if requirement.starts_with("mcp-console @ ") {
+            return Ok(requirement.to_owned());
+        }
+    }
+    Err("Cannot identify this temporary tool's source; install Console persistently with uv tool install <SOURCE> before using --no-uvx".into())
 }
 
 fn temporary_uv_environment(executable: &Path) -> Result<Option<&Path>, String> {

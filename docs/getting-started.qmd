@@ -48,7 +48,8 @@ Restart the client and approve project configuration if prompted.
 The default launch command is `uvx mcp-console serve`, with no version constraint.
 Use `--pin-version v0.0.5` to select an exact version or `--pin-version latest` to request the latest release at launch.
 Use `--pin-version current` to pin the version running setup.
-Use `--no-uvx` to configure an absolute executable path; a temporary uvx run first installs its selected source persistently with uv.
+Use `--no-uvx` to configure an absolute executable path; a temporary uvx run can first install a recorded direct wheel, archive, or Git source persistently with uv.
+For index or `--find-links` installations, run `uv tool install` with the same resolver options first, then invoke the installed executable with `--no-uvx`.
 When reviewing a source installation, run that installation's `mcp-console configure-client CLIENT --no-uvx` to save its absolute executable path.
 See [client configuration](CLI.md#configure-a-client) for paths and visibility settings.
 

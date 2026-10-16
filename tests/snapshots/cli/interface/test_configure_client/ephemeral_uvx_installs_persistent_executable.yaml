@@ -5,5 +5,8 @@ fixture: >-
 temporary_run: promoted to a persistent executable
 source_identity: >-
   selected wheel retained despite an index wheel with the same version
+index_source: >-
+  unrecorded resolver options rejected before installation or
+  configuration writes
 dry_run: no install or configuration writes
 installation_failure: no configuration writes

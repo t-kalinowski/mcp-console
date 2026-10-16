@@ -37,10 +37,12 @@ An unqualified uvx command may reuse an installed or cached version; `latest` re
 
 `--no-uvx` configures an absolute path to the running executable instead.
 Invoke the desired installation to select it, for example `/opt/mcp-console/bin/mcp-console configure-client claude --no-uvx`.
-When the executable is in a uv-created environment inside a disposable cache, the command uses `uv pip freeze --python ENVIRONMENT` to identify Console's installed requirement, then runs `uv tool install REQUIREMENT` and configures the absolute launcher path reported by `uv tool dir --bin`.
+When the executable is in a uv-created environment inside a disposable cache, the command uses `uv pip freeze --python ENVIRONMENT` to identify Console's recorded direct source, then runs `uv tool install REQUIREMENT` and configures the absolute launcher path reported by `uv tool dir --bin`.
 The shared `CACHEDIR.TAG` marker alone does not trigger installation; Cargo builds and non-uv environments retain their executable paths.
-Index installations retain their resolved version; wheel, archive, and Git installations retain their recorded source, including recorded hashes and resolved Git commits.
+Direct wheel, archive, and Git installations retain their recorded source, including recorded hashes and resolved Git commits.
 This includes temporary `uvx --no-cache` runs and custom uv cache locations.
+Temporary index and `--find-links` installations record only a version, so setup rejects them before installation or configuration changes rather than resolving through a potentially different source.
+Install persistently with `uv tool install` using the same resolver options first, then invoke the installed executable's `configure-client --no-uvx` command.
 If source metadata for a temporary uv environment cannot be identified, setup fails before installation or configuration changes; install the desired source persistently with `uv tool install SOURCE`, then run its `configure-client --no-uvx` command.
 The persistent installation requires `uv` during setup; subsequent client launches use the saved executable directly.
 The command prints the installation command and executable path before installing.

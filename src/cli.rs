@@ -223,7 +223,7 @@ pub struct ConfigureClientOptions {
     #[arg(long, value_enum, default_value = "auto")]
     pub scope: ConfigureClientScope,
 
-    /// Configure an absolute executable path; temporary uvx runs first install their source persistently with uv. Conflicts with --pin-version
+    /// Configure an absolute executable path; temporary uvx runs install recorded direct sources with uv. Index installs must be persistent first. Conflicts with --pin-version
     #[arg(long, conflicts_with = "pin_version")]
     pub no_uvx: bool,
 
