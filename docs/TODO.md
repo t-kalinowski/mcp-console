@@ -51,7 +51,7 @@ See [native capabilities](SANDBOX_CONFIGURATION.md#native-capabilities).
 **SP-3 — Reduce Windows fixture-only exclusions.** Port shell/shebang, FIFO, and Unix-layout fixtures for otherwise supported admission, resolver, client, and lifecycle behavior.
 Keep genuinely OS-specific contracts on their owning platform.
 Native Windows acceptance does not cover every skipped shared case.
-Audit through full-suite capability diagnostics; see [Windows parity](WINDOWS.md#testing-parity-and-remaining-gaps).
+Audit through full-suite capability diagnostics; see [Windows parity](WINDOWS_DEVELOPMENT.md#testing-parity-and-remaining-gaps).
 
 **SP-4 — Recheck development-Python compatibility.** The development guide records isolated `sitecustomize` fixture incompatibility with Python 3.14.
 Reproduce against current tooling before removing the tested Python 3.13 recommendation.

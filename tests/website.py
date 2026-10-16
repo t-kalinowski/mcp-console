@@ -115,8 +115,11 @@ class WebsiteTests(unittest.TestCase):
             with self.subTest(page=str(relative)):
                 page = self.pages[(self.site / relative).resolve()]
                 heading = (
-                    source.read_text()
-                    .splitlines()[0]
+                    next(
+                        line
+                        for line in source.read_text().splitlines()
+                        if line.startswith("# ")
+                    )
                     .removeprefix("# ")
                     .replace("`", "")
                 )
@@ -274,6 +277,33 @@ class WebsiteTests(unittest.TestCase):
         self.assertIsNotNone(description)
         self.assertIn("data", description["content"])
 
+    def test_get_started_belongs_to_the_guides_navigation(self) -> None:
+        soup = BeautifulSoup(
+            (self.site / "getting-started.html").read_text(), "html.parser"
+        )
+        navbar = soup.select_one(".navbar")
+        sidebar = soup.find(id="quarto-sidebar")
+        for element, included, excluded in (
+            (navbar, "README.html", "getting-started.html"),
+            (sidebar, "getting-started.html", "WINDOWS.html"),
+        ):
+            links = {
+                urlsplit(link["href"]).path.removeprefix("./")
+                for link in element.select("a[href]")
+            }
+            self.assertIn(included, links)
+            self.assertNotIn(excluded, links)
+
+    def test_get_started_client_setup_uses_the_installed_command(self) -> None:
+        commands = [
+            line.strip()
+            for code in self.pages[self.site / "getting-started.html"].code_blocks
+            for line in code.splitlines()
+            if "configure-client" in line
+        ]
+        for client in ("codex", "claude"):
+            self.assertIn(f"mcp-console configure-client {client}", commands)
+
     def test_moved_reference_pages_and_historical_fragments(self) -> None:
         fragments = {
             "CONFIGURATION": (
@@ -308,9 +338,13 @@ class WebsiteTests(unittest.TestCase):
                 "custom-workers",
             ),
             "WINDOWS": (
+                "install-and-run",
+                "native-sandbox",
                 "build-from-source",
+                "lifecycle-and-platform-differences",
                 "validation",
                 "testing-parity-and-remaining-gaps",
+                "troubleshooting",
             ),
             "SANDBOX": (
                 "application-policy-and-launch",
@@ -337,7 +371,15 @@ class WebsiteTests(unittest.TestCase):
                 self.assertGreater(len(soup.select_one("main").get_text()), 1000)
 
     def test_workspace_profile_is_available_in_setup_guides(self) -> None:
-        for name in ("getting-started", "CONFIGURATION", "SANDBOX_CONFIGURATION"):
+        setup_commands = "\n".join(
+            self.pages[self.site / "getting-started.html"].code_blocks
+        )
+        self.assertIn("-c sandbox.profile=workspace", setup_commands)
+        self.assertLess(
+            setup_commands.index("-c sandbox.profile=workspace"),
+            setup_commands.index("--writable-root"),
+        )
+        for name in ("CONFIGURATION", "SANDBOX_CONFIGURATION"):
             with self.subTest(page=name):
                 self.assertTrue(
                     any(

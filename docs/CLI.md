@@ -106,6 +106,25 @@ Codex requires project trust before loading project configuration, and Claude Co
 Configuration leaves these client approvals and tool permissions unchanged.
 Legacy Claude Code `.config.json` layouts are not supported by this command.
 
+### Other MCP clients
+
+Configure a stdio server with command `mcp-console` and arguments `["serve"]`.
+Clients using an `mcpServers` mapping can use:
+
+```json
+{
+  "mcpServers": {
+    "console": {
+      "command": "mcp-console",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+Console runs on the same host as the client, usually in the agent's workspace.
+For remote work, run both on the remote host; Console does not manage remote connections or containers.
+
 ## MCP server
 
 ```sh
@@ -227,7 +246,7 @@ Native Windows sandboxed launches require MXC, including complete native policie
 Unsupported hosts and policies fail before the workload executes; there is no automatic weaker fallback.
 
 MXC needs no provisioning command.
-See [Windows setup](WINDOWS.md#native-sandbox).
+See [Windows host requirements](SANDBOX_CONFIGURATION.md#windows-mxc-requirement).
 
 ## Run without sandboxing
 

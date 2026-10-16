@@ -79,6 +79,7 @@ Standard-library code needs no third-party packages.
 
 The equivalent mapping is `python: {existing: .venv}`.
 A venv directory needs `pyvenv.cfg` and its ordinary `bin/python` or Windows `Scripts/python.exe`.
+On Windows, select a real interpreter or virtual environment, not a Windows App Execution Alias.
 Executable paths preserve venv identity and symlinks.
 Recognized Conda installations are unsupported.
 
