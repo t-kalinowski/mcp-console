@@ -414,28 +414,16 @@ SandboxNetwork <- S7::new_class(
 )
 
 #' @rdname SandboxPolicy
-#' @param first_available A nonempty character vector of profile names in
-#'   selection order. Each of `"codex"` and `"workspace"` may appear once;
-#'   `"workspace"` must be last because it is always available.
+#' @param fallback `NULL` to require usable Codex sandbox metadata, or
+#'   `"workspace"` to permit project writes with metadata protections when
+#'   client metadata is missing or unsupported. A failure to start the selected
+#'   sandbox does not select the fallback.
 #' @export
-FirstAvailableSandboxProfile <- S7::new_class(
-  "FirstAvailableSandboxProfile",
+CodexSandboxProfile <- S7::new_class(
+  "CodexSandboxProfile",
   parent = ConfigNode,
   properties = list(
-    first_available = S7::new_property(
-      S7::class_character,
-      validator = function(value) {
-        if (
-          !length(value) ||
-            anyNA(value) ||
-            any(!value %in% c("codex", "workspace")) ||
-            anyDuplicated(value) ||
-            any(which(value == "workspace") != length(value))
-        ) {
-          "must contain codex and/or workspace at most once, with workspace last"
-        }
-      }
-    )
+    fallback = config_choice("workspace")
   )
 )
 
@@ -447,9 +435,9 @@ FirstAvailableSandboxProfile <- S7::new_class(
 #'   proxy, respectively. Filesystem enforcement remains in place.
 #' @param profile `NULL` to preserve context defaults, `"workspace"` for
 #'   workspace writes, `"codex"` to require supported sandbox metadata from
-#'   the first MCP `send`, or a `FirstAvailableSandboxProfile()` for explicit
+#'   the first MCP `send`, or a `CodexSandboxProfile()` for explicit
 #'   fallback selection. For shared clients, use
-#'   `FirstAvailableSandboxProfile(c("codex", "workspace"))`.
+#'   `CodexSandboxProfile(fallback = "workspace")`.
 #'   Filesystem entries compose with the selected base; explicit network and
 #'   temporary-storage settings apply afterward. Inherited full access disables
 #'   worker and preparation sandboxing, so local restrictions are not enforced.
@@ -482,7 +470,7 @@ SandboxPolicy <- S7::new_class(
       }
     ),
     profile = S7::new_property(
-      NULL | S7::class_character | FirstAvailableSandboxProfile,
+      NULL | S7::class_character | CodexSandboxProfile,
       validator = function(value) {
         if (
           is.character(value) &&
@@ -490,7 +478,7 @@ SandboxPolicy <- S7::new_class(
               is.na(value) ||
               !value %in% c("workspace", "codex"))
         ) {
-          "must be NULL, workspace, codex, or a FirstAvailableSandboxProfile()"
+          "must be NULL, workspace, codex, or a CodexSandboxProfile()"
         }
       }
     ),
@@ -555,6 +543,11 @@ config_mapping <- function(fields) {
 S7::method(as.list, ConfigNode) <- function(x, ...) {
   S7::validate(x)
   config_mapping(S7::props(x))
+}
+
+S7::method(as.list, CodexSandboxProfile) <- function(x, ...) {
+  S7::validate(x)
+  json_object(list(codex = config_mapping(S7::props(x))))
 }
 
 config_override <- function(key, value) {

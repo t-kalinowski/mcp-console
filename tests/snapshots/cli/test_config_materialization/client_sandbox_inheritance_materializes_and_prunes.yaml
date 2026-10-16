@@ -1,6 +1,6 @@
 ---
 profiles:
   - codex
-  - first_available:
-    - codex
-    - workspace
+  - codex: {}
+  - codex:
+      fallback: workspace

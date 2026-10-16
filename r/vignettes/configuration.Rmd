@@ -214,7 +214,7 @@ For configuration shared by Codex and clients without sandbox metadata, select o
 
 ```{r}
 SandboxPolicy(
-  profile = FirstAvailableSandboxProfile(c("codex", "workspace")),
+  profile = CodexSandboxProfile(fallback = "workspace"),
   filesystem = SandboxFilesystem(read_write = "./output")
 )
 ```

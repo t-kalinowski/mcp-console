@@ -33,7 +33,8 @@ test_that("materialization and pruning retain client sandbox inheritance", {
 
   for (profile in list(
     "codex",
-    FirstAvailableSandboxProfile(c("codex", "workspace"))
+    CodexSandboxProfile(),
+    CodexSandboxProfile(fallback = "workspace")
   )) {
     requested <- SandboxPolicy(profile = profile)
     config <- materialize_console_config(

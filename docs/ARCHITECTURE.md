@@ -62,7 +62,7 @@ One connection-owned background task discovers runtimes, prepares defaults, and 
 MCP initialization, tool discovery, and pings do not wait.
 Custom workers remain lazy.
 
-With a `sandbox.profile` selection containing `codex`, startup waits for the first `send` to capture client authority before creating any preparation or execution process.
+With the `codex` sandbox profile, startup waits for the first `send` to capture client authority before creating any preparation or execution process.
 The server translates supported permissions or selects the explicit workspace fallback, then composes local permissions and selects caches.
 Only the selected base contributes permissions; the workspace fallback cannot widen a selected client policy.
 The captured policy survives startup retries and worker replacement; changed recognized permissions require a new connection.

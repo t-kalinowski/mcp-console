@@ -50,7 +50,8 @@ For one configuration shared by Codex and clients that do not supply this metada
 ```yaml
 sandbox:
   profile:
-    first_available: [codex, workspace]
+    codex:
+      fallback: workspace
   filesystem:
     read_write: [./output]
 ```
@@ -62,15 +63,16 @@ Explicit filesystem entries compose with the selected base using the ordinary sp
 Explicit network and temporary-storage settings apply to the selected base; without a network override, the Codex network mode applies.
 Create writable directories such as `./output` before launch.
 
-`first_available` must be a nonempty list of profile names, each appearing at most once.
-`workspace` must be last because it is always available.
-Nested selections and unknown names are errors.
+The Codex mapping accepts an optional `fallback: workspace`.
+Without a fallback, `profile: {codex: {}}` requires metadata, just like `profile: codex`.
+Unknown profiles, unknown options, and nested fallbacks are errors.
+A failure to prepare runtimes or start the selected sandbox is an error; it does not select the fallback.
 The standalone `sandbox` command has no client metadata, so it uses an explicit workspace fallback or rejects a required `codex` profile before executing the target.
 `config resolve` preserves the selection policy and automatic cache choice without selecting a runtime profile or preparing interpreters.
 
-In R, use `SandboxPolicy(profile = "codex")` or `SandboxPolicy(profile = FirstAvailableSandboxProfile(c("codex", "workspace")))`.
+In R, use `SandboxPolicy(profile = "codex")` or `SandboxPolicy(profile = CodexSandboxProfile(fallback = "workspace"))`.
 
-When the profile selection includes `codex`, Console advertises the experimental `codex/sandbox-state` capability and its older `codex/sandbox-state-meta` alias.
+When the `codex` profile is configured, Console advertises the experimental `codex/sandbox-state` capability and its older `codex/sandbox-state-meta` alias.
 It reads that key from the first `send` call's `_meta`, before runtime discovery, dependency preparation, or worker startup.
 Initialization, tool discovery, and pings remain available while waiting for that call.
 Metadata belongs to the MCP request, outside the tool's `arguments`.
@@ -99,7 +101,7 @@ Dependency preparation retains its separate resolver policy unless inherited ful
 Full access defaults to host caches; explicit `cache: console` remains invalid without sandboxing.
 Inherited full access disables enforcement of local filesystem and network restrictions too.
 
-Missing metadata, an unsupported client profile, or an invalid profile shape makes the Codex candidate unavailable.
+Missing metadata, an unsupported client profile, or an invalid profile shape makes the Codex profile unavailable.
 An explicitly selected fallback applies; without one, the call fails before runtime preparation.
 Unknown fields, unsupported path forms such as globs, and client backend or launcher selections are ignored.
 Console always uses its own pinned runner; metadata cannot select an executable or change its backend.

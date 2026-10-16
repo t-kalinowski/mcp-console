@@ -42,7 +42,11 @@ def test_client_sandbox_inheritance_materializes_and_prunes(binary: Path) -> Tra
         assert result.returncode == 0 and result.stderr == "", result
         assert "inherit_from_codex" not in json.loads(result.stdout)["sandbox"]
         selected = root / "config.json"
-        profiles = ("codex", {"first_available": ["codex", "workspace"]})
+        profiles = (
+            "codex",
+            {"codex": {}},
+            {"codex": {"fallback": "workspace"}},
+        )
         for profile in profiles:
             result = resolve(
                 binary,
@@ -113,12 +117,16 @@ def test_client_sandbox_inheritance_materializes_and_prunes(binary: Path) -> Tra
             True,
             [],
             {},
-            {"first_available": []},
-            {"first_available": ["future", "workspace"]},
-            {"first_available": ["codex", {"first_available": ["workspace"]}]},
-            {"first_available": ["workspace", "codex"]},
-            {"first_available": ["codex", "codex"]},
+            {"first_available": ["codex", "workspace"]},
             {"first_available": ["codex", "workspace"], "extra": True},
+            {"workspace": {}},
+            {"codex": True},
+            {"codex": []},
+            {"codex": {"fallback": "future"}},
+            {"codex": {"fallback": "codex"}},
+            {"codex": {"fallback": {"codex": {"fallback": "workspace"}}}},
+            {"codex": {"fallback": "workspace", "extra": True}},
+            {"codex": {"fallback": "workspace"}, "extra": True},
         ):
             result = resolve(
                 binary,

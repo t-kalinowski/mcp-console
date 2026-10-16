@@ -317,10 +317,7 @@ config_from_json <- function(settings) {
           if (is.null(fields) || is.character(fields)) {
             return(fields)
           }
-          FirstAvailableSandboxProfile(as.character(unlist(
-            fields$first_available,
-            use.names = FALSE
-          )))
+          config_node_from_json(CodexSandboxProfile, fields$codex)
         },
         filesystem = function(fields) {
           config_node_from_json(SandboxFilesystem, fields)

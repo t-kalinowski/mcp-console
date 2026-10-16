@@ -72,7 +72,20 @@ pub(crate) enum Profile {
 #[serde(untagged)]
 pub(crate) enum ProfileSelection {
     Named(Profile),
-    FirstAvailable { first_available: Vec<Profile> },
+    Codex { codex: CodexProfile },
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CodexProfile {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fallback: Option<FallbackProfile>,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum FallbackProfile {
+    Workspace,
 }
 
 impl<'de> Deserialize<'de> for ProfileSelection {
@@ -80,7 +93,7 @@ impl<'de> Deserialize<'de> for ProfileSelection {
         #[derive(Deserialize)]
         #[serde(rename_all = "snake_case")]
         enum Mapping {
-            FirstAvailable(Vec<Profile>),
+            Codex(CodexProfile),
         }
         let value = Value::deserialize(deserializer)?;
         if value.is_string() {
@@ -88,43 +101,30 @@ impl<'de> Deserialize<'de> for ProfileSelection {
                 .map(Self::Named)
                 .map_err(D::Error::custom);
         }
-        let Mapping::FirstAvailable(first_available) =
-            serde_json::from_value(value).map_err(D::Error::custom)?;
-        if first_available.is_empty()
-            || first_available.iter().enumerate().any(|(index, profile)| {
-                first_available[..index].contains(profile)
-                    || (*profile == Profile::Workspace && index + 1 != first_available.len())
-            })
-        {
-            return Err(D::Error::custom(
-                "first_available must be nonempty, with each profile at most once and workspace last",
-            ));
-        }
-        Ok(Self::FirstAvailable { first_available })
+        let Mapping::Codex(codex) = serde_json::from_value(value).map_err(D::Error::custom)?;
+        Ok(Self::Codex { codex })
     }
 }
 
 impl ProfileSelection {
-    fn candidates(&self) -> &[Profile] {
+    pub(crate) fn uses_codex(&self) -> bool {
         match self {
-            Self::Named(profile) => std::slice::from_ref(profile),
-            Self::FirstAvailable { first_available } => first_available,
+            Self::Named(Profile::Workspace) => false,
+            Self::Named(Profile::Codex) | Self::Codex { .. } => true,
         }
     }
 
-    pub(crate) fn uses_codex(&self) -> bool {
-        self.candidates().contains(&Profile::Codex)
-    }
-
     pub(crate) fn select(&self, client_available: bool) -> Result<Profile, String> {
-        self.candidates()
-            .iter()
-            .copied()
-            .find(|profile| match profile {
-                Profile::Codex => client_available,
-                Profile::Workspace => true,
-            })
-            .ok_or_else(|| "sandbox.profile: codex requires usable Codex sandbox metadata; configure first_available: [codex, workspace] for a workspace fallback".into())
+        let fallback = match self {
+            Self::Named(Profile::Workspace) => return Ok(Profile::Workspace),
+            Self::Named(Profile::Codex) => None,
+            Self::Codex { codex } => codex.fallback,
+        };
+        match (client_available, fallback) {
+            (true, _) => Ok(Profile::Codex),
+            (false, Some(FallbackProfile::Workspace)) => Ok(Profile::Workspace),
+            (false, None) => Err("sandbox.profile: codex requires usable Codex sandbox metadata; set sandbox.profile to {codex: {fallback: workspace}} to allow a workspace fallback".into()),
+        }
     }
 }
 

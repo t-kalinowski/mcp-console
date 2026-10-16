@@ -7,21 +7,25 @@ test_that("client sandbox profiles preserve explicit fallback selection", {
     as.list(SandboxPolicy(profile = "codex")),
     list(profile = "codex")
   )
-  profile <- FirstAvailableSandboxProfile(c("codex", "workspace"))
+  profile <- CodexSandboxProfile(fallback = "workspace")
   expect_identical(
     as.list(SandboxPolicy(profile = profile)),
-    list(profile = list(first_available = list("codex", "workspace")))
+    list(profile = list(codex = list(fallback = "workspace")))
+  )
+  expect_identical(
+    policy_json(SandboxPolicy(profile = CodexSandboxProfile())),
+    '{"profile":{"codex":{}}}'
   )
   expect_null(SandboxPolicy()@profile)
-  expect_error(FirstAvailableSandboxProfile(character()), "first_available")
-  expect_error(
-    FirstAvailableSandboxProfile(c("workspace", "codex")),
-    "first_available"
-  )
-  expect_error(
-    FirstAvailableSandboxProfile(c("codex", "codex")),
-    "first_available"
-  )
+  for (fallback in list(
+    "codex",
+    "future",
+    c("workspace", "workspace"),
+    NA_character_,
+    TRUE
+  )) {
+    expect_error(CodexSandboxProfile(fallback = fallback), "fallback")
+  }
   expect_error(SandboxPolicy(inherit_from_codex = TRUE), "unused argument")
 })
 

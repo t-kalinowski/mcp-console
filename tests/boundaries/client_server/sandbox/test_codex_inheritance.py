@@ -114,7 +114,7 @@ def test_profile_fallback_selects_one_base_before_local_overrides(
             json.dumps(
                 {
                     "sandbox": {
-                        "profile": {"first_available": ["codex", "workspace"]},
+                        "profile": {"codex": {"fallback": "workspace"}},
                         "filesystem": {"read_write": ["output"], "deny": ["private"]},
                         "network": "restricted",
                         "tempdir": "read_write",
@@ -219,7 +219,7 @@ def test_required_profile_rejects_missing_metadata_before_runtime_inspection(
             (
                 "serve",
                 "-c",
-                "sandbox.profile=codex",
+                "sandbox.profile={codex: {}}",
                 "-c",
                 "cache=host",
                 "-c",
@@ -495,7 +495,7 @@ def test_missing_and_unsupported_metadata_retain_local_policy(
             (
                 "serve",
                 "-c",
-                "sandbox.profile={first_available: [codex, workspace]}",
+                "sandbox.profile={codex: {fallback: workspace}}",
                 "-c",
                 "cache=host",
                 "-c",

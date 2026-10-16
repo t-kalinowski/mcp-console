@@ -1,9 +1,8 @@
 ---
 sandbox:
   profile:
-    first_available:
-      - codex
-      - workspace
+    codex:
+      fallback: workspace
 ---
 network: restricted
 extends: :workspace

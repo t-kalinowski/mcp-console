@@ -14,8 +14,9 @@ result:
   content:
     - type: text
       text: >-
-        sandbox.profile: codex requires usable Codex sandbox metadata; configure
-        first_available: [codex, workspace] for a workspace fallback
+        sandbox.profile: codex requires usable Codex sandbox metadata; set
+        sandbox.profile to {codex: {fallback: workspace}} to allow a workspace
+        fallback
   isError: true
 ---
 input:
@@ -33,6 +34,7 @@ result:
   content:
     - type: text
       text: >-
-        sandbox.profile: codex requires usable Codex sandbox metadata; configure
-        first_available: [codex, workspace] for a workspace fallback
+        sandbox.profile: codex requires usable Codex sandbox metadata; set
+        sandbox.profile to {codex: {fallback: workspace}} to allow a workspace
+        fallback
   isError: true
