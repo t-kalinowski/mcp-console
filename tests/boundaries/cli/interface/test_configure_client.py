@@ -1,5 +1,9 @@
 #!/usr/bin/env -S uv run --script
 
+import base64
+import csv
+import hashlib
+import io
 import json
 import os
 import shutil
@@ -112,6 +116,198 @@ def test_all_clients_are_validated_before_changes(binary: Path) -> Transcript:
     return [{"invalid_client": "no files written", "conflicting_options": "rejected"}]
 
 
+def test_version_validation_and_current_pin(binary: Path) -> Transcript:
+    version = subprocess.check_output([binary, "--version"], text=True).split()[1]
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        for suffix in ("typo", ">=0.0.5", "v", "0.0.5@latest", ""):
+            result = configure(
+                binary,
+                root,
+                root,
+                "codex",
+                "claude",
+                "--scope",
+                "global",
+                "--pin-version",
+                suffix,
+            )
+            assert result.returncode == 2 and not result.stdout, result
+            assert "--pin-version" in result.stderr, result
+            assert (
+                not (root / "codex-home").exists()
+                and not (root / "claude-home").exists()
+            )
+        for suffix in ("current", "1!2.0rc1.post2.dev3+local"):
+            expected = version if suffix == "current" else suffix
+            case = root / suffix
+            case.mkdir()
+            result = configure(
+                binary,
+                case,
+                case,
+                "codex",
+                "claude",
+                "--scope",
+                "global",
+                "--pin-version",
+                suffix,
+                "--dry-run",
+            )
+            assert (
+                result.returncode == 0 and f"mcp-console@{expected}" in result.stdout
+            ), result
+            assert (
+                not (case / "codex-home").exists()
+                and not (case / "claude-home").exists()
+            )
+            result = configure(
+                binary,
+                case,
+                case,
+                "codex",
+                "claude",
+                "--scope",
+                "global",
+                "--pin-version",
+                suffix,
+            )
+            assert result.returncode == 0 and not result.stderr, result
+            for client, path in (
+                ("codex", case / "codex-home/config.toml"),
+                ("claude", case / "claude-home/.claude.json"),
+            ):
+                assert server(read_config(path, client), client)["args"] == [
+                    f"mcp-console@{expected}",
+                    "serve",
+                ]
+    return [
+        {
+            "invalid_suffixes": "rejected before writes",
+            "current": "expanded to the running version",
+            "exact_versions": "PEP 440 syntax",
+        }
+    ]
+
+
+def test_reserved_names_are_client_specific(binary: Path) -> Transcript:
+    names = (
+        "workspace",
+        "claude-in-chrome",
+        "computer-use",
+        "Claude Preview",
+        "Claude Browser",
+    )
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        for name in names:
+            for clients in (("claude",), ("codex", "claude")):
+                result = configure(
+                    binary, root, root, *clients, "--scope", "global", "--name", name
+                )
+                assert result.returncode == 1 and not result.stdout, result
+                assert name in result.stderr and "reserved" in result.stderr, result
+                assert (
+                    not (root / "codex-home").exists()
+                    and not (root / "claude-home").exists()
+                )
+        result = configure(
+            binary, root, root, "codex", "--scope", "global", "--name", "workspace"
+        )
+        assert result.returncode == 0, result
+        assert (
+            "workspace"
+            in read_config(root / "codex-home/config.toml", "codex")["mcp_servers"]
+        )
+    return [
+        {
+            "reserved_names": list(names),
+            "selected_clients_validated_before_writes": True,
+            "other_clients": "same names remain available",
+        }
+    ]
+
+
+def test_existing_files_retain_identity_and_security_metadata(
+    binary: Path,
+) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        long_command = "old-" + "x" * 1024
+        for client, source, relative in (
+            (
+                "codex",
+                f'[mcp_servers.console]\ncommand = "{long_command}"\n',
+                "codex-home/config.toml",
+            ),
+            (
+                "claude",
+                json.dumps({"mcpServers": {"console": {"command": long_command}}}),
+                "claude-home/.claude.json",
+            ),
+        ):
+            path = root / relative
+            path.parent.mkdir()
+            path.write_text(source, encoding="utf-8")
+            alias = root / f"{client}-managed-file"
+            os.link(path, alias)
+            before = path.stat()
+            result = configure(binary, root, root, client, "--scope", "global")
+            assert result.returncode == 0 and not result.stderr, result
+            assert path.samefile(alias), "The managed file was replaced"
+            assert (
+                alias.read_bytes() == path.read_bytes() and alias.read_text() != source
+            )
+            assert server(read_config(path, client), client)["command"] == "uvx"
+            assert (path.stat().st_uid, path.stat().st_gid) == (
+                before.st_uid,
+                before.st_gid,
+            )
+            records.append(
+                {
+                    "client": client,
+                    "file_identity_and_native_security_metadata": "retained",
+                }
+            )
+    return records
+
+
+def test_comments_on_updated_toml_fields_are_preserved(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        path = root / "codex-home/config.toml"
+        path.parent.mkdir()
+        source = (
+            "[mcp_servers.console]\n"
+            '# Managed locally.\ncommand = "old" # command annotation\n'
+            'args = ["old"] # argument annotation\n'
+            "enabled = false # enable annotation\n"
+            "omit_tools_from = [] # discovery annotation\n"
+        )
+        path.write_text(source, encoding="utf-8")
+        result = configure(binary, root, root, "codex", "--scope", "global")
+        assert result.returncode == 0, result
+        updated = path.read_text(encoding="utf-8")
+        for comment in (
+            "# Managed locally.",
+            "# command annotation",
+            "# argument annotation",
+            "# enable annotation",
+            "# discovery annotation",
+        ):
+            assert updated.count(comment) == 1, updated
+        assert server(read_config(path, "codex"), "codex")["args"] == [
+            "mcp-console",
+            "serve",
+        ]
+        result = configure(binary, root, root, "codex", "--scope", "global")
+        assert result.returncode == 0 and path.read_text(encoding="utf-8") == updated, (
+            result
+        )
+    return [{"updated_fields": "comments preserved", "repeat": "unchanged"}]
+
+
 def test_direct_executable_finds_itself(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -172,7 +368,18 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
                 f"{stem}.dist-info/WHEEL",
                 "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
             )
-            archive.writestr(f"{stem}.dist-info/RECORD", "")
+            record = io.StringIO()
+            writer = csv.writer(record, lineterminator="\n")
+            for name in archive.namelist():
+                content = archive.read(name)
+                digest = (
+                    base64.urlsafe_b64encode(hashlib.sha256(content).digest())
+                    .rstrip(b"=")
+                    .decode("ascii")
+                )
+                writer.writerow((name, f"sha256={digest}", len(content)))
+            writer.writerow((f"{stem}.dist-info/RECORD", "", ""))
+            archive.writestr(f"{stem}.dist-info/RECORD", record.getvalue())
         extra = {
             "UV_CACHE_DIR": str(root / "uv-cache"),
             "UV_TOOL_DIR": str(root / "uv-tools"),
@@ -563,7 +770,7 @@ def test_linked_configuration_preserves_target_and_permissions(
                 {"client": client, "symlink": "preserved", "permissions": "0640"}
             )
         # Both files parse before writes. The broken second link fails only
-        # during atomic replacement, after the first client's update succeeds.
+        # when writing, after the first client's update succeeds.
         target.unlink()
         result = configure(
             binary,

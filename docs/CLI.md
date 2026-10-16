@@ -11,6 +11,7 @@ uvx mcp-console configure-client codex claude
 mcp-console configure-client codex --scope global
 mcp-console configure-client claude --scope project --dry-run
 mcp-console configure-client claude --no-auto-load
+mcp-console configure-client codex --pin-version current
 mcp-console configure-client codex --pin-version v0.0.5
 mcp-console configure-client claude --no-uvx
 mcp-console configure-client codex --name console-local -- --writable-root /data
@@ -20,12 +21,15 @@ mcp-console configure-client codex --name console-local -- --writable-root /data
 Pass one or more client names; all options apply to every selected client, and repeated client names are configured once.
 Use separate invocations for different settings per client.
 `--name NAME` changes the server name; arguments after `--` are appended after `serve`.
+When Claude Code is selected, its reserved names (`workspace`, `claude-in-chrome`, `computer-use`, `Claude Preview`, and `Claude Browser`) are rejected before configuration changes.
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) so `uvx` is on the client's `PATH`.
 The client itself does not need to be installed when writing its configuration.
 
 The default uvx command has no version suffix.
 `--pin-version VERSION` appends the supplied suffix after `@`, for example `mcp-console@v0.0.5` or `mcp-console@latest`.
-Use uvx's exact-version syntax or `latest`; version ranges are not supported by this suffix.
+`--pin-version current` saves the concrete version running setup, so later launches stay on that version.
+Exact versions use PEP 440 syntax and are validated before configuration changes; `latest` and `current` are also accepted, while version ranges and invalid suffixes are rejected.
+Package availability is checked by uv when the client launches the server.
 An unqualified uvx command may reuse an installed or cached version; `latest` requests the latest available release at launch.
 
 `--no-uvx` configures an absolute path to the running executable instead.
@@ -53,7 +57,10 @@ Existing settings outside the printed fields are preserved, including other serv
 TOML comments are preserved; JSON is formatted on write.
 Malformed configuration and an existing remote server with the selected name cause an error without overwriting the file.
 Every selected client's configuration is parsed before installation or writes begin.
-Each file is replaced atomically, preserving symlinks and existing permissions; a later write failure can leave earlier files changed, and their completed actions remain in stdout.
+Existing files are updated in place to retain file identity, symlinks, ownership, and access-control lists, including Windows DACLs.
+These updates are not atomic: an interrupted or failed write may leave an incomplete file.
+New files are created atomically.
+A later file failure can leave earlier files changed, and their completed actions remain in stdout.
 Configuration edits assume no concurrent client or setup writer.
 
 By default, configuration also requests that Console tools be visible without a tool search:

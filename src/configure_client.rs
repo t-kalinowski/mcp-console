@@ -21,6 +21,19 @@ struct Configuration {
 }
 
 pub(crate) fn run(options: &ConfigureClientOptions) -> Result<(), String> {
+    // Claude Code skips its built-in server names at load time:
+    // https://code.claude.com/docs/en/mcp#configuration-warnings
+    if options.clients.contains(&ConfigureClient::Claude)
+        && matches!(
+            options.name.as_str(),
+            "workspace" | "claude-in-chrome" | "computer-use" | "Claude Preview" | "Claude Browser"
+        )
+    {
+        return Err(format!(
+            "Server name {:?} is reserved by Claude Code; choose another --name",
+            options.name
+        ));
+    }
     let directory = std::env::current_dir().map_err(|error| error.to_string())?;
     let git_root = directory
         .ancestors()
@@ -185,7 +198,16 @@ fn edit_codex(
         }),
     );
     for (key, item) in desired.iter() {
-        console.insert(key, item.clone());
+        if let Some(existing) = console.get_mut(key) {
+            let mut replacement = item.clone();
+            if let (Some(old), Some(new)) = (existing.as_value(), replacement.as_value_mut()) {
+                *new.decor_mut() = old.decor().clone();
+            }
+            // Updating the item in place also keeps the key's own comments.
+            *existing = replacement;
+        } else {
+            console.insert(key, item.clone());
+        }
     }
     let mut snippet = DocumentMut::new();
     let mut parent = Table::new();
@@ -238,23 +260,24 @@ fn edit_claude(
 }
 
 fn write_configuration(path: &Path, source: &str) -> Result<(), std::io::Error> {
-    // Follow dotfile symlinks rather than replacing the link. Broken links fail
-    // explicitly. Configuration edits assume no concurrent client/installer writer.
-    let (target, permissions) = match fs::symlink_metadata(path) {
-        Ok(_) => (
-            path.canonicalize()?,
-            Some(fs::metadata(path)?.permissions()),
-        ),
-        Err(error) if error.kind() == ErrorKind::NotFound => (path.to_path_buf(), None),
+    // Keep existing file identity, ownership, ACLs/DACLs and symlinks. Recreating
+    // only mode bits on a replacement file cannot preserve security metadata.
+    // Existing writes are not atomic; assume no concurrent client/setup writer.
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .open(path.canonicalize()?)?;
+            file.write_all(source.as_bytes())?;
+            return file.set_len(source.len() as u64);
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => return Err(error),
-    };
-    let parent = target.parent().expect("configuration path is absolute");
+    }
+    let parent = path.parent().expect("configuration path is absolute");
     fs::create_dir_all(parent)?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(source.as_bytes())?;
-    if let Some(permissions) = permissions {
-        file.as_file().set_permissions(permissions)?;
-    }
-    file.persist(target).map_err(|error| error.error)?;
+    file.persist(path).map_err(|error| error.error)?;
     Ok(())
 }

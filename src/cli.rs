@@ -25,6 +25,7 @@ preserved. Use --dry-run to preview or apply the changes manually.
 
 Examples:
   uvx mcp-console configure-client codex claude
+  mcp-console configure-client codex --pin-version current
   mcp-console configure-client codex --pin-version v0.0.5
   mcp-console configure-client claude --no-uvx --dry-run";
 
@@ -225,8 +226,8 @@ pub struct ConfigureClientOptions {
     #[arg(long, conflicts_with = "pin_version")]
     pub no_uvx: bool,
 
-    /// Append @VERSION for uvx (e.g. 0.0.5, v0.0.5, latest); omitted by default. Conflicts with --no-uvx
-    #[arg(long, value_name = "VERSION", value_parser = clap::builder::NonEmptyStringValueParser::new())]
+    /// Pin uvx to an exact version, current, or latest; omitted by default. Conflicts with --no-uvx
+    #[arg(long, value_name = "VERSION", value_parser = parse_pin_version)]
     pub pin_version: Option<String>,
 
     /// Server name in the client's configuration
@@ -257,4 +258,19 @@ pub enum ConfigureClientScope {
     Auto,
     Project,
     Global,
+}
+
+fn parse_pin_version(input: &str) -> Result<String, String> {
+    let version = if input == "current" {
+        env!("CARGO_PKG_VERSION")
+    } else {
+        input
+    };
+    // Validate syntax here; uv checks package availability when launched.
+    if version != "latest" {
+        version.parse::<pep440_rs::Version>().map_err(|error| {
+            format!("expected an exact PEP 440 version, current, or latest: {error}")
+        })?;
+    }
+    Ok(version.to_owned())
 }

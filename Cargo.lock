@@ -849,6 +849,7 @@ dependencies = [
  "libc",
  "libloading",
  "libr",
+ "pep440_rs",
  "pep508_rs",
  "rmcp",
  "rust-embed",

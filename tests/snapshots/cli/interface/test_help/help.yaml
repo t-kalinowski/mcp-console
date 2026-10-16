@@ -169,9 +169,8 @@ stdout: |
         --no-uvx                 Configure an absolute executable path; temporary
                                  uvx runs first install this version persistently
                                  with uv. Conflicts with --pin-version
-        --pin-version <VERSION>  Append @VERSION for uvx (e.g. 0.0.5, v0.0.5,
-                                 latest); omitted by default. Conflicts with
-                                 --no-uvx
+        --pin-version <VERSION>  Pin uvx to an exact version, current, or latest;
+                                 omitted by default. Conflicts with --no-uvx
         --name <NAME>            Server name in the client's configuration
                                  [default: console]
         --no-auto-load           Keep the client's default tool discovery instead
@@ -185,6 +184,7 @@ stdout: |
 
   Examples:
     uvx mcp-console configure-client codex claude
+    mcp-console configure-client codex --pin-version current
     mcp-console configure-client codex --pin-version v0.0.5
     mcp-console configure-client claude --no-uvx --dry-run
 ---
