@@ -132,6 +132,11 @@ sandbox:
 The workspace is Console's launch directory, captured before evaluated code runs.
 Changing the working directory from R or Python does not move the permission boundary.
 
+If that directory is a filesystem root, the user's home directory, or a parent of home, Console warns and uses the `read_only` base.
+This also applies when `workspace` is the fallback for unavailable client metadata.
+The same root check applies to `resolver.sandbox.profile: workspace`.
+Explicit absolute write grants, network settings, and temporary-storage settings still apply.
+
 | Access             | With `profile: workspace`                                                                                                                                                                                 |
 | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Host files         | Read files allowed by the host's own permissions, including readable secrets.                                                                                                                             |
@@ -218,6 +223,11 @@ They do not expand `~` or variables, create directories, grant parent directorie
 Worker entries modify the host-read/private-write baseline.
 Omitting both `profile` and `read_write` grants no workspace writes.
 An explicit resolver filesystem instead **replaces** its default entries, including host reads and cache writes; see [resolver grants](RESOLVER.md#filesystem-grants).
+
+Relative `read_write` paths and `--writable-root` arguments that resolve to a filesystem root, the user's home directory, or a parent of home are ignored with a warning.
+This applies to both worker and resolver filesystem settings.
+This includes `.` when Console starts from one of those directories, parent paths such as `..`, and symlinks to those roots.
+To grant writes there explicitly, supply an absolute path.
 
 Narrower native rules take precedence.
 At equal paths, deny wins over write, then read.

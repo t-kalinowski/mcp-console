@@ -11,7 +11,7 @@ mod python;
 mod resolution;
 mod sandbox;
 pub(crate) use sandbox::{
-    Profile, ProfileSelection, Tempdir, apply_workspace_profile,
+    Profile, ProfileSelection, Tempdir, apply_workspace_profile, capture_filesystem_paths,
     materialize_settings as materialize_sandbox, resolve_writable_root,
 };
 pub(crate) const SANDBOX_MARKER: &str = "MCP_CONSOLE_SANDBOX";

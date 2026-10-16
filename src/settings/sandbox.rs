@@ -1,6 +1,6 @@
 //! Human-facing permissions and execution-host additions after configuration layering.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::{Value, json};
@@ -513,11 +513,12 @@ impl Sandbox {
 pub(crate) fn materialize_settings(
     mut settings: SandboxSettings,
     roots: Vec<PathBuf>,
-    workspace: &std::path::Path,
+    workspace: &Path,
 ) -> Result<SandboxSettings, String> {
+    capture_filesystem_paths(&mut settings, workspace)?;
     let writable_roots = roots
         .into_iter()
-        .map(|path| resolve_writable_root(path, workspace))
+        .filter_map(|path| capture_writable_root(path, workspace).transpose())
         .collect::<Result<Vec<_>, _>>()?;
     settings.entry("filesystem").or_insert_with(|| json!({}));
     let mut restricted = false;
@@ -531,13 +532,6 @@ pub(crate) fn materialize_settings(
             filesystem.entry("entries").or_insert_with(|| json!([]));
         }
         if let Some(Value::Array(entries)) = filesystem.get_mut("entries") {
-            for entry in entries.iter_mut() {
-                if entry.pointer("/path/type").and_then(Value::as_str) == Some("path")
-                    && let Some(Value::String(path)) = entry.pointer_mut("/path/path")
-                {
-                    *path = resolve_writable_root(PathBuf::from(&*path), workspace)?;
-                }
-            }
             if restricted {
                 entries.insert(
                     0,
@@ -568,6 +562,109 @@ pub(crate) fn materialize_settings(
         [(super::SANDBOX_MARKER.as_ref(), Some("1".as_ref()))],
     )?;
     Ok(settings)
+}
+
+/// Guard implicit writes and capture relative paths for worker and resolver policy.
+/// Each caller retains ownership of its filesystem baseline and cache grants.
+pub(crate) fn capture_filesystem_paths(
+    settings: &mut SandboxSettings,
+    workspace: &Path,
+) -> Result<(), String> {
+    if settings.get("extends").and_then(Value::as_str) == Some(":workspace")
+        && is_broad_write_root(workspace)?
+    {
+        settings.remove("extends");
+        settings.remove("workspace_options");
+        eprintln!(
+            "Warning: refusing automatic workspace writes to '{}'; falling back to read_only",
+            workspace.display()
+        );
+    }
+    if let Some(Value::Array(entries)) = settings
+        .get_mut("filesystem")
+        .and_then(|filesystem| filesystem.get_mut("entries"))
+    {
+        let mut captured = Vec::with_capacity(entries.len());
+        for mut entry in entries.drain(..) {
+            let write = entry.get("access").and_then(Value::as_str) == Some("write");
+            if entry.pointer("/path/type").and_then(Value::as_str) == Some("path")
+                && let Some(Value::String(path)) = entry.pointer_mut("/path/path")
+            {
+                let resolved = if write {
+                    capture_writable_root(PathBuf::from(&*path), workspace)?
+                } else {
+                    Some(resolve_writable_root(PathBuf::from(&*path), workspace)?)
+                };
+                let Some(resolved) = resolved else {
+                    continue;
+                };
+                *path = resolved;
+            }
+            captured.push(entry);
+        }
+        *entries = captured;
+    }
+    Ok(())
+}
+
+fn capture_writable_root(path: PathBuf, workspace: &Path) -> Result<Option<String>, String> {
+    let root = resolve_writable_root(path.clone(), workspace)?;
+    if !path.is_absolute() && is_broad_write_root(Path::new(&root))? {
+        eprintln!(
+            "Warning: refusing relative writable root '{}'; use an absolute path to grant writes to the home directory or filesystem root",
+            path.display()
+        );
+        return Ok(None);
+    }
+    Ok(Some(root))
+}
+
+/// A launch directory must not implicitly authorize the host or the entire home.
+/// Inspect aliases without rewriting the paths passed to native validation.
+fn is_broad_write_root(path: &Path) -> Result<bool, String> {
+    // Match the runner's lexical normalization, including absent/.. paths.
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    let root = match normalized.canonicalize() {
+        Ok(root) => root,
+        // Absent roots retain the runner's platform-specific creation/skip policy.
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => {
+            return Err(format!(
+                "cannot inspect writable root '{}': {error}",
+                path.display()
+            ));
+        }
+    };
+    if root.parent().is_none() {
+        return Ok(true);
+    }
+    let home =
+        std::env::home_dir().ok_or("cannot determine the home directory for workspace writes")?;
+    let home = home.canonicalize().map_err(|error| {
+        format!(
+            "cannot resolve home directory '{}': {error}",
+            home.display()
+        )
+    })?;
+    Ok(home.starts_with(root))
 }
 
 /// Capture launch-relative paths without hiding symlinks from runner validation.

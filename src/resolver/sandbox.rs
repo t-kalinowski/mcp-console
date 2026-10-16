@@ -61,20 +61,8 @@ fn materialize(mut settings: SandboxSettings) -> Result<SandboxSettings, String>
             }
             filesystem.insert("entries".into(), entries.into());
         }
-        if let Some(Value::Array(entries)) = filesystem.get_mut("entries") {
-            for entry in entries {
-                if entry.pointer("/path/type").and_then(Value::as_str) == Some("path")
-                    && let Some(Value::String(path)) = entry.pointer_mut("/path/path")
-                {
-                    *path = std::path::absolute(workspace.join(&*path))
-                        .map_err(|error| error.to_string())?
-                        .to_str()
-                        .ok_or("resolver policy paths must be UTF-8")?
-                        .into();
-                }
-            }
-        }
     }
+    crate::settings::capture_filesystem_paths(&mut settings, &workspace)?;
     settings.entry("network").or_insert("restricted".into());
     if cfg!(target_os = "macos") {
         settings
