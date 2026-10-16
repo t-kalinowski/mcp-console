@@ -102,7 +102,7 @@ pub(super) fn render(value: Value) -> Result<String, String> {
                     "deny",
                     "\
 ## Block both reading and writing selected files or directories.
-## Filesystem rules use literal paths: no ~, variables, or glob patterns.
+## A leading ~/ uses your home directory; variables and globs are not expanded.
 ",
                     "# deny: [./.env, ./secrets]\n",
                 ),
