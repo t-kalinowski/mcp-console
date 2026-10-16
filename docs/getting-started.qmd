@@ -63,13 +63,7 @@ Without inheritance or a configured profile, the default sandbox permits host-fi
 
 ### Allow project writes {#allow-project-writes}
 
-To let the agent save files in its workspace, launch Console with the workspace profile:
-
-```sh
-uvx mcp-console serve -c sandbox.profile=workspace
-```
-
-To save this launch setting for your client, pass it after `--` during registration:
+To let the agent save files in its workspace, pass the workspace profile after `--` when registering your client:
 
 ```sh
 uvx mcp-console configure-client claude -- -c sandbox.profile=workspace
@@ -81,14 +75,15 @@ The profile permits ordinary writes in Console's launch directory while protecti
 Host-file reads remain allowed and direct network access remains restricted.
 For project-specific settings, [`uvx mcp-console config init`](CONFIGURATION.md#create-a-configuration-file) creates a configuration file with this profile.
 
-To add a single writable directory, create it before starting Console:
+To add a single writable directory, create it in the workspace and pass its path after `--`:
 
 ```sh
 mkdir output
-uvx mcp-console serve --writable-root output
+uvx mcp-console configure-client claude -- --writable-root output
 ```
 
 The flag adds a write grant without selecting the workspace profile.
+Restart the client after changing its registration.
 See [Sandbox configuration](SANDBOX_CONFIGURATION.md) for filesystem and network permissions.
 
 Project configuration can select executables and widen permissions.

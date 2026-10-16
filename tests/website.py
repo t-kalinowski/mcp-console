@@ -304,6 +304,16 @@ class WebsiteTests(unittest.TestCase):
         for client in ("codex", "claude"):
             self.assertIn(f"uvx mcp-console configure-client {client}", commands)
 
+    def test_other_client_configuration_uses_uvx(self) -> None:
+        configuration = next(
+            json.loads(code)
+            for code in self.pages[self.site / "CLI.html"].code_blocks
+            if '"mcpServers"' in code
+        )
+        server = configuration["mcpServers"]["console"]
+        self.assertEqual(server["command"], "uvx")
+        self.assertEqual(server["args"], ["mcp-console", "serve"])
+
     def test_moved_reference_pages_and_historical_fragments(self) -> None:
         fragments = {
             "CONFIGURATION": (
@@ -371,13 +381,32 @@ class WebsiteTests(unittest.TestCase):
                 self.assertGreater(len(soup.select_one("main").get_text()), 1000)
 
     def test_workspace_profile_is_available_in_setup_guides(self) -> None:
-        setup_commands = "\n".join(
-            self.pages[self.site / "getting-started.html"].code_blocks
-        )
-        self.assertIn("-c sandbox.profile=workspace", setup_commands)
+        commands = [
+            line.strip()
+            for code in self.pages[self.site / "getting-started.html"].code_blocks
+            for line in code.splitlines()
+        ]
+        profile_commands = [
+            command for command in commands if "-c sandbox.profile=workspace" in command
+        ]
+        write_commands = [
+            command for command in commands if "--writable-root" in command
+        ]
+        self.assertTrue(profile_commands)
+        self.assertTrue(write_commands)
+        for command in profile_commands + write_commands:
+            with self.subTest(command=command):
+                arguments = command.split()
+                self.assertEqual(
+                    arguments[:3], ["uvx", "mcp-console", "configure-client"]
+                )
+                self.assertIn(arguments[3], ("codex", "claude"))
+                self.assertIn("--", arguments)
         self.assertLess(
-            setup_commands.index("-c sandbox.profile=workspace"),
-            setup_commands.index("--writable-root"),
+            commands.index(profile_commands[0]), commands.index(write_commands[0])
+        )
+        self.assertLess(
+            commands.index("mkdir output"), commands.index(write_commands[0])
         )
         for name in ("CONFIGURATION", "SANDBOX_CONFIGURATION"):
             with self.subTest(page=name):

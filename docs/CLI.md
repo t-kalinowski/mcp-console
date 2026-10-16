@@ -117,15 +117,15 @@ Legacy Claude Code `.config.json` layouts are not supported by this command.
 
 ### Other MCP clients
 
-Configure a stdio server with command `mcp-console` and arguments `["serve"]`.
+Configure a stdio server with command `uvx` and arguments `["mcp-console", "serve"]`.
 Clients using an `mcpServers` mapping can use:
 
 ```json
 {
   "mcpServers": {
     "console": {
-      "command": "mcp-console",
-      "args": ["serve"]
+      "command": "uvx",
+      "args": ["mcp-console", "serve"]
     }
   }
 }
