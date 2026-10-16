@@ -52,12 +52,23 @@ pub(crate) fn run(options: &ConfigureClientOptions) -> Result<(), String> {
         ));
     }
     let directory = std::env::current_dir().map_err(|error| error.to_string())?;
-    let git_root = directory
-        .ancestors()
-        .find(|ancestor| ancestor.join(".git").exists());
+    if options.directory.is_some() && !matches!(options.scope, ConfigureClientScope::Project) {
+        return Err("--directory requires --scope project".into());
+    }
+    let project_directory = options.directory.as_ref().map(|path| directory.join(path));
+    if let Some(path) = &project_directory
+        && !path.is_dir()
+    {
+        return Err(format!(
+            "Project directory does not exist or is not a directory: {}",
+            path.display()
+        ));
+    }
     let project = match options.scope {
-        ConfigureClientScope::Auto => git_root,
-        ConfigureClientScope::Project => Some(git_root.unwrap_or(&directory)),
+        ConfigureClientScope::Auto => directory
+            .ancestors()
+            .find(|ancestor| ancestor.join(".git").exists()),
+        ConfigureClientScope::Project => Some(project_directory.as_deref().unwrap_or(&directory)),
         ConfigureClientScope::Global => None,
     };
     let scope = if project.is_some() {

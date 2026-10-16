@@ -1029,14 +1029,18 @@ def test_scope_defaults_and_explicit_overrides(binary: Path) -> Transcript:
             )
             result = configure(binary, root, nested, client, "--scope", "project")
             assert result.returncode == 0 and result.stderr == "", result
-            assert str(project_config) in result.stdout, result
-            assert not (nested / relative).exists()
+            assert str(nested / relative) in result.stdout, result
+            assert not project_config.exists()
             assert (
-                server(read_config(project_config, client), client)["command"] == "uvx"
+                server(read_config(nested / relative, client), client)["command"]
+                == "uvx"
             )
             result = configure(binary, root, nested, client, "--scope", "auto")
             assert result.returncode == 0 and str(project_config) in result.stdout, (
                 result
+            )
+            assert (
+                server(read_config(project_config, client), client)["command"] == "uvx"
             )
             result = configure(binary, root, nested, client, "--scope", "global")
             assert result.returncode == 0 and str(global_config) in result.stdout, (
@@ -1061,7 +1065,110 @@ def test_scope_defaults_and_explicit_overrides(binary: Path) -> Transcript:
                 server(read_config(outside / relative, client), client)["command"]
                 == "uvx"
             )
-            records.append({"client": client, "default": "global", "overrides": True})
+            records.append(
+                {
+                    "client": client,
+                    "default": "global",
+                    "project": "current directory",
+                    "auto": "Git root, otherwise global",
+                }
+            )
+    return records
+
+
+def test_project_directory_destinations(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        (root / ".git").mkdir()
+        workspace = root / "workspace"
+        workspace.mkdir()
+        for kind in ("relative", "absolute"):
+            target = (workspace if kind == "relative" else root) / f"{kind} project"
+            target.mkdir()
+            selector = target.name if kind == "relative" else str(target)
+            arguments = (
+                "codex",
+                "claude",
+                "--scope",
+                "project",
+                "--directory",
+                selector,
+            )
+            preview = configure(binary, root, workspace, *arguments, "--dry-run")
+            assert preview.returncode == 0 and preview.stderr == "", preview
+            assert not list(target.iterdir())
+            result = configure(binary, root, workspace, *arguments)
+            assert result.returncode == 0 and result.stderr == "", result
+            for client, relative in (
+                ("codex", ".codex/config.toml"),
+                ("claude", ".mcp.json"),
+            ):
+                path = target / relative
+                assert str(path) in preview.stdout and str(path) in result.stdout
+                assert server(read_config(path, client), client)["command"] == "uvx"
+                assert not (workspace / relative).exists()
+                assert not (root / relative).exists()
+            records.append({"directory": kind, "clients": ["codex", "claude"]})
+        assert not (root / "codex-home").exists()
+        assert not (root / "claude-home").exists()
+    return records
+
+
+def test_project_directory_rejects_invalid_targets_and_scopes(
+    binary: Path,
+) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        (root / ".git").mkdir()
+        target = root / "project"
+        target.mkdir()
+        file = root / "file"
+        file.write_text("not a directory", encoding="utf-8")
+        cases = [
+            (
+                f"{scope} scope",
+                () if scope == "default" else ("--scope", scope),
+                target,
+                "--directory requires --scope project",
+            )
+            for scope in ("default", "global", "auto")
+        ] + [
+            (
+                name,
+                ("--scope", "project"),
+                path,
+                "Project directory does not exist or is not a directory",
+            )
+            for name, path in (("missing directory", root / "missing"), ("file", file))
+        ]
+        before = set(root.rglob("*"))
+        for name, scope, path, message in cases:
+            for dry_run in (False, True):
+                result = configure(
+                    binary,
+                    root,
+                    root,
+                    "codex",
+                    "claude",
+                    *scope,
+                    "--directory",
+                    str(path),
+                    *(("--dry-run",) if dry_run else ()),
+                )
+                assert result.returncode == 1 and result.stdout == "", result
+                assert message in result.stderr, result
+                assert set(root.rglob("*")) == before
+                assert file.read_text(encoding="utf-8") == "not a directory"
+                records.append(
+                    {
+                        "case": name,
+                        "dry_run": dry_run,
+                        "exit_code": result.returncode,
+                        "stderr": result.stderr.replace(str(path), "<DIRECTORY>"),
+                    }
+                )
     return records
 
 

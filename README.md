@@ -31,7 +31,7 @@ mcp-console configure-client codex
 ```
 
 This registers Console globally, configures the client to launch `uvx mcp-console serve`, and loads Console tools up front.
-Use `--scope project` to register it for one project instead.
+Use `--scope project` to register it for the current directory instead.
 Use `--dry-run` to preview the settings or `--no-auto-load` to keep the client's default tool discovery.
 You can also start with `uvx mcp-console configure-client codex claude` to configure both clients without first installing Console.
 Use `--pin-version VERSION` to select the Console version resolved by uvx, or `--no-uvx` to configure an absolute executable path.

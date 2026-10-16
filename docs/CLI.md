@@ -12,6 +12,7 @@ Run `mcp-console --help` for the version installed on your machine.
 uvx mcp-console configure-client codex claude
 mcp-console configure-client codex --scope global
 mcp-console configure-client claude --scope project --dry-run
+mcp-console configure-client claude --scope project --directory /path/to/project
 mcp-console configure-client claude --no-auto-load
 mcp-console configure-client codex --pin-version current
 mcp-console configure-client codex --pin-version v0.0.5
@@ -67,8 +68,10 @@ It leaves existing-tool conflicts to uv and does not force replacement of execut
 `--no-uvx` conflicts with `--pin-version`; select the desired version before configuring a direct executable.
 
 Global scope is the default, including inside a Git repository.
-`--scope project` uses that Git root, or the current directory outside Git.
-`--scope auto` uses the nearest ancestor with a `.git` directory or worktree marker file, selecting global scope outside Git.
+`--scope project` writes configuration in the current directory without searching Git parents.
+Add `--directory PATH` to select another existing project directory; relative paths start at the current directory.
+`--directory` requires `--scope project` and does not set the client's launch directory.
+`--scope auto` preserves automatic scope selection: it uses the nearest ancestor with a `.git` directory or worktree marker file, selecting global scope outside Git.
 `--scope global` explicitly selects the default.
 
 | Client      | Project configuration | Global configuration                                        |
@@ -78,7 +81,9 @@ Global scope is the default, including inside a Git repository.
 
 [Codex](https://learn.chatgpt.com/docs/config-file/config-basic#configuration-precedence) and [Claude Code](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence) give loaded project entries precedence over same-named global entries.
 Global registration leaves existing project entries unchanged.
-If an earlier registration created a project entry, rerun setup with `--scope project` to update it, or remove only that server's entry from the project configuration listed above to use the global settings.
+If an earlier registration created a project entry, rerun setup with `--scope project` from that project directory, or select it with `--scope project --directory PATH`.
+Earlier automatic registrations used the Git root.
+To use global settings instead, remove only that server's entry from the project configuration listed above.
 
 The command prints the selected scope, file path, and fields it sets.
 Use `--dry-run` to preview those settings and any persistent installation without writing files or installing, or to apply them manually.

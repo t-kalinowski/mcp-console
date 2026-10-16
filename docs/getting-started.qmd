@@ -37,7 +37,7 @@ This registers Console globally, so it is available across projects, and loads i
 Restart the client after setup.
 Your client launches Console on the same host, usually in the workspace where the agent is working.
 
-To register it for just one project, add `--scope project`.
+To register it for the current directory, add `--scope project`.
 See [client configuration](CLI.md#configure-a-client) for updating earlier project registrations, other MCP clients, version pinning, and launch options.
 
 ## Try an analysis
