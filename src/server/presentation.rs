@@ -82,12 +82,19 @@ pub(crate) fn materialized_tool(
     tool.description
         .get_or_insert_with(|| profile.description(&profile.summary(), policy, no_sandbox));
     let mut schema = parameter_schema(languages);
-    profile.configure_fields(
-        schema
-            .get_mut("properties")
-            .and_then(Value::as_object_mut)
-            .expect("schema properties"),
-    );
+    let fields = schema
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+        .expect("schema properties");
+    profile.configure_fields(fields);
+    // Saved selections and policies can change on the next launch. Preserve
+    // explicit overrides, but leave generated Python guidance regenerable.
+    if let Some(python) = fields.get_mut("python") {
+        python
+            .as_object_mut()
+            .expect("Python parameter schema")
+            .remove("description");
+    }
     tool.materialize(&schema);
     tool
 }

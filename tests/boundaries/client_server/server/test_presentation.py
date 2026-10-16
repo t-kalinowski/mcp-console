@@ -131,9 +131,19 @@ def test_python_dependency_guidance_matches_selection(binary: Path) -> Transcrip
                 assert result.returncode == 0 and result.stderr == "", result
                 materialized = json.loads(result.stdout)
                 assert (
-                    materialized["tool"]["parameters"]["python"]["description"]
-                    == guidance
+                    materialized["tool"]["parameters"]["python"]["description"] is None
                 )
+                config.write_text(json.dumps(materialized))
+                with McpClient(
+                    binary,
+                    SANDBOXED.serve(),
+                    environment,
+                    root,
+                    record_in_project=False,
+                ) as reloaded:
+                    reloaded.initialize_and_list_tools()
+                    assert reloaded.transcript[-1]["result"]["tools"] == [tool], name
+                    reloaded.finish()
                 # An edit affects the next launch, not this captured presentation.
                 config.write_text(json.dumps({"python": {"managed": {}}}))
                 assert client.request("tools/list")["result"]["tools"] == [tool]

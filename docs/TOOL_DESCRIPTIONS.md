@@ -14,6 +14,7 @@ It stays stable when startup succeeds or fails.
 Configured languages control visible code fields and relevant examples; actual runtime availability is checked during execution.
 Python dependency guidance follows the captured existing/managed selection and managed resolution policy, including launch-time `RETICULATE_PYTHON` when no Python selection is configured.
 Existing environments use installed packages; managed environments describe explicit declarations, automatic import preparation, or startup-only preparation as selected.
+Configuration exports leave generated Python parameter descriptions as `null` so later launches regenerate them after selection; explicit description overrides are preserved.
 Requirements can remain visible for a hidden SQL provider.
 
 Launcher [tool configuration](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters) applies after generated presentation.

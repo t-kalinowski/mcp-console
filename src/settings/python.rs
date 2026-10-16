@@ -129,7 +129,11 @@ impl Python {
                                     })?;
                                 Candidate::Existing(capture_path(&path)?)
                             },
-                            Mapping::Managed(managed) if index + 1 == count => Candidate::Managed(managed),
+                            Mapping::Managed(managed) if index + 1 == count => {
+                                self.0["first_available"][index]["managed"]["resolution"] =
+                                    managed.resolution.name().into();
+                                Candidate::Managed(managed)
+                            },
                             _ => return Err("python.first_available permits existing paths, one active_venv, and one optional managed candidate last; nested chains are unsupported".into()),
                         }
                     };
