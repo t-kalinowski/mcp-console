@@ -45,6 +45,7 @@ def test_client_sandbox_inheritance_materializes_and_prunes(binary: Path) -> Tra
         profiles = (
             "codex",
             {"codex": {}},
+            {"codex": {"fallback": "read_only"}},
             {"codex": {"fallback": "workspace"}},
         )
         for profile in profiles:
@@ -146,24 +147,6 @@ def test_client_sandbox_inheritance_materializes_and_prunes(binary: Path) -> Tra
         assert (
             result.returncode == 1
             and "unknown field `inherit_from_codex`" in result.stderr
-        ), result
-        result = subprocess.run(
-            [
-                binary,
-                "sandbox",
-                "--no-config",
-                "-c",
-                "sandbox.profile=codex",
-                "--",
-                "unused-workload",
-            ],
-            cwd=root,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        assert (
-            result.returncode == 1 and "metadata" in result.stderr and not result.stdout
         ), result
     return [{"profiles": list(profiles)}]
 

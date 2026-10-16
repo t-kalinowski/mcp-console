@@ -16,6 +16,16 @@ test_that("client sandbox profiles preserve explicit fallback selection", {
     policy_json(SandboxPolicy(profile = CodexSandboxProfile())),
     '{"profile":{"codex":{}}}'
   )
+  expect_identical(
+    as.list(SandboxPolicy(profile = "read_only")),
+    list(profile = "read_only")
+  )
+  expect_identical(
+    as.list(SandboxPolicy(
+      profile = CodexSandboxProfile(fallback = "read_only")
+    )),
+    list(profile = list(codex = list(fallback = "read_only")))
+  )
   expect_null(SandboxPolicy()@profile)
   for (fallback in list(
     "codex",

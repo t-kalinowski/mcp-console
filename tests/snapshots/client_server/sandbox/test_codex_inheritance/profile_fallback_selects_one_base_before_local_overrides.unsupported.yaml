@@ -49,3 +49,6 @@ result:
       text: |
         workspace fallback
   isError: false
+---
+stderr: |
+  Warning: could not parse Codex sandbox settings; falling back to workspace

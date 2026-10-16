@@ -6,6 +6,8 @@ permission_round_trips:
   - empty
   - enabled
   - restricted
+  - read_only
+  - client_default
   - workspace
   - workspace_fallback
   - workspace_read_write_temp

@@ -28,6 +28,8 @@ CONFIGURATION_EXAMPLES = {
     },
     "enabled": {"sandbox": {"network": "enabled"}},
     "restricted": {"sandbox": {"network": "restricted"}},
+    "read_only": {"sandbox": {"profile": "read_only"}},
+    "client_default": {"sandbox": {"profile": "codex"}},
     "workspace": {"sandbox": {"profile": "workspace"}},
     "workspace_fallback": {
         "sandbox": {"profile": {"codex": {"fallback": "workspace"}}}

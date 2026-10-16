@@ -39,8 +39,7 @@ input:
                 connection.close()
                 raise AssertionError("explicit network restriction was lost")
         print("workspace fallback" if fallback else "client base")
-    _meta:
-      codex/sandbox-state: ~
+    _meta: {}
 result:
   content:
     - type: text

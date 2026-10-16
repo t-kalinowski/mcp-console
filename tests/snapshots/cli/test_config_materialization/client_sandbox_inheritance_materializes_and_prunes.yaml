@@ -3,4 +3,6 @@ profiles:
   - codex
   - codex: {}
   - codex:
+      fallback: read_only
+  - codex:
       fallback: workspace

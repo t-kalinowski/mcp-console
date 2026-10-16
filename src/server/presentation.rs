@@ -359,7 +359,7 @@ fn description_for_launch(
     uses_client_profile: bool,
 ) -> String {
     if uses_client_profile {
-        return "The sandbox base profile is selected from Codex metadata on the first send, using the launcher's configured fallback when metadata is missing or unsupported. Without a fallback, usable metadata is required. Explicit Console permissions apply to the selected base. Full access disables Console's sandbox. Reconnect to apply changed client permissions. Package preparation uses separate permissions unless sandboxing is disabled; use only trusted dependencies.".into();
+        return "The sandbox base comes from Codex metadata on the first send, or the configured fallback (default: read_only). Missing metadata is silent; malformed metadata warns on server stderr. Explicit Console permissions apply to the selected base. Full access disables Console's sandbox. Reconnect to change client permissions. Package preparation has separate permissions unless sandboxing is disabled; use only trusted dependencies.".into();
     }
     if no_sandbox {
         return "Evaluated code runs without a sandbox, with the server's permissions, including filesystem and network access. Package preparation may execute installation or build code; use only trusted dependencies.".into();

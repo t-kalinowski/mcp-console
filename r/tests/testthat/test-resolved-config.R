@@ -34,6 +34,7 @@ test_that("materialization and pruning retain client sandbox inheritance", {
   for (profile in list(
     "codex",
     CodexSandboxProfile(),
+    CodexSandboxProfile(fallback = "read_only"),
     CodexSandboxProfile(fallback = "workspace")
   )) {
     requested <- SandboxPolicy(profile = profile)

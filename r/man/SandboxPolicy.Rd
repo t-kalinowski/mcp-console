@@ -80,10 +80,11 @@ checks, or \code{FALSE} to restrict it. On macOS, \code{TRUE} permits loopback l
 and direct host-loopback connections. Linux managed-proxy ports remain
 inside a private network namespace.}
 
-\item{fallback}{\code{NULL} to require usable Codex sandbox metadata, or
-\code{"workspace"} to permit project writes with metadata protections when
-client metadata is missing or unsupported. A failure to start the selected
-sandbox does not select the fallback.}
+\item{fallback}{\code{NULL} or \code{"read_only"} for the default profile with host reads
+and private temporary writes, or \code{"workspace"} for project writes with metadata protections
+when client metadata is missing or malformed. Missing metadata is silent;
+malformed metadata emits a warning on the server's standard error stream.
+A failure to start the selected sandbox does not select the fallback.}
 
 \item{filesystem}{\code{NULL} or a \code{SandboxFilesystem()}.}
 
@@ -92,9 +93,10 @@ sandbox does not select the fallback.}
 access without a proxy, permit direct host networking, or enable a managed
 proxy, respectively. Filesystem enforcement remains in place.}
 
-\item{profile}{\code{NULL} to preserve context defaults, \code{"workspace"} for
-workspace writes, \code{"codex"} to require supported sandbox metadata from
-the first MCP \code{send}, or a \code{CodexSandboxProfile()} for explicit
+\item{profile}{\code{NULL} to preserve context defaults, \code{"read_only"} for the
+base with host reads and private temporary writes, \code{"workspace"} for workspace writes,
+\code{"codex"} to inherit supported sandbox metadata from the first MCP \code{send}
+with a read-only fallback, or a \code{CodexSandboxProfile()} for explicit
 fallback selection. For shared clients, use
 \code{CodexSandboxProfile(fallback = "workspace")}.
 Filesystem entries compose with the selected base; explicit network and

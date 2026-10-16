@@ -60,17 +60,6 @@ input:
                   type: path
                   path: file:///<workspace>/additional/private
                 access: deny
-              - path:
-                  type: special
-                  value:
-                    kind: future_location
-                access: write
-              - path:
-                  type: special
-                  value:
-                    kind: project_roots
-                    subpath: false
-                access: deny
           network: enabled
         sandboxCwd: file:///<workspace>/project%20caf%C3%A9%20%E9%9B%AA
         codexLinuxSandboxExe: /must-not-be-executed
@@ -97,17 +86,6 @@ input:
           file_system:
             type: restricted
             entries:
-              - path:
-                  type: special
-                  value:
-                    kind: project_roots
-                    subpath: false
-                access: deny
-              - path:
-                  type: special
-                  value:
-                    kind: future_location
-                access: write
               - path:
                   type: path
                   path: file:///<workspace>/additional/private
@@ -176,23 +154,31 @@ input:
                   type: path
                   path: file:///<workspace>/additional/private
                 access: deny
-              - path:
-                  type: special
-                  value:
-                    kind: future_location
-                access: write
-              - path:
-                  type: special
-                  value:
-                    kind: project_roots
-                    subpath: false
-                access: deny
           network: restricted
         sandboxCwd: file:///<workspace>/project%20caf%C3%A9%20%E9%9B%AA
         codexLinuxSandboxExe: /must-not-be-executed
         useLegacyLandlock: true
         useMxc: false
         unknownFutureField: true
+result:
+  content:
+    - type: text
+      text: >-
+        client sandbox permissions changed; reconnect to apply them before
+        sending more code
+  isError: true
+---
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      timeout_ms: 60000
+      python: retained = -2
+    _meta:
+      codex/sandbox-state:
+        permissionProfile:
+          type: future
 result:
   content:
     - type: text
@@ -243,17 +229,6 @@ input:
                   type: path
                   path: file:///<workspace>/additional/private
                 access: deny
-              - path:
-                  type: special
-                  value:
-                    kind: future_location
-                access: write
-              - path:
-                  type: special
-                  value:
-                    kind: project_roots
-                    subpath: false
-                access: deny
           network: enabled
         sandboxCwd: file:///<workspace>/project%20caf%C3%A9%20%E9%9B%AA
         codexLinuxSandboxExe: /must-not-be-executed
@@ -269,3 +244,7 @@ result:
         False
         [done]
   isError: false
+---
+stderr: >
+  Warning: could not parse Codex sandbox settings; reconnect to apply the
+  read_only fallback

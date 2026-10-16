@@ -64,8 +64,19 @@ pub(super) struct Sandbox {
 #[derive(Clone, Copy, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Profile {
+    ReadOnly,
     Workspace,
     Codex,
+}
+
+impl Profile {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::ReadOnly => "read_only",
+            Self::Workspace => "workspace",
+            Self::Codex => "codex",
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -85,6 +96,7 @@ pub(crate) struct CodexProfile {
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum FallbackProfile {
+    ReadOnly,
     Workspace,
 }
 
@@ -109,21 +121,22 @@ impl<'de> Deserialize<'de> for ProfileSelection {
 impl ProfileSelection {
     pub(crate) fn uses_codex(&self) -> bool {
         match self {
-            Self::Named(Profile::Workspace) => false,
+            Self::Named(Profile::ReadOnly | Profile::Workspace) => false,
             Self::Named(Profile::Codex) | Self::Codex { .. } => true,
         }
     }
 
-    pub(crate) fn select(&self, client_available: bool) -> Result<Profile, String> {
+    pub(crate) fn select(&self, client_available: bool) -> Profile {
         let fallback = match self {
-            Self::Named(Profile::Workspace) => return Ok(Profile::Workspace),
-            Self::Named(Profile::Codex) => None,
-            Self::Codex { codex } => codex.fallback,
+            Self::Named(Profile::ReadOnly) => return Profile::ReadOnly,
+            Self::Named(Profile::Workspace) => return Profile::Workspace,
+            Self::Named(Profile::Codex) => FallbackProfile::ReadOnly,
+            Self::Codex { codex } => codex.fallback.unwrap_or(FallbackProfile::ReadOnly),
         };
         match (client_available, fallback) {
-            (true, _) => Ok(Profile::Codex),
-            (false, Some(FallbackProfile::Workspace)) => Ok(Profile::Workspace),
-            (false, None) => Err("sandbox.profile: codex requires usable Codex sandbox metadata; set sandbox.profile to {codex: {fallback: workspace}} to allow a workspace fallback".into()),
+            (true, _) => Profile::Codex,
+            (false, FallbackProfile::ReadOnly) => Profile::ReadOnly,
+            (false, FallbackProfile::Workspace) => Profile::Workspace,
         }
     }
 }
@@ -350,11 +363,10 @@ impl Sandbox {
         };
         let mut policy = SandboxSettings::new();
         policy.insert("tempdir".into(), self.tempdir.name().into());
-        if self
-            .profile
-            .as_ref()
-            .is_some_and(|profile| !profile.uses_codex())
-        {
+        if matches!(
+            self.profile,
+            Some(ProfileSelection::Named(Profile::Workspace))
+        ) {
             apply_workspace_profile(&mut policy);
         }
         if let Some(filesystem) = self.filesystem {

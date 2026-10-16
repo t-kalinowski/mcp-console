@@ -22,7 +22,8 @@ pub fn capture_settings(
         ..
     } = crate::settings::discover(&workspace, overrides)?;
     if let Some(profile) = profile {
-        match profile.select(false)? {
+        match profile.select(false) {
+            crate::settings::Profile::ReadOnly => {}
             crate::settings::Profile::Workspace => {
                 crate::settings::apply_workspace_profile(&mut settings)
             }

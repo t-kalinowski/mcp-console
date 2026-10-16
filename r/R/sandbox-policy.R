@@ -414,16 +414,17 @@ SandboxNetwork <- S7::new_class(
 )
 
 #' @rdname SandboxPolicy
-#' @param fallback `NULL` to require usable Codex sandbox metadata, or
-#'   `"workspace"` to permit project writes with metadata protections when
-#'   client metadata is missing or unsupported. A failure to start the selected
-#'   sandbox does not select the fallback.
+#' @param fallback `NULL` or `"read_only"` for the default profile with host reads
+#'   and private temporary writes, or `"workspace"` for project writes with metadata protections
+#'   when client metadata is missing or malformed. Missing metadata is silent;
+#'   malformed metadata emits a warning on the server's standard error stream.
+#'   A failure to start the selected sandbox does not select the fallback.
 #' @export
 CodexSandboxProfile <- S7::new_class(
   "CodexSandboxProfile",
   parent = ConfigNode,
   properties = list(
-    fallback = config_choice("workspace")
+    fallback = config_choice(c("read_only", "workspace"))
   )
 )
 
@@ -433,9 +434,10 @@ CodexSandboxProfile <- S7::new_class(
 #'   `SandboxNetwork()`: preserve context defaults, deny ordinary direct network
 #'   access without a proxy, permit direct host networking, or enable a managed
 #'   proxy, respectively. Filesystem enforcement remains in place.
-#' @param profile `NULL` to preserve context defaults, `"workspace"` for
-#'   workspace writes, `"codex"` to require supported sandbox metadata from
-#'   the first MCP `send`, or a `CodexSandboxProfile()` for explicit
+#' @param profile `NULL` to preserve context defaults, `"read_only"` for the
+#'   base with host reads and private temporary writes, `"workspace"` for workspace writes,
+#'   `"codex"` to inherit supported sandbox metadata from the first MCP `send`
+#'   with a read-only fallback, or a `CodexSandboxProfile()` for explicit
 #'   fallback selection. For shared clients, use
 #'   `CodexSandboxProfile(fallback = "workspace")`.
 #'   Filesystem entries compose with the selected base; explicit network and
@@ -476,9 +478,9 @@ SandboxPolicy <- S7::new_class(
           is.character(value) &&
             (length(value) != 1L ||
               is.na(value) ||
-              !value %in% c("workspace", "codex"))
+              !value %in% c("read_only", "workspace", "codex"))
         ) {
-          "must be NULL, workspace, codex, or a CodexSandboxProfile()"
+          "must be NULL, read_only, workspace, codex, or a CodexSandboxProfile()"
         }
       }
     ),

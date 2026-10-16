@@ -20,8 +20,7 @@ input:
       timeout_ms: 60000
       python: >-
         assert os.environ['MCP_CONSOLE_SANDBOX'] == '1'; print('local sandbox')
-    _meta:
-      codex/sandbox-state: ~
+    _meta: {}
 result:
   content:
     - type: text
@@ -116,3 +115,8 @@ result:
       text: |
         local sandbox
   isError: false
+---
+stderr: |
+  Warning: could not parse Codex sandbox settings; falling back to workspace
+  Warning: could not parse Codex sandbox settings; falling back to workspace
+  Warning: could not parse Codex sandbox settings; falling back to workspace

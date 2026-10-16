@@ -37,8 +37,7 @@ impl Configuration {
         let selected = self
             .profile
             .as_ref()
-            .map(|profile| profile.select(inherited.is_some()))
-            .transpose()?;
+            .map(|profile| profile.select(inherited.is_some()));
         if selected == Some(BaseProfile::Workspace) {
             crate::settings::apply_workspace_profile(&mut self.policy);
         }
@@ -133,18 +132,28 @@ impl Inheritance {
         if !self.enabled() {
             return Ok(());
         }
-        let policy = metadata
+        let state = metadata
             .get(CAPABILITY)
-            .or_else(|| metadata.get(LEGACY_CAPABILITY))
-            .and_then(Policy::translate);
+            .or_else(|| metadata.get(LEGACY_CAPABILITY));
+        let policy = state.and_then(Policy::translate);
         let captured = self.captured.get_or_init(|| policy.clone());
-        if policy.is_some() && captured != &policy {
+        if state.is_some() && policy.is_none() {
+            let fallback = self.profile.as_ref().expect("client profile").select(false);
+            if captured.is_some() {
+                eprintln!(
+                    "Warning: could not parse Codex sandbox settings; reconnect to apply the {} fallback",
+                    fallback.name()
+                );
+            } else {
+                eprintln!(
+                    "Warning: could not parse Codex sandbox settings; falling back to {}",
+                    fallback.name()
+                );
+            }
+        }
+        if state.is_some() && captured != &policy {
             return Err("client sandbox permissions changed; reconnect to apply them before sending more code".into());
         }
-        self.profile
-            .as_ref()
-            .expect("client profile")
-            .select(captured.is_some())?;
         Ok(())
     }
 
@@ -214,8 +223,8 @@ impl Policy {
                     .and_then(local_path);
                 let mut entries: Vec<_> = entries
                     .iter()
-                    .filter_map(|entry| translate_entry(entry, cwd.as_deref()))
-                    .collect();
+                    .map(|entry| translate_entry(entry, cwd.as_deref()))
+                    .collect::<Option<_>>()?;
                 // Native access is independent of rule order and duplication.
                 entries.sort_unstable_by_key(Value::to_string);
                 entries.dedup();
@@ -259,15 +268,20 @@ fn translate_entry(entry: &Value, cwd: Option<&Path>) -> Option<Value> {
                 kind @ ("root" | "minimal" | "tmpdir" | "slash_tmp") => {
                     json!({"type": "special", "value": {"kind": kind}})
                 }
-                // Globs and future path forms have no public Console equivalent.
+                // Unrecognized permissions make the whole profile unavailable;
+                // dropping an entry could lose a denial and widen authority.
                 _ => return None,
             }
         }
         _ => return None,
     };
     let mut entry_policy = json!({"path": path, "access": access});
-    if entry.get("missing_path_behavior").and_then(Value::as_str) == Some("skip") {
-        entry_policy["missing_path_behavior"] = "skip".into();
+    match entry.get("missing_path_behavior") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(behavior)) if behavior == "skip" => {
+            entry_policy["missing_path_behavior"] = "skip".into();
+        }
+        _ => return None,
     }
     Some(entry_policy)
 }

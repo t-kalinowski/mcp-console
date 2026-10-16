@@ -40,12 +40,14 @@ sandbox:
   profile: codex
 ```
 
-The `codex` profile requires usable sandbox metadata from the first `send` call.
-Missing or unsupported metadata returns a tool error before runtime preparation.
+The `codex` profile inherits usable sandbox metadata from the first `send` call.
+If inheritance is unavailable, it uses the built-in `read_only` profile: host reads, private temporary writes, and restricted networking before explicit local settings are applied.
+Missing metadata selects this fallback silently.
+Malformed or unsupported metadata emits a warning on the server's standard error stream and selects the fallback.
 Select this profile only when the MCP client is trusted to configure Console's sandbox, including disabling it.
 Omitting `profile` or selecting `workspace` keeps existing behavior: client sandbox metadata has no effect.
 
-For one configuration shared by Codex and clients that do not supply this metadata, select an explicit fallback:
+For one configuration shared by Codex and Claude, or another client without this metadata, configure the default permissions for that client with `fallback`:
 
 ```yaml
 sandbox:
@@ -57,17 +59,18 @@ sandbox:
 ```
 
 Each connection selects one base profile on its first `send`.
-Usable Codex metadata selects `codex`; otherwise `workspace` permits ordinary project writes with metadata protections.
+Usable Codex metadata selects `codex`; otherwise the configured `workspace` fallback permits ordinary project writes with metadata protections.
+The configured fallback applies to both missing and malformed metadata; malformed metadata warns which profile was selected.
 The fallback's workspace grants are not added when Codex is selected.
 Explicit filesystem entries compose with the selected base using the ordinary specificity and conflict rules.
 Explicit network and temporary-storage settings apply to the selected base; without a network override, the Codex network mode applies.
 Create writable directories such as `./output` before launch.
 
-The Codex mapping accepts an optional `fallback: workspace`.
-Without a fallback, `profile: {codex: {}}` requires metadata, just like `profile: codex`.
+The Codex mapping accepts `fallback: read_only` or `fallback: workspace`.
+Omitting `fallback`, including with `profile: codex` or `profile: {codex: {}}`, selects `read_only` when inheritance is unavailable.
 Unknown profiles, unknown options, and nested fallbacks are errors.
 A failure to prepare runtimes or start the selected sandbox is an error; it does not select the fallback.
-The standalone `sandbox` command has no client metadata, so it uses an explicit workspace fallback or rejects a required `codex` profile before executing the target.
+The standalone `sandbox` command has no client metadata, so it silently uses the configured fallback, defaulting to `read_only`.
 `config resolve` preserves the selection policy and automatic cache choice without selecting a runtime profile or preparing interpreters.
 
 In R, use `SandboxPolicy(profile = "codex")` or `SandboxPolicy(profile = CodexSandboxProfile(fallback = "workspace"))`.
@@ -101,15 +104,16 @@ Dependency preparation retains its separate resolver policy unless inherited ful
 Full access defaults to host caches; explicit `cache: console` remains invalid without sandboxing.
 Inherited full access disables enforcement of local filesystem and network restrictions too.
 
-Missing metadata, an unsupported client profile, or an invalid profile shape makes the Codex profile unavailable.
-An explicitly selected fallback applies; without one, the call fails before runtime preparation.
-Unknown fields, unsupported path forms such as globs, and client backend or launcher selections are ignored.
+Missing metadata, an unsupported client profile, an invalid profile shape, or a malformed or unsupported filesystem entry makes the whole Codex profile unavailable.
+Console does not drop permission entries individually: omitting a denial could widen access.
+Unknown additional fields and client backend or launcher selections are ignored.
 Console always uses its own pinned runner; metadata cannot select an executable or change its backend.
 Supported translated permissions still undergo ordinary native validation.
 
 The first `send` captures the translated policy or fallback for the connection.
 Workers and explicit restarts retain that policy.
-Later calls without usable metadata keep it; later calls with different recognized permissions fail before submitting code, with a request to reconnect.
+Later calls without metadata keep it; later calls with different permissions or malformed metadata that cannot reproduce the captured policy fail before submitting code, with a request to reconnect.
+Malformed metadata after startup warns that reconnecting is needed to apply the fallback; it does not replace a running worker or execute the call under the previous policy.
 Reconnect after changing the client's permissions so Console can prepare its runtimes under the new policy.
 
 ## Profiles and temporary storage

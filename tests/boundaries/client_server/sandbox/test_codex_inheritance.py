@@ -52,20 +52,6 @@ def sandbox_state(root: Path, network: str = "restricted") -> dict:
                         },
                         "access": "deny",
                     },
-                    {
-                        "path": {
-                            "type": "special",
-                            "value": {"kind": "future_location"},
-                        },
-                        "access": "write",
-                    },
-                    {
-                        "path": {
-                            "type": "special",
-                            "value": {"kind": "project_roots", "subpath": False},
-                        },
-                        "access": "deny",
-                    },
                 ],
             },
             "network": network,
@@ -85,18 +71,32 @@ def send_with_state(
         "tools/call",
         name="send",
         arguments={"timeout_ms": 60000, **arguments},
-        _meta={key: state},
+        _meta={} if state is None else {key: state},
     )
 
 
-def finish(client: McpClient, root: Path) -> Transcript:
-    transcript = client.finish()
-    # Assert native/URI paths above; normalize only the random fixture prefix.
-    return json.loads(
-        json.dumps(transcript, ensure_ascii=False)
-        .replace(root.as_uri(), "file:///<workspace>")
-        .replace(str(root), "<workspace>")
-    )
+def finish(client: McpClient, root: Path, *, warning: str = "") -> Transcript:
+    transcript, stderr = client.finish_with_standard_error()
+    assert stderr == warning, stderr
+    if stderr:
+        transcript.append({"stderr": stderr})
+
+    # Normalize native paths before JSON escaping, including Windows separators.
+    # Native/URI permissions are asserted before this incidental presentation.
+    def normalize(value: object) -> object:
+        if isinstance(value, dict):
+            return {key: normalize(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        if isinstance(value, str):
+            if value.startswith(str(root)):
+                return "<workspace>" + value[len(str(root)) :].replace(os.sep, "/")
+            return value.replace(root.as_uri(), "file:///<workspace>").replace(
+                str(root), "<workspace>"
+            )
+        return value
+
+    return json.loads(json.dumps(normalize(transcript), ensure_ascii=False))
 
 
 @requires(SANDBOX)
@@ -194,7 +194,15 @@ def test_profile_fallback_selects_one_base_before_local_overrides(
                 assert last_tool_text(client) == (
                     "workspace fallback\n" if use_workspace else "client base\n"
                 ), last_tool_text(client)
-                transcripts[name] = finish(client, root)
+                transcripts[name] = finish(
+                    client,
+                    root,
+                    warning=(
+                        "Warning: could not parse Codex sandbox settings; falling back to workspace\n"
+                        if name == "unsupported"
+                        else ""
+                    ),
+                )
         return TranscriptWithCompanions(
             transcripts.pop("codex"),
             {
@@ -204,16 +212,13 @@ def test_profile_fallback_selects_one_base_before_local_overrides(
         )
 
 
-def test_required_profile_rejects_missing_metadata_before_runtime_inspection(
+@requires(SANDBOX)
+def test_missing_metadata_silently_uses_default_read_only(
     binary: Path,
 ) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
-        python, site = isolated_python(root)
-        marker = root / "inspected"
-        (site / "sitecustomize.py").write_text(
-            f"from pathlib import Path\n_ = Path({str(marker)!r}).write_text('inspected')\n"
-        )
+        python, _ = isolated_python(root)
         with McpClient(
             binary,
             (
@@ -229,21 +234,140 @@ def test_required_profile_rejects_missing_metadata_before_runtime_inspection(
             root,
         ) as client:
             client.initialize_and_list_tools()
-            for metadata in (None, {"permissionProfile": {"type": "future"}}):
-                entry = send_with_state(
-                    client,
-                    metadata,
-                    python="raise AssertionError('submitted code ran')",
-                )
-                assert entry["result"]["isError"] is True, entry
-                assert "requires usable Codex sandbox metadata" in last_result_text(
-                    client
-                ), entry
-            transcript = finish(client, root)
-            assert not marker.exists(), (
-                "a required profile inspected runtimes without client metadata"
+            client.expect(
+                "read_only fallback\n",
+                # fmt: python
+                python=code("""
+                    import errno
+                    import os
+                    from pathlib import Path
+
+                    assert os.environ["MCP_CONSOLE_SANDBOX"] == "1"
+                    try:
+                        _ = Path("created").write_text("denied")
+                    except OSError as error:
+                        assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS)
+                    else:
+                        raise AssertionError("default fallback allowed workspace writes")
+                    print("read_only fallback")
+                    """),
             )
-            return transcript
+            assert not (root / "created").exists()
+            return finish(client, root)
+
+
+@requires(SANDBOX)
+def test_malformed_metadata_warns_and_uses_default_read_only(
+    binary: Path,
+) -> TranscriptWithCompanions:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        python, _ = isolated_python(root)
+        malformed = {
+            "null": None,
+            "empty": {},
+            "unknown_profile": {"permissionProfile": {"type": "future"}},
+            "invalid_filesystem": {
+                "permissionProfile": {"type": "managed", "file_system": []}
+            },
+        }
+        for name, entry in (
+            ("missing_access", {"path": {"type": "path", "path": str(root)}}),
+            (
+                "invalid_path",
+                {"path": {"type": "path", "path": False}, "access": "deny"},
+            ),
+            ("unknown_path", {"path": {"type": "future"}, "access": "deny"}),
+            (
+                "invalid_missing_path_behavior",
+                {
+                    "path": {"type": "path", "path": str(root / "secret")},
+                    "access": "deny",
+                    "missing_path_behavior": False,
+                },
+            ),
+            (
+                "invalid_subpath",
+                {
+                    "path": {
+                        "type": "special",
+                        "value": {"kind": "project_roots", "subpath": False},
+                    },
+                    "access": "deny",
+                },
+            ),
+        ):
+            malformed[name] = {
+                "permissionProfile": {
+                    "type": "managed",
+                    "network": "enabled",
+                    "file_system": {
+                        "type": "restricted",
+                        "entries": [
+                            {
+                                "path": {"type": "path", "path": str(root)},
+                                "access": "write",
+                            },
+                            entry,
+                        ],
+                    },
+                },
+                "sandboxCwd": root.as_uri(),
+            }
+        transcripts = {}
+        for name, state in malformed.items():
+            with McpClient(
+                binary,
+                (
+                    "serve",
+                    "-c",
+                    "sandbox.profile=codex",
+                    "-c",
+                    "cache=host",
+                    "-c",
+                    f"python.existing={python}",
+                ),
+                os.environ.copy(),
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                result = client.request(
+                    "tools/call",
+                    name="send",
+                    arguments={
+                        "timeout_ms": 60000,
+                        # fmt: python
+                        "python": code("""
+                            import errno
+                            import os
+                            from pathlib import Path
+
+                            assert os.environ["MCP_CONSOLE_SANDBOX"] == "1"
+                            try:
+                                _ = Path("created").write_text("denied")
+                            except OSError as error:
+                                assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS)
+                            else:
+                                raise AssertionError("malformed metadata allowed workspace writes")
+                            print("read_only fallback")
+                            """),
+                    },
+                    _meta={STATE: state},
+                )
+                assert result["result"]["isError"] is False, result
+                assert last_tool_text(client) == "read_only fallback\n", result
+                transcripts[name] = finish(
+                    client,
+                    root,
+                    warning="Warning: could not parse Codex sandbox settings; falling back to read_only\n",
+                )
+        return TranscriptWithCompanions(
+            transcripts.pop("null"),
+            {
+                f"{name}.yaml": McpTranscript(transcript)
+                for name, transcript in transcripts.items()
+            },
+        )
 
 
 @requires(SANDBOX)
@@ -336,6 +460,13 @@ def test_inherits_filesystem_and_network_before_first_worker(
             rejected = send_with_state(client, changed, python="retained = -1")
             assert rejected["result"]["isError"] is True, rejected
             assert "reconnect" in last_result_text(client), rejected
+            malformed = send_with_state(
+                client,
+                {"permissionProfile": {"type": "future"}},
+                python="retained = -2",
+            )
+            assert malformed["result"]["isError"] is True, malformed
+            assert "reconnect" in last_result_text(client), malformed
             client.send(python="retained")
             assert last_tool_text(client) == "41\n"
             send_with_state(
@@ -347,7 +478,11 @@ def test_inherits_filesystem_and_network_before_first_worker(
             ), last_tool_text(client)
             assert (root / "additional/created").read_text() == "allowed"
             assert not (root / "neighbor/created").exists()
-            transcript = finish(client, root)
+            transcript = finish(
+                client,
+                root,
+                warning="Warning: could not parse Codex sandbox settings; reconnect to apply the read_only fallback\n",
+            )
             projection = next(root.glob(".agents/console/sessions/*/transcript.qmd"))
             assert "retained = -1" in projection.read_text(), (
                 "rejected call was not recorded"
@@ -538,7 +673,12 @@ def test_missing_and_unsupported_metadata_retain_local_policy(
                 "isError"
             ] is True and "reconnect" in last_result_text(client), rejected
             client.expect("local sandbox\n", python="print('local sandbox')")
-            return finish(client, root)
+            return finish(
+                client,
+                root,
+                warning="Warning: could not parse Codex sandbox settings; falling back to workspace\n"
+                * 3,
+            )
 
 
 def test_discovery_and_eof_do_not_prepare_runtimes_when_inheriting(
