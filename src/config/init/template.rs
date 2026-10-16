@@ -205,7 +205,8 @@ pub(super) fn render(value: Value, profile: Option<&ProfileSelection>) -> Result
             "r",
             "\
 ## Package preparation policies for R and managed Python:
-## automatic (default): startup packages, explicit requests, and missing loads/imports.
+## R defaults to automatic; managed Python defaults to explicit.
+## automatic: startup packages, explicit requests, and missing loads/imports.
 ## explicit: startup packages and explicit requests only.
 ## startup_only: prepare startup packages; reject later package changes.
 ##
@@ -229,7 +230,7 @@ pub(super) fn render(value: Value, profile: Option<&ProfileSelection>) -> Result
 # python:
 #   managed:
 #     version: \"3.13\"
-#     resolution: automatic
+#     resolution: explicit
 #     packages: [numpy, pandas, matplotlib]
 
 ## Alternatively, use an existing Python environment without managing its packages.
