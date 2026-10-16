@@ -13,8 +13,9 @@ pub(crate) fn run(options: &ConfigInitOptions, overrides: &ConfigOverrides) -> R
         || overrides.no_project_config
         || overrides.config_file.is_some()
         || overrides.values_file.is_some()
+        || !overrides.default_values.is_empty()
     {
-        return Err("config init accepts -c/--config settings, not --config-file, --no-config, --no-global-config, --no-project-config, or --config-overrides-file".into());
+        return Err("config init accepts -c/--config settings, not --default-config, --config-file, --no-config, --no-global-config, --no-project-config, or --config-overrides-file".into());
     }
     if let Some(directory) = &options.directory {
         // No runtimes or background threads have started. Relative selectors
@@ -47,7 +48,7 @@ pub(crate) fn run(options: &ConfigInitOptions, overrides: &ConfigOverrides) -> R
     // Seed only the starter's permissions before normal ordered overrides.
     // Read no discovered files or materialized defaults: those remain live
     // configuration layers, rather than becoming frozen in the new file.
-    let (_, value) = crate::settings::read(
+    let (captured, value) = crate::settings::read(
         &directory,
         &ConfigOverrides {
             no_config: true,
@@ -57,7 +58,7 @@ pub(crate) fn run(options: &ConfigInitOptions, overrides: &ConfigOverrides) -> R
             ..ConfigOverrides::default()
         },
     )?;
-    let contents = template::render(value)?;
+    let contents = template::render(value, captured.profile.as_ref())?;
     if !options.dry_run {
         let parent = path.parent().expect("configuration path is absolute");
         fs::create_dir_all(parent)

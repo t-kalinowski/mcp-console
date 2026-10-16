@@ -370,6 +370,57 @@ def test_launch_profile_overrides_do_not_retain_workspace_grants(
     return records
 
 
+def test_profile_guidance_matches_the_selected_policy(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        for name, assignment, guidance in (
+            (
+                "read_only",
+                "read_only",
+                "The read_only profile does not grant writes to project files.",
+            ),
+            (
+                "inherit_codex",
+                "inherit_codex",
+                "The inherit_codex profile uses permissions supplied by the client.",
+            ),
+            (
+                "inherit with fallback",
+                "{inherit_codex: {fallback: workspace}}",
+                "The inherit_codex profile uses permissions supplied by the client.",
+            ),
+            (
+                "no profile",
+                "null",
+                "Without a named profile, the base policy grants no project writes.",
+            ),
+        ):
+            directory = root / name
+            directory.mkdir()
+            result = invoke(
+                binary,
+                root,
+                directory,
+                "config",
+                "init",
+                "-c",
+                f"sandbox.profile={assignment}",
+            )
+            assert result.returncode == 0 and not result.stderr, result
+            contents = (directory / ".agents/console/config.yaml").read_text(
+                encoding="utf-8"
+            )
+            assert guidance in contents, contents
+            assert (
+                "profile allows creating, editing, and deleting project files"
+                not in contents
+            )
+            assert ".git, .agents, .codex, and .aws stay read-only" not in contents
+            records.append({"profile": name, "guidance": guidance})
+    return records
+
+
 def test_existing_configuration_is_never_replaced(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -441,6 +492,18 @@ def test_invalid_settings_and_destinations_do_not_create_files(
         )
         assert result.returncode == 1 and not result.stdout, result
         assert "--config-file" in result.stderr, result
+        assert not (root / ".agents").exists()
+        result = invoke(
+            binary,
+            root,
+            root,
+            "--default-config",
+            "sandbox.profile=inherit_codex",
+            "config",
+            "init",
+        )
+        assert result.returncode == 1 and not result.stdout, result
+        assert "--default-config" in result.stderr, result
         assert not (root / ".agents").exists()
     return records + [{"configuration_source_flags": "rejected before writing"}]
 

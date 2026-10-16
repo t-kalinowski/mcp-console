@@ -23,7 +23,7 @@ preview: |
     profile: workspace
 
     ## Add exceptions to the selected profile's filesystem permissions.
-    ## To limit writes to selected directories, replace workspace with read_only first.
+    ## To grant writes only to selected directories, use profile: read_only first.
     # filesystem:
     #   read_write: [/absolute/path/to/shared-output]
     #   read_only: [.claude]
@@ -124,7 +124,7 @@ created: |
     profile: workspace
 
     ## Add exceptions to the selected profile's filesystem permissions.
-    ## To limit writes to selected directories, replace workspace with read_only first.
+    ## To grant writes only to selected directories, use profile: read_only first.
     # filesystem:
     #   read_write: [/absolute/path/to/shared-output]
     #   read_only: [.claude]
