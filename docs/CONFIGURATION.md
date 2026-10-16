@@ -39,8 +39,8 @@ The two options are mutually exclusive.
 These files are shared by clients that launch Console with the same configuration locations.
 Client registration remains a separate operation; see [Connect your client](getting-started.qmd#connect-your-client).
 
-The starter allows ordinary workspace writes and makes the project's `.git`, `.agents`, `.codex`, and `.aws` paths read-only.
-It spells out these filesystem permissions rather than selecting a profile; other readable host files remain readable.
+The starter selects `sandbox.profile: workspace`, with comments explaining that it allows ordinary workspace writes and makes the project's `.git`, `.agents`, `.codex`, and `.aws` paths read-only.
+Other readable host files remain readable.
 Annotated examples cover temporary storage, network access and localhost services, package preparation, Python environments, environment variables, and cache locations.
 Lines beginning with `##` are explanations; lines beginning with `#` are YAML examples to uncomment.
 The header links to the full configuration reference.
@@ -48,11 +48,14 @@ The header links to the full configuration reference.
 Use repeated `-c` or `--config` assignments to override the starter settings, with the same ordering and merge rules as launch overrides.
 Assignments may appear before `config` or after `init`.
 Supplied sections show active YAML with their guidance; unconfigured sections retain commented examples.
-To start with read-only permissions instead, clear the starter sandbox before selecting a profile:
+To start with read-only permissions instead, replace the starter profile:
 
 ```sh
-mcp-console config init -c sandbox=null -c sandbox.profile=read_only
+mcp-console config init -c sandbox.profile=read_only
 ```
+
+Later profile overrides replace the starter profile without retaining explicit workspace write grants.
+Filesystem settings add exceptions to the selected profile; to restrict writes to selected directories, choose `read_only` and supply those directories in `sandbox.filesystem.read_write`.
 
 Only the starter permissions and supplied settings are saved: initialization does not copy discovered global or project configuration or expand built-in defaults.
 Explicit values are retained even when they equal built-in defaults, so a new project layer can override different global values.

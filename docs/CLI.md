@@ -191,7 +191,7 @@ mcp-console config init -c r.resolution=disabled -c 'r.packages=[]' --dry-run
 
 `config init` creates `.agents/console/config.yaml` in the current directory, without searching Git parents or falling back to global configuration outside Git.
 Use `--directory PATH` for another existing project directory, or `--global` for Console's global configuration location; these options are mutually exclusive.
-The annotated starter grants workspace writes while keeping project metadata read-only.
+The annotated starter selects `sandbox.profile: workspace`, with comments explaining workspace writes and read-only project metadata.
 It includes commented examples for common settings, using `##` for explanations and `#` for YAML to uncomment.
 Ordered `-c`/`--config` assignments apply after the starter permissions.
 Other defaults remain implicit; initialization does not read discovered files or materialize defaults.

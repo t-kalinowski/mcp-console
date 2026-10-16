@@ -51,12 +51,9 @@ pub(crate) fn run(options: &ConfigInitOptions, overrides: &ConfigOverrides) -> R
         &directory,
         &ConfigOverrides {
             no_config: true,
-            values: std::iter::once(
-                "sandbox.filesystem={read_write: [.], read_only: [.git, .agents, .codex, .aws]}"
-                    .into(),
-            )
-            .chain(overrides.values.iter().chain(&options.values).cloned())
-            .collect(),
+            values: std::iter::once("sandbox.profile=workspace".into())
+                .chain(overrides.values.iter().chain(&options.values).cloned())
+                .collect(),
             ..ConfigOverrides::default()
         },
     )?;

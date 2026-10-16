@@ -78,12 +78,37 @@ pub(super) fn render(value: Value) -> Result<String, String> {
     };
     let fields = vec![
         Field::new("sandbox", "", "").children(vec![
-            Field::new("filesystem", "", "").children(vec![
+            Field::new(
+                "profile",
+                "\
+## workspace allows creating, editing, and deleting project files.
+## The workspace is Console's launch directory, even if code changes directory.
+## .git, .agents, .codex, and .aws stay read-only, even when absent.
+## .agents includes this configuration file; referenced Git metadata is protected too.
+## Other host files remain readable when permitted by the OS.
+## Network access and temporary storage are configured separately below.
+## Use read_only instead to omit the profile's workspace write grants.
+",
+                "# profile: workspace\n",
+            ),
+            Field::new(
+                "filesystem",
+                "\
+## Add exceptions to the selected profile's filesystem permissions.
+## To limit writes to selected directories, replace workspace with read_only first.
+",
+                "\
+# filesystem:
+#   read_write: [/absolute/path/to/shared-output]
+#   read_only: [.claude]
+#   deny: [./.env, ./secrets]
+",
+            )
+            .children(vec![
                 Field::new(
                     "read_write",
                     "\
-## Allow creating, editing, and deleting project files.
-## Other host files remain readable when permitted by the OS.
+## Allow creating, editing, and deleting files in these directories.
 ## Add existing directories to allow writes outside the project.
 ",
                     "# read_write: [.]\n",
