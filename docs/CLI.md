@@ -186,14 +186,15 @@ Use `--no-project-config` for an unfamiliar project until you have reviewed its 
 mcp-console config init
 mcp-console config init --global
 mcp-console config init --directory /path/to/project
-mcp-console config init -c sandbox.profile=workspace --dry-run
+mcp-console config init -c r.resolution=disabled -c 'r.packages=[]' --dry-run
 ```
 
 `config init` creates `.agents/console/config.yaml` in the current directory, without searching Git parents or falling back to global configuration outside Git.
 Use `--directory PATH` for another existing project directory, or `--global` for Console's global configuration location; these options are mutually exclusive.
-The command saves only explicit `-c`/`--config` assignments, preserving their order and merge rules.
-It does not read discovered files or materialize defaults.
-With no assignments, it creates a commented empty mapping.
+The annotated starter grants workspace writes while keeping project metadata read-only.
+It includes commented examples for common settings, using `##` for explanations and `#` for YAML to uncomment.
+Ordered `-c`/`--config` assignments apply after the starter permissions.
+Other defaults remain implicit; initialization does not read discovered files or materialize defaults.
 Existing destinations cause an error and remain unchanged.
 The command prints the path and file contents; `--dry-run` previews them without creating files or directories.
 

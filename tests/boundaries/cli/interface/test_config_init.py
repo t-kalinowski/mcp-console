@@ -16,6 +16,16 @@ from support.records import Transcript
 from support.suites import run_this_suite
 
 
+WORKSPACE_CONFIGURATION = {
+    "sandbox": {
+        "filesystem": {
+            "read_write": ["."],
+            "read_only": [".git", ".agents", ".codex", ".aws"],
+        }
+    }
+}
+
+
 def invoke(
     binary: Path,
     root: Path,
@@ -58,10 +68,12 @@ def test_defaults_use_cwd_without_git_or_global_inference(binary: Path) -> Trans
             assert result.returncode == 0 and not result.stderr, result
             path = directory / ".agents/console/config.yaml"
             assert str(path) in result.stdout, result
-            assert read_yaml(path) == {}
-            assert "#" in path.read_text(encoding="utf-8")
+            assert read_yaml(path) == WORKSPACE_CONFIGURATION
+            assert "## Full reference:" in path.read_text(encoding="utf-8")
             assert not (repository / ".agents").exists()
-            records.append({"directory": relative, "configuration": {}})
+            records.append(
+                {"directory": relative, "configuration": WORKSPACE_CONFIGURATION}
+            )
         assert (home / "config.yaml").read_text(encoding="utf-8") == "[]\n"
     return records
 
@@ -98,9 +110,11 @@ def test_directory_and_global_destinations(binary: Path) -> Transcript:
             )
             assert result.returncode == 0 and not result.stderr, result
             assert str(path) in result.stdout, result
-            assert read_yaml(path) == {}
+            assert read_yaml(path) == WORKSPACE_CONFIGURATION
             assert not (caller / ".agents").exists()
-            records.append({"destination": selection, "configuration": {}})
+            records.append(
+                {"destination": selection, "configuration": WORKSPACE_CONFIGURATION}
+            )
     return records
 
 
@@ -125,9 +139,9 @@ def test_directory_validates_and_retains_relative_settings(binary: Path) -> Tran
             f"python={executable.name}",
         )
         assert result.returncode == 0 and not result.stderr, result
-        assert read_yaml(project / ".agents/console/config.yaml") == {
-            "python": executable.name
-        }
+        assert read_yaml(
+            project / ".agents/console/config.yaml"
+        ) == WORKSPACE_CONFIGURATION | {"python": executable.name}
         assert not (root / ".agents").exists()
     return [
         {
@@ -144,7 +158,7 @@ def test_ordered_settings_are_saved_without_copying_discovered_values(
         home = root / "console-home"
         home.mkdir()
         (home / "config.yaml").write_text(
-            "environment: {INHERITED: global}\nr: {vanilla: false}\n", encoding="utf-8"
+            "environment: {INHERITED: global}\nr: {vanilla: true}\n", encoding="utf-8"
         )
         result = invoke(
             binary,
@@ -161,25 +175,27 @@ def test_ordered_settings_are_saved_without_copying_discovered_values(
             "-c",
             "r.packages=[]",
             "-c",
-            "r.vanilla=true",
+            "r.vanilla=false",
             "-c",
             "startup=null",
         )
         assert result.returncode == 0 and not result.stderr, result
         path = root / ".agents/console/config.yaml"
-        expected = {
+        expected = WORKSPACE_CONFIGURATION | {
             "environment": {"KEEP": "explicit", "VALUE": "last"},
-            "r": {"packages": [], "vanilla": True},
+            "r": {"packages": [], "vanilla": False},
             "startup": None,
         }
         assert read_yaml(path) == expected
         # The new file remains one layer: normal launch discovery still merges
         # the global defaults rather than freezing them into the project file.
-        resolved = invoke(binary, root, root, "config", "resolve", "--format", "json")
+        resolved = invoke(
+            binary, root, root, "config", "resolve", "--full", "--format", "json"
+        )
         assert resolved.returncode == 0 and not resolved.stderr, resolved
         value = json.loads(resolved.stdout)
         assert value["environment"] == expected["environment"] | {"INHERITED": "global"}
-        assert value["r"]["packages"] == [] and value["r"]["vanilla"] is True
+        assert value["r"]["packages"] == [] and value["r"]["vanilla"] is False
     return [
         {"saved": expected, "global_values": "remain a separate configuration layer"}
     ]
@@ -188,7 +204,7 @@ def test_ordered_settings_are_saved_without_copying_discovered_values(
 def test_dry_run_previews_the_created_contents(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
-        arguments = ["config", "init", "-c", "sandbox.profile=workspace"]
+        arguments = ["config", "init"]
         preview = invoke(binary, root, root, *arguments, "--dry-run")
         assert preview.returncode == 0 and not preview.stderr, preview
         assert not (root / ".agents").exists()
@@ -198,13 +214,125 @@ def test_dry_run_previews_the_created_contents(binary: Path) -> Transcript:
         path = root / ".agents/console/config.yaml"
         contents = path.read_text(encoding="utf-8")
         assert contents in preview.stdout and contents in result.stdout
-        assert read_yaml(path) == {"sandbox": {"profile": "workspace"}}
+        assert read_yaml(path) == WORKSPACE_CONFIGURATION
         for output in (preview.stdout, result.stdout):
             assert str(path) in output, output
     return [
         {"preview": preview.stdout.replace(str(root), "<WORKSPACE>")},
         {"created": result.stdout.replace(str(root), "<WORKSPACE>")},
     ]
+
+
+def test_template_examples_can_be_uncommented_and_loaded(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        result = invoke(binary, root, root, "config", "init")
+        assert result.returncode == 0 and not result.stderr, result
+        path = root / ".agents/console/config.yaml"
+        contents = path.read_text(encoding="utf-8")
+        assert "## Temporary storage options:" in contents
+        assert "#   allow_local_binding: true" in contents
+        assert "#     MCP_CONSOLE_CACHE_DIR:" in contents
+        output = root / "shared-output"
+        output.mkdir()
+        (root / ".env").write_text("SECRET=fixture\n", encoding="utf-8")
+        (root / "secrets").mkdir()
+        lines = []
+        for line in contents.splitlines():
+            # Choose managed Python; the scalar example is the alternative.
+            if line == "# python: .venv":
+                continue
+            if line.lstrip().startswith("# "):
+                line = line.replace("# ", "", 1)
+            line = line.replace(
+                "/absolute/path/to/shared-output", output.as_posix()
+            ).replace("/absolute/path/to/console-cache", (root / "cache").as_posix())
+            lines.append(line)
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        resolved = invoke(binary, root, root, "config", "resolve", "--format", "json")
+        assert resolved.returncode == 0 and not resolved.stderr, resolved
+        value = json.loads(resolved.stdout)
+        assert value["sandbox"]["network"]["allow_local_binding"] is True
+        assert value["python"]["managed"]["packages"] == [
+            "numpy",
+            "pandas",
+            "matplotlib",
+        ]
+        assert value["r"]["packages"] == ["dplyr", "ggplot2"]
+        assert value["environment"] == {"OMP_NUM_THREADS": "4"}
+        assert value["cache"] == "host"
+        assert (
+            value["resolver"]["environment"]["MCP_CONSOLE_CACHE_DIR"]
+            == (root / "cache").as_posix()
+        )
+        assert not (root / "cache").exists()
+    return [{"template_examples": "uncommented and accepted by config resolve"}]
+
+
+def test_settings_override_the_starter_permissions(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        for scenario, arguments, expected in (
+            (
+                "clear sandbox",
+                ("sandbox=null",),
+                {"sandbox": None},
+            ),
+            (
+                "read-only sandbox",
+                ("sandbox=null", "sandbox.profile=read_only"),
+                {"sandbox": {"profile": "read_only"}},
+            ),
+            (
+                "empty sandbox mapping",
+                ("sandbox=null", "sandbox={}"),
+                {"sandbox": {}},
+            ),
+            (
+                "replace write grants",
+                ("sandbox.filesystem.read_write=[]",),
+                {
+                    "sandbox": {
+                        "filesystem": {
+                            "read_write": [],
+                            "read_only": [".git", ".agents", ".codex", ".aws"],
+                        }
+                    }
+                },
+            ),
+            (
+                "configured proxy and local binding",
+                (
+                    "sandbox.network.proxy.domains.allow=[api.example.com]",
+                    "sandbox.network.allow_local_binding=true",
+                ),
+                {
+                    "sandbox": WORKSPACE_CONFIGURATION["sandbox"]
+                    | {
+                        "network": {
+                            "proxy": {"domains": {"allow": ["api.example.com"]}},
+                            "allow_local_binding": True,
+                        }
+                    }
+                },
+            ),
+        ):
+            directory = root / scenario
+            directory.mkdir()
+            result = invoke(
+                binary,
+                root,
+                directory,
+                "config",
+                "init",
+                *(argument for value in arguments for argument in ("-c", value)),
+            )
+            assert result.returncode == 0 and not result.stderr, result
+            path = directory / ".agents/console/config.yaml"
+            assert read_yaml(path) == expected
+            records.append({"scenario": scenario, "configuration": expected})
+    return records
 
 
 def test_existing_configuration_is_never_replaced(binary: Path) -> Transcript:

@@ -1,9 +1,11 @@
-//! Create one configuration layer without capturing discovered settings or defaults.
+//! Create an annotated starter layer without capturing discovered settings.
+
+mod template;
 
 use std::fs;
 use std::io::{ErrorKind, Write};
 
-use crate::cli::{ConfigFormat, ConfigInitOptions, ConfigOverrides};
+use crate::cli::{ConfigInitOptions, ConfigOverrides};
 
 pub(crate) fn run(options: &ConfigInitOptions, overrides: &ConfigOverrides) -> Result<(), String> {
     if overrides.no_config
@@ -42,25 +44,23 @@ pub(crate) fn run(options: &ConfigInitOptions, overrides: &ConfigOverrides) -> R
         Err(error) if error.kind() == ErrorKind::NotFound => {}
         Err(error) => return Err(format!("Cannot inspect {}: {error}", path.display())),
     }
-    // Reuse launch validation, but read no discovered files and serialize only
-    // the explicit layer. Materialized defaults would freeze launch choices.
+    // Seed only the starter's permissions before normal ordered overrides.
+    // Read no discovered files or materialized defaults: those remain live
+    // configuration layers, rather than becoming frozen in the new file.
     let (_, value) = crate::settings::read(
         &directory,
         &ConfigOverrides {
             no_config: true,
-            values: overrides
-                .values
-                .iter()
-                .chain(&options.values)
-                .cloned()
-                .collect(),
+            values: std::iter::once(
+                "sandbox.filesystem={read_write: [.], read_only: [.git, .agents, .codex, .aws]}"
+                    .into(),
+            )
+            .chain(overrides.values.iter().chain(&options.values).cloned())
+            .collect(),
             ..ConfigOverrides::default()
         },
     )?;
-    let contents = format!(
-        "# MCP Console configuration shared by clients.\n# Omitted settings use Console's defaults.\n{}\n",
-        crate::settings::materialize::render(value, None, ConfigFormat::Yaml)?
-    );
+    let contents = template::render(value)?;
     if !options.dry_run {
         let parent = path.parent().expect("configuration path is absolute");
         fs::create_dir_all(parent)

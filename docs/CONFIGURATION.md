@@ -28,7 +28,7 @@ Worker and package-preparation permissions are independent; see [Sandbox configu
 mcp-console config init
 mcp-console config init --global
 mcp-console config init --directory /path/to/project
-mcp-console config init -c sandbox.profile=workspace --dry-run
+mcp-console config init -c r.resolution=disabled -c 'r.packages=[]' --dry-run
 ```
 
 By default, `config init` creates `.agents/console/config.yaml` in the current directory, including outside Git.
@@ -39,10 +39,23 @@ The two options are mutually exclusive.
 These files are shared by clients that launch Console with the same configuration locations.
 Client registration remains a separate operation; see [Connect your client](getting-started.qmd#connect-your-client).
 
-Without settings, the file contains a commented header and an empty mapping; omitted settings keep their existing defaults.
-Use repeated `-c` or `--config` assignments to save initial settings, with the same ordering and merge rules as launch overrides.
+The starter allows ordinary workspace writes and makes the project's `.git`, `.agents`, `.codex`, and `.aws` paths read-only.
+It spells out these filesystem permissions rather than selecting a profile; other readable host files remain readable.
+Annotated examples cover temporary storage, network access and localhost services, package preparation, Python environments, environment variables, and cache locations.
+Lines beginning with `##` are explanations; lines beginning with `#` are YAML examples to uncomment.
+The header links to the full configuration reference.
+
+Use repeated `-c` or `--config` assignments to override the starter settings, with the same ordering and merge rules as launch overrides.
 Assignments may appear before `config` or after `init`.
-Only supplied settings are saved: initialization does not copy discovered global or project configuration or expand built-in defaults.
+Supplied sections show active YAML with their guidance; unconfigured sections retain commented examples.
+To start with read-only permissions instead, clear the starter sandbox before selecting a profile:
+
+```sh
+mcp-console config init -c sandbox=null -c sandbox.profile=read_only
+```
+
+Only the starter permissions and supplied settings are saved: initialization does not copy discovered global or project configuration or expand built-in defaults.
+Explicit values are retained even when they equal built-in defaults, so a new project layer can override different global values.
 Configuration-source flags such as `--config-file` and `--no-config` are not accepted.
 
 The command validates settings without starting interpreters or preparing packages, creates the configuration directory if needed, and reports the file path and contents.

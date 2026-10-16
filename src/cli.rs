@@ -32,7 +32,8 @@ Examples:
   mcp-console configure-client claude --no-uvx --dry-run";
 
 const CONFIG_INIT_EXAMPLES: &str = "\
-Saves only explicit -c settings; omitted settings retain their defaults.
+Starts with workspace permissions and commented examples for common settings.
+Apply -c settings after the starter permissions; other defaults remain implicit.
 Existing files are never overwritten. Does not start interpreters or prepare
 packages.
 
@@ -40,7 +41,7 @@ Examples:
   mcp-console config init
   mcp-console config init --global
   mcp-console config init --directory /path/to/project
-  mcp-console config init -c sandbox.profile=workspace --dry-run";
+  mcp-console config init -c r.resolution=disabled -c 'r.packages=[]' --dry-run";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -203,7 +204,7 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
-    /// Create a shared Console configuration file
+    /// Create an annotated Console configuration with workspace permissions
     #[command(after_help = CONFIG_INIT_EXAMPLES)]
     Init(ConfigInitOptions),
 
@@ -236,7 +237,7 @@ pub struct ConfigInitOptions {
     #[arg(long, value_name = "PATH")]
     pub directory: Option<PathBuf>,
 
-    /// Save initial settings; repeat for ordered dotted KEY=VALUE assignments
+    /// Override starter settings; repeat for ordered dotted KEY=VALUE assignments
     #[arg(short = 'c', long = "config", value_name = "KEY=VALUE")]
     pub values: Vec<String>,
 
