@@ -62,7 +62,11 @@ fn materialize(mut settings: SandboxSettings) -> Result<SandboxSettings, String>
             filesystem.insert("entries".into(), entries.into());
         }
     }
-    crate::settings::capture_filesystem_paths(&mut settings, &workspace)?;
+    crate::settings::capture_filesystem_paths(
+        &mut settings,
+        &workspace,
+        crate::settings::PolicyContext::Launch,
+    )?;
     settings.entry("network").or_insert("restricted".into());
     if cfg!(target_os = "macos") {
         settings

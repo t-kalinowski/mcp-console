@@ -72,6 +72,7 @@ Unknown profiles, unknown options, and nested fallbacks are errors.
 A failure to prepare runtimes or start the selected sandbox is an error; it does not select the fallback.
 The standalone `sandbox` command has no client metadata, so it silently uses the configured fallback, defaulting to `read_only`.
 `config resolve` preserves the selection policy and automatic cache choice without selecting a runtime profile or preparing interpreters.
+Broad-root checks and their warnings apply at launch, so resolving configuration from a broad root does not replace the configured workspace permissions.
 
 In R, use `SandboxPolicy(profile = "inherit_codex")` or `SandboxPolicy(profile = InheritCodexSandboxProfile(fallback = "workspace"))`.
 
@@ -133,6 +134,7 @@ The workspace is Console's launch directory, captured before evaluated code runs
 Changing the working directory from R or Python does not move the permission boundary.
 
 If that directory is a filesystem root, the user's home directory, or a parent of home, Console warns and uses the `read_only` base.
+Home follows the same [launch-environment selection](CONFIGURATION.md#paths) as `~` paths, including explicit `HOME` precedence on Windows.
 This also applies when `workspace` is the fallback for unavailable client metadata.
 The same root check applies to `resolver.sandbox.profile: workspace`.
 Explicit absolute write grants, network settings, and temporary-storage settings still apply.

@@ -1,6 +1,8 @@
 """Launch directories must not implicitly grant writes to the home or host."""
 
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,6 +16,58 @@ from support.records import McpTranscript, TranscriptWithCompanions
 from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
 from support.suites import run_this_suite
 from boundaries.client_server.python.test_without_r import environment
+
+
+def test_workspace_guard_uses_console_home(binary: Path) -> TranscriptWithCompanions:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        home = root / "home"
+        home.mkdir()
+        profile = root / "profile"
+        profile.mkdir()
+        launch_environment = os.environ | {
+            "HOME": str(home),
+            "USERPROFILE": str(profile),
+            "MCP_CONSOLE_HOME": str(root / "console"),
+        }
+        arguments = (
+            "serve",
+            "--no-config",
+            # Keep runtime startup lazy: this case only inspects launch policy.
+            "--worker",
+            str(binary),
+            "-c",
+            "sandbox.profile=workspace",
+            "-c",
+            "cache=host",
+            "-c",
+            "languages=[r,python,sql]",
+        )
+        with McpClient(
+            binary, arguments, launch_environment, home, record_in_project=False
+        ) as client:
+            client.initialize_and_list_tools()
+            description = client.transcript[-1]["result"]["tools"][0]["description"]
+            assert "Writable locations: private `TMPDIR`;" in description, description
+            transcript, stderr = client.finish_with_standard_error()
+        assert stderr == (
+            f"Warning: refusing automatic workspace writes to '{home}'; falling back to read_only\n"
+        ), stderr
+        transcript.append({"stderr": stderr.replace(str(home), "<home>")})
+        relative = subprocess.run(
+            [binary, *arguments],
+            input="",
+            cwd=home,
+            env=launch_environment | {"HOME": "."},
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert relative.returncode == 1 and relative.stdout == "", relative
+        assert relative.stderr == "HOME must be an absolute path\n", relative
+        return TranscriptWithCompanions(
+            transcript, {"relative-home.yaml": [{"stderr": relative.stderr}]}
+        )
 
 
 @requires(SANDBOX)

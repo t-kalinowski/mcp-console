@@ -521,16 +521,24 @@ impl Sandbox {
     }
 }
 
-/// Apply execution-host additions to an explicitly selected policy. No discovery.
+/// Configuration inspection preserves permissions; launch capture guards writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolicyContext {
+    Configuration,
+    Launch,
+}
+
+/// Add filesystem baselines and capture paths without runtime discovery.
 pub(crate) fn materialize_settings(
     mut settings: SandboxSettings,
     roots: Vec<PathBuf>,
     workspace: &Path,
+    context: PolicyContext,
 ) -> Result<SandboxSettings, String> {
-    capture_filesystem_paths(&mut settings, workspace)?;
+    capture_filesystem_paths(&mut settings, workspace, context)?;
     let writable_roots = roots
         .into_iter()
-        .filter_map(|path| capture_writable_root(path, workspace).transpose())
+        .filter_map(|path| capture_writable_root(path, workspace, context).transpose())
         .collect::<Result<Vec<_>, _>>()?;
     settings.entry("filesystem").or_insert_with(|| json!({}));
     let mut restricted = false;
@@ -576,13 +584,15 @@ pub(crate) fn materialize_settings(
     Ok(settings)
 }
 
-/// Guard implicit writes and capture relative paths for worker and resolver policy.
+/// Capture relative paths, guarding implicit writes only when launching.
 /// Each caller retains ownership of its filesystem baseline and cache grants.
 pub(crate) fn capture_filesystem_paths(
     settings: &mut SandboxSettings,
     workspace: &Path,
+    context: PolicyContext,
 ) -> Result<(), String> {
-    if settings.get("extends").and_then(Value::as_str) == Some(":workspace")
+    if context == PolicyContext::Launch
+        && settings.get("extends").and_then(Value::as_str) == Some(":workspace")
         && is_broad_write_root(workspace)?
     {
         settings.remove("extends");
@@ -603,7 +613,7 @@ pub(crate) fn capture_filesystem_paths(
                 && let Some(Value::String(path)) = entry.pointer_mut("/path/path")
             {
                 let resolved = if write {
-                    capture_writable_root(PathBuf::from(&*path), workspace)?
+                    capture_writable_root(PathBuf::from(&*path), workspace, context)?
                 } else {
                     Some(resolve_writable_root(PathBuf::from(&*path), workspace)?)
                 };
@@ -619,10 +629,17 @@ pub(crate) fn capture_filesystem_paths(
     Ok(())
 }
 
-fn capture_writable_root(path: PathBuf, workspace: &Path) -> Result<Option<String>, String> {
+fn capture_writable_root(
+    path: PathBuf,
+    workspace: &Path,
+    context: PolicyContext,
+) -> Result<Option<String>, String> {
     let path = crate::console_paths::expand_home(&path)?;
     let root = resolve_writable_root(path.clone(), workspace)?;
-    if !path.is_absolute() && is_broad_write_root(Path::new(&root))? {
+    if context == PolicyContext::Launch
+        && !path.is_absolute()
+        && is_broad_write_root(Path::new(&root))?
+    {
         eprintln!(
             "Warning: refusing relative writable root '{}'; use an absolute path to grant writes to the home directory or filesystem root",
             path.display()
@@ -669,8 +686,8 @@ fn is_broad_write_root(path: &Path) -> Result<bool, String> {
     if root.parent().is_none() {
         return Ok(true);
     }
-    let home =
-        std::env::home_dir().ok_or("cannot determine the home directory for workspace writes")?;
+    let home = crate::console_paths::home_directory()?
+        .ok_or("cannot determine the home directory for workspace writes")?;
     let home = home.canonicalize().map_err(|error| {
         format!(
             "cannot resolve home directory '{}': {error}",
