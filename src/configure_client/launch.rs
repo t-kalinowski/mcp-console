@@ -121,6 +121,8 @@ impl Launch {
 fn installed_requirement(environment: &Path) -> Result<String, String> {
     // Requires uv 0.11.29+ to retain recorded archive hashes. Older uv versions
     // are outside this path's supported contract; do not add compatibility logic.
+    // Directory requirements intentionally rebuild the recorded checkout, which
+    // must remain unchanged during setup; separate builds may differ in bytes.
     // Let uv reconstruct its installed requirement, including direct URLs,
     // archive hashes, and resolved Git commits. Index installs record only a
     // version, losing CLI-only resolver options. Never resolve that version

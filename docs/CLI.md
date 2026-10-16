@@ -42,6 +42,8 @@ When the executable is in a uv-created environment inside a disposable cache, th
 The shared `CACHEDIR.TAG` marker alone does not trigger installation; Cargo builds and non-uv environments retain their executable paths.
 Direct wheel, archive, and Git installations retain their recorded source, including recorded hashes and resolved Git commits.
 Automatic persistent installation requires uv 0.11.29 or newer, which preserves recorded archive hashes in `uv pip freeze` output.
+Directory sources are rebuilt from their recorded path.
+Keep that checkout unchanged during setup; the resulting executable may differ from the temporary build.
 This includes temporary `uvx --no-cache` runs and custom uv cache locations.
 Temporary index and `--find-links` installations record only a version, so setup rejects them before installation or configuration changes rather than resolving through a potentially different source.
 Install persistently with `uv tool install` using the same resolver options first, then invoke the installed executable's `configure-client --no-uvx` command.
