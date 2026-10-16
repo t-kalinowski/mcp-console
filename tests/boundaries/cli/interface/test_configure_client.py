@@ -1022,10 +1022,21 @@ def test_scope_defaults_and_explicit_overrides(binary: Path) -> Transcript:
             )
             result = configure(binary, root, nested, client)
             assert result.returncode == 0 and result.stderr == "", result
+            assert str(global_config) in result.stdout, result
+            assert not project_config.exists() and not (nested / relative).exists()
+            assert (
+                server(read_config(global_config, client), client)["command"] == "uvx"
+            )
+            result = configure(binary, root, nested, client, "--scope", "project")
+            assert result.returncode == 0 and result.stderr == "", result
             assert str(project_config) in result.stdout, result
-            assert not global_config.exists() and not (nested / relative).exists()
+            assert not (nested / relative).exists()
             assert (
                 server(read_config(project_config, client), client)["command"] == "uvx"
+            )
+            result = configure(binary, root, nested, client, "--scope", "auto")
+            assert result.returncode == 0 and str(project_config) in result.stdout, (
+                result
             )
             result = configure(binary, root, nested, client, "--scope", "global")
             assert result.returncode == 0 and str(global_config) in result.stdout, (
@@ -1038,6 +1049,10 @@ def test_scope_defaults_and_explicit_overrides(binary: Path) -> Transcript:
                 result
             )
             assert not (outside / relative).exists()
+            result = configure(binary, root, outside, client, "--scope", "auto")
+            assert result.returncode == 0 and str(global_config) in result.stdout, (
+                result
+            )
             result = configure(binary, root, outside, client, "--scope", "project")
             assert (
                 result.returncode == 0 and str(outside / relative) in result.stdout
@@ -1046,9 +1061,7 @@ def test_scope_defaults_and_explicit_overrides(binary: Path) -> Transcript:
                 server(read_config(outside / relative, client), client)["command"]
                 == "uvx"
             )
-            records.append(
-                {"client": client, "automatic": "Git root or global", "overrides": True}
-            )
+            records.append({"client": client, "default": "global", "overrides": True})
     return records
 
 

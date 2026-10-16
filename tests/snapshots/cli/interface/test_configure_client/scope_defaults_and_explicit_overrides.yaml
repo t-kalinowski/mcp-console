@@ -1,8 +1,8 @@
 ---
 client: codex
-automatic: Git root or global
+default: global
 overrides: true
 ---
 client: claude
-automatic: Git root or global
+default: global
 overrides: true

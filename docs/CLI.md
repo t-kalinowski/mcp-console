@@ -66,10 +66,10 @@ The recorded source's URL query is redacted from that report and captured uv out
 It leaves existing-tool conflicts to uv and does not force replacement of executable files.
 `--no-uvx` conflicts with `--pin-version`; select the desired version before configuring a direct executable.
 
-The default `--scope auto` uses the nearest ancestor with a `.git` directory or worktree marker file.
-Outside Git, it selects global scope.
+Global scope is the default, including inside a Git repository.
 `--scope project` uses that Git root, or the current directory outside Git.
-`--scope global` selects global scope regardless of the current directory.
+`--scope auto` uses the nearest ancestor with a `.git` directory or worktree marker file, selecting global scope outside Git.
+`--scope global` explicitly selects the default.
 
 | Client      | Project configuration | Global configuration                                        |
 | ----------- | --------------------- | ----------------------------------------------------------- |
