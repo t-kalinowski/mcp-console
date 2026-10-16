@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use rmcp::RoleServer;
-use rmcp::model::{ClientNotification, ClientRequest, JsonRpcMessage, RequestId, ServerResult};
+use rmcp::model::{
+    CallToolRequest, ClientNotification, ClientRequest, JsonRpcMessage, RequestId, ServerResult,
+};
 use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -53,6 +55,8 @@ struct ResponseDeliveryState {
     pending_writes: usize,
     /// Last waiting member of the wire-order chain, retained across cancellation gaps.
     admission_tail: Option<Arc<ResponseDeliveryAdmissionNode>>,
+    /// Physical EOF is insufficient until the transport exhausts buffered requests.
+    input_drained: bool,
     closed: bool,
 }
 
@@ -275,8 +279,8 @@ impl ResponseDeliveries {
         }
     }
 
-    /// Let responses accepted before input EOF reach stdout, with a bound for
-    /// clients that stop reading their output pipe.
+    /// Drain queued input and its responses after physical EOF, with a bound
+    /// for clients that stop reading their output pipe.
     pub(crate) async fn settle_before_close(&self, deadline: Instant) {
         let settled = async {
             loop {
@@ -285,9 +289,13 @@ impl ResponseDeliveries {
                 changed.as_mut().enable();
                 {
                     let state = self.lock();
-                    if state.active.is_empty()
-                        && state.pending.is_empty()
-                        && state.pending_writes == 0
+                    // A startup EOF observer can run before the transport has
+                    // framed queued requests and reserved their responses.
+                    if state.closed
+                        || (state.input_drained
+                            && state.active.is_empty()
+                            && state.pending.is_empty()
+                            && state.pending_writes == 0)
                     {
                         return;
                     }
@@ -740,9 +748,12 @@ impl Drop for ResponseDeliveryWrite {
     }
 }
 
+type SendObserver = dyn Fn(&mut CallToolRequest) + Send;
+
 pub(crate) struct ServerTransport<R: AsyncRead, W: AsyncWrite> {
     inner: AsyncRwTransport<RoleServer, R, W>,
     deliveries: ResponseDeliveries,
+    send_observer: Option<Box<SendObserver>>,
 }
 
 impl<R, W> ServerTransport<R, W>
@@ -754,7 +765,17 @@ where
         Self {
             inner: AsyncRwTransport::new_server(read, write),
             deliveries,
+            send_observer: None,
         }
+    }
+
+    /// Observe accepted sends in wire order, before asynchronous handler dispatch.
+    pub(crate) fn with_send_observer(
+        mut self,
+        observer: impl Fn(&mut CallToolRequest) + Send + 'static,
+    ) -> Self {
+        self.send_observer = Some(Box::new(observer));
+        self
     }
 }
 
@@ -822,6 +843,9 @@ where
                         return None;
                     };
                     call.extensions.insert(admission);
+                    if let Some(observer) = &self.send_observer {
+                        observer(call);
+                    }
                 }
             }
             Some(JsonRpcMessage::Notification(notification)) => {
@@ -833,7 +857,10 @@ where
                 }
             }
             Some(JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)) => {}
-            None => {}
+            None => {
+                self.deliveries.lock().input_drained = true;
+                self.deliveries.gate_changed.notify_waiters();
+            }
         }
         message
     }

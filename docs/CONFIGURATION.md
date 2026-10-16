@@ -241,8 +241,10 @@ See [Environment variables](ENVIRONMENT.md).
 ## Cache selection
 
 Sandboxed sessions default to Console-specific caches.
+Set `MCP_CONSOLE_CACHE_DIR` to an absolute directory to relocate those caches.
 Set `cache: host` to reuse host cache locations.
 `--no-sandbox` defaults to host caches and rejects `cache: console` and explicit sandbox policies.
+The [`inherit_codex` profile](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex) also selects host caches when the first call requests full access.
 [Resolver caches](RESOLVER.md#cache-locations) documents locations and permission implications.
 
 To retain other file settings while disabling enforcement, clear inherited permission nodes explicitly:
@@ -376,5 +378,5 @@ See [Tool configuration](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters)
 Global configuration now contributes defaults even when a project file exists.
 Use discovery exclusions to opt out.
 Older native-shaped YAML, `extends`, and camelCase permission fields are not accepted.
-The supported application profile is `sandbox.profile: workspace`; it is separate from complete native policy selectors.
+Application profiles select workspace permissions or inherited client permissions with an explicit fallback; they are separate from complete native policy selectors.
 Use the public [sandbox schema](SANDBOX_CONFIGURATION.md); complete native JSON remains a separate explicit interface.

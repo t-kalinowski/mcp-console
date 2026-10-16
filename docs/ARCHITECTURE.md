@@ -62,6 +62,16 @@ One connection-owned background task discovers runtimes, prepares defaults, and 
 MCP initialization, tool discovery, and pings do not wait.
 Custom workers remain lazy.
 
+With the `inherit_codex` sandbox profile, startup waits for the first `send` to capture client authority before creating any preparation or execution process.
+Capture happens in transport request order before asynchronous handler dispatch; a cancelled first request cannot let a later request select the connection's permissions.
+The server translates supported permissions or selects the configured fallback, defaulting to `read_only`, then composes local permissions and selects caches.
+Absent metadata is silent; unparseable metadata warns on server stderr.
+An untranslatable permission entry rejects the entire client profile rather than discarding a possible denial.
+Only the selected base contributes permissions; the workspace fallback cannot widen a selected client policy.
+The captured policy survives startup retries and worker replacement; changed recognized permissions require a new connection.
+Connection closure before the first call settles pending startup without creating a runtime.
+The metadata adapter and its supported limits live in [`src/server/sandbox.rs`](../src/server/sandbox.rs) and [sandbox configuration](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex).
+
 Transport readiness connects command, input, output, and resolver services before built-in interpreter bootstrap.
 It does not mean either interpreter is initialized.
 Unchanged requirements do not wait for bootstrap.
@@ -161,6 +171,7 @@ A forced launcher kill, pipe EOF, or suppressed status diagnostic cannot prove t
 The pinned runner has no separate Unix cleanup receipt; a nonzero status can represent workload failure or a cleanup error.
 
 Connection closure cancels startup/preparation, retires execution resources, settles accepted responses, and bounds blocked MCP delivery.
+Physical EOF can precede transport consumption of queued requests; response settlement waits for the transport's input drain within the same delivery deadline.
 Native runner loss retains the [documented lifetime limits](SANDBOX.md#supported-hosts-and-lifetime-limits); Console has no independent recovery daemon.
 
 ## Output and delivery
