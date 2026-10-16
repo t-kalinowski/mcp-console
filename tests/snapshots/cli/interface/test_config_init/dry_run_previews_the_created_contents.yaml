@@ -12,8 +12,9 @@ preview: |
   ## Lines beginning with ## explain settings; lines beginning with # can be uncommented.
 
   sandbox:
-    ## workspace allows creating, editing, and deleting project files.
-    ## The workspace is Console's launch directory, even if code changes directory.
+    ## The workspace profile allows creating, editing, and deleting project files.
+    ## The workspace is Console's launch directory.
+    ## Changing the working directory later does not change the workspace.
     ## .git, .agents, .codex, and .aws stay read-only, even when absent.
     ## .agents includes this configuration file; referenced Git metadata is protected too.
     ## Other host files remain readable when permitted by the OS.
@@ -112,8 +113,9 @@ created: |
   ## Lines beginning with ## explain settings; lines beginning with # can be uncommented.
 
   sandbox:
-    ## workspace allows creating, editing, and deleting project files.
-    ## The workspace is Console's launch directory, even if code changes directory.
+    ## The workspace profile allows creating, editing, and deleting project files.
+    ## The workspace is Console's launch directory.
+    ## Changing the working directory later does not change the workspace.
     ## .git, .agents, .codex, and .aws stay read-only, even when absent.
     ## .agents includes this configuration file; referenced Git metadata is protected too.
     ## Other host files remain readable when permitted by the OS.

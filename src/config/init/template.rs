@@ -81,8 +81,9 @@ pub(super) fn render(value: Value) -> Result<String, String> {
             Field::new(
                 "profile",
                 "\
-## workspace allows creating, editing, and deleting project files.
-## The workspace is Console's launch directory, even if code changes directory.
+## The workspace profile allows creating, editing, and deleting project files.
+## The workspace is Console's launch directory.
+## Changing the working directory later does not change the workspace.
 ## .git, .agents, .codex, and .aws stay read-only, even when absent.
 ## .agents includes this configuration file; referenced Git metadata is protected too.
 ## Other host files remain readable when permitted by the OS.

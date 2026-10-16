@@ -224,7 +224,7 @@ def test_template_examples_can_be_uncommented_and_loaded(binary: Path) -> Transc
         path = root / ".agents/console/config.yaml"
         contents = path.read_text(encoding="utf-8")
         assert (
-            "## workspace allows creating, editing, and deleting project files."
+            "## The workspace profile allows creating, editing, and deleting project files."
             in contents
         )
         assert (
