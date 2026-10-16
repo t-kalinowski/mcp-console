@@ -184,7 +184,7 @@ def test_initializes_and_lists_tools(
             )
         )
         companions["client-sandbox-python-only.yaml"] = _initializes_and_lists_tools(
-            binary, execution, client_profile=True, python_only=True
+            binary, execution, sandbox_profile="inherit_codex", python_only=True
         )
         companions["proxy.yaml"] = _initializes_and_lists_tools(
             binary, execution, proxy=True
