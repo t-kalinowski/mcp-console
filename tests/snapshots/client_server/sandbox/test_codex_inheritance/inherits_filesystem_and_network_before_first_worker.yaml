@@ -17,7 +17,7 @@ input:
         root = Path(os.environ["MCP_CONSOLE_TEST_ROOT"])
         assert Path.cwd() == root
         assert os.environ["MCP_CONSOLE_SANDBOX"] == "1"
-        for name in ("project café 雪", "additional", "local"):
+        for name in ("project café 雪", "project café 雪/nested", "additional", "local"):
             _ = (root / name / "created").write_text("allowed")
         for path, operation in (
             (root / "neighbor/created", lambda path: path.write_text("denied")),
@@ -60,6 +60,12 @@ input:
                   type: path
                   path: file:///<workspace>/additional/private
                 access: deny
+              - path:
+                  type: special
+                  value:
+                    kind: current_working_directory
+                    subpath: nested
+                access: write
           network: enabled
         sandboxCwd: file:///<workspace>/project%20caf%C3%A9%20%E9%9B%AA
         codexLinuxSandboxExe: /must-not-be-executed
@@ -86,6 +92,12 @@ input:
           file_system:
             type: restricted
             entries:
+              - path:
+                  type: special
+                  value:
+                    kind: current_working_directory
+                    subpath: nested
+                access: write
               - path:
                   type: path
                   path: file:///<workspace>/additional/private
@@ -229,6 +241,12 @@ input:
                   type: path
                   path: file:///<workspace>/additional/private
                 access: deny
+              - path:
+                  type: special
+                  value:
+                    kind: current_working_directory
+                    subpath: nested
+                access: write
           network: enabled
         sandboxCwd: file:///<workspace>/project%20caf%C3%A9%20%E9%9B%AA
         codexLinuxSandboxExe: /must-not-be-executed

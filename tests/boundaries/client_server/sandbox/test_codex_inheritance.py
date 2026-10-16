@@ -271,7 +271,7 @@ def test_malformed_metadata_warns_and_uses_default_read_only(
                 "permissionProfile": {"type": "managed", "file_system": []}
             },
         }
-        for name, entry in (
+        malformed_entries = [
             ("missing_access", {"path": {"type": "path", "path": str(root)}}),
             (
                 "invalid_path",
@@ -296,7 +296,30 @@ def test_malformed_metadata_warns_and_uses_default_read_only(
                     "access": "deny",
                 },
             ),
-        ):
+        ]
+        malformed_entries.extend(
+            (
+                name,
+                {
+                    "path": {
+                        "type": "special",
+                        "value": {"kind": kind, "subpath": subpath},
+                    },
+                    "access": "write",
+                },
+            )
+            for name, kind, subpath in (
+                ("absolute_project_subpath", "project_roots", str(root)),
+                ("parent_project_subpath", "project_roots", ".."),
+                (
+                    "parent_cwd_subpath",
+                    "current_working_directory",
+                    "nested/../outside",
+                ),
+                ("nul_cwd_subpath", "current_working_directory", "bad\0path"),
+            )
+        )
+        for name, entry in malformed_entries:
             malformed[name] = {
                 "permissionProfile": {
                     "type": "managed",
@@ -376,7 +399,12 @@ def test_inherits_filesystem_and_network_before_first_worker(
 ) -> Transcript:
     with TemporaryDirectory() as temporary, host_tcp_ports() as ports:
         root = Path(temporary).resolve()
-        for name in ("project café 雪", "additional/private", "local", "neighbor"):
+        for name in (
+            "project café 雪/nested",
+            "additional/private",
+            "local",
+            "neighbor",
+        ):
             (root / name).mkdir(parents=True)
         (root / "additional/private/secret").write_text("secret")
         python, _ = isolated_python(root)
@@ -405,6 +433,18 @@ def test_inherits_filesystem_and_network_before_first_worker(
             capabilities = client.transcript[0]["result"]["capabilities"]
             assert capabilities["experimental"][STATE] == {}, capabilities
             state = sandbox_state(root, "enabled")
+            state["permissionProfile"]["file_system"]["entries"].append(
+                {
+                    "path": {
+                        "type": "special",
+                        "value": {
+                            "kind": "current_working_directory",
+                            "subpath": "nested",
+                        },
+                    },
+                    "access": "write",
+                }
+            )
             entry = send_with_state(
                 client,
                 state,
@@ -419,7 +459,7 @@ def test_inherits_filesystem_and_network_before_first_worker(
                     root = Path(os.environ["MCP_CONSOLE_TEST_ROOT"])
                     assert Path.cwd() == root
                     assert os.environ["MCP_CONSOLE_SANDBOX"] == "1"
-                    for name in ("project café 雪", "additional", "local"):
+                    for name in ("project café 雪", "project café 雪/nested", "additional", "local"):
                         _ = (root / name / "created").write_text("allowed")
                     for path, operation in (
                         (root / "neighbor/created", lambda path: path.write_text("denied")),

@@ -92,6 +92,7 @@ Console translates the current `permissionProfile` and uses `sandboxCwd` to reso
 
 Concrete paths accept absolute native paths or local `file:` URIs.
 Symbolic project roots use the client's sandbox working directory, which can differ from Console's launch directory; inheritance does not change the worker's working directory.
+Symbolic subpaths must be relative and cannot contain parent-directory components, drive prefixes, or NUL characters.
 Root, minimal, and temporary-path entries use Console's corresponding native permissions.
 Existing local grants and denials retain their normal specificity and conflict precedence.
 Console's host-read baseline and temporary-storage setting remain in effect for restricted profiles.
@@ -112,8 +113,9 @@ Supported translated permissions still undergo ordinary native validation.
 
 The first `send` captures the translated policy or fallback for the connection.
 Workers and explicit restarts retain that policy.
-Later calls without metadata keep it; later calls with different permissions or malformed metadata that cannot reproduce the captured policy fail before submitting code, with a request to reconnect.
-Malformed metadata after startup warns that reconnecting is needed to apply the fallback; it does not replace a running worker or execute the call under the previous policy.
+Later calls without metadata keep it; later calls with different permissions fail before submitting code, with a request to reconnect.
+When a usable client policy was captured, later malformed metadata rejects the call and warns that reconnecting is needed to apply the fallback.
+If the fallback is already active, later malformed metadata warns and the call continues under that same fallback.
 Reconnect after changing the client's permissions so Console can prepare its runtimes under the new policy.
 
 ## Profiles and temporary storage

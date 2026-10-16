@@ -4,7 +4,7 @@
 //! This adapter intentionally interprets supported permissions rather than
 //! forwarding the opaque state to the client's executable.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
 use rmcp::model::RequestMetaObject;
@@ -262,6 +262,15 @@ fn translate_entry(entry: &Value, cwd: Option<&Path>) -> Option<Value> {
                         Some(Value::String(subpath)) => subpath,
                         _ => return None,
                     };
+                    // Symbolic subpaths extend the selected root; they cannot
+                    // replace it or traverse to a different root.
+                    if subpath.contains('\0')
+                        || Path::new(subpath).components().any(|component| {
+                            !matches!(component, Component::Normal(_) | Component::CurDir)
+                        })
+                    {
+                        return None;
+                    }
                     let path = cwd?.join(subpath);
                     json!({"type": "path", "path": path.to_str()?})
                 }
