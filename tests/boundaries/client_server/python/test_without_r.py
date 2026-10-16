@@ -941,7 +941,7 @@ def test_resolves_reached_import_in_managed_worker(
         uv = expose_uv(root)
         with McpClient(
             installed_console(binary),
-            execution.serve("-c", "python.managed.resolution=automatic"),
+            execution.serve("-c", "python.managed.resolution=implicit"),
             environment(root),
             current_directory=root,
         ) as client:
@@ -1146,7 +1146,7 @@ def test_retains_automatic_additions_after_import_errors(
             installed_console(binary),
             execution.serve(
                 "-c",
-                "python.managed.resolution=automatic",
+                "python.managed.resolution=implicit",
                 *(
                     ("-c", "resolver.sandbox.network=enabled")
                     if execution == SANDBOXED
@@ -1225,7 +1225,7 @@ def automatic_resolution_failure_and_cancel_keep_accepted_state(
             with McpClient(
                 installed_console(binary),
                 execution.serve(
-                    "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                    "-c", "python.managed.resolution=implicit", "-c", "cache=host"
                 ),
                 env,
             ) as client:
@@ -1313,7 +1313,7 @@ def automatic_activation_failure_requires_restart(
         with McpClient(
             installed_console(binary),
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             env,
         ) as client:
@@ -1366,7 +1366,7 @@ def test_automatic_imports_stay_on_main_worker_thread_and_process(
         with McpClient(
             installed_console(binary),
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             env,
         ) as client:

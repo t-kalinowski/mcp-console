@@ -47,7 +47,7 @@ impl PythonSelection {
         match self {
             Self::Existing => sections::PYTHON_EXISTING,
             Self::Managed(Resolution::Explicit) => sections::PYTHON_EXPLICIT,
-            Self::Managed(Resolution::Automatic) => sections::PYTHON_AUTOMATIC,
+            Self::Managed(Resolution::Implicit) => sections::PYTHON_IMPLICIT,
             Self::Managed(Resolution::StartupOnly) => sections::PYTHON_STARTUP_ONLY,
             Self::Managed(Resolution::Disabled) => {
                 unreachable!("managed Python resolution cannot be disabled")

@@ -61,7 +61,7 @@ pub(super) const PYTHON_RUNTIME: &str = r#"Evaluate one complete Python cell in 
 
 pub(super) const PYTHON_EXPLICIT: &str = " Declare dependencies with `requirements.python` before importing them; preparation can accompany the cell. Import names may differ from distribution names.";
 
-pub(super) const PYTHON_AUTOMATIC: &str = " Import packages normally; managed sessions prepare missing PyPI distributions on first import. Import names may differ from distribution names.";
+pub(super) const PYTHON_IMPLICIT: &str = " Import packages normally; managed sessions prepare missing PyPI distributions on first import. Import names may differ from distribution names.";
 
 pub(super) const PYTHON_STARTUP_ONLY: &str = " Only startup dependencies are prepared; later `requirements.python` changes and automatic import preparation are disabled.";
 

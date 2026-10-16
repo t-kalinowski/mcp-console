@@ -1074,7 +1074,7 @@ def test_activates_without_reticulate_virtualenv_helper(
 ) -> Transcript:
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     ) as client:
         client.initialize_and_list_tools()
         # fmt: r
@@ -1147,7 +1147,7 @@ def test_preserves_setup_after_r_initialization(
 ) -> Transcript:
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     ) as client:
         client.initialize_and_list_tools()
         client.send(
@@ -1226,7 +1226,7 @@ def test_retries_managed_import_setup_after_interrupt(
         np.get_printoptions = configure_thread_checkpoint
         """)
     with startup_client(
-        binary, execution, source, "-c", "python.managed.resolution=automatic"
+        binary, execution, source, "-c", "python.managed.resolution=implicit"
     ) as client:
         client.send(python="raise AssertionError('interrupted setup ran the cell')")
         assert last_result_text(client) == (

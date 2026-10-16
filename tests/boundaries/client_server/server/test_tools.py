@@ -122,13 +122,13 @@ def test_initializes_and_lists_tools(
             binary, execution, python_only=True, bootstrap_languages="python"
         ),
         "automatic.yaml": _initializes_and_lists_tools(
-            binary, execution, python_resolution="automatic"
+            binary, execution, python_resolution="implicit"
         ),
         "configured-python-automatic.yaml": _initializes_and_lists_tools(
             binary,
             execution,
             bootstrap_languages="python",
-            python_resolution="automatic",
+            python_resolution="implicit",
         ),
         "startup-only.yaml": _initializes_and_lists_tools(
             binary, execution, python_resolution="startup_only"
@@ -199,7 +199,7 @@ def test_initializes_and_lists_tools(
             binary, execution, python_only=True, writable=True
         )
         companions["automatic-writable.yaml"] = _initializes_and_lists_tools(
-            binary, execution, python_resolution="automatic", writable=True
+            binary, execution, python_resolution="implicit", writable=True
         )
         companions["custom-writable.yaml"] = _initializes_and_lists_tools(
             binary, execution, custom=True, writable=True
@@ -366,7 +366,7 @@ def _initializes_and_lists_tools(
                 python_guidance = properties["python"]["description"]
                 if python_only and not python_managed:
                     assert "`requirements.python` is unavailable" in python_guidance
-                elif python_resolution == "automatic":
+                elif python_resolution == "implicit":
                     assert (
                         "prepare missing PyPI distributions on first import"
                         in python_guidance
@@ -381,7 +381,7 @@ def _initializes_and_lists_tools(
                 assert (
                     "prepare missing PyPI distributions on first import"
                     not in python_guidance
-                ) == (python_resolution != "automatic")
+                ) == (python_resolution != "implicit")
             description = send["description"]
             assert ("ir run script.R" in description) == (
                 not custom and "r" in send["inputSchema"]["properties"]

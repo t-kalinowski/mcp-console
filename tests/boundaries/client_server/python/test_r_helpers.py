@@ -221,7 +221,7 @@ def test_requirements_get_add_set_and_live_activation(
         binary,
         execution.serve(
             "-c",
-            "python.managed.resolution=automatic",
+            "python.managed.resolution=implicit",
             "-c",
             "r.packages=[]",
             "-c",

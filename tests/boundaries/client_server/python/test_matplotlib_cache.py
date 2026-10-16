@@ -135,7 +135,7 @@ def preserves_matplotlib_cache_across_activation_and_restart(
             McpClient(
                 binary,
                 execution.serve(
-                    "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                    "-c", "python.managed.resolution=implicit", "-c", "cache=host"
                 ),
                 environment,
                 current_directory=workspace,

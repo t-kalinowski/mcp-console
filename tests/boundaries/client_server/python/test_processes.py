@@ -33,7 +33,7 @@ def test_runs_sklearn_parallel_search(binary: Path, execution: Execution) -> Tra
     environment["LOKY_MAX_CPU_COUNT"] = "2"
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     ) as client:
         client.initialize_and_list_tools()
@@ -191,7 +191,7 @@ def test_runs_joblib_process_backend_after_live_resolution(
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     )
     client.initialize_and_list_tools()
@@ -218,7 +218,7 @@ def test_runs_spawn_process_after_live_resolution(
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     )
     client.initialize_and_list_tools()

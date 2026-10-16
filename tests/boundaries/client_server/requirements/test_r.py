@@ -321,7 +321,7 @@ def test_stops_live_preparation_for_idle_callback_input(
 ) -> Transcript:
     client = McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     )
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})

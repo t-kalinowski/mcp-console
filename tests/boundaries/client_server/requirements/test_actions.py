@@ -438,7 +438,7 @@ def test_r_duckdb_replacement_failure_and_reset(
         with McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         ) as client:

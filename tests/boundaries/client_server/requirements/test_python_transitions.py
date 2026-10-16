@@ -36,7 +36,7 @@ def test_owns_managed_python_transitions(
     environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     ) as client:
         client.initialize_and_list_tools()
@@ -129,7 +129,7 @@ def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(
         serve = (
             execution.serve(
                 "-c",
-                "python.managed.resolution=automatic",
+                "python.managed.resolution=implicit",
                 "-c",
                 "cache=host",
                 "--writable-root",
@@ -137,7 +137,7 @@ def test_native_activation_agrees_with_reticulate_and_publishes_after_commit(
             )
             if execution == SANDBOXED
             else execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             )
         )
         with McpClient(binary, serve, environment, root) as client:
@@ -193,7 +193,7 @@ def test_preserves_preparation_restoration_and_live_noops(
         with McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         ) as client:
@@ -303,7 +303,7 @@ def test_uses_inspected_candidate_without_reticulate_rediscovery(
 ) -> Transcript:
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     ) as client:
         client.initialize_and_list_tools()
         client.send(
@@ -346,7 +346,7 @@ def test_reports_activation_python_failure_once_and_restores_requirements(
 ) -> Transcript:
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     ) as client:
         client.initialize_and_list_tools()
         client.send(python="import runpy; original_run_path = runpy.run_path")
@@ -387,7 +387,7 @@ def test_preserves_activation_interrupt_conditions(
 ) -> Transcript:
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     ) as client:
         client.initialize_and_list_tools()
         client.send(python="None")
@@ -457,7 +457,7 @@ def test_idle_activation_failure_retains_worker_until_restart(
             McpClient(
                 binary,
                 execution.serve(
-                    "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                    "-c", "python.managed.resolution=implicit", "-c", "cache=host"
                 ),
                 environment,
                 root,

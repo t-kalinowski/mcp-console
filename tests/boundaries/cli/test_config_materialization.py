@@ -41,7 +41,7 @@ def test_managed_python_resolution_defaults_to_explicit(binary: Path) -> Transcr
         root = Path(temporary).resolve()
         config = root / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
-        for managed in ({}, {"packages": []}, {"resolution": "automatic"}):
+        for managed in ({}, {"packages": []}, {"resolution": "implicit"}):
             config.write_text(json.dumps({"python": {"managed": managed}}))
             result = resolve(
                 binary,
@@ -54,7 +54,7 @@ def test_managed_python_resolution_defaults_to_explicit(binary: Path) -> Transcr
             settings = json.loads(result.stdout)
             expected = {"resolution": "explicit", **managed}
             assert settings["python"] == {"managed": expected}, settings["python"]
-            assert settings["r"]["resolution"] == "automatic", settings["r"]
+            assert settings["r"]["resolution"] == "implicit", settings["r"]
             configurations.append(settings["python"])
     return configurations
 
@@ -71,7 +71,7 @@ def test_managed_fallback_resolution_is_materialized(binary: Path) -> Transcript
             for managed in (
                 {},
                 {"packages": [], "version": ">=3.12,<3.14"},
-                {"resolution": "automatic"},
+                {"resolution": "implicit"},
                 {"resolution": "startup_only"},
             ):
                 candidates = [{"existing": existing}, {"managed": managed}]
@@ -141,7 +141,7 @@ def test_exports_regenerate_python_guidance_after_reselection(
                                 {"existing": str(executable)},
                                 {
                                     "managed": {
-                                        "resolution": "automatic",
+                                        "resolution": "implicit",
                                         "packages": [],
                                     }
                                 },
@@ -380,7 +380,7 @@ def test_prunes_builtin_defaults_by_default(binary: Path) -> Transcript:
         root = Path(temporary).resolve()
         defaults = {
             "languages": ["r", "python", "sql"],
-            "r": {"vanilla": False, "resolution": "automatic"},
+            "r": {"vanilla": False, "resolution": "implicit"},
             "python": None,
             "startup": None,
             "inherit_environment": True,
@@ -420,7 +420,7 @@ def test_prunes_against_builtin_defaults_after_layering(binary: Path) -> Transcr
         project = root / ".agents" / "console"
         project.mkdir(parents=True)
         (project / "config.yaml").write_text(
-            json.dumps({"r": {"resolution": "automatic"}}), encoding="utf-8"
+            json.dumps({"r": {"resolution": "implicit"}}), encoding="utf-8"
         )
         result = resolve(binary, root, "--format", "json", "-c", "r.packages=[]")
         assert result.returncode == 0 and result.stderr == "", result
@@ -626,7 +626,7 @@ def test_materializes_without_starting_runtimes(binary: Path) -> Transcript:
         assert settings["r"]["executable"] == str(root / "missing-R")
         assert settings["r"]["packages"] == ["must-not-install"]
         assert settings["r"]["vanilla"] is False
-        assert settings["r"]["resolution"] == "automatic"
+        assert settings["r"]["resolution"] == "implicit"
         assert settings["cache"] == "console"
         tool = settings["tool"]
         assert tool["description"] and tool["instructions"]

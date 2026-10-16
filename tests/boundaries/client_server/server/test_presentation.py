@@ -42,10 +42,10 @@ def test_python_dependency_guidance_matches_selection(binary: Path) -> Transcrip
         ("configured existing", {"existing": sys.executable}, None, "existing"),
         ("managed explicit", {"managed": {}}, sys.executable, "explicit"),
         (
-            "managed automatic",
-            {"managed": {"resolution": "automatic"}},
+            "managed implicit",
+            {"managed": {"resolution": "implicit"}},
             sys.executable,
-            "automatic",
+            "implicit",
         ),
         (
             "managed startup only",
@@ -58,7 +58,7 @@ def test_python_dependency_guidance_matches_selection(binary: Path) -> Transcrip
             {
                 "first_available": [
                     {"existing": sys.executable},
-                    {"managed": {"resolution": "automatic"}},
+                    {"managed": {"resolution": "implicit"}},
                 ]
             },
             None,
@@ -69,11 +69,11 @@ def test_python_dependency_guidance_matches_selection(binary: Path) -> Transcrip
             {
                 "first_available": [
                     {"existing": "missing-python"},
-                    {"managed": {"resolution": "automatic"}},
+                    {"managed": {"resolution": "implicit"}},
                 ]
             },
             sys.executable,
-            "automatic",
+            "implicit",
         ),
     )
     for name, selection, launch_python, policy in cases:
@@ -107,7 +107,7 @@ def test_python_dependency_guidance_matches_selection(binary: Path) -> Transcrip
                 ) == (policy == "explicit"), (name, guidance)
                 assert (
                     "prepare missing PyPI distributions on first import" in guidance
-                ) == (policy == "automatic"), (name, guidance)
+                ) == (policy == "implicit"), (name, guidance)
                 assert ("Only startup dependencies are prepared" in guidance) == (
                     policy == "startup_only"
                 ), (name, guidance)

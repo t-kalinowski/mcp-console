@@ -315,7 +315,7 @@ def test_activation_error_preserves_r_condition(
         with McpClient(
             installed_console(binary),
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         ) as client:

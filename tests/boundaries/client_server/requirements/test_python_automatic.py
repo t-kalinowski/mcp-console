@@ -43,7 +43,7 @@ def test_resolves_missing_python_import_without_replaying_cell(
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     )
     client.initialize_and_list_tools()
@@ -101,7 +101,7 @@ def test_keeps_mapped_resolution_notice_atomic_at_output_limit(
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     )
     client.initialize_and_list_tools()
@@ -146,7 +146,7 @@ def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
     environment.pop("RETICULATE_PYTHON", None)
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     ) as client:
         client.initialize_and_list_tools()
@@ -199,7 +199,7 @@ def test_retries_new_meta_path_finders_after_automatic_resolution(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -274,7 +274,7 @@ def test_infers_python_distributions_for_normal_import_forms(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -337,7 +337,7 @@ def test_does_not_resolve_unreached_or_available_python_imports(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
             current_directory=directory,
@@ -418,7 +418,7 @@ def test_does_not_resolve_missing_python_imports_from_sql(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -557,7 +557,7 @@ def test_does_not_reenter_automatic_python_resolution(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -618,7 +618,7 @@ def test_retains_automatic_python_requirement_after_error_and_restart(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -665,7 +665,7 @@ def test_reports_automatic_python_resolution_failure(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -753,7 +753,7 @@ def test_retains_inferred_distribution_that_does_not_provide_import(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -806,7 +806,7 @@ def test_explicit_python_requirements_preempt_automatic_resolution(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -853,7 +853,7 @@ def test_requires_explicit_python_requirements_for_ambiguous_or_installed_roots(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
             current_directory=directory,
@@ -917,7 +917,7 @@ def test_reports_unavailable_standard_library_module_without_resolution(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -996,7 +996,7 @@ def test_runtime_toolchain_probe_does_not_install_a_distribution(
         with McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         ) as client:

@@ -62,7 +62,7 @@ def test_uses_current_r_library_for_managed_python_resolution(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
             current_directory=temporary,
@@ -159,7 +159,7 @@ def test_validates_registry_only_python_requirements(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
             current_directory=temporary,
@@ -441,7 +441,7 @@ def test_recovers_from_python_version_resolution_failure(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )

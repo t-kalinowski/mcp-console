@@ -480,9 +480,7 @@ def python_inventory_client(
         environment.update(extra_environment)
     client = McpClient(
         binary,
-        execution.serve(
-            "-c", "cache=host", "-c", "python.managed.resolution=automatic"
-        ),
+        execution.serve("-c", "cache=host", "-c", "python.managed.resolution=implicit"),
         environment,
         current_directory=directory,
     )

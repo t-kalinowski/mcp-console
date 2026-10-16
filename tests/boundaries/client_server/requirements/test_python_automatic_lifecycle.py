@@ -45,7 +45,7 @@ def test_rejects_automatic_resolution_from_background_thread(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -103,7 +103,7 @@ def test_rejects_automatic_resolution_from_fork_child(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -197,7 +197,7 @@ def test_times_out_and_polls_automatic_python_resolution(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -313,7 +313,7 @@ def interrupts_automatic_python_resolver_and_preserves_worker(
             client = McpClient(
                 binary,
                 execution.serve(
-                    "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                    "-c", "python.managed.resolution=implicit", "-c", "cache=host"
                 ),
                 environment,
             )
@@ -426,7 +426,7 @@ def test_restart_discards_unactivated_automatic_python_candidate(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )

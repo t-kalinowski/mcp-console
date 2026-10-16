@@ -7,4 +7,4 @@ managed:
   packages: []
 ---
 managed:
-  resolution: automatic
+  resolution: implicit

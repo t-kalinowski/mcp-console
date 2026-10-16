@@ -567,7 +567,7 @@ def test_console_startup_resolves_python_version_and_import(
             format_yaml(
                 {
                     "startup": {"language": "r", "code": source},
-                    "python": {"managed": {"resolution": "automatic"}},
+                    "python": {"managed": {"resolution": "implicit"}},
                 }
             )
         )

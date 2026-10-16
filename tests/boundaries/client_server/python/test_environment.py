@@ -594,7 +594,7 @@ def test_prints_requirements_with_host_uv_cache(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
             current_directory=temporary,

@@ -545,7 +545,7 @@ def test_retries_python_runtime_initialization_after_interrupt(
         environment["RETICULATE_PYTHONPATH"] = str(modules)
         client = McpClient(
             binary,
-            execution.serve("-c", "python.managed.resolution=automatic"),
+            execution.serve("-c", "python.managed.resolution=implicit"),
             environment,
         )
         passed = False
@@ -779,7 +779,7 @@ def test_restart_cancels_live_python_preparation(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )

@@ -47,7 +47,7 @@ def test_declares_imports_and_uses_python_packages(
     environment.pop("RETICULATE_PYTHON", None)
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     ) as client:
         client.initialize_and_list_tools()
@@ -148,7 +148,7 @@ def test_preserves_python_requirement_values(
     environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
     client = McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     )
     client.initialize_and_list_tools()
@@ -314,7 +314,7 @@ def test_materializes_lazy_python_requirements_without_initializing(
     environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
     client = McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     )
     client.initialize_and_list_tools()
@@ -588,7 +588,7 @@ def restart_discards_pre_marker_activation(
         client = McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
         )
@@ -832,7 +832,7 @@ def failed_live_python_requirements_do_not_run_cell(
         with McpClient(
             binary,
             execution.serve(
-                "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                "-c", "python.managed.resolution=implicit", "-c", "cache=host"
             ),
             environment,
             root,
@@ -977,7 +977,7 @@ def test_prepares_after_idle_python_resolution(
 ) -> Transcript:
     client = McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     )
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
@@ -1017,7 +1017,7 @@ def test_retains_idle_python_activation_during_continuous_collection(
 ) -> Transcript:
     client = McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     )
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
@@ -1171,7 +1171,7 @@ def test_layers_python_requirements_declared_by_r_packages(
         )
         client = McpClient(
             binary,
-            execution.serve("-c", "python.managed.resolution=automatic"),
+            execution.serve("-c", "python.managed.resolution=implicit"),
             environment,
         )
         client.initialize_and_list_tools()
@@ -1307,7 +1307,7 @@ def test_retains_python_activation_before_later_cell_failure(
 ) -> Transcript:
     client = McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     )
     client.initialize_and_list_tools()
     # fmt: r

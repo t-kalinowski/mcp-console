@@ -31,7 +31,7 @@ def test_psutil_sees_host_processes_without_sandbox(binary: Path) -> Transcript:
         try:
             with McpClient(
                 binary,
-                DIRECT.serve("-c", "python.managed.resolution=automatic"),
+                DIRECT.serve("-c", "python.managed.resolution=implicit"),
                 environment,
             ) as client:
                 client.initialize_and_list_tools()

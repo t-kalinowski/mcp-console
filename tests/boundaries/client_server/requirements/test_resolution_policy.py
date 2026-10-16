@@ -218,7 +218,7 @@ def test_locked_python_startup_and_fallback(
             client.send(requirements={"python": ["packaging"]})
             client.send(requirements={"action": "set", **startup["requirements"]})
             client.send(requirements={"action": "reset"})
-            configure(root, {"managed": {"resolution": "automatic"}})
+            configure(root, {"managed": {"resolution": "implicit"}})
             client.send(control="restart", requirements={"action": "reset"})
             client.expect(
                 "startup available\n",
@@ -772,7 +772,7 @@ def test_failed_initial_preparation_retries_locked_baseline(
             )
             Path(recorded["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"]).unlink()
             configure(
-                root, {"managed": {"packages": ["six"], "resolution": "automatic"}}
+                root, {"managed": {"packages": ["six"], "resolution": "implicit"}}
             )
             result = client.send(
                 control="restart",

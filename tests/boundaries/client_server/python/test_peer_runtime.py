@@ -979,7 +979,7 @@ def test_shared_managed_bootstrap_and_replacement(
                 )
             with McpClient(
                 binary,
-                execution.serve("-c", "python.managed.resolution=automatic"),
+                execution.serve("-c", "python.managed.resolution=implicit"),
                 environment,
                 root,
             ) as client:
@@ -1593,7 +1593,7 @@ def r_startup_with_python(
             else execution.serve()
         )
         if managed:
-            serve += ("-c", "python.managed.resolution=automatic")
+            serve += ("-c", "python.managed.resolution=implicit")
         with McpClient(binary, serve, environment, root) as client:
             client.initialize_and_list_tools()
             if managed:

@@ -63,7 +63,7 @@ python_guidance: >-
   remaining open figures return as PNGs and close; `show()` is optional.
   Closing an unshown figure suppresses capture.
 ---
-selection: managed automatic
+selection: managed implicit
 python_guidance: >-
   Evaluate one complete Python cell in persistent `__main__` state. The
   final visible expression autoprints; leave the primary result last.

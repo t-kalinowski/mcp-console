@@ -21,7 +21,7 @@ def test_prepares_without_reticulate_environment_mutators(
     binary: Path, execution: Execution
 ) -> Transcript:
     with McpClient(
-        binary, execution.serve("-c", "python.managed.resolution=automatic")
+        binary, execution.serve("-c", "python.managed.resolution=implicit")
     ) as client:
         client.initialize_and_list_tools()
         client.send(r="owner_r_state <- 42L")
@@ -104,7 +104,7 @@ def test_initializes_with_lazy_exclusion_date(
     environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     ) as client:
         client.initialize_and_list_tools()
@@ -143,7 +143,7 @@ def test_preserves_live_reticulate_requirement_rules(
 ) -> list:
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     ) as client:
         client.initialize_and_list_tools()
         client.send(
@@ -213,7 +213,7 @@ def test_refreshes_numpy_configuration_after_live_preparation(
     environment = dict(os.environ, MCP_CONSOLE_LANGUAGES="r")
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
         environment,
     ) as client:
         client.initialize_and_list_tools()
@@ -255,7 +255,7 @@ def test_matches_live_python_version_constraints_like_the_resolver(
 ) -> Transcript:
     with McpClient(
         binary,
-        execution.serve("-c", "python.managed.resolution=automatic"),
+        execution.serve("-c", "python.managed.resolution=implicit"),
     ) as client:
         client.initialize_and_list_tools()
         client.send(

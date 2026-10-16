@@ -56,11 +56,11 @@ Selecting an existing environment changes package management; it does not grant 
 
 R and managed Python each have a resolution policy:
 
-R defaults to `automatic`; managed Python defaults to `explicit`.
+R defaults to `implicit`; managed Python defaults to `explicit`.
 
 | Policy                           | Startup packages       | Explicit package requests | Missing package loads/imports |
 | -------------------------------- | ---------------------- | ------------------------- | ----------------------------- |
-| `automatic`                      | Prepared               | Allowed                   | May prepare packages          |
+| `implicit`                       | Prepared               | Allowed                   | May prepare packages          |
 | `explicit`                       | Prepared               | Allowed                   | Do not prepare packages       |
 | `startup_only`                   | Prepared               | Not allowed               | Do not prepare packages       |
 | R `disabled`, or existing Python | No managed preparation | Not allowed               | Use installed packages        |
@@ -90,7 +90,7 @@ By default, the agent declares Python dependencies through `requirements.python`
 Preparation can accompany the cell that uses the packages.
 
 Reached missing-package loads in R can request preparation by default.
-For Python, opt in with `python.managed.resolution: automatic` in `config.yaml` to let missing imports request preparation.
+For Python, opt in with `python.managed.resolution: implicit` in `config.yaml` to let missing imports request preparation.
 Console does not rerun the whole cell to make this happen.
 
 Python import names and package-distribution names can differ.

@@ -11,7 +11,7 @@ managed:
 ---
 selected: existing
 managed:
-  resolution: automatic
+  resolution: implicit
 ---
 selected: existing
 managed:
@@ -29,7 +29,7 @@ managed:
 ---
 selected: managed
 managed:
-  resolution: automatic
+  resolution: implicit
 ---
 selected: managed
 managed:

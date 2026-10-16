@@ -413,7 +413,7 @@ def test_preserves_r_interrupt_during_python_site_activation(
         environment = managed_environments(root, interrupt_site=True)
         with McpClient(
             binary,
-            execution.serve("-c", "python.managed.resolution=automatic"),
+            execution.serve("-c", "python.managed.resolution=implicit"),
             environment,
             root,
         ) as client:
@@ -546,7 +546,7 @@ def test_preserves_suspended_r_interrupt_during_publication(
         environment = managed_environments(root)
         with McpClient(
             binary,
-            execution.serve("-c", "python.managed.resolution=automatic"),
+            execution.serve("-c", "python.managed.resolution=implicit"),
             environment,
             root,
         ) as client:
@@ -729,7 +729,7 @@ def cancelled_candidate_probe(
                     "-c",
                     "python.managed.packages=[]",
                     *(
-                        ("-c", "python.managed.resolution=automatic")
+                        ("-c", "python.managed.resolution=implicit")
                         if r_transition
                         else ()
                     ),
@@ -891,7 +891,7 @@ def test_retains_previous_candidate_after_lazy_projection_failure(
             binary,
             execution.serve(
                 "-c",
-                "python.managed.resolution=automatic",
+                "python.managed.resolution=implicit",
                 "-c",
                 "python.managed.packages=[console-initial-fixture]",
             ),

@@ -123,7 +123,7 @@ def test_retains_environment_when_optional_psutil_setup_fails(
     environment.pop("RETICULATE_PYTHON", None)
     client = McpClient(
         binary,
-        SANDBOXED.serve("-c", "python.managed.resolution=automatic"),
+        SANDBOXED.serve("-c", "python.managed.resolution=implicit"),
         environment,
     )
     client.initialize_and_list_tools()

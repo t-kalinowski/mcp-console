@@ -233,7 +233,7 @@ def test_template_examples_can_be_uncommented_and_loaded(binary: Path) -> Transc
         )
         assert "## Temporary storage options:" in contents
         assert (
-            "## R defaults to automatic; managed Python defaults to explicit."
+            "## R defaults to implicit; managed Python defaults to explicit."
             in contents
         )
         assert "#   allow_local_binding: true" in contents
@@ -259,7 +259,7 @@ def test_template_examples_can_be_uncommented_and_loaded(binary: Path) -> Transc
         )
         assert resolved.returncode == 0 and not resolved.stderr, resolved
         value = json.loads(resolved.stdout)
-        assert value["r"]["resolution"] == "automatic"
+        assert value["r"]["resolution"] == "implicit"
         assert value["python"]["managed"]["resolution"] == "explicit"
         assert value["sandbox"]["network"]["allow_local_binding"] is True
         assert value["python"]["managed"]["packages"] == [

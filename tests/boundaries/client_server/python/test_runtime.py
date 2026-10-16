@@ -406,7 +406,7 @@ def returns_matplotlib_plots(
             McpClient(
                 binary,
                 execution.serve(
-                    "-c", "python.managed.resolution=automatic", "-c", "cache=host"
+                    "-c", "python.managed.resolution=implicit", "-c", "cache=host"
                 ),
                 environment,
                 current_directory=workspace,
