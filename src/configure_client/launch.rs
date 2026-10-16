@@ -30,8 +30,8 @@ impl Launch {
             let executable = std::env::current_exe()
                 .and_then(|path| path.canonicalize())
                 .map_err(|error| format!("Cannot locate this executable: {error}"))?;
-            let target = if in_cache(&executable)? {
-                launch.install = Some(installed_requirement(&executable)?);
+            let target = if let Some(environment) = temporary_uv_environment(&executable)? {
+                launch.install = Some(installed_requirement(environment)?);
                 // uv marks both its normal cache and --no-cache temporary roots.
                 // Query its persistent launcher directory before any installation
                 // so dry-run can show the same command and configuration path.
@@ -100,11 +100,7 @@ impl Launch {
     }
 }
 
-fn installed_requirement(executable: &Path) -> Result<String, String> {
-    let environment = executable
-        .ancestors()
-        .find(|directory| directory.join("pyvenv.cfg").is_file())
-        .ok_or("Cannot locate this temporary tool's environment; install Console persistently with uv tool install <SOURCE> before using --no-uvx")?;
+fn installed_requirement(environment: &Path) -> Result<String, String> {
     // Let uv reconstruct its installed requirement, including direct URLs,
     // archive hashes, and resolved Git commits. A version alone loses the
     // source selected by uvx --from. Never guess when metadata is unavailable.
@@ -138,25 +134,34 @@ fn installed_requirement(executable: &Path) -> Result<String, String> {
         .ok_or_else(|| "Cannot identify this temporary tool's source; install Console persistently with uv tool install <SOURCE> before using --no-uvx".into())
 }
 
-fn in_cache(executable: &Path) -> Result<bool, String> {
-    // uv tags every virtualenv, including persistent tools and project venvs.
-    // Only a containing cache makes the executable disposable. Its marker also
-    // handles custom cache directories and --no-cache temporary cache roots.
-    for directory in executable.parent().unwrap().ancestors() {
-        if directory.join("pyvenv.cfg").is_file() {
-            continue;
-        }
+fn temporary_uv_environment(executable: &Path) -> Result<Option<&Path>, String> {
+    let Some(environment) = executable
+        .ancestors()
+        .find(|directory| directory.join("pyvenv.cfg").is_file())
+    else {
+        return Ok(None);
+    };
+    let configuration = environment.join("pyvenv.cfg");
+    let contents = fs::read_to_string(&configuration)
+        .map_err(|error| format!("Cannot read {}: {error}", configuration.display()))?;
+    if !contents.lines().any(|line| line.starts_with("uv = ")) {
+        return Ok(None);
+    }
+    // CACHEDIR.TAG is shared with Cargo and other tools. Require uv's own
+    // environment marker first, then a containing cache. The environment's
+    // own tag also exists on persistent uv tools and does not imply disposal.
+    for directory in environment.ancestors().skip(1) {
         let marker = directory.join("CACHEDIR.TAG");
         match fs::read(&marker) {
             Ok(contents)
                 if contents.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55") =>
             {
-                return Ok(true);
+                return Ok(Some(environment));
             }
             Ok(_) => {}
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(format!("Cannot read {}: {error}", marker.display())),
         }
     }
-    Ok(false)
+    Ok(None)
 }

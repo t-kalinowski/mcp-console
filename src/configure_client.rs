@@ -34,6 +34,17 @@ pub(crate) fn run(options: &ConfigureClientOptions) -> Result<(), String> {
             options.name
         ));
     }
+    if options.clients.contains(&ConfigureClient::Codex)
+        && !options
+            .name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_:@/.-".contains(&byte))
+    {
+        return Err(format!(
+            "Server name {:?} must match ^[a-zA-Z0-9_:@/.-]+$ for Codex; choose another --name",
+            options.name
+        ));
+    }
     let directory = std::env::current_dir().map_err(|error| error.to_string())?;
     let git_root = directory
         .ancestors()

@@ -54,7 +54,7 @@ def test_multiple_clients_pins_names_and_serve_arguments(binary: Path) -> Transc
     records = []
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
-        name = 'console.test "custom"'
+        name = "console.test_custom-1:@/local"
         for pin in (None, "latest", "0.0.5", "v0.0.5"):
             arguments = [] if pin is None else ["--pin-version", pin]
             result = configure(
@@ -226,6 +226,31 @@ def test_reserved_names_are_client_specific(binary: Path) -> Transcript:
             "other_clients": "same names remain available",
         }
     ]
+
+
+def test_server_name_patterns_are_client_specific(binary: Path) -> Transcript:
+    names = ("console custom", 'console"quoted', "console+extra", "cönsole")
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        for name in names:
+            for clients in (("codex",), ("claude", "codex")):
+                result = configure(
+                    binary, root, root, *clients, "--scope", "global", "--name", name
+                )
+                assert result.returncode == 1 and not result.stdout, result
+                assert "^[a-zA-Z0-9_:@/.-]+$" in result.stderr, result
+                assert (
+                    not (root / "codex-home").exists()
+                    and not (root / "claude-home").exists()
+                )
+            result = configure(
+                binary, root, root, "claude", "--scope", "global", "--name", name
+            )
+            assert result.returncode == 0 and not result.stderr, result
+            config = read_config(root / "claude-home/.claude.json", "claude")
+            assert name in config["mcpServers"], config
+            shutil.rmtree(root / "claude-home")
+    return [{"server_name_pattern": "client-specific validation before changes"}]
 
 
 def test_existing_files_retain_identity_and_security_metadata(
@@ -437,6 +462,12 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
         assert (
             not (root / "codex-home").exists() and not (root / "claude-home").exists()
         )
+        result = invoke("--name", "invalid name")
+        assert result.returncode == 1 and not result.stdout, result
+        assert not (root / "uv-bin").exists()
+        assert (
+            not (root / "codex-home").exists() and not (root / "claude-home").exists()
+        )
         # Invalid configuration must also prevent a persistent installation.
         bad = root / "claude-home/.claude.json"
         bad.parent.mkdir()
@@ -521,38 +552,49 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
     ]
 
 
-def test_cached_executable_without_environment_is_rejected(binary: Path) -> Transcript:
+def test_shared_cache_marker_keeps_direct_executables(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
-        cache = root / "cache"
-        executable = cache / "bin" / native_console(binary).name
-        executable.parent.mkdir(parents=True)
-        shutil.copy2(native_console(binary), executable)
-        (cache / "CACHEDIR.TAG").write_text(
-            "Signature: 8a477f597d28d172789f06886806bc55\n", encoding="utf-8"
-        )
-        result = configure(
-            executable,
-            root,
-            root,
-            "codex",
-            "claude",
-            "--scope",
-            "global",
-            "--no-uvx",
-            extra_environment={"PATH": str(root / "empty-path")},
-        )
-        assert result.returncode == 1 and not result.stdout, result
-        assert "Cannot locate this temporary tool's environment" in result.stderr, (
-            result
-        )
-        assert "uv tool install <SOURCE>" in result.stderr, result
-        assert (
-            not (root / "codex-home").exists() and not (root / "claude-home").exists()
-        )
+        for layout in ("cargo", "python-venv"):
+            case = root / layout
+            cache = case / "target"
+            prefix = cache if layout == "cargo" else cache / "venv"
+            executable = (
+                prefix
+                / ("release" if layout == "cargo" else "bin")
+                / native_console(binary).name
+            )
+            executable.parent.mkdir(parents=True)
+            shutil.copy2(native_console(binary), executable)
+            (cache / "CACHEDIR.TAG").write_text(
+                "Signature: 8a477f597d28d172789f06886806bc55\n", encoding="utf-8"
+            )
+            if layout == "python-venv":
+                (prefix / "pyvenv.cfg").write_text("home = fixture\n", encoding="utf-8")
+            result = configure(
+                executable,
+                case,
+                case,
+                "codex",
+                "claude",
+                "--scope",
+                "global",
+                "--no-uvx",
+                extra_environment={"PATH": str(root / "empty-path")},
+            )
+            assert result.returncode == 0 and not result.stderr, result
+            assert "tool install" not in result.stdout, result
+            for client, path in (
+                ("codex", case / "codex-home/config.toml"),
+                ("claude", case / "claude-home/.claude.json"),
+            ):
+                entry = server(read_config(path, client), client)
+                assert Path(entry["command"]).is_absolute()
+                assert Path(entry["command"]).samefile(executable)
+                assert entry["args"] == ["serve"]
     return [
         {
-            "unidentified_cached_executable": "rejected before installation or configuration writes"
+            "shared_cache_marker": "Cargo and non-uv virtualenvs retain their executable paths"
         }
     ]
 
