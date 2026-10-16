@@ -108,7 +108,6 @@ The full output contains captured settings, configuration defaults, generated in
 Each parameter has explicit `enabled` and `description` fields, read-only `schema` metadata for its type and constraints, and a `parameters` mapping for nested fields.
 Generated Python parameter descriptions export as `null` so the next launch regenerates guidance for its selected environment and resolution policy.
 An explicit Python description remains verbatim, including an empty string.
-Stored description strings from older exports are also treated as explicit overrides; Console does not detect or migrate previously generated text.
 Changes to the `schema` metadata fail validation.
 Use `enabled: false` to hide a parameter while retaining its details for inspection or re-enabling.
 
