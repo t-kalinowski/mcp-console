@@ -63,6 +63,8 @@ Without inheritance or a configured profile, the default sandbox permits host-fi
 
 ### Allow project writes {#allow-project-writes}
 
+If you registered with `--scope project`, include that option in both `configure-client` commands below and run them from the same project directory.
+
 To let the agent save files in its workspace, pass the workspace profile after `--` when registering your client:
 
 ```sh
