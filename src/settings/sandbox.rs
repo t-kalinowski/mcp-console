@@ -688,13 +688,25 @@ fn is_broad_write_root(path: &Path) -> Result<bool, String> {
     }
     let home = crate::console_paths::home_directory()?
         .ok_or("cannot determine the home directory for workspace writes")?;
-    let home = home.canonicalize().map_err(|error| {
-        format!(
-            "cannot resolve home directory '{}': {error}",
-            home.display()
-        )
-    })?;
-    Ok(home.starts_with(root))
+    // An absent home cannot contain a workspace, but its existing ancestors
+    // must still be protected, including through symlinks.
+    for ancestor in home.ancestors() {
+        match ancestor.canonicalize() {
+            Ok(ancestor) => return Ok(ancestor.starts_with(&root)),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot resolve home directory '{}': {error}",
+                    home.display()
+                ));
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Capture launch-relative paths without hiding symlinks from runner validation.

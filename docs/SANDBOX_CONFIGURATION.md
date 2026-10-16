@@ -135,6 +135,7 @@ Changing the working directory from R or Python does not move the permission bou
 
 If that directory is a filesystem root, the user's home directory, or a parent of home, Console warns and uses the `read_only` base.
 Home follows the same [launch-environment selection](CONFIGURATION.md#paths) as `~` paths, including explicit `HOME` precedence on Windows.
+The home directory need not exist; Console still protects its existing ancestors.
 This also applies when `workspace` is the fallback for unavailable client metadata.
 The same root check applies to `resolver.sandbox.profile: workspace`.
 Explicit absolute write grants, network settings, and temporary-storage settings still apply.

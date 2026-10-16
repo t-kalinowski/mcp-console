@@ -113,6 +113,90 @@ def test_broad_roots_require_absolute_write_grants(binary: Path) -> Transcript:
     return transcript
 
 
+@requires(SANDBOX)
+def test_missing_home_preserves_safe_project_writes(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        project = root / "project"
+        project.mkdir()
+        alias = root / "project-alias"
+        alias.symlink_to(project, target_is_directory=True)
+        file = root / "file"
+        file.write_text("not a directory")
+        probe = project / "probe"
+        for name, home, writable in (
+            ("missing", root / "missing", True),
+            ("not_directory", file / "home", True),
+            ("missing_child", project / "missing", False),
+            ("missing_alias_child", alias / "missing", False),
+        ):
+            for profile in (True, False):
+                probe.write_text("unchanged")
+                result = subprocess.run(
+                    [
+                        binary,
+                        "sandbox",
+                        "--no-config",
+                        *(
+                            ("-c", "sandbox.profile=workspace")
+                            if profile
+                            else ("--writable-root", ".")
+                        ),
+                        "--",
+                        sys.executable,
+                        "-c",
+                        # fmt: python
+                        code("""
+                            import errno
+                            import os
+                            from pathlib import Path
+
+                            writable = os.environ["TEST_WRITABLE"] == "True"
+                            try:
+                                _ = Path("probe").write_text("changed")
+                            except OSError as error:
+                                assert not writable and error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), (
+                                    error
+                                )
+                            else:
+                                assert writable, "home ancestor granted broad writes"
+                            print("writable" if writable else "read-only")
+                            """),
+                    ],
+                    cwd=project,
+                    env=os.environ
+                    | {"HOME": str(home), "TEST_WRITABLE": str(writable)},
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                assert result.returncode == 0, result
+                assert result.stdout == ("writable\n" if writable else "read-only\n"), (
+                    result
+                )
+                assert probe.read_text() == ("changed" if writable else "unchanged")
+                expected = (
+                    ""
+                    if writable
+                    else (
+                        f"Warning: refusing automatic workspace writes to '{project}'; falling back to read_only\n"
+                        if profile
+                        else "Warning: refusing relative writable root '.'; use an absolute path to grant writes to the home directory or filesystem root\n"
+                    )
+                )
+                assert result.stderr == expected, result
+                records.append(
+                    {
+                        "scenario": name,
+                        "source": "profile" if profile else "--writable-root",
+                        "stdout": result.stdout,
+                        "stderr": result.stderr.replace(str(project), "<workspace>"),
+                    }
+                )
+    return records
+
+
 @requires(SANDBOX, case_insensitive_paths())
 def test_home_case_alias_does_not_bypass_root_guard(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
