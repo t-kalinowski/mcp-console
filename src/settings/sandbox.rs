@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use serde::{Deserialize, Deserializer, de::Error as _};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::{Value, json};
 
 use super::SandboxSettings;
@@ -53,9 +53,7 @@ where
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Sandbox {
-    #[serde(deserialize_with = "supplied")]
-    pub(super) inherit_from_codex: Option<bool>,
-    profile: Option<Profile>,
+    pub(super) profile: Option<ProfileSelection>,
     tempdir: Tempdir,
     #[serde(deserialize_with = "supplied_mapping")]
     filesystem: Option<Filesystem>,
@@ -63,10 +61,81 @@ pub(super) struct Sandbox {
     network: Option<Network>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum Profile {
+pub(crate) enum Profile {
     Workspace,
+    Codex,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+pub(crate) enum ProfileSelection {
+    Named(Profile),
+    FirstAvailable { first_available: Vec<Profile> },
+}
+
+impl<'de> Deserialize<'de> for ProfileSelection {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum Mapping {
+            FirstAvailable(Vec<Profile>),
+        }
+        let value = Value::deserialize(deserializer)?;
+        if value.is_string() {
+            return serde_json::from_value(value)
+                .map(Self::Named)
+                .map_err(D::Error::custom);
+        }
+        let Mapping::FirstAvailable(first_available) =
+            serde_json::from_value(value).map_err(D::Error::custom)?;
+        if first_available.is_empty()
+            || first_available.iter().enumerate().any(|(index, profile)| {
+                first_available[..index].contains(profile)
+                    || (*profile == Profile::Workspace && index + 1 != first_available.len())
+            })
+        {
+            return Err(D::Error::custom(
+                "first_available must be nonempty, with each profile at most once and workspace last",
+            ));
+        }
+        Ok(Self::FirstAvailable { first_available })
+    }
+}
+
+impl ProfileSelection {
+    fn candidates(&self) -> &[Profile] {
+        match self {
+            Self::Named(profile) => std::slice::from_ref(profile),
+            Self::FirstAvailable { first_available } => first_available,
+        }
+    }
+
+    pub(crate) fn uses_codex(&self) -> bool {
+        self.candidates().contains(&Profile::Codex)
+    }
+
+    pub(crate) fn select(&self, client_available: bool) -> Result<Profile, String> {
+        self.candidates()
+            .iter()
+            .copied()
+            .find(|profile| match profile {
+                Profile::Codex => client_available,
+                Profile::Workspace => true,
+            })
+            .ok_or_else(|| "sandbox.profile: codex requires usable Codex sandbox metadata; configure first_available: [codex, workspace] for a workspace fallback".into())
+    }
+}
+
+pub(crate) fn apply_workspace_profile(policy: &mut SandboxSettings) {
+    policy.insert("extends".into(), ":workspace".into());
+    // Temp permissions have one owner, independently of the
+    // native workspace profile's broader temporary defaults.
+    policy.insert(
+        "workspace_options".into(),
+        json!({"exclude_tmpdir_env_var": true, "exclude_slash_tmp": true}),
+    );
 }
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq)]
@@ -266,8 +335,13 @@ impl<'de> Deserialize<'de> for UnixSockets {
 
 impl Sandbox {
     pub(super) fn compile(self, resolver: bool) -> Result<SandboxSettings, String> {
-        if resolver && self.inherit_from_codex.is_some() {
-            return Err("resolver.sandbox.inherit_from_codex is unsupported; configure sandbox.inherit_from_codex on the session".into());
+        if resolver
+            && self
+                .profile
+                .as_ref()
+                .is_some_and(ProfileSelection::uses_codex)
+        {
+            return Err("resolver.sandbox.profile: codex is a session profile; configure sandbox.profile instead".into());
         }
         let prefix = if resolver {
             "resolver.sandbox"
@@ -276,19 +350,12 @@ impl Sandbox {
         };
         let mut policy = SandboxSettings::new();
         policy.insert("tempdir".into(), self.tempdir.name().into());
-        match self.profile {
-            Some(Profile::Workspace) => {
-                policy.insert("extends".into(), ":workspace".into());
-                // Temp permissions have one owner, independently of the
-                // native workspace profile's broader temporary defaults.
-                policy.insert(
-                    "workspace_options".into(),
-                    json!({
-                        "exclude_tmpdir_env_var": true, "exclude_slash_tmp": true,
-                    }),
-                );
-            }
-            None => {}
+        if self
+            .profile
+            .as_ref()
+            .is_some_and(|profile| !profile.uses_codex())
+        {
+            apply_workspace_profile(&mut policy);
         }
         if let Some(filesystem) = self.filesystem {
             let entries: Vec<Value> = [

@@ -2,17 +2,27 @@ policy_json <- function(x) {
   as.character(jsonlite::toJSON(as.list(x), auto_unbox = TRUE))
 }
 
-test_that("client sandbox inheritance is an explicit optional boolean", {
+test_that("client sandbox profiles preserve explicit fallback selection", {
   expect_identical(
-    as.list(SandboxPolicy(inherit_from_codex = TRUE)),
-    list(inherit_from_codex = TRUE)
+    as.list(SandboxPolicy(profile = "codex")),
+    list(profile = "codex")
   )
+  profile <- FirstAvailableSandboxProfile(c("codex", "workspace"))
   expect_identical(
-    as.list(SandboxPolicy(inherit_from_codex = FALSE)),
-    list(inherit_from_codex = FALSE)
+    as.list(SandboxPolicy(profile = profile)),
+    list(profile = list(first_available = list("codex", "workspace")))
   )
-  expect_null(SandboxPolicy()@inherit_from_codex)
-  expect_error(SandboxPolicy(inherit_from_codex = "true"), "inherit_from_codex")
+  expect_null(SandboxPolicy()@profile)
+  expect_error(FirstAvailableSandboxProfile(character()), "first_available")
+  expect_error(
+    FirstAvailableSandboxProfile(c("workspace", "codex")),
+    "first_available"
+  )
+  expect_error(
+    FirstAvailableSandboxProfile(c("codex", "codex")),
+    "first_available"
+  )
+  expect_error(SandboxPolicy(inherit_from_codex = TRUE), "unused argument")
 })
 
 test_that("workspace and tempdir selectors preserve their public wire shape", {

@@ -72,7 +72,10 @@ impl ConsoleServer {
             worker.is_none(),
             &sandbox.policy,
             sandbox.no_sandbox,
-            sandbox.inherit_from_codex,
+            sandbox
+                .profile
+                .as_ref()
+                .is_some_and(crate::settings::ProfileSelection::uses_codex),
             &tool_settings,
         )?;
         let runtime = Arc::new(startup::Runtime {
@@ -85,15 +88,18 @@ impl ConsoleServer {
             ),
         });
         let prelaunch = worker.is_none();
-        let inherit_from_codex = sandbox.inherit_from_codex;
-        let inheritance = Arc::new(sandbox::Inheritance::new(inherit_from_codex));
+        let uses_client_profile = sandbox
+            .profile
+            .as_ref()
+            .is_some_and(crate::settings::ProfileSelection::uses_codex);
+        let inheritance = Arc::new(sandbox::Inheritance::new(sandbox.profile.clone()));
         let startup_inheritance = inheritance.clone();
         let startup = startup::Startup::new(
             input_closed,
             runtime,
             prelaunch,
             move |started, diagnostics| {
-                let sandbox = if inherit_from_codex {
+                let sandbox = if uses_client_profile {
                     sandbox
                         .clone()
                         .configure(startup_inheritance.policy(), python.as_ref())?
@@ -136,7 +142,7 @@ impl ConsoleServer {
                 })
             },
         );
-        if !inherit_from_codex {
+        if !uses_client_profile {
             startup.start();
         }
         Ok(Self {

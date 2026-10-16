@@ -190,7 +190,8 @@ fn run_server(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let directory = std::env::current_dir()?;
     let settings::Captured {
-        inherit_from_codex,
+        profile,
+        network_explicit,
         tool,
         startup,
         cache,
@@ -217,14 +218,19 @@ fn run_server(
     }
     let sandbox = server::SandboxConfiguration {
         no_sandbox,
-        inherit_from_codex,
+        profile,
+        network_explicit,
         policy,
         resolver,
         cache,
         writable_roots,
         directory,
     };
-    let sandbox = if inherit_from_codex {
+    let sandbox = if sandbox
+        .profile
+        .as_ref()
+        .is_some_and(settings::ProfileSelection::uses_codex)
+    {
         sandbox
     } else {
         sandbox.configure(None, python.as_ref())?

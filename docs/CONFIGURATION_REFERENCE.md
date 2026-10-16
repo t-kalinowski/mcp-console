@@ -195,6 +195,8 @@ See [Environment variables](ENVIRONMENT.md) for recognized host settings and [Pa
 | `host`           | Use ordinary host cache locations and installed package environments where supported. Default with `--no-sandbox`.                |
 
 Omitted or `null` selects the appropriate default for the launch.
+For a profile selection containing `codex`, automatic cache selection waits for client metadata: sandboxed profiles use Console caches, and inherited full access uses host caches.
+`config resolve --full` retains `cache: null` for that automatic choice.
 `cache: host` retains resolver sandboxing on macOS/Linux.
 Existing Python still uses its preinstalled packages.
 See [Cache locations](RESOLVER.md#cache-locations) for directories, environment overrides, and write grants.
@@ -205,17 +207,20 @@ The following schema applies under both `sandbox` (evaluated code) and `resolver
 These are independent policies.
 Default worker permissions allow host-file reads, including readable secrets, and private temporary writes; ordinary workspace writes and direct networking are restricted.
 
-| Node                                                  | Accepted values                           | Meaning and default                                                                                        |
-| ----------------------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `sandbox.profile`<br>`resolver.sandbox.profile`       | `workspace` or `null`                     | Add workspace writes with metadata protections. Omitted or `null`: no workspace profile.                   |
-| `sandbox.tempdir`<br>`resolver.sandbox.tempdir`       | `managed`, `read_write`, `read_only`      | Select automatic temporary-storage grants. Default: `managed`.                                             |
-| `sandbox.filesystem`<br>`resolver.sandbox.filesystem` | Mapping                                   | Set concrete read, write, and deny paths. Omission retains generated defaults for that policy.             |
-| `sandbox.network`<br>`resolver.sandbox.network`       | `restricted`, `enabled`, or proxy mapping | Select network access. Worker default: `restricted`; macOS/Linux resolver default: managed download proxy. |
+| Node                                                  | Accepted values                                                    | Meaning and default                                                                                        |
+| ----------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `sandbox.profile`                                     | `workspace`, `codex`, `first_available` mapping, or `null`         | Select the worker's base profile. Omitted or `null`: host-read baseline without workspace writes.          |
+| `resolver.sandbox.profile`                            | `workspace`, a workspace-only `first_available` mapping, or `null` | Add preparation workspace writes with metadata protections. Omitted or `null`: no workspace profile.       |
+| `sandbox.tempdir`<br>`resolver.sandbox.tempdir`       | `managed`, `read_write`, `read_only`                               | Select automatic temporary-storage grants. Default: `managed`.                                             |
+| `sandbox.filesystem`<br>`resolver.sandbox.filesystem` | Mapping                                                            | Set concrete read, write, and deny paths. Omission retains generated defaults for that policy.             |
+| `sandbox.network`<br>`resolver.sandbox.network`       | `restricted`, `enabled`, or proxy mapping                          | Select network access. Worker default: `restricted`; macOS/Linux resolver default: managed download proxy. |
 
-The session setting `sandbox.inherit_from_codex` accepts `true` or `false` and defaults to `false`.
-When enabled, the first `send` inherits supported client permissions before runtime preparation; full access disables both sandboxes and selects host caches.
-Missing or unsupported metadata retains configured permissions.
-This setting is not accepted under `resolver.sandbox`.
+`sandbox.profile: codex` requires usable client sandbox metadata from the first `send`, before runtime preparation.
+For clients without that metadata, use `sandbox.profile: {first_available: [codex, workspace]}` to select the workspace fallback.
+The nonempty list accepts each profile once, with the always-available `workspace` last; nested lists are unsupported.
+Explicit filesystem entries compose with the selected base, and explicit network and temporary-storage settings apply afterward.
+Inherited full access disables both sandboxes, including local restrictions, and selects host caches by default.
+Selections containing `codex` are not accepted under `resolver.sandbox.profile`.
 See [Inherit permissions from Codex](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex) for mapping and connection-lifetime rules.
 
 Setting the whole `sandbox` or `resolver.sandbox` node to `null` clears inherited settings and restores that policy's built-in defaults.

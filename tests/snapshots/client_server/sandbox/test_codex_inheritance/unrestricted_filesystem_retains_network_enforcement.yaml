@@ -8,6 +8,7 @@ input:
     arguments:
       timeout_ms: 60000
       python: |
+        import errno
         import json
         import os
         import socket
@@ -15,6 +16,12 @@ input:
 
         assert os.environ["MCP_CONSOLE_SANDBOX"] == "1"
         _ = Path("created").write_text("unrestricted filesystem")
+        try:
+            _ = Path("secret").read_text()
+        except OSError as error:
+            assert error.errno in (errno.EACCES, errno.EPERM)
+        else:
+            raise AssertionError("explicit denial was lost on unrestricted base")
         for port in json.loads(os.environ["MCP_CONSOLE_TEST_PORTS"]):
             try:
                 connection = socket.create_connection(("127.0.0.1", port), timeout=2)

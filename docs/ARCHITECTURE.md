@@ -62,8 +62,9 @@ One connection-owned background task discovers runtimes, prepares defaults, and 
 MCP initialization, tool discovery, and pings do not wait.
 Custom workers remain lazy.
 
-With `sandbox.inherit_from_codex`, startup waits for the first `send` to capture client authority before creating any preparation or execution process.
-The server translates supported permissions into its own policy and selects caches after that translation.
+With a `sandbox.profile` selection containing `codex`, startup waits for the first `send` to capture client authority before creating any preparation or execution process.
+The server translates supported permissions or selects the explicit workspace fallback, then composes local permissions and selects caches.
+Only the selected base contributes permissions; the workspace fallback cannot widen a selected client policy.
 The captured policy survives startup retries and worker replacement; changed recognized permissions require a new connection.
 Connection closure before the first call settles pending startup without creating a runtime.
 The metadata adapter and its supported limits live in [`src/server/sandbox.rs`](../src/server/sandbox.rs) and [sandbox configuration](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex).

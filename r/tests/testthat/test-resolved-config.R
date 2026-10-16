@@ -31,12 +31,19 @@ test_that("materialization and pruning retain client sandbox inheritance", {
   dir.create(project)
   on.exit(unlink(project, recursive = TRUE), add = TRUE)
 
-  config <- materialize_console_config(
-    ConsoleConfig(sandbox = SandboxPolicy(inherit_from_codex = TRUE)),
-    path = binary,
-    project = project
-  )
-  expect_true(config@sandbox@inherit_from_codex)
-  pruned <- prune_console_config(config, path = binary, project = project)
-  expect_identical(as.list(pruned)$sandbox, list(inherit_from_codex = TRUE))
+  for (profile in list(
+    "codex",
+    FirstAvailableSandboxProfile(c("codex", "workspace"))
+  )) {
+    requested <- SandboxPolicy(profile = profile)
+    config <- materialize_console_config(
+      ConsoleConfig(sandbox = requested),
+      path = binary,
+      project = project
+    )
+    expect_identical(config@sandbox@profile, profile)
+    expect_null(config@cache)
+    pruned <- prune_console_config(config, path = binary, project = project)
+    expect_identical(as.list(pruned)$sandbox, as.list(requested))
+  }
 })

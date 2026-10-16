@@ -1,3 +1,6 @@
 ---
-sandbox:
-  inherit_from_codex: true
+profiles:
+  - codex
+  - first_available:
+    - codex
+    - workspace

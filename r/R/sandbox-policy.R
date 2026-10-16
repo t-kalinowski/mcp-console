@@ -414,13 +414,47 @@ SandboxNetwork <- S7::new_class(
 )
 
 #' @rdname SandboxPolicy
+#' @param first_available A nonempty character vector of profile names in
+#'   selection order. Each of `"codex"` and `"workspace"` may appear once;
+#'   `"workspace"` must be last because it is always available.
+#' @export
+FirstAvailableSandboxProfile <- S7::new_class(
+  "FirstAvailableSandboxProfile",
+  parent = ConfigNode,
+  properties = list(
+    first_available = S7::new_property(
+      S7::class_character,
+      validator = function(value) {
+        if (
+          !length(value) ||
+            anyNA(value) ||
+            any(!value %in% c("codex", "workspace")) ||
+            anyDuplicated(value) ||
+            any(which(value == "workspace") != length(value))
+        ) {
+          "must contain codex and/or workspace at most once, with workspace last"
+        }
+      }
+    )
+  )
+)
+
+#' @rdname SandboxPolicy
 #' @param filesystem `NULL` or a `SandboxFilesystem()`.
 #' @param network `NULL`, `"restricted"`, `"enabled"`, or a
 #'   `SandboxNetwork()`: preserve context defaults, deny ordinary direct network
 #'   access without a proxy, permit direct host networking, or enable a managed
 #'   proxy, respectively. Filesystem enforcement remains in place.
-#' @param profile `NULL` to preserve context defaults or `"workspace"` for
-#'   the native workspace profile. Filesystem entries compose with the profile.
+#' @param profile `NULL` to preserve context defaults, `"workspace"` for
+#'   workspace writes, `"codex"` to require supported sandbox metadata from
+#'   the first MCP `send`, or a `FirstAvailableSandboxProfile()` for explicit
+#'   fallback selection. For shared clients, use
+#'   `FirstAvailableSandboxProfile(c("codex", "workspace"))`.
+#'   Filesystem entries compose with the selected base; explicit network and
+#'   temporary-storage settings apply afterward. Inherited full access disables
+#'   worker and preparation sandboxing, so local restrictions are not enforced.
+#'   Client permissions are retained across worker restarts; changed permissions
+#'   require reconnecting. The Codex profile is not accepted for resolver policies.
 #' @param tempdir `NULL` to preserve context defaults, `"managed"` (the default) for private
 #'   writable storage owned and cleaned up by the active sandbox, `"read_write"` for
 #'   automatic write grants to normal host temp locations without Console-owned
@@ -428,12 +462,6 @@ SandboxNetwork <- S7::new_class(
 #'   permissions still apply. Without an active sandbox and managed storage,
 #'   Console adds no temporary-directory cleanup guarantees; R uses its normal
 #'   best-effort session-tempdir cleanup.
-#' @param inherit_from_codex Optional logical. Set `TRUE` to inherit supported
-#'   sandbox permissions from the first MCP `send` call's Codex metadata.
-#'   Full access disables worker and preparation sandboxing. Missing or
-#'   unsupported metadata retains local permissions; changed permissions require
-#'   reconnecting. The native default is `FALSE`. This session setting is not
-#'   accepted in `ResolverConfig(sandbox = ...)`.
 #' @export
 SandboxPolicy <- S7::new_class(
   "SandboxPolicy",
@@ -453,9 +481,20 @@ SandboxPolicy <- S7::new_class(
         }
       }
     ),
-    profile = config_choice("workspace"),
-    tempdir = config_choice(c("managed", "read_write", "read_only")),
-    inherit_from_codex = config_flag()
+    profile = S7::new_property(
+      NULL | S7::class_character | FirstAvailableSandboxProfile,
+      validator = function(value) {
+        if (
+          is.character(value) &&
+            (length(value) != 1L ||
+              is.na(value) ||
+              !value %in% c("workspace", "codex"))
+        ) {
+          "must be NULL, workspace, codex, or a FirstAvailableSandboxProfile()"
+        }
+      }
+    ),
+    tempdir = config_choice(c("managed", "read_write", "read_only"))
   )
 )
 

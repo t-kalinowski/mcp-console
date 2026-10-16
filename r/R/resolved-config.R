@@ -313,6 +313,15 @@ config_from_json <- function(settings) {
       SandboxPolicy,
       fields,
       list(
+        profile = function(fields) {
+          if (is.null(fields) || is.character(fields)) {
+            return(fields)
+          }
+          FirstAvailableSandboxProfile(as.character(unlist(
+            fields$first_available,
+            use.names = FALSE
+          )))
+        },
         filesystem = function(fields) {
           config_node_from_json(SandboxFilesystem, fields)
         },

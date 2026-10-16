@@ -7,6 +7,7 @@
 \alias{SandboxProxy}
 \alias{SandboxSockets}
 \alias{SandboxNetwork}
+\alias{FirstAvailableSandboxProfile}
 \title{Configure sandbox filesystem and network access}
 \usage{
 SandboxFilesystem(read_only = NULL, read_write = NULL, deny = NULL)
@@ -28,12 +29,13 @@ SandboxNetwork(
   allow_local_binding = "auto"
 )
 
+FirstAvailableSandboxProfile(first_available = character(0))
+
 SandboxPolicy(
   filesystem = NULL,
   network = NULL,
   profile = NULL,
-  tempdir = NULL,
-  inherit_from_codex = NULL
+  tempdir = NULL
 )
 }
 \arguments{
@@ -78,6 +80,10 @@ checks, or \code{FALSE} to restrict it. On macOS, \code{TRUE} permits loopback l
 and direct host-loopback connections. Linux managed-proxy ports remain
 inside a private network namespace.}
 
+\item{first_available}{A nonempty character vector of profile names in
+selection order. Each of \code{"codex"} and \code{"workspace"} may appear once;
+\code{"workspace"} must be last because it is always available.}
+
 \item{filesystem}{\code{NULL} or a \code{SandboxFilesystem()}.}
 
 \item{network}{\code{NULL}, \code{"restricted"}, \code{"enabled"}, or a
@@ -85,8 +91,16 @@ inside a private network namespace.}
 access without a proxy, permit direct host networking, or enable a managed
 proxy, respectively. Filesystem enforcement remains in place.}
 
-\item{profile}{\code{NULL} to preserve context defaults or \code{"workspace"} for
-the native workspace profile. Filesystem entries compose with the profile.}
+\item{profile}{\code{NULL} to preserve context defaults, \code{"workspace"} for
+workspace writes, \code{"codex"} to require supported sandbox metadata from
+the first MCP \code{send}, or a \code{FirstAvailableSandboxProfile()} for explicit
+fallback selection. For shared clients, use
+\code{FirstAvailableSandboxProfile(c("codex", "workspace"))}.
+Filesystem entries compose with the selected base; explicit network and
+temporary-storage settings apply afterward. Inherited full access disables
+worker and preparation sandboxing, so local restrictions are not enforced.
+Client permissions are retained across worker restarts; changed permissions
+require reconnecting. The Codex profile is not accepted for resolver policies.}
 
 \item{tempdir}{\code{NULL} to preserve context defaults, \code{"managed"} (the default) for private
 writable storage owned and cleaned up by the active sandbox, \code{"read_write"} for
@@ -95,13 +109,6 @@ cleanup, or \code{"read_only"} to omit automatic temp grants. Explicit filesyste
 permissions still apply. Without an active sandbox and managed storage,
 Console adds no temporary-directory cleanup guarantees; R uses its normal
 best-effort session-tempdir cleanup.}
-
-\item{inherit_from_codex}{Optional logical. Set \code{TRUE} to inherit supported
-sandbox permissions from the first MCP \code{send} call's Codex metadata.
-Full access disables worker and preparation sandboxing. Missing or
-unsupported metadata retains local permissions; changed permissions require
-reconnecting. The native default is \code{FALSE}. This session setting is not
-accepted in \code{ResolverConfig(sandbox = ...)}.}
 }
 \value{
 An S7 configuration object. The constructor is also its S7 class.

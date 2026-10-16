@@ -40,37 +40,124 @@ def test_client_sandbox_inheritance_materializes_and_prunes(binary: Path) -> Tra
         root = Path(temporary).resolve()
         result = resolve(binary, root, "--no-config", "--full", "--format", "json")
         assert result.returncode == 0 and result.stderr == "", result
-        assert json.loads(result.stdout)["sandbox"]["inherit_from_codex"] is False
-        result = resolve(
-            binary,
-            root,
-            "--no-config",
-            "--format",
-            "json",
-            "-c",
-            "sandbox.inherit_from_codex=true",
-        )
-        assert result.returncode == 0 and result.stderr == "", result
-        enabled = json.loads(result.stdout)
-        assert enabled == {"sandbox": {"inherit_from_codex": True}}, enabled
+        assert "inherit_from_codex" not in json.loads(result.stdout)["sandbox"]
         selected = root / "config.json"
-        selected.write_text(json.dumps(enabled))
-        result = resolve(
-            binary, root, "--config-file", str(selected), "--full", "--format", "json"
-        )
-        assert result.returncode == 0 and result.stderr == "", result
-        assert json.loads(result.stdout)["sandbox"]["inherit_from_codex"] is True
-        assert (
-            "inherited from Codex" in json.loads(result.stdout)["tool"]["description"]
-        )
-        for value in ("null", "yes", "1"):
+        profiles = ("codex", {"first_available": ["codex", "workspace"]})
+        for profile in profiles:
             result = resolve(
-                binary, root, "--no-config", "-c", f"sandbox.inherit_from_codex={value}"
+                binary,
+                root,
+                "--no-config",
+                "--format",
+                "json",
+                "-c",
+                "sandbox.profile=" + json.dumps(profile),
             )
-            assert result.returncode != 0 and "inherit_from_codex" in result.stderr, (
+            assert result.returncode == 0 and result.stderr == "", result
+            enabled = json.loads(result.stdout)
+            assert enabled == {"sandbox": {"profile": profile}}, enabled
+            selected.write_text(json.dumps(enabled), encoding="utf-8")
+            result = resolve(
+                binary,
+                root,
+                "--config-file",
+                str(selected),
+                "--full",
+                "--format",
+                "json",
+            )
+            assert result.returncode == 0 and result.stderr == "", result
+            full = json.loads(result.stdout)
+            assert full["sandbox"]["profile"] == profile, full
+            assert "network" not in full["sandbox"], full
+            assert full["cache"] is None, full
+            assert "Codex" in full["tool"]["description"]
+            selected.write_text(result.stdout, encoding="utf-8")
+            result = resolve(
+                binary, root, "--config-file", str(selected), "--format", "json"
+            )
+            assert result.returncode == 0 and json.loads(result.stdout) == enabled, (
                 result
             )
-    return [enabled]
+            result = resolve(
+                binary,
+                root,
+                "--no-config",
+                "--format",
+                "json",
+                "-c",
+                "sandbox.profile=" + json.dumps(profile),
+                "-c",
+                "sandbox.network=restricted",
+            )
+            expected = {"sandbox": {"profile": profile, "network": "restricted"}}
+            assert result.returncode == 0 and json.loads(result.stdout) == expected, (
+                result
+            )
+            result = resolve(
+                binary,
+                root,
+                "--no-config",
+                "--format",
+                "json",
+                "-c",
+                "sandbox.profile=" + json.dumps(profile),
+                "-c",
+                "cache=console",
+            )
+            assert result.returncode == 0 and json.loads(result.stdout) == {
+                "sandbox": {"profile": profile},
+                "cache": "console",
+            }, result
+        for profile in (
+            True,
+            [],
+            {},
+            {"first_available": []},
+            {"first_available": ["future", "workspace"]},
+            {"first_available": ["codex", {"first_available": ["workspace"]}]},
+            {"first_available": ["workspace", "codex"]},
+            {"first_available": ["codex", "codex"]},
+            {"first_available": ["codex", "workspace"], "extra": True},
+        ):
+            result = resolve(
+                binary,
+                root,
+                "--no-config",
+                "-c",
+                "sandbox.profile=" + json.dumps(profile),
+            )
+            assert (
+                result.returncode == 1
+                and "profile" in result.stderr
+                and not result.stdout
+            ), result
+        result = resolve(
+            binary, root, "--no-config", "-c", "sandbox.inherit_from_codex=true"
+        )
+        assert (
+            result.returncode == 1
+            and "unknown field `inherit_from_codex`" in result.stderr
+        ), result
+        result = subprocess.run(
+            [
+                binary,
+                "sandbox",
+                "--no-config",
+                "-c",
+                "sandbox.profile=codex",
+                "--",
+                "unused-workload",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert (
+            result.returncode == 1 and "metadata" in result.stderr and not result.stdout
+        ), result
+    return [{"profiles": list(profiles)}]
 
 
 def test_prunes_builtin_defaults_by_default(binary: Path) -> Transcript:

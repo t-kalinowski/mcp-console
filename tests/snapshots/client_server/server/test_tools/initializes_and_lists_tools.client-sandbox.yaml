@@ -70,12 +70,13 @@ result:
         report state and omitted-output locations.
 
 
-        Sandbox permissions are inherited from Codex metadata on the first send;
-        full access disables Console's sandbox. Missing or unsupported metadata
-        retains the launcher's configured permissions. Reconnect to apply
-        changed client permissions. Package preparation uses separate
-        permissions unless sandboxing is disabled; use only trusted
-        dependencies.
+        The sandbox base profile is selected from Codex metadata on the first
+        send, using the launcher's configured fallback when metadata is missing
+        or unsupported. Without a fallback, usable metadata is required.
+        Explicit Console permissions apply to the selected base. Full access
+        disables Console's sandbox. Reconnect to apply changed client
+        permissions. Package preparation uses separate permissions unless
+        sandboxing is disabled; use only trusted dependencies.
       inputSchema:
         $schema: https://json-schema.org/draft/2020-12/schema
         additionalProperties: false

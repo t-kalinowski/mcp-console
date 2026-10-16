@@ -84,3 +84,35 @@ result:
       text: |
         local sandbox
   isError: false
+---
+input:
+  method: tools/call
+  params:
+    name: send
+    arguments:
+      timeout_ms: 60000
+      python: raise AssertionError('changed permissions executed code')
+    _meta:
+      codex/sandbox-state:
+        permissionProfile:
+          type: managed
+          file_system:
+            type: restricted
+            entries: []
+          network: restricted
+result:
+  content:
+    - type: text
+      text: >-
+        client sandbox permissions changed; reconnect to apply them before
+        sending more code
+  isError: true
+---
+send:
+  python: print('local sandbox')
+result:
+  content:
+    - type: text
+      text: |
+        local sandbox
+  isError: false

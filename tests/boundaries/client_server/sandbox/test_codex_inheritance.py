@@ -3,6 +3,7 @@
 import json
 import copy
 import os
+import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,7 +14,7 @@ from support.assertions import last_result_text, last_tool_text
 from support.client import McpClient
 from support.normalization import code
 from support.python import isolated_python
-from support.records import Transcript
+from support.records import McpTranscript, Transcript, TranscriptWithCompanions
 from support.requirements import SANDBOX, requires
 from support.sandbox_configuration import host_tcp_ports
 from support.suites import run_this_suite
@@ -99,6 +100,153 @@ def finish(client: McpClient, root: Path) -> Transcript:
 
 
 @requires(SANDBOX)
+def test_profile_fallback_selects_one_base_before_local_overrides(
+    binary: Path,
+) -> TranscriptWithCompanions:
+    with TemporaryDirectory() as temporary, host_tcp_ports() as ports:
+        root = Path(temporary).resolve()
+        for name in ("output", "private", "temp"):
+            (root / name).mkdir()
+        (root / "private/secret").write_text("secret")
+        python, _ = isolated_python(root)
+        config = root / "shared.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "sandbox": {
+                        "profile": {"first_available": ["codex", "workspace"]},
+                        "filesystem": {"read_write": ["output"], "deny": ["private"]},
+                        "network": "restricted",
+                        "tempdir": "read_write",
+                    },
+                    "cache": "host",
+                    "python": {"existing": str(python)},
+                }
+            ),
+            encoding="utf-8",
+        )
+        state = {
+            "permissionProfile": {
+                "type": "managed",
+                "file_system": {"type": "restricted", "entries": []},
+                "network": "enabled",
+            }
+        }
+        transcripts = {}
+        # Connections share one file; only the connection with usable client
+        # metadata selects the client base instead of the workspace fallback.
+        for name, metadata in (
+            ("codex", state),
+            ("fallback", None),
+            ("unsupported", {"permissionProfile": {"type": "future"}}),
+        ):
+            use_workspace = name != "codex"
+            with McpClient(
+                binary,
+                ("serve", "--config-file", str(config)),
+                {
+                    **os.environ,
+                    "TMPDIR": str(root / "temp"),
+                    "MCP_CONSOLE_TEST_FALLBACK": str(use_workspace),
+                    "MCP_CONSOLE_TEST_PORTS": json.dumps(ports),
+                },
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                send_with_state(
+                    client,
+                    metadata,
+                    # fmt: python
+                    python=code("""
+                        import errno
+                        import json
+                        import os
+                        import socket
+                        from pathlib import Path
+
+                        fallback = os.environ["MCP_CONSOLE_TEST_FALLBACK"] == "True"
+                        _ = Path("output/created").write_text("explicit grant")
+                        try:
+                            _ = Path("workspace-file").write_text("workspace grant")
+                        except OSError as error:
+                            assert not fallback and error.errno in (errno.EACCES, errno.EPERM, errno.EROFS)
+                        else:
+                            assert fallback, "fallback workspace grants leaked into the client base"
+                        try:
+                            _ = Path("private/secret").read_text()
+                        except OSError as error:
+                            assert error.errno in (errno.EACCES, errno.EPERM)
+                        else:
+                            raise AssertionError("explicit denial was lost")
+                        assert Path(os.environ["TMPDIR"]) == Path.cwd() / "temp"
+                        assert os.environ["MCP_CONSOLE_MANAGED_TEMPDIR"] == "0"
+                        for port in json.loads(os.environ["MCP_CONSOLE_TEST_PORTS"]):
+                            try:
+                                connection = socket.create_connection(("127.0.0.1", port), timeout=2)
+                            except OSError:
+                                pass
+                            else:
+                                connection.close()
+                                raise AssertionError("explicit network restriction was lost")
+                        print("workspace fallback" if fallback else "client base")
+                        """),
+                )
+                assert last_tool_text(client) == (
+                    "workspace fallback\n" if use_workspace else "client base\n"
+                ), last_tool_text(client)
+                transcripts[name] = finish(client, root)
+        return TranscriptWithCompanions(
+            transcripts.pop("codex"),
+            {
+                f"{name}.yaml": McpTranscript(transcript)
+                for name, transcript in transcripts.items()
+            },
+        )
+
+
+def test_required_profile_rejects_missing_metadata_before_runtime_inspection(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        python, site = isolated_python(root)
+        marker = root / "inspected"
+        (site / "sitecustomize.py").write_text(
+            f"from pathlib import Path\n_ = Path({str(marker)!r}).write_text('inspected')\n"
+        )
+        with McpClient(
+            binary,
+            (
+                "serve",
+                "-c",
+                "sandbox.profile=codex",
+                "-c",
+                "cache=host",
+                "-c",
+                f"python.existing={python}",
+            ),
+            os.environ.copy(),
+            root,
+        ) as client:
+            client.initialize_and_list_tools()
+            for metadata in (None, {"permissionProfile": {"type": "future"}}):
+                entry = send_with_state(
+                    client,
+                    metadata,
+                    python="raise AssertionError('submitted code ran')",
+                )
+                assert entry["result"]["isError"] is True, entry
+                assert "requires usable Codex sandbox metadata" in last_result_text(
+                    client
+                ), entry
+            transcript = finish(client, root)
+            assert not marker.exists(), (
+                "a required profile inspected runtimes without client metadata"
+            )
+            return transcript
+
+
+@requires(SANDBOX)
 def test_inherits_filesystem_and_network_before_first_worker(
     binary: Path,
 ) -> Transcript:
@@ -118,7 +266,7 @@ def test_inherits_filesystem_and_network_before_first_worker(
             (
                 "serve",
                 "-c",
-                "sandbox.inherit_from_codex=true",
+                "sandbox.profile=codex",
                 "-c",
                 "sandbox.filesystem.read_write=[local]",
                 "-c",
@@ -272,17 +420,34 @@ def test_full_access_uses_host_permissions_and_caches(binary: Path) -> Transcrip
         root = Path(temporary).resolve()
         (root / "host-cache").mkdir()
         python, _ = isolated_python(root)
-        with McpClient(
-            binary,
-            (
-                "serve",
+        exported = subprocess.run(
+            [
+                binary,
+                "config",
+                "resolve",
+                "--no-config",
+                "--full",
+                "--format",
+                "json",
                 "-c",
-                "sandbox.inherit_from_codex=true",
+                "sandbox.profile=codex",
                 "-c",
                 "sandbox.filesystem.deny=[outside]",
                 "-c",
                 f"python.existing={python}",
-            ),
+            ],
+            cwd=root,
+            env={**os.environ, "MCP_CONSOLE_HOME": str(root / "console-home")},
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert exported.returncode == 0 and exported.stderr == "", exported
+        config = root / "full.json"
+        config.write_text(exported.stdout, encoding="utf-8")
+        with McpClient(
+            binary,
+            ("serve", "--config-file", str(config)),
             {
                 **without_r_environment(root),
                 "XDG_CACHE_HOME": str(root / "host-cache"),
@@ -330,7 +495,7 @@ def test_missing_and_unsupported_metadata_retain_local_policy(
             (
                 "serve",
                 "-c",
-                "sandbox.inherit_from_codex=true",
+                "sandbox.profile={first_available: [codex, workspace]}",
                 "-c",
                 "cache=host",
                 "-c",
@@ -358,6 +523,21 @@ def test_missing_and_unsupported_metadata_retain_local_policy(
                 assert last_tool_text(client) == "local sandbox\n", last_tool_text(
                     client
                 )
+            rejected = send_with_state(
+                client,
+                {
+                    "permissionProfile": {
+                        "type": "managed",
+                        "file_system": {"type": "restricted", "entries": []},
+                        "network": "restricted",
+                    }
+                },
+                python="raise AssertionError('changed permissions executed code')",
+            )
+            assert rejected["result"][
+                "isError"
+            ] is True and "reconnect" in last_result_text(client), rejected
+            client.expect("local sandbox\n", python="print('local sandbox')")
             return finish(client, root)
 
 
@@ -376,7 +556,7 @@ def test_discovery_and_eof_do_not_prepare_runtimes_when_inheriting(
             (
                 "serve",
                 "-c",
-                "sandbox.inherit_from_codex=true",
+                "sandbox.profile=codex",
                 "-c",
                 "sandbox.filesystem.read_write=[.]",
                 "-c",
@@ -400,15 +580,16 @@ def test_unrestricted_filesystem_retains_network_enforcement(
 ) -> Transcript:
     with TemporaryDirectory() as temporary, host_tcp_ports() as ports:
         root = Path(temporary).resolve()
+        (root / "secret").write_text("private")
         python, _ = isolated_python(root)
         with McpClient(
             binary,
             (
                 "serve",
                 "-c",
-                "sandbox.inherit_from_codex=true",
+                "sandbox.profile=codex",
                 "-c",
-                "sandbox.network=enabled",
+                "sandbox.filesystem.deny=[secret]",
                 "-c",
                 "cache=host",
                 "-c",
@@ -430,6 +611,7 @@ def test_unrestricted_filesystem_retains_network_enforcement(
                 state,
                 # fmt: python
                 python=code("""
+                    import errno
                     import json
                     import os
                     import socket
@@ -437,6 +619,12 @@ def test_unrestricted_filesystem_retains_network_enforcement(
 
                     assert os.environ["MCP_CONSOLE_SANDBOX"] == "1"
                     _ = Path("created").write_text("unrestricted filesystem")
+                    try:
+                        _ = Path("secret").read_text()
+                    except OSError as error:
+                        assert error.errno in (errno.EACCES, errno.EPERM)
+                    else:
+                        raise AssertionError("explicit denial was lost on unrestricted base")
                     for port in json.loads(os.environ["MCP_CONSOLE_TEST_PORTS"]):
                         try:
                             connection = socket.create_connection(("127.0.0.1", port), timeout=2)
@@ -475,7 +663,7 @@ def test_inheritance_preserves_explicit_console_proxy(binary: Path) -> Transcrip
             (
                 "serve",
                 "-c",
-                "sandbox.inherit_from_codex=true",
+                "sandbox.profile=codex",
                 "-c",
                 "sandbox.network={proxy: {mode: limited, allow_upstream_proxy: true}}",
                 "-c",

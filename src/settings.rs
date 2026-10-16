@@ -11,7 +11,8 @@ mod python;
 mod resolution;
 mod sandbox;
 pub(crate) use sandbox::{
-    Tempdir, materialize_settings as materialize_sandbox, resolve_writable_root,
+    Profile, ProfileSelection, Tempdir, apply_workspace_profile,
+    materialize_settings as materialize_sandbox, resolve_writable_root,
 };
 pub(crate) const SANDBOX_MARKER: &str = "MCP_CONSOLE_SANDBOX";
 pub(crate) const MANAGED_TEMPDIR_ENVIRONMENT: &str = "MCP_CONSOLE_MANAGED_TEMPDIR";
@@ -214,7 +215,8 @@ fn environment<'de, D: serde::Deserializer<'de>>(
 
 #[derive(Default)]
 pub(crate) struct Captured {
-    pub inherit_from_codex: bool,
+    pub profile: Option<ProfileSelection>,
+    pub network_explicit: bool,
     pub tool: Tool,
     pub startup: Option<startup::Startup>,
     pub cache: Option<Cache>,
@@ -356,11 +358,11 @@ pub(crate) fn read(
         .validate(languages)
         .map_err(|error| format!("{name}: {error}"))?;
     let sandbox_requested = project.sandbox.is_some();
-    let inherit_from_codex = project
+    let profile = project
         .sandbox
         .as_ref()
-        .and_then(|sandbox| sandbox.inherit_from_codex)
-        .unwrap_or(false);
+        .and_then(|sandbox| sandbox.profile.clone());
+    let network_explicit = value.pointer("/sandbox/network").is_some();
     let resolver_sandbox_requested = project.resolver.sandbox.is_some();
     if cfg!(windows) && resolver_sandbox_requested {
         return Err(format!(
@@ -422,7 +424,8 @@ pub(crate) fn read(
     }
     Ok((
         Captured {
-            inherit_from_codex,
+            profile,
+            network_explicit,
             tool: project.tool,
             r: project.r,
             startup: project.startup,

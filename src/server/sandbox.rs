@@ -11,7 +11,7 @@ use rmcp::model::RequestMetaObject;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::settings::SandboxSettings;
+use crate::settings::{Profile as BaseProfile, ProfileSelection, SandboxSettings};
 
 pub(super) const CAPABILITY: &str = "codex/sandbox-state";
 pub(super) const LEGACY_CAPABILITY: &str = "codex/sandbox-state-meta";
@@ -19,7 +19,8 @@ pub(super) const LEGACY_CAPABILITY: &str = "codex/sandbox-state-meta";
 #[derive(Clone)]
 pub(crate) struct Configuration {
     pub no_sandbox: bool,
-    pub inherit_from_codex: bool,
+    pub profile: Option<ProfileSelection>,
+    pub network_explicit: bool,
     pub policy: SandboxSettings,
     pub resolver: SandboxSettings,
     pub cache: Option<crate::settings::Cache>,
@@ -33,6 +34,14 @@ impl Configuration {
         inherited: Option<Policy>,
         python: Option<&crate::settings::PythonChoice>,
     ) -> Result<Self, String> {
+        let selected = self
+            .profile
+            .as_ref()
+            .map(|profile| profile.select(inherited.is_some()))
+            .transpose()?;
+        if selected == Some(BaseProfile::Workspace) {
+            crate::settings::apply_workspace_profile(&mut self.policy);
+        }
         match inherited {
             Some(Policy::Disabled) => self.no_sandbox = true,
             Some(Policy::Permissions {
@@ -40,6 +49,21 @@ impl Configuration {
                 network,
             }) if !self.no_sandbox => {
                 if filesystem["kind"] == "unrestricted" {
+                    let filesystem = if let Some(local) = self.policy.get("filesystem") {
+                        let mut entries = local["entries"]
+                            .as_array()
+                            .expect("captured entries")
+                            .clone();
+                        // A writable root is the native equivalent of an
+                        // unrestricted base that still admits local denials.
+                        entries.push(json!({
+                            "path": {"type": "special", "value": {"kind": "root"}},
+                            "access": "write",
+                        }));
+                        json!({"kind": "restricted", "entries": entries})
+                    } else {
+                        filesystem
+                    };
                     self.policy.insert("filesystem".into(), filesystem);
                     self.policy.remove("extends");
                 } else {
@@ -58,9 +82,9 @@ impl Configuration {
                             .cloned(),
                     );
                 }
-                // Proxy rules are not part of Codex's state envelope. Preserve
-                // an explicitly configured Console proxy and its upstream policy.
-                if !self.policy.contains_key("proxy") {
+                // Explicit network settings override the selected base. Client
+                // metadata has no proxy endpoint or destination configuration.
+                if !self.network_explicit {
                     self.policy.insert("network".into(), network);
                 }
             }
@@ -87,24 +111,26 @@ impl Configuration {
 }
 
 pub(super) struct Inheritance {
-    enabled: bool,
+    profile: Option<ProfileSelection>,
     captured: OnceLock<Option<Policy>>,
 }
 
 impl Inheritance {
-    pub fn new(enabled: bool) -> Self {
+    pub fn new(profile: Option<ProfileSelection>) -> Self {
         Self {
-            enabled,
+            profile,
             captured: OnceLock::new(),
         }
     }
 
     pub fn enabled(&self) -> bool {
-        self.enabled
+        self.profile
+            .as_ref()
+            .is_some_and(ProfileSelection::uses_codex)
     }
 
     pub fn capture(&self, metadata: &RequestMetaObject) -> Result<(), String> {
-        if !self.enabled {
+        if !self.enabled() {
             return Ok(());
         }
         let policy = metadata
@@ -115,11 +141,15 @@ impl Inheritance {
         if policy.is_some() && captured != &policy {
             return Err("client sandbox permissions changed; reconnect to apply them before sending more code".into());
         }
+        self.profile
+            .as_ref()
+            .expect("client profile")
+            .select(captured.is_some())?;
         Ok(())
     }
 
     pub fn policy(&self) -> Option<Policy> {
-        if self.enabled {
+        if self.enabled() {
             self.captured
                 .get()
                 .expect("first send captured sandbox authority")

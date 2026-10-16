@@ -17,9 +17,20 @@ pub fn capture_settings(
         .map_err(|error| format!("cannot find launch workspace: {error}"))?;
     let crate::settings::Captured {
         source,
-        policy: settings,
+        profile,
+        policy: mut settings,
         ..
     } = crate::settings::discover(&workspace, overrides)?;
+    if let Some(profile) = profile {
+        match profile.select(false)? {
+            crate::settings::Profile::Workspace => {
+                crate::settings::apply_workspace_profile(&mut settings)
+            }
+            crate::settings::Profile::Codex => {
+                unreachable!("standalone sandbox has no client metadata")
+            }
+        }
+    }
     capture_policy(source.as_deref(), settings, roots, &workspace)
 }
 

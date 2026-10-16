@@ -6,6 +6,7 @@ native_launches:
   - enabled
   - restricted
   - workspace
+  - workspace_fallback
   - workspace_read_write_temp
   - read_only_temp
   - groups
