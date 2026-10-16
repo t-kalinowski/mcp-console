@@ -106,7 +106,8 @@ A successfully accepted library remains available even if the subsequent load or
 
 ## Automatic Python import resolution
 
-A last-chance import finder can prepare a missing distribution under `automatic`.
+Managed Python defaults to `explicit`: declare dependencies through `requirements.python` before importing them.
+Set `python.managed.resolution: automatic` in `config.yaml` to let a last-chance import finder prepare a missing distribution.
 Existing standard-library, installed, local, and loaded modules retain normal lookup.
 Availability checks such as `find_spec()` do not install packages.
 

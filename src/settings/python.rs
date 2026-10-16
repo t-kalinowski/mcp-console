@@ -18,7 +18,7 @@ enum Mapping {
     FirstAvailable(Vec<Value>),
 }
 
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct Managed {
     #[serde(deserialize_with = "super::sandbox::supplied")]
@@ -27,6 +27,16 @@ pub(crate) struct Managed {
     pub(crate) version: Option<String>,
     #[serde(deserialize_with = "super::resolution::managed")]
     pub(crate) resolution: super::Resolution,
+}
+
+impl Default for Managed {
+    fn default() -> Self {
+        Self {
+            packages: None,
+            version: None,
+            resolution: super::Resolution::Explicit,
+        }
+    }
 }
 
 impl Managed {

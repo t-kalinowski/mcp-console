@@ -121,7 +121,11 @@ def test_retains_environment_when_optional_psutil_setup_fails(
 ) -> Transcript:
     environment = os.environ.copy()
     environment.pop("RETICULATE_PYTHON", None)
-    client = McpClient(binary, SANDBOXED.serve(), environment)
+    client = McpClient(
+        binary,
+        SANDBOXED.serve("-c", "python.managed.resolution=automatic"),
+        environment,
+    )
     client.initialize_and_list_tools()
     # fmt: python
     python = code("""

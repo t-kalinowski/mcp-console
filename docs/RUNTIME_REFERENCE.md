@@ -115,8 +115,9 @@ For help, use `help("import", package = "reticulate")` for `py_import()`.
 The other helpers use their matching reticulate help topics, for example `help("py_run_string", package = "reticulate")`.
 
 `py_require()` without arguments returns the current R-side Python declarations.
-In managed sessions, declarations use Console's existing [requirements and preparation](REQUIREMENTS_API.md#live-preparation) path.
-Pre-initialization declarations are accepted when Python is prepared; MCP requirements inspection returns the last committed declaration.
+Managed Python defaults to `explicit`: prepare additions through `requirements.python` in `send`; R-side declarations do not authorize additional preparation.
+With `python.managed.resolution: automatic`, declarations use Console's existing [requirements and preparation](REQUIREMENTS_API.md#live-preparation) path.
+In that mode, pre-initialization declarations are accepted when Python is prepared; MCP requirements inspection returns the last committed declaration.
 Before Python initializes, `action = "set"` can replace requirements; after initialization, compatible additions preserve live objects.
 Use [restart](REQUIREMENTS_API.md#restarting-with-requirements) for changes that require a fresh environment.
 

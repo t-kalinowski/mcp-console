@@ -328,6 +328,15 @@ def _initializes_and_lists_tools(
                     assert properties[field]["description"].startswith(
                         "Evaluate one complete"
                     )
+            if not custom and "python" in properties:
+                python_guidance = properties["python"]["description"]
+                assert (
+                    "Declare dependencies with `requirements.python`" in python_guidance
+                )
+                assert (
+                    "prepare missing PyPI distributions on first import"
+                    not in python_guidance
+                )
             description = send["description"]
             assert ("ir run script.R" in description) == (
                 not custom and "r" in send["inputSchema"]["properties"]

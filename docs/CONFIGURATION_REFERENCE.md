@@ -85,7 +85,7 @@ Fields under `python.managed`:
 | --------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `python.managed.version`    | One quoted Python version or constraint string, such as `"3.13"` or `">=3.12,<3.14"` | Restrict the managed CPython version. Omission adds no version constraint; CPython older than 3.10 is always excluded.                                                                               |
 | `python.managed.packages`   | List of named PEP 508 registry requirements                                          | Startup packages to prepare. Omission keeps the [default Python packages](REQUIREMENTS.md#defaults-and-startup-configuration); `[]` requests no optional packages. Preparation does not import them. |
-| `python.managed.resolution` | `automatic`, `explicit`, `startup_only`                                              | When Console may prepare Python packages. Default: `automatic`. For preinstalled-only use, select an existing environment.                                                                           |
+| `python.managed.resolution` | `automatic`, `explicit`, `startup_only`                                              | When Console may prepare Python packages. Default: `explicit`. Set `automatic` to opt in to preparation on missing imports. For preinstalled-only use, select an existing environment.               |
 
 ```yaml
 python:
@@ -125,12 +125,14 @@ See [Python environment selection](CONFIGURATION.md#python-environment-selection
 
 These values apply to `r.resolution` and `python.managed.resolution`, including a managed fallback candidate:
 
-| Value                 | What Console prepares                                                                                        |
-| --------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `automatic` (default) | Startup packages, explicit requirement changes, and reached missing-package loads/imports.                   |
-| `explicit`            | Startup packages and explicit requirement changes. Missing-package loads/imports do not request preparation. |
-| `startup_only`        | Startup packages only. Later requirement changes are rejected.                                               |
-| `disabled` (R only)   | No R package preparation, including Console's R infrastructure. Supplied `r.packages` must be empty.         |
+R defaults to `automatic`; managed Python defaults to `explicit`.
+
+| Value               | What Console prepares                                                                                        |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `automatic`         | Startup packages, explicit requirement changes, and reached missing-package loads/imports.                   |
+| `explicit`          | Startup packages and explicit requirement changes. Missing-package loads/imports do not request preparation. |
+| `startup_only`      | Startup packages only. Later requirement changes are rejected.                                               |
+| `disabled` (R only) | No R package preparation, including Console's R infrastructure. Supplied `r.packages` must be empty.         |
 
 An omitted package list keeps the runtime's default declaration; an explicit list replaces it.
 An empty list does not uninstall packages or remove infrastructure/caches.

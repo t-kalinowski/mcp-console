@@ -319,7 +319,10 @@ def test_prepares_r_requirements_after_worker_startup(
 def test_stops_live_preparation_for_idle_callback_input(
     binary: Path, execution: Execution
 ) -> Transcript:
-    client = McpClient(binary, execution.serve())
+    client = McpClient(
+        binary,
+        execution.serve("-c", "python.managed.resolution=automatic"),
+    )
     client.initialize_and_list_tools()
     client.send(requirements={"r": ["later"]})
 

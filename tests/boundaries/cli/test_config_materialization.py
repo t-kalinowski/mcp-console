@@ -35,6 +35,30 @@ def resolve(
     )
 
 
+def test_managed_python_resolution_defaults_to_explicit(binary: Path) -> Transcript:
+    configurations = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        for managed in ({}, {"packages": []}, {"resolution": "automatic"}):
+            config.write_text(json.dumps({"python": {"managed": managed}}))
+            result = resolve(
+                binary,
+                root,
+                "--full",
+                "--format",
+                "json",
+            )
+            assert result.returncode == 0 and result.stderr == "", result
+            settings = json.loads(result.stdout)
+            expected = {"resolution": "explicit", **managed}
+            assert settings["python"] == {"managed": expected}, settings["python"]
+            assert settings["r"]["resolution"] == "automatic", settings["r"]
+            configurations.append(settings["python"])
+    return configurations
+
+
 def test_broad_workspace_roots_preserve_selection_policy(binary: Path) -> Transcript:
     records = []
     with TemporaryDirectory() as temporary:
@@ -302,7 +326,7 @@ def test_prunes_nested_values_without_losing_empty_overrides(
             "inherit_environment": False,
             "resolver": {"environment": {"EMPTY": ""}, "inherit_environment": True},
             "sandbox": {"filesystem": {"read_only": [], "read_write": [], "deny": []}},
-            "python": {"managed": {"packages": [], "resolution": "automatic"}},
+            "python": {"managed": {"packages": [], "resolution": "explicit"}},
         }, settings
         selected = root / "pruned.json"
         selected.write_text(result.stdout, encoding="utf-8")
