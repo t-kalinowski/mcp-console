@@ -8,11 +8,11 @@ stderr: |
   Usage: mcp-console [OPTIONS] <COMMAND>
 
   Commands:
-    configure-client  Configure clients to launch MCP Console and expose its tools
-    config            Inspect configuration without starting interpreters or
-                      preparing packages
     serve             Run the MCP server over standard input and output
     sandbox           Run a command with the default or an explicit sandbox policy
+    config            Inspect configuration without starting interpreters or
+                      preparing packages
+    configure-client  Configure clients to launch MCP Console and expose its tools
     help              Print this message or the help of the given subcommand(s)
 
   Options:
@@ -31,9 +31,9 @@ stderr: |
     -V, --version             Print version
 
   Examples:
-    mcp-console configure-client codex claude
     mcp-console serve
     mcp-console sandbox -- python -c 'print("hello")'
+    mcp-console configure-client codex claude
 ---
 command: mcp-console --help
 stdout: |
@@ -42,11 +42,11 @@ stdout: |
   Usage: mcp-console [OPTIONS] <COMMAND>
 
   Commands:
-    configure-client  Configure clients to launch MCP Console and expose its tools
-    config            Inspect configuration without starting interpreters or
-                      preparing packages
     serve             Run the MCP server over standard input and output
     sandbox           Run a command with the default or an explicit sandbox policy
+    config            Inspect configuration without starting interpreters or
+                      preparing packages
+    configure-client  Configure clients to launch MCP Console and expose its tools
     help              Print this message or the help of the given subcommand(s)
 
   Options:
@@ -82,9 +82,9 @@ stdout: |
             Print version
 
   Examples:
-    mcp-console configure-client codex claude
     mcp-console serve
     mcp-console sandbox -- python -c 'print("hello")'
+    mcp-console configure-client codex claude
 ---
 command: mcp-console config --help
 stdout: |
@@ -170,8 +170,9 @@ stdout: |
                                  uvx runs install recorded direct sources with uv.
                                  Index installs must be persistent first.
                                  Conflicts with --pin-version
-        --pin-version <VERSION>  Pin uvx to an exact version, current, or latest;
-                                 omitted by default. Conflicts with --no-uvx
+        --pin-version <VERSION>  Console version to resolve with uvx: exact
+                                 version, current, or latest; unpinned by default.
+                                 Conflicts with --no-uvx
         --name <NAME>            Server name in the client's configuration
                                  [default: console]
         --no-auto-load           Keep the client's default tool discovery instead

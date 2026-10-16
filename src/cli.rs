@@ -10,9 +10,9 @@ Global settings supply defaults, not a mandatory security ceiling; projects may 
 
 const ROOT_EXAMPLES: &str = "\
 Examples:
-  mcp-console configure-client codex claude
   mcp-console serve
-  mcp-console sandbox -- python -c 'print(\"hello\")'";
+  mcp-console sandbox -- python -c 'print(\"hello\")'
+  mcp-console configure-client codex claude";
 
 const SANDBOX_EXAMPLES: &str = "\
 Examples:
@@ -97,15 +97,17 @@ impl ConfigOverrides {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Configure clients to launch MCP Console and expose its tools
-    #[command(after_help = CONFIGURE_CLIENT_EXAMPLES)]
+    #[command(after_help = CONFIGURE_CLIENT_EXAMPLES, display_order = 4)]
     ConfigureClient(ConfigureClientOptions),
 
     /// Inspect configuration without starting interpreters or preparing packages
+    #[command(display_order = 3)]
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
     },
     /// Run the MCP server over standard input and output
+    #[command(display_order = 1)]
     Serve {
         #[command(flatten)]
         overrides: ConfigOverrides,
@@ -154,7 +156,7 @@ pub enum Command {
     },
 
     /// Run a command with the default or an explicit sandbox policy
-    #[command(after_help = SANDBOX_EXAMPLES)]
+    #[command(after_help = SANDBOX_EXAMPLES, display_order = 2)]
     Sandbox {
         #[command(flatten)]
         overrides: ConfigOverrides,
@@ -227,7 +229,7 @@ pub struct ConfigureClientOptions {
     #[arg(long, conflicts_with = "pin_version")]
     pub no_uvx: bool,
 
-    /// Pin uvx to an exact version, current, or latest; omitted by default. Conflicts with --no-uvx
+    /// Console version to resolve with uvx: exact version, current, or latest; unpinned by default. Conflicts with --no-uvx
     #[arg(long, value_name = "VERSION", value_parser = parse_pin_version)]
     pub pin_version: Option<String>,
 

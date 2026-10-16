@@ -1,6 +1,6 @@
 # Command-line reference
 
-Use `configure-client` to register Console with a client, `serve` to run the MCP server, `sandbox` to run one command under a sandbox, and `config resolve` to inspect configuration.
+Use `serve` to run the MCP server, `sandbox` to run one command under a sandbox, `config resolve` to inspect configuration, and `configure-client` to register Console with a client.
 Console runs on the local host; it does not create remote connections.
 
 The [CLI help page](cli-help.qmd) shows tested public-command help.
@@ -29,7 +29,7 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) so `uvx` i
 The client itself does not need to be installed when writing its configuration.
 
 The default uvx command has no version suffix.
-`--pin-version VERSION` appends the supplied suffix after `@`, for example `mcp-console@v0.0.5` or `mcp-console@latest`.
+`--pin-version VERSION` appends a Console version suffix after `@`, for example `mcp-console@v0.0.5` or `mcp-console@latest`.
 `--pin-version current` saves the concrete version running setup, so later launches stay on that version.
 Exact versions use PEP 440 syntax and are validated before configuration changes; `latest` and `current` are also accepted, while version ranges and invalid suffixes are rejected.
 Package availability is checked by uv when the client launches the server.

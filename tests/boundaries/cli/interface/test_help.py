@@ -47,6 +47,18 @@ def test_help(binary: Path) -> Transcript:
     for entry in entries:
         output = entry.get("stdout", "") + entry.get("stderr", "")
         assert all(len(line) <= 80 for line in output.splitlines()), entry
+        if entry["command"] in ("mcp-console", "mcp-console --help"):
+            positions = [
+                output.index(f"\n  {command} ")
+                for command in (
+                    "serve",
+                    "sandbox",
+                    "config",
+                    "configure-client",
+                    "help",
+                )
+            ]
+            assert positions == sorted(positions), entry
         # Executable suffixes are presentation, not a different CLI contract.
         # Assert wrapping above before normalizing the shared transcript.
         for stream in ("stdout", "stderr"):
