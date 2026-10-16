@@ -108,6 +108,7 @@ def test_broad_workspace_roots_fall_back_to_read_only(
                         assert (
                             "private `TMPDIR`, workspace," in description
                         ) is writable
+                        assert json.dumps(str(output)) in description, description
                     transcript, stderr = client.finish_with_standard_error()
                 expected = (
                     ""
@@ -127,7 +128,9 @@ def test_broad_workspace_roots_fall_back_to_read_only(
                     },
                 )
                 transcript = json.loads(
-                    json.dumps(transcript).replace(str(root), "<fixture>")
+                    json.dumps(transcript)
+                    .replace(str(output), "<writable-root>")
+                    .replace(str(root), "<fixture>")
                 )
                 transcripts[f"{name}{'_fallback' if fallback else ''}"] = transcript
         return TranscriptWithCompanions(
