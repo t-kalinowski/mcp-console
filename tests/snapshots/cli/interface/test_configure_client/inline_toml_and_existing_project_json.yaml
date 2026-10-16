@@ -8,7 +8,7 @@ console:
     - mcp-console
     - serve
     - -c
-    - sandbox.profile=codex
+    - sandbox.profile=inherit_codex
   enabled: true
   omit_tools_from:
     - deferred

@@ -70,7 +70,9 @@ impl Launch {
     pub(super) fn arguments(&self, client: ConfigureClient, serve_args: &[String]) -> Vec<String> {
         let mut args = self.args.clone();
         match client {
-            ConfigureClient::Codex => args.extend(["-c".into(), "sandbox.profile=codex".into()]),
+            ConfigureClient::Codex => {
+                args.extend(["-c".into(), "sandbox.profile=inherit_codex".into()])
+            }
             ConfigureClient::Claude => {}
         }
         // Explicit serve arguments take precedence over client defaults.

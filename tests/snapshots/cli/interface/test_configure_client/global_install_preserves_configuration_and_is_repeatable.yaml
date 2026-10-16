@@ -6,7 +6,7 @@ console:
     - mcp-console
     - serve
     - -c
-    - sandbox.profile=codex
+    - sandbox.profile=inherit_codex
   enabled: true
   startup_timeout_sec: 30
   omit_tools_from:
@@ -20,7 +20,7 @@ stdout: |
   Set these fields:
   [mcp_servers.console]
   command = "uvx"
-  args = ["mcp-console", "serve", "-c", "sandbox.profile=codex"]
+  args = ["mcp-console", "serve", "-c", "sandbox.profile=inherit_codex"]
   enabled = true
   omit_tools_from = ["deferred"]
 

@@ -126,7 +126,7 @@ def test_multiple_clients_pins_names_and_serve_arguments(binary: Path) -> Transc
                 "a path",
             ]
             expected = {
-                "codex": [*prefix, "-c", "sandbox.profile=codex", *serve_args],
+                "codex": [*prefix, "-c", "sandbox.profile=inherit_codex", *serve_args],
                 "claude": [*prefix, *serve_args],
             }
             for client, path in (
@@ -168,7 +168,11 @@ def test_explicit_sandbox_profile_overrides_client_default(binary: Path) -> Tran
                 entry = server(read_config(path, client), client)
                 expected = [
                     "serve",
-                    *(["-c", "sandbox.profile=codex"] if client == "codex" else []),
+                    *(
+                        ["-c", "sandbox.profile=inherit_codex"]
+                        if client == "codex"
+                        else []
+                    ),
                     "-c",
                     "sandbox.profile=workspace",
                 ]
@@ -290,7 +294,11 @@ def test_version_validation_and_current_pin(binary: Path) -> Transcript:
                 assert server(read_config(path, client), client)["args"] == [
                     f"mcp-console@{expected}",
                     "serve",
-                    *(["-c", "sandbox.profile=codex"] if client == "codex" else []),
+                    *(
+                        ["-c", "sandbox.profile=inherit_codex"]
+                        if client == "codex"
+                        else []
+                    ),
                 ]
     return [
         {
@@ -461,7 +469,7 @@ def test_comments_on_updated_toml_fields_are_preserved(binary: Path) -> Transcri
             "mcp-console",
             "serve",
             "-c",
-            "sandbox.profile=codex",
+            "sandbox.profile=inherit_codex",
         ]
         result = configure(binary, root, root, "codex", "--scope", "global")
         assert result.returncode == 0 and path.read_text(encoding="utf-8") == updated, (
@@ -503,7 +511,7 @@ def test_direct_executable_finds_itself(binary: Path) -> Transcript:
             assert Path(entry["command"]).samefile(executable)
             assert entry["args"] == [
                 "serve",
-                *(["-c", "sandbox.profile=codex"] if client == "codex" else []),
+                *(["-c", "sandbox.profile=inherit_codex"] if client == "codex" else []),
             ]
     return [{"launch": "absolute path to the running executable", "clients": 2}]
 
@@ -624,7 +632,11 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
                 assert Path(entry["command"]).samefile(executable), entry
                 assert entry["args"] == [
                     "serve",
-                    *(["-c", "sandbox.profile=codex"] if client == "codex" else []),
+                    *(
+                        ["-c", "sandbox.profile=inherit_codex"]
+                        if client == "codex"
+                        else []
+                    ),
                 ], entry
         command = [
             uv,
@@ -739,7 +751,7 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
             assert Path(entry["command"]) == installed and installed.is_file(), entry
             assert entry["args"] == [
                 "serve",
-                *(["-c", "sandbox.profile=codex"] if client == "codex" else []),
+                *(["-c", "sandbox.profile=inherit_codex"] if client == "codex" else []),
             ]
             assert (
                 subprocess.check_output([installed, "--version"], text=True).split()[1]
@@ -822,7 +834,11 @@ def test_shared_cache_marker_keeps_direct_executables(binary: Path) -> Transcrip
                 assert Path(entry["command"]).samefile(executable)
                 assert entry["args"] == [
                     "serve",
-                    *(["-c", "sandbox.profile=codex"] if client == "codex" else []),
+                    *(
+                        ["-c", "sandbox.profile=inherit_codex"]
+                        if client == "codex"
+                        else []
+                    ),
                 ]
     return [
         {
@@ -885,7 +901,7 @@ def test_global_install_preserves_configuration_and_is_repeatable(
             assert entry["command"] == "uvx" and entry["args"] == [
                 "mcp-console",
                 "serve",
-                *(["-c", "sandbox.profile=codex"] if client == "codex" else []),
+                *(["-c", "sandbox.profile=inherit_codex"] if client == "codex" else []),
             ]
             assert entry["env"] == {"KEEP": "value"}
             if client == "codex":
@@ -1046,7 +1062,7 @@ def test_inline_toml_and_existing_project_json(binary: Path) -> Transcript:
             assert entry["command"] == "uvx" and entry["args"] == [
                 "mcp-console",
                 "serve",
-                *(["-c", "sandbox.profile=codex"] if client == "codex" else []),
+                *(["-c", "sandbox.profile=inherit_codex"] if client == "codex" else []),
             ]
             assert entry["env"] == {"KEEP": "value"}
             mapping = config["mcp_servers" if client == "codex" else "mcpServers"]
@@ -1142,7 +1158,7 @@ def test_linked_configuration_preserves_target_and_permissions(
             "mcp-console@latest",
             "serve",
             "-c",
-            "sandbox.profile=codex",
+            "sandbox.profile=inherit_codex",
         ]
         assert path.is_symlink() and not target.exists()
         records.append({"later_write_failure": "earlier change remains reported"})

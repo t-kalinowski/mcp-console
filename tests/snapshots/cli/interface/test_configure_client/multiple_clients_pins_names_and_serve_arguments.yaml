@@ -6,7 +6,7 @@ args:
     - mcp-console
     - serve
     - -c
-    - sandbox.profile=codex
+    - sandbox.profile=inherit_codex
     - --no-project-config
     - --writable-root
     - a path
@@ -24,7 +24,7 @@ args:
     - mcp-console@latest
     - serve
     - -c
-    - sandbox.profile=codex
+    - sandbox.profile=inherit_codex
     - --no-project-config
     - --writable-root
     - a path
@@ -42,7 +42,7 @@ args:
     - mcp-console@0.0.5
     - serve
     - -c
-    - sandbox.profile=codex
+    - sandbox.profile=inherit_codex
     - --no-project-config
     - --writable-root
     - a path
@@ -60,7 +60,7 @@ args:
     - mcp-console@v0.0.5
     - serve
     - -c
-    - sandbox.profile=codex
+    - sandbox.profile=inherit_codex
     - --no-project-config
     - --writable-root
     - a path

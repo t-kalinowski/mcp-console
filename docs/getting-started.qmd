@@ -46,7 +46,7 @@ By default, it also configures Console tools to load up front; `--no-auto-load` 
 Restart the client and approve project configuration if prompted.
 
 The default launch command is `uvx mcp-console serve`, with no version constraint.
-Codex configuration adds `-c sandbox.profile=codex` to [inherit the client's sandbox permissions](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex).
+Codex configuration adds `-c sandbox.profile=inherit_codex` to [inherit the client's sandbox permissions](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex).
 Use `--pin-version v0.0.5` to select an exact version or `--pin-version latest` to request the latest release at launch.
 Use `--pin-version current` to pin the version running setup.
 Use `--no-uvx` to configure an absolute executable path; a temporary uvx run can first install a recorded direct wheel, archive, or Git source persistently with uv.

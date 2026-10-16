@@ -29,7 +29,7 @@ When Claude Code is selected, its reserved names (`workspace`, `claude-in-chrome
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) so `uvx` is on the client's `PATH`.
 The client itself does not need to be installed when writing its configuration.
 
-Codex launches include `-c sandbox.profile=codex` to [inherit the client's sandbox permissions](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex).
+Codex launches include `-c sandbox.profile=inherit_codex` to [inherit the client's sandbox permissions](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex).
 This applies to uvx and `--no-uvx` launches.
 This overrides profiles in configuration files.
 Arguments after `--` follow this default and can override it, for example:
@@ -45,7 +45,7 @@ The default uvx command has no version suffix.
 `--pin-version current` saves the concrete version running setup, so later launches stay on that version.
 Exact versions use PEP 440 syntax and are validated before configuration changes; `latest` and `current` are also accepted, while version ranges and invalid suffixes are rejected.
 Package availability is checked by uv when the client launches the server.
-For Codex, pinned versions must support `sandbox.profile=codex`.
+For Codex, pinned versions must support `sandbox.profile=inherit_codex`.
 An unqualified uvx command may reuse an installed or cached version; `latest` requests the latest available release at launch.
 
 `--no-uvx` configures an absolute path to the running executable instead.

@@ -5,7 +5,7 @@ args:
   - mcp-console
   - serve
   - -c
-  - sandbox.profile=codex
+  - sandbox.profile=inherit_codex
   - -c
   - sandbox.profile=workspace
 resolved:
@@ -28,7 +28,7 @@ client: codex
 args:
   - serve
   - -c
-  - sandbox.profile=codex
+  - sandbox.profile=inherit_codex
   - -c
   - sandbox.profile=workspace
 resolved:
