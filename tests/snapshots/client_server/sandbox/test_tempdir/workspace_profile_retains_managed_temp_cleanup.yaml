@@ -105,11 +105,10 @@ result:
           python:
             description: >-
               Evaluate one complete Python cell in persistent `__main__` state. The
-              final visible expression autoprints; leave the primary result last.
-              Declare dependencies with `requirements.python` before importing them;
-              preparation can accompany the cell. Import names may differ from
-              distribution names. Access R globals and call functions through
-              `r.name`. Select a user-owned DB-API connection for SQL cells with
+              final visible expression autoprints; leave the primary result last. Use
+              installed packages in the selected environment; `requirements.python` is
+              unavailable. Access R globals and call functions through `r.name`.
+              Select a user-owned DB-API connection for SQL cells with
               `_console.sql_connection(connection)`; restore managed DuckDB with
               `_console.sql_connection(None)`. For R-owned DuckDB, bind Python frames
               to an R name through `r` before querying. `_console.sql_connection()`

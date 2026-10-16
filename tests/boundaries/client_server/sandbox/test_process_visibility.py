@@ -80,7 +80,7 @@ def _inspects_sandbox_child_processes(
             child.pid in observed,
         )
         """)
-    client.send(python=python)
+    client.send(python=python, requirements={"python": ["psutil"]})
     output = last_result_text(client)
     assert output == "(True, True, True, True, True, True, True)\n", repr(output)
     return client.finish()
