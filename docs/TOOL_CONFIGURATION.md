@@ -68,6 +68,7 @@ Set `enabled: false` to remove a parameter from the advertised schema and reject
 Omission keeps the parameter's existing runtime default.
 For example, hiding `timeout_ms` makes every call use the existing 60,000 ms wait budget; work continues after that budget expires, and an empty call polls for more output.
 Generated timeout guidance follows this choice.
+Generated Python guidance uses installed packages when `requirements.python` or its parent `requirements` field is hidden under explicit resolution.
 When hiding other parameters, supply matching description overrides if their generated prose refers to the hidden fields.
 
 Parameter settings apply after `languages`; unknown or unavailable names and nested parameters under scalar fields fail launch.
@@ -107,6 +108,7 @@ The full output contains captured settings, configuration defaults, generated in
 Each parameter has explicit `enabled` and `description` fields, read-only `schema` metadata for its type and constraints, and a `parameters` mapping for nested fields.
 Generated Python parameter descriptions export as `null` so the next launch regenerates guidance for its selected environment and resolution policy.
 An explicit Python description remains verbatim, including an empty string.
+Stored description strings from older exports are also treated as explicit overrides; Console does not detect or migrate previously generated text.
 Changes to the `schema` metadata fail validation.
 Use `enabled: false` to hide a parameter while retaining its details for inspection or re-enabling.
 

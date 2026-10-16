@@ -19,6 +19,7 @@ struct Profile {
     timeout: bool,
     uses_client_profile: bool,
     python: PythonSelection,
+    python_requirements: bool,
 }
 
 enum PythonSelection {
@@ -43,10 +44,16 @@ impl PythonSelection {
         }
     }
 
-    fn guidance(&self) -> &'static str {
+    fn guidance(&self, requirements_visible: bool) -> &'static str {
         match self {
-            Self::Existing => sections::PYTHON_EXISTING,
-            Self::Managed(Resolution::Explicit) => sections::PYTHON_EXPLICIT,
+            Self::Existing => sections::PYTHON_INSTALLED,
+            Self::Managed(Resolution::Explicit) => {
+                if requirements_visible {
+                    sections::PYTHON_EXPLICIT
+                } else {
+                    sections::PYTHON_INSTALLED
+                }
+            }
             Self::Managed(Resolution::Implicit) => sections::PYTHON_IMPLICIT,
             Self::Managed(Resolution::StartupOnly) => sections::PYTHON_STARTUP_ONLY,
             Self::Managed(Resolution::Disabled) => {
@@ -72,6 +79,7 @@ pub(crate) fn materialized_tool(
         timeout: tool.enabled("timeout_ms"),
         uses_client_profile,
         python: PythonSelection::capture(python),
+        python_requirements: tool.enabled("requirements.python"),
     };
     let mut tool = if apply_overrides {
         tool.clone()
@@ -115,6 +123,7 @@ impl ConsoleServer {
             timeout: tool.enabled("timeout_ms"),
             uses_client_profile,
             python: PythonSelection::capture(python),
+            python_requirements: tool.enabled("requirements.python"),
         };
         let instructions = tool
             .instructions
@@ -296,7 +305,7 @@ impl Profile {
                 ("r", r_description_for(self.languages)),
                 (
                     "python",
-                    python_description_for(self.languages, &self.python),
+                    python_description_for(self.languages, &self.python, self.python_requirements),
                 ),
                 ("sql", sql_description_for(self.languages)),
             ] {
@@ -349,12 +358,17 @@ pub(super) fn python_description() -> String {
     python_description_for(
         Languages::all(),
         &PythonSelection::Managed(crate::settings::ManagedPythonSettings::default().resolution),
+        true,
     )
 }
 
-fn python_description_for(languages: Languages, python: &PythonSelection) -> String {
+fn python_description_for(
+    languages: Languages,
+    python: &PythonSelection,
+    requirements_visible: bool,
+) -> String {
     let mut description = sections::PYTHON_RUNTIME.to_string();
-    description.push_str(python.guidance());
+    description.push_str(python.guidance(requirements_visible));
     if languages.r {
         description.push_str(sections::PYTHON_BRIDGE);
     }

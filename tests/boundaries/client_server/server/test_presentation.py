@@ -152,6 +152,72 @@ def test_python_dependency_guidance_matches_selection(binary: Path) -> Transcrip
     return records
 
 
+def test_python_guidance_respects_requirement_visibility(binary: Path) -> Transcript:
+    records: Transcript = []
+    for visibility in ("visible", "python hidden", "requirements hidden"):
+        for description in (None, "Custom Python guidance.", ""):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                config = root / ".agents/console/config.yaml"
+                config.parent.mkdir(parents=True)
+                parameters = {}
+                if visibility == "python hidden":
+                    parameters["requirements"] = {
+                        "parameters": {"python": {"enabled": False}}
+                    }
+                elif visibility == "requirements hidden":
+                    parameters["requirements"] = {"enabled": False}
+                if description is not None:
+                    parameters["python"] = {"description": description}
+                config.write_text(
+                    json.dumps(
+                        {
+                            "languages": ["python"],
+                            "python": {"managed": {}},
+                            "sandbox": {"profile": "inherit_codex"},
+                            "tool": {"parameters": parameters},
+                        }
+                    )
+                )
+                environment = dict(os.environ, PATH="")
+                with McpClient(
+                    binary,
+                    SANDBOXED.serve(),
+                    environment,
+                    root,
+                    record_in_project=False,
+                ) as client:
+                    client.initialize_and_list_tools()
+                    (tool,) = client.transcript[-1]["result"]["tools"]
+                    properties = tool["inputSchema"]["properties"]
+                    requirements = properties.get("requirements", {}).get(
+                        "properties", {}
+                    )
+                    visible = visibility == "visible"
+                    assert ("python" in requirements) == visible, tool
+                    guidance = properties["python"]["description"]
+                    if description is None:
+                        assert (
+                            "Declare dependencies with `requirements.python`"
+                            in guidance
+                        ) == visible, (visibility, guidance)
+                        assert (
+                            "Use installed packages in the selected environment"
+                            in guidance
+                        ) == (not visible), (visibility, guidance)
+                    else:
+                        assert guidance == description, (visibility, guidance)
+                    client.finish()
+                    records.append(
+                        {
+                            "visibility": visibility,
+                            "description": description,
+                            "python_guidance": guidance,
+                        }
+                    )
+    return records
+
+
 def test_builtin_configured_language_matrix(binary: Path) -> Transcript:
     return _configured_language_matrix(binary)
 
