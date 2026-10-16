@@ -1,13 +1,16 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.records import Transcript, TranscriptEntry
+from support.installation import native_console
 from support.suites import run_this_suite
 
 
@@ -54,6 +57,23 @@ def test_help(binary: Path) -> Transcript:
 
 def test_version(binary: Path) -> Transcript:
     return [record(binary, "--version")]
+
+
+def test_executable_suffix_keeps_help_within_80_columns(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        executable = Path(temporary) / "mcp-console.exe"
+        shutil.copy2(native_console(binary), executable)
+        entry = record(executable, "configure-client", "--help")
+        assert "exit_code" not in entry and "stderr" not in entry, entry
+        output = entry["stdout"]
+        assert all(len(line) <= 80 for line in output.splitlines()), entry
+        assert "Usage: mcp-console configure-client " in output, entry
+    return [
+        {
+            "executable": "mcp-console.exe",
+            "help": "canonical command name within 80 columns",
+        }
+    ]
 
 
 if __name__ == "__main__":

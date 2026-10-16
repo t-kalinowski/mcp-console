@@ -32,6 +32,7 @@ Examples:
 #[derive(Debug, Parser)]
 #[command(
     name = "mcp-console",
+    bin_name = "mcp-console",
     version,
     about = env!("CARGO_PKG_DESCRIPTION"),
     after_help = ROOT_EXAMPLES

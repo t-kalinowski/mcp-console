@@ -372,6 +372,9 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
                     "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
                 )
                 archive.writestr(f"{stem}.dist-info/fixture-origin.txt", origin)
+            # Reopen finalized entries before hashing: on Windows, the writer's
+            # cached ZipInfo retains native separators in its original name.
+            with zipfile.ZipFile(directory / filename, "a") as archive:
                 record = io.StringIO()
                 writer = csv.writer(record, lineterminator="\n")
                 for name in archive.namelist():

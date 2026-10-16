@@ -58,7 +58,9 @@ Outside Git, it selects global scope.
 The command prints the selected scope, file path, and fields it sets.
 Use `--dry-run` to preview those settings and any persistent installation without writing files or installing, or to apply them manually.
 Existing settings outside the printed fields are preserved, including other servers, environment variables, and client preferences.
-TOML comments are preserved; JSON is formatted on write.
+TOML key comments and comments around replaced values are preserved.
+Comments inside the managed `args` and `omit_tools_from` arrays are discarded when those arrays are replaced.
+JSON is formatted on write.
 Malformed configuration and an existing remote server with the selected name cause an error without overwriting the file.
 Every selected client's configuration is parsed before installation or writes begin.
 Existing files are updated in place to retain file identity, symlinks, ownership, and access-control lists, including Windows DACLs.

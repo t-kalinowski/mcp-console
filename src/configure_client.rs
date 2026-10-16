@@ -201,6 +201,8 @@ fn edit_codex(
         if let Some(existing) = console.get_mut(key) {
             let mut replacement = item.clone();
             if let (Some(old), Some(new)) = (existing.as_value(), replacement.as_value_mut()) {
+                // Managed arrays are replaced in full. Keep outer decoration,
+                // but comments inside the old arrays leave with their contents.
                 *new.decor_mut() = old.decor().clone();
             }
             // Updating the item in place also keeps the key's own comments.
