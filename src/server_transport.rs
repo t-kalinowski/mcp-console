@@ -57,6 +57,9 @@ struct ResponseDeliveryState {
     admission_tail: Option<Arc<ResponseDeliveryAdmissionNode>>,
     /// Physical EOF is insufficient until the transport exhausts buffered requests.
     input_drained: bool,
+    /// The latest bootstrap message received a complete response. rmcp may
+    /// answer discovery or ping without selecting a session lifecycle.
+    bootstrap_response_delivered: bool,
     closed: bool,
 }
 
@@ -91,6 +94,11 @@ struct ResponseDeliveryWrite {
 }
 
 impl ResponseDeliveries {
+    pub(crate) fn bootstrap_complete(&self) -> bool {
+        let state = self.lock();
+        state.input_drained && state.bootstrap_response_delivered
+    }
+
     #[cfg(test)]
     fn start_response(&self, request_id: RequestId) -> ResponseDeliveryCall {
         self.admission_count.fetch_add(1, Ordering::AcqRel);
@@ -790,6 +798,10 @@ where
         &mut self,
         item: TxJsonRpcMessage<RoleServer>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let response = matches!(
+            &item,
+            JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)
+        );
         let delivery = match &item {
             JsonRpcMessage::Response(response) => self.deliveries.write(&response.id),
             JsonRpcMessage::Error(error) => error
@@ -818,6 +830,9 @@ where
                     Err(std::io::ErrorKind::BrokenPipe.into())
                 },
             };
+            if response && result.is_ok() {
+                deliveries.lock().bootstrap_response_delivered = true;
+            }
             if let Some(delivery) = delivery {
                 if result.is_ok() {
                     delivery.delivered();
@@ -831,6 +846,9 @@ where
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
         let mut message = self.inner.receive().await;
+        if message.is_some() {
+            self.deliveries.lock().bootstrap_response_delivered = false;
+        }
         match &mut message {
             Some(JsonRpcMessage::Request(request)) => {
                 if let ClientRequest::CallToolRequest(call) = &mut request.request

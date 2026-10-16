@@ -579,6 +579,7 @@ pub async fn run(
         let inherited = inheritance.capture(call.extensions.get_or_insert_default());
         call.extensions.insert(sandbox::CaptureResult(inherited));
     });
+    let startup_responses = deliveries.clone();
     let shutdown = async move {
         let shutdown_started = wait_for_input_close
             .await
@@ -612,6 +613,11 @@ pub async fn run(
             Ok(service) => service,
             Err(error) => {
                 shutdown.await.map_err(std::io::Error::other)?;
+                if matches!(&error, rmcp::service::ServerInitializeError::ConnectionClosed(_))
+                    && startup_responses.bootstrap_complete()
+                {
+                    return Ok(());
+                }
                 return Err(match error {
                     rmcp::service::ServerInitializeError::ConnectionClosed(_) =>
                         std::io::Error::other(CLOSED_BEFORE_INITIALIZATION).into(),
@@ -621,6 +627,9 @@ pub async fn run(
         },
         result = &mut shutdown => {
             result.map_err(std::io::Error::other)?;
+            if startup_responses.bootstrap_complete() {
+                return Ok(());
+            }
             return Err(std::io::Error::other(CLOSED_BEFORE_INITIALIZATION).into());
         }
     };
