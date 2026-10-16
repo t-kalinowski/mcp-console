@@ -1,0 +1,10 @@
+---
+saved:
+  environment:
+    KEEP: explicit
+    VALUE: last
+  r:
+    packages: []
+    vanilla: true
+  startup: ~
+global_values: remain a separate configuration layer

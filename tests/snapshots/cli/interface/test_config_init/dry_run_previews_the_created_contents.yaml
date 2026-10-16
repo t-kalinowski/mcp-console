@@ -1,0 +1,20 @@
+---
+preview: |
+  Would create configuration: <WORKSPACE>/.agents/console/config.yaml
+
+  # MCP Console configuration shared by clients.
+  # Omitted settings use Console's defaults.
+  ---
+  sandbox:
+    profile: workspace
+
+  Dry run; no files changed.
+---
+created: |
+  Created configuration: <WORKSPACE>/.agents/console/config.yaml
+
+  # MCP Console configuration shared by clients.
+  # Omitted settings use Console's defaults.
+  ---
+  sandbox:
+    profile: workspace

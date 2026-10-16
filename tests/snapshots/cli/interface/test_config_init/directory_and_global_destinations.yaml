@@ -1,0 +1,9 @@
+---
+destination: relative
+configuration: {}
+---
+destination: absolute
+configuration: {}
+---
+destination: global
+configuration: {}

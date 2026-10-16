@@ -29,6 +29,17 @@ Examples:
   mcp-console configure-client codex --pin-version v0.0.5
   mcp-console configure-client claude --no-uvx --dry-run";
 
+const CONFIG_INIT_EXAMPLES: &str = "\
+Saves only explicit -c settings; omitted settings retain their defaults.
+Existing files are never overwritten. Does not start interpreters or prepare
+packages.
+
+Examples:
+  mcp-console config init
+  mcp-console config init --global
+  mcp-console config init --directory /path/to/project
+  mcp-console config init -c sandbox.profile=workspace --dry-run";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "mcp-console",
@@ -45,7 +56,7 @@ pub struct Cli {
     pub command: Command,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Args)]
 pub struct ConfigOverrides {
     /// Skip trusted launch-directory project configuration; still load global configuration and apply -c overrides
     #[arg(long, long_help = PROJECT_CONFIG_HELP)]
@@ -100,7 +111,7 @@ pub enum Command {
     #[command(after_help = CONFIGURE_CLIENT_EXAMPLES, display_order = 4)]
     ConfigureClient(ConfigureClientOptions),
 
-    /// Inspect configuration without starting interpreters or preparing packages
+    /// Create or inspect configuration without starting interpreters or preparing packages
     #[command(display_order = 3)]
     Config {
         #[command(subcommand)]
@@ -190,6 +201,10 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
+    /// Create a shared Console configuration file
+    #[command(after_help = CONFIG_INIT_EXAMPLES)]
+    Init(ConfigInitOptions),
+
     /// Print resolved configuration
     Resolve {
         #[command(flatten)]
@@ -207,6 +222,25 @@ pub enum ConfigCommand {
         #[arg(long, value_enum, default_value = "yaml")]
         format: ConfigFormat,
     },
+}
+
+#[derive(Debug, Args)]
+pub struct ConfigInitOptions {
+    /// Create global configuration in Console home instead of the project directory
+    #[arg(long, conflicts_with = "directory")]
+    pub global: bool,
+
+    /// Existing project directory; defaults to the current directory without searching Git parents
+    #[arg(long, value_name = "PATH")]
+    pub directory: Option<PathBuf>,
+
+    /// Save initial settings; repeat for ordered dotted KEY=VALUE assignments
+    #[arg(short = 'c', long = "config", value_name = "KEY=VALUE")]
+    pub values: Vec<String>,
+
+    /// Print the destination and proposed contents without creating files or directories
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]

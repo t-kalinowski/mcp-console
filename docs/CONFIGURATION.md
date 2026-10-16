@@ -22,6 +22,33 @@ Worker and package-preparation permissions are independent; see [Sandbox configu
 
 [Configuration reference](CONFIGURATION_REFERENCE.md) lists every public field, its accepted values, and its default behavior.
 
+## Create a configuration file
+
+```sh
+mcp-console config init
+mcp-console config init --global
+mcp-console config init --directory /path/to/project
+mcp-console config init -c sandbox.profile=workspace --dry-run
+```
+
+By default, `config init` creates `.agents/console/config.yaml` in the current directory, including outside Git.
+It does not search parent directories.
+`--directory PATH` selects an existing project directory and interprets relative settings there.
+`--global` creates `$MCP_CONSOLE_HOME/config.yaml`, or `~/.agents/console/config.yaml` when the variable is unset.
+The two options are mutually exclusive.
+These files are shared by clients that launch Console with the same configuration locations.
+Client registration remains a separate operation; see [Connect your client](getting-started.qmd#connect-your-client).
+
+Without settings, the file contains a commented header and an empty mapping; omitted settings keep their existing defaults.
+Use repeated `-c` or `--config` assignments to save initial settings, with the same ordering and merge rules as launch overrides.
+Assignments may appear before `config` or after `init`.
+Only supplied settings are saved: initialization does not copy discovered global or project configuration or expand built-in defaults.
+Configuration-source flags such as `--config-file` and `--no-config` are not accepted.
+
+The command validates settings without starting interpreters or preparing packages, creates the configuration directory if needed, and reports the file path and contents.
+An existing destination causes an error and is left untouched, including with `--dry-run` or `-c`.
+`--dry-run` prints the proposed path and contents without creating files or directories.
+
 ## Python environment selection
 
 Select a preinstalled interpreter or standard virtual environment:

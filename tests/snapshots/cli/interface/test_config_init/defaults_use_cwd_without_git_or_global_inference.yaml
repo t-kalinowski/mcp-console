@@ -1,0 +1,6 @@
+---
+directory: outside-git
+configuration: {}
+---
+directory: repository/nested
+configuration: {}

@@ -92,7 +92,14 @@ The default sandbox permits host-file reads and private temporary writes, but no
 
 ### Use the workspace profile {#allow-project-writes}
 
-To let the agent save files in the project, create `.agents/console/config.yaml` in the directory where Console will start:
+To let the agent save files in the project, initialize configuration in the directory where Console will start:
+
+```sh
+mcp-console config init -c sandbox.profile=workspace
+```
+
+This creates `.agents/console/config.yaml` with the following setting.
+If the file already exists, edit it to include the setting instead:
 
 ```yaml
 sandbox:
