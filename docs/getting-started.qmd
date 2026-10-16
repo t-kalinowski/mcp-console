@@ -2,16 +2,13 @@
 title: Get started
 ---
 
-Install Console, connect it to your MCP client, and try an analysis.
+Install uv, connect Console to your MCP client, and try an analysis.
 No Console configuration file is required.
 
 ## Install
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/), then install Console:
-
-```sh
-uv tool install mcp-console
-```
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
+The examples below use `uvx` to run Console without a separate installation.
 
 Prebuilt packages are available for macOS and Linux on ARM64 and x86-64, and for Windows x64.
 On Windows, also install the [Microsoft Visual C++ v14 Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
@@ -32,8 +29,8 @@ To install the development version, follow [Build from source](BUILD_FROM_SOURCE
 Register Console with the client you use:
 
 ```sh
-mcp-console configure-client codex
-mcp-console configure-client claude
+uvx mcp-console configure-client codex
+uvx mcp-console configure-client claude
 ```
 
 This registers Console globally, so it is available across projects, and loads its tools up front.
@@ -69,26 +66,26 @@ Without inheritance or a configured profile, the default sandbox permits host-fi
 To let the agent save files in its workspace, launch Console with the workspace profile:
 
 ```sh
-mcp-console serve -c sandbox.profile=workspace
+uvx mcp-console serve -c sandbox.profile=workspace
 ```
 
 To save this launch setting for your client, pass it after `--` during registration:
 
 ```sh
-mcp-console configure-client claude -- -c sandbox.profile=workspace
+uvx mcp-console configure-client claude -- -c sandbox.profile=workspace
 ```
 
 Use `codex` in place of `claude` for Codex.
 
 The profile permits ordinary writes in Console's launch directory while protecting workspace metadata such as `.git` and `.agents`.
 Host-file reads remain allowed and direct network access remains restricted.
-For project-specific settings, [`mcp-console config init`](CONFIGURATION.md#create-a-configuration-file) creates a configuration file with this profile.
+For project-specific settings, [`uvx mcp-console config init`](CONFIGURATION.md#create-a-configuration-file) creates a configuration file with this profile.
 
 To add a single writable directory, create it before starting Console:
 
 ```sh
 mkdir output
-mcp-console serve --writable-root output
+uvx mcp-console serve --writable-root output
 ```
 
 The flag adds a write grant without selecting the workspace profile.

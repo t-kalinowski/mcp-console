@@ -294,7 +294,7 @@ class WebsiteTests(unittest.TestCase):
             self.assertIn(included, links)
             self.assertNotIn(excluded, links)
 
-    def test_get_started_client_setup_uses_the_installed_command(self) -> None:
+    def test_get_started_client_setup_uses_uvx(self) -> None:
         commands = [
             line.strip()
             for code in self.pages[self.site / "getting-started.html"].code_blocks
@@ -302,7 +302,7 @@ class WebsiteTests(unittest.TestCase):
             if "configure-client" in line
         ]
         for client in ("codex", "claude"):
-            self.assertIn(f"mcp-console configure-client {client}", commands)
+            self.assertIn(f"uvx mcp-console configure-client {client}", commands)
 
     def test_moved_reference_pages_and_historical_fragments(self) -> None:
         fragments = {
