@@ -73,6 +73,11 @@ stderr: >
   configuration with CLI overrides: resolver: expected a mapping; see
   docs/CONFIGURATION.md for the public format
 ---
+path: resolver.sandbox.inherit_from_codex
+stderr: >
+  configuration with CLI overrides: resolver.sandbox.inherit_from_codex is
+  unsupported; configure sandbox.inherit_from_codex on the session
+---
 path: sandbox.network.proxy
 stderr: >
   configuration with CLI overrides: sandbox: network: proxy: expected a

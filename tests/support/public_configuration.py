@@ -63,6 +63,8 @@ INVALID_CONFIGURATIONS = [
     ("sandbox", []),
     ("sandbox.filesystem", []),
     ("resolver", []),
+    # Windows rejects explicit resolver policies before field validation.
+    ("resolver.sandbox.inherit_from_codex", True),
     ("sandbox.network.proxy", []),
     ("sandbox.network.sockets", []),
     ("sandbox.network.proxy.domains", []),

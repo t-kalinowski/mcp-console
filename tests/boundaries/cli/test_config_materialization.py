@@ -70,14 +70,6 @@ def test_client_sandbox_inheritance_materializes_and_prunes(binary: Path) -> Tra
             assert result.returncode != 0 and "inherit_from_codex" in result.stderr, (
                 result
             )
-        result = resolve(
-            binary,
-            root,
-            "--no-config",
-            "-c",
-            "resolver.sandbox.inherit_from_codex=true",
-        )
-        assert result.returncode != 0 and "inherit_from_codex" in result.stderr, result
     return [enabled]
 
 
