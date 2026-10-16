@@ -36,8 +36,10 @@ An unqualified uvx command may reuse an installed or cached version; `latest` re
 
 `--no-uvx` configures an absolute path to the running executable instead.
 Invoke the desired installation to select it, for example `/opt/mcp-console/bin/mcp-console configure-client claude --no-uvx`.
-When the executable is inside a disposable cache, the command first runs `uv tool install mcp-console@VERSION`, using the version running setup, and configures the absolute launcher path reported by `uv tool dir --bin`.
+When the executable is inside a disposable cache, the command uses `uv pip freeze --python ENVIRONMENT` to identify Console's installed requirement, then runs `uv tool install REQUIREMENT` and configures the absolute launcher path reported by `uv tool dir --bin`.
+Index installations retain their resolved version; wheel, archive, and Git installations retain their recorded source, including recorded hashes and resolved Git commits.
 This includes temporary `uvx --no-cache` runs and custom uv cache locations.
+If the environment or source metadata cannot be identified, setup fails before installation or configuration changes; install the desired source persistently with `uv tool install SOURCE`, then run its `configure-client --no-uvx` command.
 The persistent installation requires `uv` during setup; subsequent client launches use the saved executable directly.
 The command prints the installation command and executable path before installing.
 It leaves existing-tool conflicts to uv and does not force replacement of executable files.

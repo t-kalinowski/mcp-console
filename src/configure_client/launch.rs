@@ -31,6 +31,7 @@ impl Launch {
                 .and_then(|path| path.canonicalize())
                 .map_err(|error| format!("Cannot locate this executable: {error}"))?;
             let target = if in_cache(&executable)? {
+                launch.install = Some(installed_requirement(&executable)?);
                 // uv marks both its normal cache and --no-cache temporary roots.
                 // Query its persistent launcher directory before any installation
                 // so dry-run can show the same command and configuration path.
@@ -50,7 +51,6 @@ impl Launch {
                 if bin.is_empty() {
                     return Err("uv tool dir --bin returned no directory".into());
                 }
-                launch.install = Some(format!("mcp-console@{}", env!("CARGO_PKG_VERSION")));
                 directory
                     .join(bin)
                     .join(format!("mcp-console{}", std::env::consts::EXE_SUFFIX))
@@ -75,7 +75,7 @@ impl Launch {
             } else {
                 "Installing"
             };
-            println!("{action} a persistent executable: uv tool install {package}");
+            println!("{action} a persistent executable: uv tool install {package:?}");
             println!("Executable: {}", self.command);
             if !dry_run {
                 std::io::stdout()
@@ -98,6 +98,44 @@ impl Launch {
         }
         Ok(())
     }
+}
+
+fn installed_requirement(executable: &Path) -> Result<String, String> {
+    let environment = executable
+        .ancestors()
+        .find(|directory| directory.join("pyvenv.cfg").is_file())
+        .ok_or("Cannot locate this temporary tool's environment; install Console persistently with uv tool install <SOURCE> before using --no-uvx")?;
+    // Let uv reconstruct its installed requirement, including direct URLs,
+    // archive hashes, and resolved Git commits. A version alone loses the
+    // source selected by uvx --from. Never guess when metadata is unavailable.
+    let output = Command::new("uv")
+        .args(["pip", "freeze", "--python"])
+        .arg(environment)
+        .args(["--color", "never"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| {
+            format!("Cannot read this temporary tool's source with uv pip freeze: {error}")
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "uv pip freeze failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let requirements = String::from_utf8(output.stdout).map_err(|error| error.to_string())?;
+    requirements
+        .lines()
+        .find_map(|requirement| {
+            if let Some(version) = requirement.strip_prefix("mcp-console==") {
+                Some(format!("mcp-console@{version}"))
+            } else if requirement.starts_with("mcp-console @ ") {
+                Some(requirement.to_owned())
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| "Cannot identify this temporary tool's source; install Console persistently with uv tool install <SOURCE> before using --no-uvx".into())
 }
 
 fn in_cache(executable: &Path) -> Result<bool, String> {

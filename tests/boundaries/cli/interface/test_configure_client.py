@@ -353,33 +353,37 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
         root = Path(temporary).resolve()
         wheels = root / "wheels"
         wheels.mkdir()
+        selected = root / "selected source"
+        selected.mkdir()
         stem = f"mcp_console-{version}"
-        wheel = wheels / f"{stem}-py3-none-any.whl"
-        with zipfile.ZipFile(wheel, "w") as archive:
-            archive.write(
-                native_console(binary),
-                f"{stem}.data/scripts/{native_console(binary).name}",
-            )
-            archive.writestr(
-                f"{stem}.dist-info/METADATA",
-                f"Metadata-Version: 2.1\nName: mcp-console\nVersion: {version}\n",
-            )
-            archive.writestr(
-                f"{stem}.dist-info/WHEEL",
-                "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
-            )
-            record = io.StringIO()
-            writer = csv.writer(record, lineterminator="\n")
-            for name in archive.namelist():
-                content = archive.read(name)
-                digest = (
-                    base64.urlsafe_b64encode(hashlib.sha256(content).digest())
-                    .rstrip(b"=")
-                    .decode("ascii")
+        filename = f"{stem}-py3-none-any.whl"
+        for directory, origin in ((wheels, "index"), (selected, "selected")):
+            with zipfile.ZipFile(directory / filename, "w") as archive:
+                archive.write(
+                    native_console(binary),
+                    f"{stem}.data/scripts/{native_console(binary).name}",
                 )
-                writer.writerow((name, f"sha256={digest}", len(content)))
-            writer.writerow((f"{stem}.dist-info/RECORD", "", ""))
-            archive.writestr(f"{stem}.dist-info/RECORD", record.getvalue())
+                archive.writestr(
+                    f"{stem}.dist-info/METADATA",
+                    f"Metadata-Version: 2.1\nName: mcp-console\nVersion: {version}\n",
+                )
+                archive.writestr(
+                    f"{stem}.dist-info/WHEEL",
+                    "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+                )
+                archive.writestr(f"{stem}.dist-info/fixture-origin.txt", origin)
+                record = io.StringIO()
+                writer = csv.writer(record, lineterminator="\n")
+                for name in archive.namelist():
+                    content = archive.read(name)
+                    digest = (
+                        base64.urlsafe_b64encode(hashlib.sha256(content).digest())
+                        .rstrip(b"=")
+                        .decode("ascii")
+                    )
+                    writer.writerow((name, f"sha256={digest}", len(content)))
+                writer.writerow((f"{stem}.dist-info/RECORD", "", ""))
+                archive.writestr(f"{stem}.dist-info/RECORD", record.getvalue())
         extra = {
             "UV_CACHE_DIR": str(root / "uv-cache"),
             "UV_TOOL_DIR": str(root / "uv-tools"),
@@ -400,6 +404,8 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
             "run",
             "--isolated",
             "--no-cache",
+            "--find-links",
+            str(wheels),
             "mcp-console",
             "configure-client",
             "codex",
@@ -423,7 +429,7 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
 
         result = invoke("--dry-run")
         assert result.returncode == 0, result
-        assert f"uv tool install mcp-console@{version}" in result.stdout, result
+        assert f'uv tool install "mcp-console@{version}"' in result.stdout, result
         assert not (root / "uv-bin").exists()
         assert (
             not (root / "codex-home").exists() and not (root / "claude-home").exists()
@@ -437,7 +443,6 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
         bad.unlink()
         # A resolver failure must leave both client configurations untouched.
         config.write_text("no-index = true\n", encoding="utf-8")
-        command[command.index("mcp-console")] = str(wheel)
         result = invoke()
         assert result.returncode != 0 and "uv tool install" in result.stdout, result
         assert not (root / "codex-home").exists() and not bad.exists()
@@ -445,20 +450,51 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
             f"no-index = true\nfind-links = [{json.dumps(str(wheels))}]\n",
             encoding="utf-8",
         )
-        result = invoke()
-        assert result.returncode == 0, result
-        for client, path in (
-            ("codex", root / "codex-home/config.toml"),
-            ("claude", bad),
-        ):
-            entry = server(read_config(path, client), client)
-            installed = root / "uv-bin" / native_console(binary).name
-            assert Path(entry["command"]) == installed and installed.is_file(), entry
-            assert entry["args"] == ["serve"]
-            assert (
-                subprocess.check_output([installed, "--version"], text=True).split()[1]
-                == version
+        for source in (None, selected / filename):
+            if source is not None:
+                # A distinct wheel with the same published version must retain
+                # its selected source instead of resolving the index wheel.
+                command[command.index("mcp-console") : command.index("mcp-console")] = [
+                    "--from",
+                    str(source),
+                ]
+                extra["UV_TOOL_DIR"] = str(root / "selected-tools")
+                extra["UV_TOOL_BIN_DIR"] = str(root / "selected-bin")
+            preview = invoke("--dry-run")
+            assert preview.returncode == 0, preview
+            result = invoke()
+            assert result.returncode == 0, result
+            for client, path in (
+                ("codex", root / "codex-home/config.toml"),
+                ("claude", bad),
+            ):
+                entry = server(read_config(path, client), client)
+                installed = Path(extra["UV_TOOL_BIN_DIR"]) / native_console(binary).name
+                assert Path(entry["command"]) == installed and installed.is_file(), (
+                    entry
+                )
+                assert entry["args"] == ["serve"]
+                assert (
+                    subprocess.check_output(
+                        [installed, "--version"], text=True
+                    ).split()[1]
+                    == version
+                )
+            origins = list(Path(extra["UV_TOOL_DIR"]).rglob("fixture-origin.txt"))
+            assert len(origins) == 1, origins
+            assert origins[0].read_text() == ("selected" if source else "index"), (
+                source,
+                origins[0].read_text(),
             )
+            if source is not None:
+                assert (
+                    source.as_uri() in preview.stdout
+                    and source.as_uri() in result.stdout
+                )
+                provenance = json.loads(
+                    origins[0].with_name("direct_url.json").read_text()
+                )
+                assert provenance["url"] == source.as_uri(), provenance
         # Once installed, --no-uvx should use itself without calling uv again.
         result = configure(
             installed,
@@ -475,8 +511,45 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
         {
             "fixture": "Local binary-only Console wheel, real uv, isolated tools and cache, no registry access",
             "temporary_run": "promoted to a persistent executable",
+            "source_identity": "selected wheel retained despite an index wheel with the same version",
             "dry_run": "no install or configuration writes",
             "installation_failure": "no configuration writes",
+        }
+    ]
+
+
+def test_cached_executable_without_environment_is_rejected(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        cache = root / "cache"
+        executable = cache / "bin" / native_console(binary).name
+        executable.parent.mkdir(parents=True)
+        shutil.copy2(native_console(binary), executable)
+        (cache / "CACHEDIR.TAG").write_text(
+            "Signature: 8a477f597d28d172789f06886806bc55\n", encoding="utf-8"
+        )
+        result = configure(
+            executable,
+            root,
+            root,
+            "codex",
+            "claude",
+            "--scope",
+            "global",
+            "--no-uvx",
+            extra_environment={"PATH": str(root / "empty-path")},
+        )
+        assert result.returncode == 1 and not result.stdout, result
+        assert "Cannot locate this temporary tool's environment" in result.stderr, (
+            result
+        )
+        assert "uv tool install <SOURCE>" in result.stderr, result
+        assert (
+            not (root / "codex-home").exists() and not (root / "claude-home").exists()
+        )
+    return [
+        {
+            "unidentified_cached_executable": "rejected before installation or configuration writes"
         }
     ]
 

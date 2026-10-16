@@ -167,7 +167,7 @@ stdout: |
                                  root or current directory [default: auto]
                                  [possible values: auto, project, global]
         --no-uvx                 Configure an absolute executable path; temporary
-                                 uvx runs first install this version persistently
+                                 uvx runs first install their source persistently
                                  with uv. Conflicts with --pin-version
         --pin-version <VERSION>  Pin uvx to an exact version, current, or latest;
                                  omitted by default. Conflicts with --no-uvx
