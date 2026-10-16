@@ -15,6 +15,7 @@ uv tool install mcp-console
 
 Prebuilt packages are available for macOS and Linux on ARM64 and x86-64, and for Windows x64.
 On Windows, also install the [Microsoft Visual C++ v14 Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
+Sandboxed Windows sessions require a host that supports [MXC](SANDBOX_CONFIGURATION.md#windows-mxc-requirement).
 
 If Console fails to start on Linux, see [Linux host compatibility](LINUX_COMPATIBILITY.md) for missing libraries or sandbox restrictions.
 
@@ -40,7 +41,7 @@ Restart the client after setup.
 Your client launches Console on the same host, usually in the workspace where the agent is working.
 
 To register it for just one project, add `--scope project`.
-See [client configuration](CLI.md#configure-a-client) for other MCP clients, version pinning, and launch options.
+See [client configuration](CLI.md#configure-a-client) for updating earlier project registrations, other MCP clients, version pinning, and launch options.
 
 ## Try an analysis
 
@@ -83,9 +84,10 @@ The profile permits ordinary writes in Console's launch directory while protecti
 Host-file reads remain allowed and direct network access remains restricted.
 For project-specific settings, [`mcp-console config init`](CONFIGURATION.md#create-a-configuration-file) creates a configuration file with this profile.
 
-To add a single writable directory, use `--writable-root` with an existing path:
+To add a single writable directory, create it before starting Console:
 
 ```sh
+mkdir output
 mcp-console serve --writable-root output
 ```
 

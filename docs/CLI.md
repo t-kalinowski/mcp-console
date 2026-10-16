@@ -76,6 +76,10 @@ Global scope is the default, including inside a Git repository.
 | Codex       | `.codex/config.toml`  | `$CODEX_HOME/config.toml`, default `~/.codex/config.toml`   |
 | Claude Code | `.mcp.json`           | `$CLAUDE_CONFIG_DIR/.claude.json`, default `~/.claude.json` |
 
+[Codex](https://learn.chatgpt.com/docs/config-file/config-basic#configuration-precedence) and [Claude Code](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence) give loaded project entries precedence over same-named global entries.
+Global registration leaves existing project entries unchanged.
+If an earlier registration created a project entry, rerun setup with `--scope project` to update it, or remove only that server's entry from the project configuration listed above to use the global settings.
+
 The command prints the selected scope, file path, and fields it sets.
 Use `--dry-run` to preview those settings and any persistent installation without writing files or installing, or to apply them manually.
 Existing settings outside the printed fields are preserved, including other servers, environment variables, and client preferences.
