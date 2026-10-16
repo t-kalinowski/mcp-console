@@ -21,7 +21,7 @@ use rmcp::{
     },
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorCode,
-        Implementation, ServerCapabilities, ServerInfo,
+        Implementation, ServerCapabilities, ServerConfig,
     },
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -363,7 +363,7 @@ fn response_to_tool_result(
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for ConsoleServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let mut capabilities = ServerCapabilities::builder().enable_tools().build();
         if self.inheritance.enabled() {
             capabilities.experimental = Some(std::collections::BTreeMap::from_iter([
@@ -374,7 +374,7 @@ impl ServerHandler for ConsoleServer {
                 ),
             ]));
         }
-        ServerInfo::new(capabilities)
+        ServerConfig::new(capabilities)
             .with_server_info(Implementation::new(
                 "mcp-console",
                 env!("CARGO_PKG_VERSION"),
