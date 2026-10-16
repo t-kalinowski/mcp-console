@@ -16,6 +16,10 @@ use crate::settings::{Profile as BaseProfile, ProfileSelection, SandboxSettings}
 pub(super) const CAPABILITY: &str = "codex/sandbox-state";
 pub(super) const LEGACY_CAPABILITY: &str = "codex/sandbox-state-meta";
 
+/// Permission selection or validation completed in transport request order.
+#[derive(Clone)]
+pub(super) struct CaptureResult(pub Result<(), String>);
+
 #[derive(Clone)]
 pub(crate) struct Configuration {
     pub no_sandbox: bool,

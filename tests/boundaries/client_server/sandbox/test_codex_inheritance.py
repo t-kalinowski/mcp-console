@@ -394,6 +394,118 @@ def test_malformed_metadata_warns_and_uses_default_read_only(
 
 
 @requires(SANDBOX)
+def test_first_received_send_selects_authority_before_cancelled_handler(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        python, _ = isolated_python(root)
+        with McpClient(
+            binary,
+            (
+                "serve",
+                "-c",
+                "sandbox.profile=codex",
+                "-c",
+                "cache=host",
+                "-c",
+                f"python.existing={python}",
+            ),
+            os.environ.copy(),
+            root,
+        ) as client:
+            client.transcript.append(
+                {
+                    "scenario": "The first received send selects permissions even if its handler is cancelled.",
+                    "fixture": "Write two conflicting sends and cancellation together so all three frames are ready before handler dispatch.",
+                }
+            )
+            client.initialize_and_list_tools()
+            first, second, _ = client.send_messages(
+                [
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1000,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "send",
+                            "arguments": {
+                                "python": "raise AssertionError('cancelled first handler ran')"
+                            },
+                            "_meta": {
+                                STATE: {
+                                    "permissionProfile": {
+                                        "type": "managed",
+                                        "file_system": {
+                                            "type": "restricted",
+                                            "entries": [],
+                                        },
+                                        "network": "restricted",
+                                    }
+                                }
+                            },
+                        },
+                    },
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1001,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "send",
+                            "arguments": {
+                                "timeout_ms": 60000,
+                                # fmt: python
+                                "python": code("""
+                                    from pathlib import Path
+
+                                    _ = Path("later-policy-ran").write_text("unexpected")
+                                    """),
+                            },
+                            "_meta": {
+                                STATE: {"permissionProfile": {"type": "disabled"}}
+                            },
+                        },
+                    },
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/cancelled",
+                        "params": {"requestId": 1000},
+                    },
+                ]
+            )
+            client.receive(second)
+            assert "result" not in first and "error" not in first, first
+            assert second["result"]["isError"] is True, second
+            assert "reconnect" in second["result"]["content"][0]["text"], second
+            assert not (root / "later-policy-ran").exists()
+            client.expect(
+                "first received permissions retained\n",
+                # fmt: python
+                python=code("""
+                    import errno
+                    import os
+                    from pathlib import Path
+
+                    assert os.environ["MCP_CONSOLE_SANDBOX"] == "1"
+                    try:
+                        _ = Path("created").write_text("denied")
+                    except OSError as error:
+                        assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS)
+                    else:
+                        raise AssertionError("later metadata replaced the first permissions")
+                    print("first received permissions retained")
+                    """),
+            )
+            assert not (root / "created").exists()
+            transcript = finish(client, root)
+            projection = next(root.glob(".agents/console/sessions/*/transcript.qmd"))
+            assert "cancelled first handler ran" not in projection.read_text(), (
+                "the fixture must cancel the first handler before execution admission"
+            )
+            return transcript
+
+
+@requires(SANDBOX)
 def test_inherits_filesystem_and_network_before_first_worker(
     binary: Path,
 ) -> Transcript:

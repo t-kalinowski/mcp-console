@@ -427,7 +427,10 @@ impl ServerHandler for ConsoleServer {
                 }
             }
         };
-        let inherited = self.inheritance.capture(&context.meta);
+        let sandbox::CaptureResult(inherited) = context
+            .extensions
+            .remove::<sandbox::CaptureResult>()
+            .expect("console operations must carry transport sandbox capture");
         if self.inheritance.enabled() && inherited.is_ok() {
             self.startup.start();
         }
@@ -563,11 +566,18 @@ pub async fn run(
         })?
     };
     let input = ShutdownReader::new(input, input_closed);
+    let inheritance = server.inheritance.clone();
     let transport = crate::server_transport::ServerTransport::new(
         input,
         tokio::io::stdout(),
         server.deliveries.clone(),
-    );
+    )
+    .with_send_observer(move |call| {
+        // Pending response reservations do not order runnable handlers. Capture
+        // before dispatch so cancellation or scheduling cannot select a later policy.
+        let inherited = inheritance.capture(call.extensions.get_or_insert_default());
+        call.extensions.insert(sandbox::CaptureResult(inherited));
+    });
     let shutdown = async move {
         let shutdown_started = wait_for_input_close
             .await

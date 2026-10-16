@@ -63,6 +63,7 @@ MCP initialization, tool discovery, and pings do not wait.
 Custom workers remain lazy.
 
 With the `codex` sandbox profile, startup waits for the first `send` to capture client authority before creating any preparation or execution process.
+Capture happens in transport request order before asynchronous handler dispatch; a cancelled first request cannot let a later request select the connection's permissions.
 The server translates supported permissions or selects the configured fallback, defaulting to `read_only`, then composes local permissions and selects caches.
 Absent metadata is silent; unparseable metadata warns on server stderr.
 An untranslatable permission entry rejects the entire client profile rather than discarding a possible denial.

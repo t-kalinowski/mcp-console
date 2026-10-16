@@ -111,7 +111,7 @@ Unknown additional fields and client backend or launcher selections are ignored.
 Console always uses its own pinned runner; metadata cannot select an executable or change its backend.
 Supported translated permissions still undergo ordinary native validation.
 
-The first `send` captures the translated policy or fallback for the connection.
+The first received `send` captures the translated policy or fallback for the connection, even if that call is cancelled before execution.
 Workers and explicit restarts retain that policy.
 Later calls without metadata keep it; later calls with different permissions fail before submitting code, with a request to reconnect.
 When a usable client policy was captured, later malformed metadata rejects the call and warns that reconnecting is needed to apply the fallback.
