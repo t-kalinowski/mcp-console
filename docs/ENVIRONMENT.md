@@ -41,16 +41,16 @@ It does rerun R's native startup files.
 
 ## Server paths and executable discovery
 
-| Variable            | Console-specific effect                                                                                                                                                                                                                 |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `MCP_CONSOLE_HOME`  | Absolute Console home for global `config.yaml` and fallback session storage. Defaults to the user's `.agents/console`; does not move package caches or project-local storage. Empty/relative values fail when needed; no `~` expansion. |
-| `HOME`              | Home discovery and leading-`~` expansion for public interpreter paths. Those uses need an absolute home. Child overrides affect runtime/tool behavior, not server configuration discovery.                                              |
-| `USERPROFILE`       | Windows fallback for home/cache discovery when the relevant HOME value is unavailable; native home discovery can also use the Windows profile API.                                                                                      |
-| `PATH`              | R, resolver, and subprocess discovery. The selected Python executable directory is added during worker initialization/activation. Windows R discovery supports `.exe`, `.bat`, and `.cmd`.                                              |
-| `R_HOME`            | Selects an R installation directory unless public `r` selection overrides it. Presence, including empty/invalid values, can cause a selection error instead of Python-only fallback.                                                    |
-| `RETICULATE_PYTHON` | Legacy launch-time existing-Python selection, also recognized without R. Empty, absent, and literal `managed` are not explicit selections. Public `python` configuration wins.                                                          |
-| `RETICULATE_UV`     | uv selection for R/reticulate-backed Python preparation. R-free preparation ignores it and uses PATH uv.                                                                                                                                |
-| `SystemRoot`        | Windows supervisor preflight uses it to locate `System32/cmd.exe`.                                                                                                                                                                      |
+| Variable            | Console-specific effect                                                                                                                                                                                                                                    |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCP_CONSOLE_HOME`  | Console home for global `config.yaml` and fallback session storage. Defaults to the user's `.agents/console`; does not move package caches or project-local storage. Must be absolute after leading-`~` expansion; empty/relative values fail when needed. |
+| `HOME`              | Home discovery and leading-`~` expansion for public paths. Those uses need an absolute home. Windows uses the user profile when HOME is absent or empty. Child overrides affect runtime/tool behavior, not configuration path expansion.                   |
+| `USERPROFILE`       | Windows fallback for home/cache discovery when the relevant HOME value is unavailable; native home discovery can also use the Windows profile API.                                                                                                         |
+| `PATH`              | R, resolver, and subprocess discovery. The selected Python executable directory is added during worker initialization/activation. Windows R discovery supports `.exe`, `.bat`, and `.cmd`.                                                                 |
+| `R_HOME`            | Selects an R installation directory unless public `r` selection overrides it. Presence, including empty/invalid values, can cause a selection error instead of Python-only fallback.                                                                       |
+| `RETICULATE_PYTHON` | Legacy launch-time existing-Python selection, also recognized without R. Empty, absent, and literal `managed` are not explicit selections. Public `python` configuration wins.                                                                             |
+| `RETICULATE_UV`     | uv selection for R/reticulate-backed Python preparation. R-free preparation ignores it and uses PATH uv.                                                                                                                                                   |
+| `SystemRoot`        | Windows supervisor preflight uses it to locate `System32/cmd.exe`.                                                                                                                                                                                         |
 
 Use [interpreter selection](CONFIGURATION.md#python-environment-selection) for projects rather than depending on ambient activation.
 In particular, `VIRTUAL_ENV` selects Python only through the configured `active_venv` choice; `UV_PYTHON` is not a substitute for `python:`.
@@ -94,6 +94,8 @@ See [uv's reference](https://docs.astral.sh/uv/reference/environment/) and [reso
 ## Cache and data locations
 
 [Resolver configuration](RESOLVER.md#cache-locations) owns root selection and host-cache permissions.
+`MCP_CONSOLE_CACHE_DIR` selects an absolute Console cache root, taking precedence over XDG and platform defaults.
+An unset or empty value uses the defaults; `cache: host` ignores it.
 Let `D` be the selected Console dependency directory.
 `cache: console` applies these assignments to preparation and eligible workers:
 
@@ -120,7 +122,7 @@ Values observed inside a cell are therefore not necessarily the persistent resol
 With `cache: host`, tool variables/defaults select caches and Console generates appropriate resolver grants.
 An explicit resolver filesystem replaces those generated entries.
 `MCP_CONSOLE_HOME` does not move caches.
-Windows cache-root selection uses absolute `XDG_CACHE_HOME`, then absolute `LOCALAPPDATA`, then its home/profile fallback.
+Without `MCP_CONSOLE_CACHE_DIR`, Windows cache-root selection uses absolute `XDG_CACHE_HOME`, then absolute `LOCALAPPDATA`, then its home/profile fallback.
 
 Despite its prefix, `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY` is a supported user cache setting in host mode.
 A relative nonempty value resolves against the launch directory; otherwise managed extensions use the resolver home's `.duckdb/extensions`.
