@@ -8,5 +8,6 @@ source_identity: >-
 index_source: >-
   unrecorded resolver options rejected before installation or
   configuration writes
+credentials: used for installation and omitted from both output streams
 dry_run: no install or configuration writes
 installation_failure: no configuration writes

@@ -70,25 +70,43 @@ impl Launch {
 
     pub(super) fn prepare(&self, dry_run: bool) -> Result<(), String> {
         if let Some(package) = &self.install {
+            // Preserve the original requirement for uv, but keep its query
+            // out of our report and uv's source-bearing diagnostics.
+            let query = package
+                .find('?')
+                .map(|start| package[start..].split('#').next().unwrap());
+            let redact = |output: &[u8]| {
+                let text = String::from_utf8_lossy(output);
+                match query {
+                    Some(query) => text.replace(query, "?<redacted>"),
+                    None => text.into_owned(),
+                }
+            };
             let action = if dry_run {
                 "Would install"
             } else {
                 "Installing"
             };
-            println!("{action} a persistent executable: uv tool install {package:?}");
+            println!(
+                "{action} a persistent executable: uv tool install {:?}",
+                redact(package.as_bytes())
+            );
             println!("Executable: {}", self.command);
             if !dry_run {
                 std::io::stdout()
                     .flush()
                     .map_err(|error| error.to_string())?;
-                let status = Command::new("uv")
+                let output = Command::new("uv")
                     .args(["tool", "install", package])
                     .stdin(Stdio::null())
-                    .status()
+                    .output()
                     .map_err(|error| format!("Cannot run uv tool install: {error}"))?;
-                if !status.success() {
+                print!("{}", redact(&output.stdout));
+                eprint!("{}", redact(&output.stderr));
+                if !output.status.success() {
                     return Err(format!(
-                        "uv tool install failed with {status}; no client configuration files changed"
+                        "uv tool install failed with {}; no client configuration files changed",
+                        output.status
                     ));
                 }
                 if !PathBuf::from(&self.command).is_file() {
@@ -101,6 +119,8 @@ impl Launch {
 }
 
 fn installed_requirement(environment: &Path) -> Result<String, String> {
+    // Requires uv 0.11.29+ to retain recorded archive hashes. Older uv versions
+    // are outside this path's supported contract; do not add compatibility logic.
     // Let uv reconstruct its installed requirement, including direct URLs,
     // archive hashes, and resolved Git commits. Index installs record only a
     // version, losing CLI-only resolver options. Never resolve that version

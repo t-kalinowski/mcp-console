@@ -9,8 +9,12 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import tomllib
 import zipfile
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -48,6 +52,42 @@ def configure(
         encoding="utf-8",
         timeout=10,
     )
+
+
+@contextmanager
+def authenticated_wheel(wheel: Path, token: str) -> Iterator[str]:
+    contents = wheel.read_bytes()
+    route = f"/{wheel.name}?access_key={token}"
+
+    class Origin(BaseHTTPRequestHandler):
+        def respond(self, body: bool) -> None:
+            if self.path != route:
+                self.send_error(403)
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(contents)))
+            self.end_headers()
+            if body:
+                self.wfile.write(contents)
+
+        def do_GET(self) -> None:
+            self.respond(True)
+
+        def do_HEAD(self) -> None:
+            self.respond(False)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Origin) as origin:
+        thread = threading.Thread(target=origin.serve_forever)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{origin.server_port}{route}"
+        finally:
+            origin.shutdown()
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "fixture origin did not stop"
 
 
 def test_multiple_clients_pins_names_and_serve_arguments(binary: Path) -> Transcript:
@@ -211,6 +251,29 @@ def test_reserved_names_are_client_specific(binary: Path) -> Transcript:
                     not (root / "codex-home").exists()
                     and not (root / "claude-home").exists()
                 )
+        for clients in (("codex",), ("claude", "codex")):
+            result = configure(
+                binary,
+                root,
+                root,
+                *clients,
+                "--scope",
+                "global",
+                "--name",
+                "codex_apps",
+            )
+            assert result.returncode == 1 and not result.stdout, result
+            assert "codex_apps" in result.stderr and "reserved" in result.stderr, result
+            assert not (root / "codex-home").exists()
+            assert not (root / "claude-home").exists()
+        result = configure(
+            binary, root, root, "claude", "--scope", "global", "--name", "codex_apps"
+        )
+        assert result.returncode == 0 and not result.stderr, result
+        assert (
+            "codex_apps"
+            in read_config(root / "claude-home/.claude.json", "claude")["mcpServers"]
+        )
         result = configure(
             binary, root, root, "codex", "--scope", "global", "--name", "workspace"
         )
@@ -222,6 +285,7 @@ def test_reserved_names_are_client_specific(binary: Path) -> Transcript:
     return [
         {
             "reserved_names": list(names),
+            "reserved_builtin_name": "rejected only for the affected client",
             "selected_clients_validated_before_writes": True,
             "other_clients": "same names remain available",
         }
@@ -374,7 +438,7 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
     uv = shutil.which("uv")
     assert uv is not None, "uv is required"
     version = subprocess.check_output([binary, "--version"], text=True).split()[1]
-    with TemporaryDirectory() as temporary:
+    with TemporaryDirectory() as temporary, ExitStack() as stack:
         root = Path(temporary).resolve()
         wheels = root / "wheels"
         wheels.mkdir()
@@ -477,20 +541,26 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
             f"no-index = true\nfind-links = [{json.dumps(str(wheels))}]\n",
             encoding="utf-8",
         )
-        source = selected / filename
+        token = "fixture-query-credential"
+        source = stack.enter_context(authenticated_wheel(selected / filename, token))
+        # Keep the outer uv run quiet; the Console command owns the install report.
+        command.insert(1, "--quiet")
+        extra["UV_OFFLINE"] = "false"
         command[command.index("mcp-console") : command.index("mcp-console")] = [
             "--from",
-            str(source),
+            source,
         ]
         result = invoke("--dry-run")
         assert result.returncode == 0, result
-        assert source.as_uri() in result.stdout, result
+        assert source.split("?")[0] in result.stdout, result
+        assert token not in result.stdout + result.stderr, result
         assert not (root / "uv-bin").exists()
         assert (
             not (root / "codex-home").exists() and not (root / "claude-home").exists()
         )
-        result = invoke("--name", "invalid name")
-        assert result.returncode == 1 and not result.stdout, result
+        for name in ("invalid name", "codex_apps"):
+            result = invoke("--name", name)
+            assert result.returncode == 1 and not result.stdout, result
         assert not (root / "uv-bin").exists()
         assert (
             not (root / "codex-home").exists() and not (root / "claude-home").exists()
@@ -508,12 +578,15 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
         extra["UV_TOOL_DIR"] = str(blocked)
         result = invoke()
         assert result.returncode != 0 and "uv tool install" in result.stdout, result
+        assert token not in result.stdout + result.stderr, result
         assert not (root / "codex-home").exists() and not bad.exists()
         extra["UV_TOOL_DIR"] = str(root / "uv-tools")
         preview = invoke("--dry-run")
         assert preview.returncode == 0, preview
         result = invoke()
         assert result.returncode == 0, result
+        assert token not in preview.stdout + preview.stderr, preview
+        assert token not in result.stdout + result.stderr, result
         for client, path in (
             ("codex", root / "codex-home/config.toml"),
             ("claude", bad),
@@ -529,9 +602,12 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
         origins = list(Path(extra["UV_TOOL_DIR"]).rglob("fixture-origin.txt"))
         assert len(origins) == 1, origins
         assert origins[0].read_text() == "selected", origins[0].read_text()
-        assert source.as_uri() in preview.stdout and source.as_uri() in result.stdout
+        assert (
+            source.split("?")[0] in preview.stdout
+            and source.split("?")[0] in result.stdout
+        )
         provenance = json.loads(origins[0].with_name("direct_url.json").read_text())
-        assert provenance["url"] == source.as_uri(), provenance
+        assert provenance["url"] == source, provenance
         # Once installed, --no-uvx should use itself without calling uv again.
         result = configure(
             installed,
@@ -550,6 +626,7 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
             "temporary_run": "promoted to a persistent executable",
             "source_identity": "selected wheel retained despite an index wheel with the same version",
             "index_source": "unrecorded resolver options rejected before installation or configuration writes",
+            "credentials": "used for installation and omitted from both output streams",
             "dry_run": "no install or configuration writes",
             "installation_failure": "no configuration writes",
         }

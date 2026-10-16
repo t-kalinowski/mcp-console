@@ -24,6 +24,7 @@ Pass one or more client names; all options apply to every selected client, and r
 Use separate invocations for different settings per client.
 `--name NAME` changes the server name; arguments after `--` are appended after `serve`.
 Codex server names must match `^[a-zA-Z0-9_:@/.-]+$`; other names are rejected before installation or configuration changes.
+Its built-in `codex_apps` name is also reserved and rejected before changes.
 When Claude Code is selected, its reserved names (`workspace`, `claude-in-chrome`, `computer-use`, `Claude Preview`, and `Claude Browser`) are rejected before configuration changes.
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) so `uvx` is on the client's `PATH`.
 The client itself does not need to be installed when writing its configuration.
@@ -40,12 +41,14 @@ Invoke the desired installation to select it, for example `/opt/mcp-console/bin/
 When the executable is in a uv-created environment inside a disposable cache, the command uses `uv pip freeze --python ENVIRONMENT` to identify Console's recorded direct source, then runs `uv tool install REQUIREMENT` and configures the absolute launcher path reported by `uv tool dir --bin`.
 The shared `CACHEDIR.TAG` marker alone does not trigger installation; Cargo builds and non-uv environments retain their executable paths.
 Direct wheel, archive, and Git installations retain their recorded source, including recorded hashes and resolved Git commits.
+Automatic persistent installation requires uv 0.11.29 or newer, which preserves recorded archive hashes in `uv pip freeze` output.
 This includes temporary `uvx --no-cache` runs and custom uv cache locations.
 Temporary index and `--find-links` installations record only a version, so setup rejects them before installation or configuration changes rather than resolving through a potentially different source.
 Install persistently with `uv tool install` using the same resolver options first, then invoke the installed executable's `configure-client --no-uvx` command.
 If source metadata for a temporary uv environment cannot be identified, setup fails before installation or configuration changes; install the desired source persistently with `uv tool install SOURCE`, then run its `configure-client --no-uvx` command.
 The persistent installation requires `uv` during setup; subsequent client launches use the saved executable directly.
 The command prints the installation command and executable path before installing.
+The recorded source's URL query is redacted from that report and captured uv output; the original requirement is passed to uv unchanged.
 It leaves existing-tool conflicts to uv and does not force replacement of executable files.
 `--no-uvx` conflicts with `--pin-version`; select the desired version before configuring a direct executable.
 

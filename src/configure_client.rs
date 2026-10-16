@@ -34,6 +34,12 @@ pub(crate) fn run(options: &ConfigureClientOptions) -> Result<(), String> {
             options.name
         ));
     }
+    if options.clients.contains(&ConfigureClient::Codex) && options.name == "codex_apps" {
+        return Err(format!(
+            "Server name {:?} is reserved by Codex; choose another --name",
+            options.name
+        ));
+    }
     if options.clients.contains(&ConfigureClient::Codex)
         && !options
             .name
