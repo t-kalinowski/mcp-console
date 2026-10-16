@@ -134,7 +134,7 @@ Edit Python API docstrings and R roxygen sources for generated reference changes
 The site configurations are `docs/_quarto.yml`, `great-docs.yml`, and `r/_pkgdown.yml`.
 Generated build directories remain ignored.
 
-The guides and package references follow the browser's light or dark preference by default and respond when it changes.
+On page load, the guides and package references follow the browser's light or dark preference by default.
 A saved choice from a page's theme control takes precedence over the browser preference.
 
 ### Documentation ownership
