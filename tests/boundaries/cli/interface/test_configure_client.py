@@ -490,6 +490,63 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
             f"no-index = true\nfind-links = [{json.dumps(str(wheels))}]\n",
             encoding="utf-8",
         )
+        # Persistent tools must stay usable beneath another tool's tagged cache,
+        # regardless of the current UV_TOOL_DIR or whether uv is still on PATH.
+        tagged = root / "target"
+        tagged.mkdir()
+        (tagged / "CACHEDIR.TAG").write_text(
+            "Signature: 8a477f597d28d172789f06886806bc55\n", encoding="utf-8"
+        )
+        for origin, requirement in (
+            ("index", "mcp-console"),
+            ("direct", str(selected / filename)),
+        ):
+            case = tagged / origin
+            case.mkdir()
+            tools = case / "tools"
+            result = subprocess.run(
+                [uv, "tool", "install", requirement],
+                cwd=case,
+                env=environment(case)
+                | extra
+                | {
+                    "UV_TOOL_DIR": str(tools),
+                    "UV_TOOL_BIN_DIR": str(case / "bin"),
+                },
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=30,
+            )
+            assert result.returncode == 0, result
+            executables = [
+                path
+                for path in tools.rglob(native_console(binary).name)
+                if path.is_file()
+            ]
+            assert len(executables) == 1, executables
+            executable = executables[0]
+            result = configure(
+                executable,
+                case,
+                case,
+                "codex",
+                "claude",
+                "--scope",
+                "global",
+                "--no-uvx",
+                extra_environment=extra | {"PATH": str(root / "empty-path")},
+            )
+            assert result.returncode == 0 and not result.stderr, result
+            assert "tool install" not in result.stdout, result
+            for client, path in (
+                ("codex", case / "codex-home/config.toml"),
+                ("claude", case / "claude-home/.claude.json"),
+            ):
+                entry = server(read_config(path, client), client)
+                assert Path(entry["command"]).samefile(executable), entry
+                assert entry["args"] == ["serve"], entry
         command = [
             uv,
             "tool",
@@ -507,9 +564,14 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
             "--no-uvx",
         ]
 
-        def invoke(*args: str) -> subprocess.CompletedProcess[str]:
+        def invoke(
+            *args: str, cached: bool = False
+        ) -> subprocess.CompletedProcess[str]:
+            launch = command.copy()
+            if cached:
+                launch.remove("--no-cache")
             return subprocess.run(
-                [*command, *args],
+                [*launch, *args],
                 cwd=root,
                 env=environment(root) | extra,
                 stdin=subprocess.DEVNULL,
@@ -550,14 +612,16 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
             "--from",
             source,
         ]
-        result = invoke("--dry-run")
-        assert result.returncode == 0, result
-        assert source.split("?")[0] in result.stdout, result
-        assert token not in result.stdout + result.stderr, result
-        assert not (root / "uv-bin").exists()
-        assert (
-            not (root / "codex-home").exists() and not (root / "claude-home").exists()
-        )
+        for cached in (False, True):
+            result = invoke("--dry-run", cached=cached)
+            assert result.returncode == 0, result
+            assert source.split("?")[0] in result.stdout, result
+            assert token not in result.stdout + result.stderr, result
+            assert not (root / "uv-bin").exists()
+            assert (
+                not (root / "codex-home").exists()
+                and not (root / "claude-home").exists()
+            )
         for name in ("invalid name", "codex_apps"):
             result = invoke("--name", name)
             assert result.returncode == 1 and not result.stdout, result
@@ -624,6 +688,8 @@ def test_ephemeral_uvx_installs_persistent_executable(binary: Path) -> Transcrip
         {
             "fixture": "Local binary-only Console wheel, real uv, isolated tools and cache, no registry access",
             "temporary_run": "promoted to a persistent executable",
+            "persistent_tools": "index and direct-source installations beneath a tagged parent retain their executable paths without uv",
+            "cache_layouts": "custom cache and --no-cache environments are promoted",
             "source_identity": "selected wheel retained despite an index wheel with the same version",
             "index_source": "unrecorded resolver options rejected before installation or configuration writes",
             "credentials": "used for installation and omitted from both output streams",

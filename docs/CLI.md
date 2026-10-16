@@ -39,7 +39,7 @@ An unqualified uvx command may reuse an installed or cached version; `latest` re
 `--no-uvx` configures an absolute path to the running executable instead.
 Invoke the desired installation to select it, for example `/opt/mcp-console/bin/mcp-console configure-client claude --no-uvx`.
 When the executable is in a uv-created environment inside a disposable cache, the command uses `uv pip freeze --python ENVIRONMENT` to identify Console's recorded direct source, then runs `uv tool install REQUIREMENT` and configures the absolute launcher path reported by `uv tool dir --bin`.
-The shared `CACHEDIR.TAG` marker alone does not trigger installation; Cargo builds and non-uv environments retain their executable paths.
+Only uv's disposable cache layout triggers installation; persistent uv tools, Cargo builds, and non-uv environments retain their executable paths even beneath unrelated tagged caches.
 Direct wheel, archive, and Git installations retain their recorded source, including recorded hashes and resolved Git commits.
 Automatic persistent installation requires uv 0.11.29 or newer, which preserves recorded archive hashes in `uv pip freeze` output.
 Directory sources are rebuilt from their recorded path.

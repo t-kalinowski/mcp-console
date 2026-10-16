@@ -167,21 +167,22 @@ fn temporary_uv_environment(executable: &Path) -> Result<Option<&Path>, String> 
     if !contents.lines().any(|line| line.starts_with("uv = ")) {
         return Ok(None);
     }
-    // CACHEDIR.TAG is shared with Cargo and other tools. Require uv's own
-    // environment marker first, then a containing cache. The environment's
-    // own tag also exists on persistent uv tools and does not imply disposal.
-    for directory in environment.ancestors().skip(1) {
-        let marker = directory.join("CACHEDIR.TAG");
-        match fs::read(&marker) {
-            Ok(contents)
-                if contents.starts_with(b"Signature: 8a477f597d28d172789f06886806bc55") =>
-            {
-                return Ok(Some(environment));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("Cannot read {}: {error}", marker.display())),
-        }
+    // uv relocates disposable tool environments to CACHE/archive-v0/ID, even
+    // with --no-cache. Only that cache root's tag implies disposal: persistent
+    // uv environments have their own tag and may be below unrelated caches.
+    let Some(cache) = environment
+        .parent()
+        .filter(|bucket| bucket.file_name().is_some_and(|name| name == "archive-v0"))
+        .and_then(Path::parent)
+    else {
+        return Ok(None);
+    };
+    let marker = cache.join("CACHEDIR.TAG");
+    match fs::read(&marker) {
+        Ok(contents) => Ok(contents
+            .starts_with(b"Signature: 8a477f597d28d172789f06886806bc55")
+            .then_some(environment)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Cannot read {}: {error}", marker.display())),
     }
-    Ok(None)
 }
