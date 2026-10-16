@@ -136,6 +136,7 @@ Changing the working directory from R or Python does not move the permission bou
 If that directory is a filesystem root, the user's home directory, or a parent of home, Console warns and uses the `read_only` base.
 Home follows the same [launch-environment selection](CONFIGURATION.md#paths) as `~` paths, including explicit `HOME` precedence on Windows.
 The home directory need not exist; Console still protects its existing ancestors.
+If home cannot be determined, automatic workspace writes fall back to `read_only` and relative write grants are ignored with a warning.
 This also applies when `workspace` is the fallback for unavailable client metadata.
 The same root check applies to `resolver.sandbox.profile: workspace`.
 Explicit absolute write grants, network settings, and temporary-storage settings still apply.
@@ -232,6 +233,9 @@ Relative `read_write` paths and `--writable-root` arguments that resolve to a fi
 This applies to both worker and resolver filesystem settings.
 This includes `.` when Console starts from one of those directories, parent paths such as `..`, and symlinks to those roots.
 To grant writes there explicitly, supply an absolute path.
+The check includes absent paths that would grant writes to home or its ancestors.
+Console checks relative grants again before every native launch, including after worker replacement, so a changed symlink cannot turn one into a broad grant.
+Absolute grants retain their explicit authority and the native runner's path validation.
 
 Narrower native rules take precedence.
 At equal paths, deny wins over write, then read.

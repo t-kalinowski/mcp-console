@@ -114,6 +114,145 @@ def test_broad_roots_require_absolute_write_grants(binary: Path) -> Transcript:
 
 
 @requires(SANDBOX)
+def test_absent_home_write_grants_are_rejected(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        home = root / "missing" / "home"
+        for grant in ("missing", "missing/home"):
+            result = subprocess.run(
+                [
+                    binary,
+                    "sandbox",
+                    "--no-config",
+                    "--writable-root",
+                    grant,
+                    "--",
+                    sys.executable,
+                    "-c",
+                    # fmt: python
+                    code("""
+                        import errno
+                        import os
+                        from pathlib import Path
+
+                        home = Path(os.environ["HOME"])
+                        try:
+                            home.mkdir(parents=True)
+                            _ = (home / "probe").write_text("blocked")
+                        except OSError as error:
+                            assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
+                        else:
+                            raise AssertionError("absent HOME received a write grant")
+                        print("absent home remains read-only")
+                        """),
+                ],
+                cwd=root,
+                env=os.environ | {"HOME": str(home)},
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert result.returncode == 0, result
+            assert result.stdout == "absent home remains read-only\n", result
+            assert result.stderr == (
+                f"Warning: refusing relative writable root '{grant}'; use an absolute path to grant writes to the home directory or filesystem root\n"
+            ), result
+            assert not home.exists()
+            records.append(
+                {"grant": grant, "stdout": result.stdout, "stderr": result.stderr}
+            )
+        safe = subprocess.run(
+            [
+                binary,
+                "sandbox",
+                "--no-config",
+                "--writable-root",
+                "output",
+                "--",
+                sys.executable,
+                "-c",
+                "print('unrelated absent root accepted')",
+            ],
+            cwd=root,
+            env=os.environ | {"HOME": str(home)},
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert safe.returncode == 0 and safe.stderr == "", safe
+        assert safe.stdout == "unrelated absent root accepted\n", safe
+        records.append(
+            {"grant": "output", "stdout": safe.stdout, "stderr": safe.stderr}
+        )
+    return records
+
+
+@requires(SANDBOX)
+def test_unknown_home_falls_back_to_read_only(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        launch_environment = dict(os.environ)
+        launch_environment.pop("HOME", None)
+        for profile in (True, False):
+            result = subprocess.run(
+                [
+                    binary,
+                    "sandbox",
+                    "--no-config",
+                    *(
+                        ("-c", "sandbox.profile=workspace")
+                        if profile
+                        else ("--writable-root", ".")
+                    ),
+                    "--",
+                    sys.executable,
+                    "-c",
+                    # fmt: python
+                    code("""
+                        import errno
+                        import os
+                        from pathlib import Path
+
+                        try:
+                            _ = Path("probe").write_text("blocked")
+                        except OSError as error:
+                            assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
+                        else:
+                            raise AssertionError("unknown HOME granted workspace writes")
+                        _ = (Path(os.environ["TMPDIR"]) / "allowed").write_text("allowed")
+                        print("unknown home uses read-only with private temporary writes")
+                        """),
+                ],
+                cwd=root,
+                env=launch_environment,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            assert result.returncode == 0, result
+            assert (
+                result.stdout
+                == "unknown home uses read-only with private temporary writes\n"
+            ), result
+            expected = (
+                f"Warning: refusing automatic workspace writes to '{root}'; falling back to read_only\n"
+                if profile
+                else "Warning: refusing relative writable root '.'; use an absolute path to grant writes to the home directory or filesystem root\n"
+            )
+            assert result.stderr == expected, result
+            records.append(
+                {
+                    "source": "profile" if profile else "--writable-root",
+                    "stdout": result.stdout,
+                    "stderr": result.stderr.replace(str(root), "<workspace>"),
+                }
+            )
+    return records
+
+
+@requires(SANDBOX)
 def test_missing_home_preserves_safe_project_writes(binary: Path) -> Transcript:
     records = []
     with TemporaryDirectory() as temporary:

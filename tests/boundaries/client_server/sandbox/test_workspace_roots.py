@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.client import McpClient
 from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
-from support.records import McpTranscript, TranscriptWithCompanions
+from support.records import McpTranscript, Transcript, TranscriptWithCompanions
 from support.requirements import NATIVE_FIXTURES, SANDBOX, requires
 from support.suites import run_this_suite
 from boundaries.client_server.python.test_without_r import environment
@@ -209,6 +209,8 @@ def test_resolver_requires_absolute_broad_write_grants(
         transcripts = {}
         for name, policy in (
             ("profile", {"profile": "workspace"}),
+            ("relative_cache", {}),
+            ("relative_extension_cache", {}),
             (
                 "relative",
                 {"filesystem": {"read_only": [home.anchor], "read_write": ["."]}},
@@ -227,7 +229,13 @@ def test_resolver_requires_absolute_broad_write_grants(
                         "cache": "host",
                         "resolver": {
                             "sandbox": policy,
-                            "environment": {"TEST_POLICY_OWNER": "resolver"},
+                            "environment": {"TEST_POLICY_OWNER": "resolver"}
+                            | {
+                                "relative_cache": {"UV_CACHE_DIR": "."},
+                                "relative_extension_cache": {
+                                    "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY": "."
+                                },
+                            }.get(name, {}),
                         },
                     }
                 )
@@ -271,6 +279,8 @@ def test_resolver_requires_absolute_broad_write_grants(
             expected = {
                 "profile": f"Warning: refusing automatic workspace writes to '{home}'; falling back to read_only\n",
                 "relative": "Warning: refusing relative writable root '.'; use an absolute path to grant writes to the home directory or filesystem root\n",
+                "relative_cache": "Warning: refusing relative writable root '.'; use an absolute path to grant writes to the home directory or filesystem root\n",
+                "relative_extension_cache": "Warning: refusing relative writable root '.'; use an absolute path to grant writes to the home directory or filesystem root\n",
                 "absolute": "",
             }[name]
             assert stderr == expected, stderr
@@ -290,6 +300,94 @@ def test_resolver_requires_absolute_broad_write_grants(
                 f"{name}.yaml": McpTranscript(transcript)
                 for name, transcript in transcripts.items()
             },
+        )
+
+
+@requires(SANDBOX)
+def test_retargeted_relative_grant_stays_read_only_after_restart(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        home = root / "home"
+        project = home / "project"
+        grant = project / "grant"
+        grant.mkdir(parents=True)
+        (home / "probe").write_text("unchanged")
+        config = root / "config.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "languages": ["python"],
+                    "python": {"existing": sys.executable},
+                    "cache": "host",
+                    "sandbox": {
+                        "profile": "workspace",
+                        "filesystem": {"read_write": ["grant"]},
+                    },
+                }
+            )
+        )
+        with McpClient(
+            binary,
+            ("serve", "--config-file", str(config)),
+            environment(root) | {"HOME": str(home)},
+            project,
+            record_in_project=False,
+        ) as client:
+            client.initialize_and_list_tools()
+            description = client.transcript[-1]["result"]["tools"][0]["description"]
+            assert json.dumps(str(grant)) in description, description
+            client.expect(
+                "relative grant used\n",
+                # fmt: python
+                python=code("""
+                    from pathlib import Path
+
+                    grant = Path("grant")
+                    initial = grant / "initial"
+                    _ = initial.write_text("allowed")
+                    initial.unlink()
+                    print("relative grant used")
+                    """),
+            )
+            # The host changes the path while the worker is idle. macOS forbids
+            # deleting a granted root from inside the worker; Linux permits the
+            # original symlink form. Both must inspect the next launch's target.
+            grant.rmdir()
+            grant.symlink_to(home, target_is_directory=True)
+            client.send(control="restart")
+            result = client.send(
+                # fmt: python
+                python=code("""
+                    import errno
+                    import os
+                    from pathlib import Path
+
+                    probe = Path(os.environ["HOME"]) / "probe"
+                    try:
+                        _ = probe.write_text("blocked")
+                    except OSError as error:
+                        assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
+                    else:
+                        raise AssertionError("retargeted relative grant made home writable")
+                    assert probe.read_text() == "unchanged"
+                    print("home remains read-only after restart")
+                    """),
+            )
+            assert not result.get("isError"), result
+            assert any(
+                "home remains read-only after restart\n" in part.get("text", "")
+                for part in result["content"]
+            ), result
+            transcript, stderr = client.finish_with_standard_error()
+        assert (home / "probe").read_text() == "unchanged"
+        if stderr:
+            transcript.append({"stderr": stderr})
+        return json.loads(
+            json.dumps(transcript)
+            .replace(str(grant), "<writable-root>")
+            .replace(str(root), "<fixture>")
         )
 
 
