@@ -48,9 +48,9 @@ with TemporaryDirectory(prefix="mcp-console-duckdb-builtins-") as builtin_direct
             ).fetchall()
         }
         # Installation uses the captured shared cache.
-        connection.execute(
-            "SET extension_directory = ?", [request["extension_directory"]]
-        )
+        # Older DuckDB versions cannot bind SET values.
+        extension_directory = request["extension_directory"].replace("'", "''")
+        connection.execute(f"SET extension_directory = '{extension_directory}'")
         for extension in extensions:
             if extension not in builtin_extensions:
                 connection.install_extension(extension)

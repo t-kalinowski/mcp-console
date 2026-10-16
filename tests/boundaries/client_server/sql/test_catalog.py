@@ -37,7 +37,8 @@ def test_prepares_extensions_while_unrelated_metadata_is_inaccessible(
     for provider in ("python", "r"):
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            cache = workspace / "extensions"
+            # Captured cache paths may contain SQL string delimiters.
+            cache = workspace / "extensions'cache"
             environment = (
                 os.environ.copy() if provider == "r" else no_r_environment(workspace)
             )
