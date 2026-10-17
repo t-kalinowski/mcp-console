@@ -1,12 +1,12 @@
 ---
 exit_code: 1
 stdout: |
-  MCP Console doctor
+  MCP Console warmup
   Server: FAIL
   connection closed: initialize response
   Shutdown: FAIL
   server exited with status 1
-  Doctor found 2 failed checks.
+  Warmup found 2 failed checks.
 stderr: >
   configuration with CLI overrides: unknown: unknown field `unknown`,
   expected one of `tool`, `startup`, `cache`, `python`, `r`, `languages`,

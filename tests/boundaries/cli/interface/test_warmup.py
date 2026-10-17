@@ -1,4 +1,4 @@
-"""Doctor exercises the configured server through its public MCP interface."""
+"""Warmup exercises the configured server through its public MCP interface."""
 
 import json
 import os
@@ -17,7 +17,7 @@ from support.suites import run_this_suite
 from boundaries.client_server.server.test_no_r import no_r_environment
 
 
-def doctor(
+def warmup(
     binary: Path,
     workspace: Path,
     execution: Execution,
@@ -26,7 +26,7 @@ def doctor(
     environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [binary, *root_arguments, "doctor", *execution.serve()[1:], *arguments],
+        [binary, *root_arguments, "warmup", *execution.serve()[1:], *arguments],
         cwd=workspace,
         env=(os.environ if environment is None else environment)
         | {"MCP_CONSOLE_HOME": str(workspace / "console-home"), "NO_COLOR": "1"}
@@ -46,10 +46,10 @@ def doctor(
 @executions(RUNTIME)
 def test_checks_all_languages(binary: Path, execution: Execution) -> Transcript:
     with TemporaryDirectory() as temporary:
-        result = doctor(binary, Path(temporary), execution)
+        result = warmup(binary, Path(temporary), execution)
         assert result.returncode == 0 and result.stderr == "", result
         assert result.stdout == (
-            "MCP Console doctor\n"
+            "MCP Console warmup\n"
             "Server: OK\n"
             "Checking R...\nR: OK\n"
             "Checking Python...\nPython: OK\n"
@@ -88,7 +88,7 @@ def test_respects_configuration_and_disabled_languages(
             encoding="utf-8",
         )
         # Root and command overrides retain their order across the child launch.
-        result = doctor(
+        result = warmup(
             binary,
             workspace,
             execution,
@@ -103,7 +103,7 @@ def test_respects_configuration_and_disabled_languages(
         )
         assert result.returncode == 0 and result.stderr == "", result
         assert result.stdout == (
-            "MCP Console doctor\n"
+            "MCP Console warmup\n"
             "Server: OK\n"
             "R: SKIP (disabled)\n"
             "Checking Python...\nPython: OK\n"
@@ -127,20 +127,20 @@ def test_reports_runtime_failure_and_finishes_other_checks(
                 {
                     "startup": {
                         "language": "python",
-                        "code": "raise RuntimeError('doctor fixture startup failure')",
+                        "code": "raise RuntimeError('warmup fixture startup failure')",
                     }
                 }
             ),
             encoding="utf-8",
         )
-        result = doctor(binary, workspace, execution, "--config-file", str(config))
+        result = warmup(binary, workspace, execution, "--config-file", str(config))
         assert result.returncode == 1 and result.stderr == "", result
         assert "R: OK\n" in result.stdout, result
         assert "Python: OK\n" in result.stdout, result
         assert "SQL: FAIL\n" in result.stdout, result
-        assert "doctor fixture startup failure" in result.stdout, result
+        assert "warmup fixture startup failure" in result.stdout, result
         assert "Shutdown: OK\n" in result.stdout, result
-        assert result.stdout.endswith("Doctor found 1 failed check.\n"), result
+        assert result.stdout.endswith("Warmup found 1 failed check.\n"), result
         assert "Runtime caches are warm" not in result.stdout, result
         return [{"exit_code": result.returncode, "stdout": result.stdout}]
 
@@ -150,7 +150,7 @@ def test_reports_configuration_failure(
     binary: Path, execution: Execution
 ) -> Transcript:
     with TemporaryDirectory() as temporary:
-        result = doctor(
+        result = warmup(
             binary, Path(temporary), execution, "--no-config", "-c", "unknown=true"
         )
         assert result.returncode == 1, result
@@ -159,7 +159,7 @@ def test_reports_configuration_failure(
         assert result.stdout.endswith(
             "Shutdown: FAIL\n"
             "server exited with status 1\n"
-            "Doctor found 2 failed checks.\n"
+            "Warmup found 2 failed checks.\n"
         ), result
         assert "All checks passed" not in result.stdout, result
         return [
@@ -178,14 +178,14 @@ def test_reports_missing_r_and_checks_python_and_sql(
 ) -> Transcript:
     with TemporaryDirectory() as temporary:
         workspace = Path(temporary)
-        result = doctor(
+        result = warmup(
             binary, workspace, execution, environment=no_r_environment(workspace)
         )
         assert result.returncode == 1 and result.stderr == "", result
         assert "R: FAIL\n" in result.stdout, result
         assert "Python: OK\n" in result.stdout, result
         assert "SQL: OK\n" in result.stdout, result
-        assert result.stdout.endswith("Doctor found 1 failed check.\n"), result
+        assert result.stdout.endswith("Warmup found 1 failed check.\n"), result
         return [{"exit_code": result.returncode, "stdout": result.stdout}]
 
 
@@ -218,7 +218,7 @@ def test_timeout_retires_the_worker(binary: Path, execution: Execution) -> Trans
             ),
             encoding="utf-8",
         )
-        result = doctor(
+        result = warmup(
             binary,
             workspace,
             execution,
@@ -238,15 +238,15 @@ def test_timeout_retires_the_worker(binary: Path, execution: Execution) -> Trans
         except ProcessLookupError:
             pass
         else:
-            raise AssertionError(f"doctor left worker {pid} running")
+            raise AssertionError(f"warmup left worker {pid} running")
         assert result.stdout == (
-            "MCP Console doctor\n"
+            "MCP Console warmup\n"
             "Server: OK\n"
             "R: SKIP (disabled)\n"
             "Checking Python...\nPython: FAIL\n"
             "check timed out; stopping the server\n"
             "Shutdown: OK\n"
-            "Doctor found 1 failed check.\n"
+            "Warmup found 1 failed check.\n"
         ), result
         return [{"exit_code": result.returncode, "stdout": result.stdout}]
 
@@ -264,13 +264,13 @@ def test_reports_interactive_input(binary: Path, execution: Execution) -> Transc
                     "python": sys.executable,
                     "startup": {
                         "language": "python",
-                        "code": "input('doctor fixture input: ')",
+                        "code": "input('warmup fixture input: ')",
                     },
                 }
             ),
             encoding="utf-8",
         )
-        result = doctor(
+        result = warmup(
             binary,
             workspace,
             execution,
@@ -282,10 +282,10 @@ def test_reports_interactive_input(binary: Path, execution: Execution) -> Transc
         )
         assert result.returncode == 1 and result.stderr == "", result
         assert "Python: FAIL\n" in result.stdout, result
-        assert "doctor fixture input: " in result.stdout, result
+        assert "warmup fixture input: " in result.stdout, result
         assert "[waiting for stdin]" in result.stdout, result
         assert "check requested interactive input\n" in result.stdout, result
-        assert result.stdout.endswith("Shutdown: OK\nDoctor found 1 failed check.\n"), (
+        assert result.stdout.endswith("Shutdown: OK\nWarmup found 1 failed check.\n"), (
             result
         )
         return [{"exit_code": result.returncode, "stdout": result.stdout}]

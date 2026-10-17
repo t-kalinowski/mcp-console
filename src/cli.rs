@@ -11,7 +11,7 @@ Global settings supply defaults, not a mandatory security ceiling; projects may 
 const ROOT_EXAMPLES: &str = "\
 Examples:
   mcp-console serve
-  mcp-console doctor
+  mcp-console warmup
   mcp-console sandbox -- python -c 'print(\"hello\")'
   mcp-console configure-client codex claude";
 
@@ -118,7 +118,7 @@ impl ConfigOverrides {
 pub enum Command {
     /// Check the configured server and runtimes and warm their caches
     #[command(display_order = 5)]
-    Doctor {
+    Warmup {
         #[command(flatten)]
         overrides: ConfigOverrides,
 

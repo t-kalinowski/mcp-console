@@ -55,7 +55,7 @@ pub(crate) fn run(
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        println!("MCP Console doctor");
+        println!("MCP Console warmup");
         let mut child = command.spawn()?;
         let stdout = child.stdout.take().expect("piped server stdout");
         let stdin = child.stdin.take().expect("piped server stdin");
@@ -108,7 +108,7 @@ pub(crate) fn run(
             println!("All checks passed. Runtime caches are warm.");
         } else {
             let suffix = if failures == 1 { "" } else { "s" };
-            println!("Doctor found {failures} failed check{suffix}.");
+            println!("Warmup found {failures} failed check{suffix}.");
         }
         Ok(failures == 0)
     })
@@ -127,20 +127,20 @@ async fn check_languages(
         (
             "r",
             "R",
-            "stopifnot(1 + 1 == 2)\ncat('mcp-console doctor: R OK\\n')",
-            "mcp-console doctor: R OK",
+            "stopifnot(1 + 1 == 2)\ncat('mcp-console warmup: R OK\\n')",
+            "mcp-console warmup: R OK",
         ),
         (
             "python",
             "Python",
-            "assert sum((1, 1)) == 2\nprint('mcp-console doctor: Python OK')",
-            "mcp-console doctor: Python OK",
+            "assert sum((1, 1)) == 2\nprint('mcp-console warmup: Python OK')",
+            "mcp-console warmup: Python OK",
         ),
         (
             "sql",
             "SQL",
-            "SELECT CASE WHEN 1 + 1 = 2 THEN 'mcp-console doctor: SQL OK' ELSE 'arithmetic failed' END AS result",
-            "mcp-console doctor: SQL OK",
+            "SELECT CASE WHEN 1 + 1 = 2 THEN 'mcp-console warmup: SQL OK' ELSE 'arithmetic failed' END AS result",
+            "mcp-console warmup: SQL OK",
         ),
     ] {
         if !properties.contains_key(field) {

@@ -9,7 +9,7 @@ SMOKE = (
     "client_server/server/test_tools::initializes_and_lists_tools",
     "client_server/server/test_tools::invalid_send_has_no_external_effects",
     "cli/interface/test_help::help",
-    "cli/interface/test_doctor::checks_all_languages",
+    "cli/interface/test_warmup::checks_all_languages",
     "cli/test_local_host::removed_provider_commands_are_unavailable",
     "cli/test_config_overrides::layers_project_then_cli_in_order",
     # Real runtimes, persistent state, and mixed-language recording with a plot.

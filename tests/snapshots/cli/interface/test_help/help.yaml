@@ -13,7 +13,7 @@ stderr: |
     config            Create or inspect configuration without starting
                       interpreters or preparing packages
     configure-client  Configure clients to launch MCP Console and expose its tools
-    doctor            Check the configured server and runtimes and warm their
+    warmup            Check the configured server and runtimes and warm their
                       caches
     help              Print this message or the help of the given subcommand(s)
 
@@ -42,7 +42,7 @@ stderr: |
 
   Examples:
     mcp-console serve
-    mcp-console doctor
+    mcp-console warmup
     mcp-console sandbox -- python -c 'print("hello")'
     mcp-console configure-client codex claude
 ---
@@ -58,7 +58,7 @@ stdout: |
     config            Create or inspect configuration without starting
                       interpreters or preparing packages
     configure-client  Configure clients to launch MCP Console and expose its tools
-    doctor            Check the configured server and runtimes and warm their
+    warmup            Check the configured server and runtimes and warm their
                       caches
     help              Print this message or the help of the given subcommand(s)
 
@@ -101,7 +101,7 @@ stdout: |
 
   Examples:
     mcp-console serve
-    mcp-console doctor
+    mcp-console warmup
     mcp-console sandbox -- python -c 'print("hello")'
     mcp-console configure-client codex claude
 ---
@@ -290,11 +290,11 @@ stdout: |
     -h, --help
             Print help (see a summary with '-h')
 ---
-command: mcp-console doctor --help
+command: mcp-console warmup --help
 stdout: |
   Check the configured server and runtimes and warm their caches
 
-  Usage: mcp-console doctor [OPTIONS]
+  Usage: mcp-console warmup [OPTIONS]
 
   Options:
         --no-project-config

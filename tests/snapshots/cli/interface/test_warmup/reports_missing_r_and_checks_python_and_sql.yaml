@@ -1,7 +1,7 @@
 ---
 exit_code: 1
 stdout: |
-  MCP Console doctor
+  MCP Console warmup
   Server: OK
   Checking R...
   R: FAIL
@@ -11,4 +11,4 @@ stdout: |
   Checking SQL...
   SQL: OK
   Shutdown: OK
-  Doctor found 1 failed check.
+  Warmup found 1 failed check.

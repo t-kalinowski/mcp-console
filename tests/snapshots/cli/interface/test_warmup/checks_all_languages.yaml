@@ -1,6 +1,6 @@
 ---
 stdout: |
-  MCP Console doctor
+  MCP Console warmup
   Server: OK
   Checking R...
   R: OK

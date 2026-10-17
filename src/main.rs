@@ -10,7 +10,6 @@ mod cli;
 mod config;
 mod configure_client;
 mod console_paths;
-mod doctor;
 #[cfg(unix)]
 mod input_watch;
 #[cfg(any(unix, windows))]
@@ -47,6 +46,7 @@ mod sideband;
 #[cfg(any(unix, windows))]
 mod sql;
 mod transcript;
+mod warmup;
 mod worker;
 mod worker_client;
 mod worker_protocol;
@@ -64,7 +64,7 @@ fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let mut overrides = cli.overrides;
     match cli.command {
-        cli::Command::Doctor {
+        cli::Command::Warmup {
             overrides: command_overrides,
             no_sandbox,
             writable_root,
@@ -73,7 +73,7 @@ fn main() -> ExitCode {
             if let Err(error) = overrides.extend(command_overrides) {
                 return exit_with_error(error);
             }
-            match doctor::run(&overrides, no_sandbox, writable_root, timeout) {
+            match warmup::run(&overrides, no_sandbox, writable_root, timeout) {
                 Ok(true) => ExitCode::SUCCESS,
                 Ok(false) => ExitCode::FAILURE,
                 Err(error) => exit_with_error(error),
