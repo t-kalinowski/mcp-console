@@ -80,5 +80,6 @@ Customizations let you manage network access through a [built-in proxy](SANDBOX_
 Project configuration is trusted input and may widen permissions.
 Dependency preparation has a separate policy.
 
-Recordings contain input and output without redaction and have no automatic cleanup.
-Read [Sandbox and trust](SANDBOX.md) before changing permissions and [Recordings and reports](RECORDING.md) before sharing session files.
+[Recordings](RECORDING.md) capture input and output from an MCP Console session.
+They are unredacted, so check for secrets before sharing session files.
+For example, a recording may include a secret printed by code the agent ran.
