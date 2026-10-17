@@ -118,6 +118,25 @@ Codex requires project trust before loading project configuration, and Claude Co
 Configuration leaves these client approvals and tool permissions unchanged.
 Legacy Claude Code `.config.json` layouts are not supported by this command.
 
+### Other MCP clients
+
+Configure a stdio server with command `uvx` and arguments `["mcp-console", "serve"]`.
+Clients using an `mcpServers` mapping can use:
+
+```json
+{
+  "mcpServers": {
+    "console": {
+      "command": "uvx",
+      "args": ["mcp-console", "serve"]
+    }
+  }
+}
+```
+
+Console runs on the same host as the client, usually in the agent's workspace.
+For remote work, run both on the remote host; Console does not manage remote connections or containers.
+
 ## MCP server
 
 ```sh
@@ -138,12 +157,35 @@ sandbox:
 The [workspace profile](SANDBOX_CONFIGURATION.md#workspace-profile) allows project writes while keeping workspace metadata read-only.
 It retains the default private temporary storage and restricted networking.
 
-To add a writable path through the client command instead:
+Each `configure-client` call replaces that entry's managed launch arguments.
+Include every server option you want to retain when changing its permissions, and restart the client afterward.
+
+### Allow workspace writes across projects
+
+To select workspace writes for future launches across projects, update the global client registration:
 
 ```sh
-mcp-console serve --writable-root .
+uvx mcp-console configure-client claude -- -c sandbox.profile=workspace
 ```
 
+The profile uses each future launch directory as the workspace; running setup does not bind it to the setup directory.
+The `-c` setting overrides profiles selected in configuration files or inherited from the client.
+Use this option when you want that write policy across projects.
+An existing project client entry may take precedence over the global entry; see [client configuration](#configure-a-client).
+
+### Grant writes to one directory
+
+To add a writable path through a project client entry, create the directory before registering the grant:
+
+```sh
+mkdir output
+uvx mcp-console configure-client claude --directory . -- -c sandbox.profile=read_only --writable-root output
+```
+
+Use `codex` in place of `claude` for Codex.
+The client chooses Console's launch directory, and Console resolves `output` there.
+The `read_only` base restricts ordinary workspace writes; `--writable-root` adds the explicit grant.
+Other configured filesystem permissions still apply.
 `--writable-root PATH` may be repeated.
 It adds filesystem grants without selecting the workspace profile, does not create missing directories, and remains subject to more specific permission rules.
 [Sandbox configuration](SANDBOX_CONFIGURATION.md) documents path rules and protected metadata.
@@ -239,7 +281,7 @@ Native Windows sandboxed launches require MXC, including complete native policie
 Unsupported hosts and policies fail before the workload executes; there is no automatic weaker fallback.
 
 MXC needs no provisioning command.
-See [Windows setup](WINDOWS.md#native-sandbox).
+See [Windows host requirements](SANDBOX_CONFIGURATION.md#windows-mxc-requirement).
 
 ## Run without sandboxing
 
