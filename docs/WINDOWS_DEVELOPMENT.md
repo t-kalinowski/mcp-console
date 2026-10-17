@@ -73,4 +73,5 @@ For Linux workflows under WSL, use an independent Linux checkout and follow [WSL
 
 Windows uses native pipes, events, and process handles rather than Unix signals/descriptors.
 Workers dispatch interpreter interrupts through the system UCRT's signal table, independently of Console's static CRT, so blocking Python calls and temporary native SQL handlers still wake.
+The selected Python DLL's directory is searched first for its dependencies, including any runtime DLLs supplied by Python itself.
 Those implementation choices do not create different public MCP message shapes.

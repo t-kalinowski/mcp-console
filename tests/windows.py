@@ -1085,8 +1085,29 @@ class WindowsConsole(unittest.TestCase):
         result = session.send(
             python=dedent("""
                 import ctypes
+                from pathlib import Path
+                import sys
 
                 assert ctypes.windll.kernel32.GetModuleHandleW("R.dll") == 0
+                # Console must find Python's supplied runtime without relying
+                # on a separately installed system redistributable. A Python
+                # build with its own static CRT may not load this DLL at all.
+                supplied = Path(sys.base_prefix) / "vcruntime140.dll"
+                if supplied.is_file():
+                    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+                    kernel.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+                    kernel.GetModuleHandleW.restype = ctypes.c_void_p
+                    kernel.GetModuleFileNameW.argtypes = [
+                        ctypes.c_void_p,
+                        ctypes.c_wchar_p,
+                        ctypes.c_ulong,
+                    ]
+                    kernel.GetModuleFileNameW.restype = ctypes.c_ulong
+                    module = kernel.GetModuleHandleW("vcruntime140.dll")
+                    if module:
+                        loaded = ctypes.create_unicode_buffer(32768)
+                        assert kernel.GetModuleFileNameW(module, loaded, len(loaded))
+                        assert supplied.samefile(loaded.value), (str(supplied), loaded.value)
                 answer = 42
                 print("Python alone:", answer)
                 """)
