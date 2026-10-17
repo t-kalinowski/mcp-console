@@ -8,6 +8,8 @@ Use the shared [installation instructions](getting-started.qmd#install) and [san
 Source builds additionally need Git, Rust's MSVC toolchain, Visual Studio C++ build tools, the Windows SDK, and CMake.
 From the repository root, run `uv tool install --reinstall .`.
 Source packaging stages the pinned companion.
+Console's Cargo configuration enables static MSVC runtime linkage for native builds, wheels, and source installs.
+Native C/C++ dependencies built through `cc` inherit the same runtime selection.
 Direct Cargo builds need `scripts/stage-sandbox-runner.cmd` first.
 Use `scripts/with-checkout.cmd` for direct mutating build commands.
 
