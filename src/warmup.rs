@@ -13,12 +13,19 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub(crate) fn run(
     overrides: &ConfigOverrides,
+    worker: Option<PathBuf>,
+    relay: Option<PathBuf>,
     no_sandbox: bool,
     writable_roots: Vec<PathBuf>,
     timeout: u32,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     let mut command = Command::new(std::env::current_exe()?);
     command.arg("serve");
+    for (flag, path) in [("--worker", worker), ("--relay", relay)] {
+        if let Some(path) = path {
+            command.arg(flag).arg(path);
+        }
+    }
     for (flag, enabled) in [
         ("--no-config", overrides.no_config),
         ("--no-global-config", overrides.no_global_config),

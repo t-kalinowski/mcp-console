@@ -246,5 +246,68 @@ def test_direct_launch_warms_real_runtimes(binary: Path) -> Transcript:
         return [{"configure_exit_code": result.returncode, "log": log.read_text()}]
 
 
+@requires(POSIX)
+def test_background_warmup_uses_custom_worker_and_relay(binary: Path) -> Transcript:
+    fixtures = Path(__file__).resolve().parents[3] / "fixtures"
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        cells = root / "cells.jsonl"
+        result = configure(
+            binary,
+            root,
+            "claude",
+            "--no-uvx",
+            "--",
+            "--no-config",
+            "--no-sandbox",
+            "-c",
+            "languages=[python]",
+            "--worker",
+            str(fixtures / "zod"),
+            "--relay",
+            str(fixtures / "identified_relay"),
+            extra_environment={
+                "TMPDIR": str(root),
+                "MCP_CONSOLE_TEST_BINARY": str(binary),
+                "MCP_CONSOLE_TEST_PYTHON": sys.executable,
+                "MCP_CONSOLE_TEST_ZOD_PYTHON_CELLS": str(cells),
+            },
+        )
+        assert result.returncode == 0 and not result.stderr, result
+        match = re.search(
+            r"^Background warmup started \(PID (\d+)\)\. Log: (.+)$",
+            result.stdout,
+            re.MULTILINE,
+        )
+        assert match is not None, result
+        pid = int(match[1])
+        log = Path(match[2])
+        with Events() as events:
+            try:
+                events.watch_process(pid)
+            except ProcessLookupError:
+                pass
+            else:
+                assert pid in events.wait(10), log.read_text()
+        assert log.read_text() == (
+            "MCP Console warmup\n"
+            "Server: OK\n"
+            "R: SKIP (disabled)\n"
+            "Checking Python...\nPython: OK\n"
+            "SQL: SKIP (disabled)\n"
+            "Shutdown: OK\n"
+            "All checks passed. Runtime caches are warm.\n"
+        ), log.read_text()
+        assert int((root / "zod-relay-pid").read_text()) > 0
+        assert [json.loads(line) for line in cells.read_text().splitlines()] == [
+            {
+                "kind": "evaluate",
+                "language": "python",
+                "source": "assert sum((1, 1)) == 2\nprint('mcp-console warmup: Python OK')",
+            }
+        ]
+        return [{"configure_exit_code": result.returncode, "log": log.read_text()}]
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

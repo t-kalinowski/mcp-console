@@ -134,6 +134,14 @@ pub enum Command {
         /// Maximum seconds for server initialization and each language check
         #[arg(long, default_value_t = 600, value_name = "SECONDS", value_parser = clap::value_parser!(u32).range(1..))]
         timeout: u32,
+
+        /// Replace the runtime worker during development
+        #[arg(long, hide = true, value_name = "PATH")]
+        worker: Option<PathBuf>,
+
+        /// Replace the worker relay during development
+        #[arg(long, hide = true, value_name = "PATH", requires = "worker")]
+        relay: Option<PathBuf>,
     },
 
     /// Configure clients to launch MCP Console and expose its tools

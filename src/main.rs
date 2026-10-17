@@ -69,11 +69,20 @@ fn main() -> ExitCode {
             no_sandbox,
             writable_root,
             timeout,
+            worker,
+            relay,
         } => {
             if let Err(error) = overrides.extend(command_overrides) {
                 return exit_with_error(error);
             }
-            match warmup::run(&overrides, no_sandbox, writable_root, timeout) {
+            match warmup::run(
+                &overrides,
+                worker,
+                relay,
+                no_sandbox,
+                writable_root,
+                timeout,
+            ) {
                 Ok(true) => ExitCode::SUCCESS,
                 Ok(false) => ExitCode::FAILURE,
                 Err(error) => exit_with_error(error),
