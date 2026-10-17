@@ -142,6 +142,18 @@ fn shadowing_project_configuration(
     global_config: &str,
     name: &str,
 ) -> Result<Option<PathBuf>, String> {
+    // Resolve existing files before comparing them: client homes can contain
+    // parent components or symlinks that alias a discovered project file.
+    let global_path = match global_path.canonicalize() {
+        Ok(path) => Some(path),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(format!(
+                "Cannot inspect global configuration {}: {error}",
+                global_path.display()
+            ));
+        }
+    };
     // This is a registration diagnostic, not a second client configuration
     // loader: trust, approvals, profiles, and managed settings remain client-owned.
     // Codex's user config can customize the ancestor-search boundary:
@@ -185,10 +197,20 @@ fn shadowing_project_configuration(
     };
     for ancestor in directory.ancestors() {
         let path = match client {
-            ConfigureClient::Codex => ancestor.join(".codex/config.toml"),
+            ConfigureClient::Codex => ancestor.join(".codex").join("config.toml"),
             ConfigureClient::Claude => ancestor.join(".mcp.json"),
         };
-        if path != global_path {
+        let resolved_path = match path.canonicalize() {
+            Ok(path) => Some(path),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(format!(
+                    "Cannot inspect project configuration {}: {error}",
+                    path.display()
+                ));
+            }
+        };
+        if resolved_path.is_some() && resolved_path != global_path {
             let source = match fs::read_to_string(&path) {
                 Ok(source) => Some(source),
                 Err(error) if error.kind() == ErrorKind::NotFound => None,
