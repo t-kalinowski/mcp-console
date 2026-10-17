@@ -426,10 +426,10 @@ def test_r_duckdb_replacement_failure_and_reset(
         environment, record = recording_fixture_r_environment(
             Path(directory), ("mcpcleared",)
         )
-        native_rscript = (Path(environment["R_HOME"]) / "bin/Rscript").resolve()
         selected = isolated_r_home(Path(directory), environment)
         rscript = selected / "bin/Rscript"
-        rscript.unlink()
+        native_rscript = rscript.with_name("Rscript-original")
+        rscript.rename(native_rscript)
         native_stderr = Path(directory) / "rscript.stderr"
         environment["MCP_CONSOLE_TEST_REAL_RSCRIPT"] = str(native_rscript)
         environment["MCP_CONSOLE_TEST_RSCRIPT_STDERR"] = str(native_stderr)
