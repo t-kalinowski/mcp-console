@@ -197,7 +197,7 @@ fn shadowing_project_configuration(
     };
     for ancestor in directory.ancestors() {
         let path = match client {
-            ConfigureClient::Codex => ancestor.join(".codex/config.toml"),
+            ConfigureClient::Codex => ancestor.join(".codex").join("config.toml"),
             ConfigureClient::Claude => ancestor.join(".mcp.json"),
         };
         let resolved_path = match path.canonicalize() {
