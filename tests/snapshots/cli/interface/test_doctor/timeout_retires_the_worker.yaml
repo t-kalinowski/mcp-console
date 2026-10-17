@@ -1,0 +1,11 @@
+---
+exit_code: 1
+stdout: |
+  MCP Console doctor
+  Server: OK
+  R: SKIP (disabled)
+  Checking Python...
+  Python: FAIL
+  check timed out; stopping the server
+  Shutdown: OK
+  Doctor found 1 failed check.

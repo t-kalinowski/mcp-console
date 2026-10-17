@@ -11,6 +11,7 @@ Global settings supply defaults, not a mandatory security ceiling; projects may 
 const ROOT_EXAMPLES: &str = "\
 Examples:
   mcp-console serve
+  mcp-console doctor
   mcp-console sandbox -- python -c 'print(\"hello\")'
   mcp-console configure-client codex claude";
 
@@ -115,6 +116,25 @@ impl ConfigOverrides {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Check the configured server and runtimes and warm their caches
+    #[command(display_order = 5)]
+    Doctor {
+        #[command(flatten)]
+        overrides: ConfigOverrides,
+
+        /// Run evaluated code and dependency resolution with host permissions
+        #[arg(long)]
+        no_sandbox: bool,
+
+        /// Allow writes to an additional path (temporary launch option)
+        #[arg(long, value_name = "PATH", conflicts_with = "no_sandbox")]
+        writable_root: Vec<PathBuf>,
+
+        /// Maximum seconds for server initialization and each language check
+        #[arg(long, default_value_t = 600, value_name = "SECONDS", value_parser = clap::value_parser!(u32).range(1..))]
+        timeout: u32,
+    },
+
     /// Configure clients to launch MCP Console and expose its tools
     #[command(after_help = CONFIGURE_CLIENT_EXAMPLES, display_order = 4)]
     ConfigureClient(ConfigureClientOptions),

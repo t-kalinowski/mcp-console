@@ -1,0 +1,12 @@
+---
+stdout: |
+  MCP Console doctor
+  Server: OK
+  Checking R...
+  R: OK
+  Checking Python...
+  Python: OK
+  Checking SQL...
+  SQL: OK
+  Shutdown: OK
+  All checks passed. Runtime caches are warm.

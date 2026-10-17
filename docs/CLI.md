@@ -1,6 +1,6 @@
 # Command-line reference
 
-Use `serve` to run the MCP server, `sandbox` to run one command under a sandbox, `config init` to create shared settings, `config resolve` to inspect configuration, and `configure-client` to register Console with a client.
+Use `serve` to run the MCP server, `doctor` to check the runtimes and warm caches, `sandbox` to run one command under a sandbox, `config init` to create shared settings, `config resolve` to inspect configuration, and `configure-client` to register Console with a client.
 Console runs on the local host; it does not create remote connections.
 
 The [CLI help page](cli-help.qmd) shows tested public-command help.
@@ -137,6 +137,29 @@ Clients using an `mcpServers` mapping can use:
 Console runs on the same host as the client, usually in the agent's workspace.
 For remote work, run both on the remote host; Console does not manage remote connections or containers.
 
+## Check your installation
+
+```sh
+uvx mcp-console doctor
+mcp-console doctor --config-file ./session.yaml
+mcp-console doctor -c 'languages=[python,sql]'
+```
+
+`doctor` starts a server, initializes an MCP connection, discovers its tools, and evaluates a small check in each enabled language before shutting down.
+It prepares the configured startup packages and reuses the same dependency caches as `serve`, so a later session with the same settings can reuse them.
+The first run may download Python, packages, and DuckDB extensions.
+
+Run it from the directory where your client launches Console, with the same configuration and launch options.
+Configuration selection, ordered `-c` overrides, `--no-sandbox`, and `--writable-root` work as they do for `serve`.
+When using the `inherit_codex` profile, this standalone connection has no client permissions to inherit and uses the configured fallback.
+The check runs with your shell's environment; a client launched with a different environment may select different runtimes.
+
+Each language reports `OK`, `FAIL`, or `SKIP (disabled)`.
+R must be installed separately to pass the R check; use `languages=[python,sql]` when you only need Python and SQL.
+Doctor prints diagnostics, continues after completed language failures, and exits with status 1 if a check or server shutdown fails.
+`--timeout SECONDS` limits initialization and each language check to 600 seconds by default.
+A timeout or interactive input request stops further checks and shuts down the server.
+
 ## MCP server
 
 ```sh
@@ -206,7 +229,7 @@ See [Sandbox and trust](SANDBOX.md) for networking and cleanup limits.
 
 ## Configuration options
 
-These options work before or after `serve` and ordinary `sandbox`:
+These options work before or after `serve`, `doctor`, and ordinary `sandbox`:
 
 | Option                               | Configuration sources                                           |
 | ------------------------------------ | --------------------------------------------------------------- |

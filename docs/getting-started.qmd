@@ -20,6 +20,10 @@ To use R, install it separately, for example with [rig](https://github.com/r-lib
 Python and SQL also work without R.
 The first session may download Python and packages.
 
+To check your installation and prepare those caches before opening a client, run `uvx mcp-console doctor`.
+Without R, use `uvx mcp-console doctor -c 'languages=[python,sql]'`.
+See [Check your installation](CLI.md#check-your-installation) for configuration and diagnostics.
+
 ### Build from source
 
 To install the development version, follow [Build from source](BUILD_FROM_SOURCE.md).

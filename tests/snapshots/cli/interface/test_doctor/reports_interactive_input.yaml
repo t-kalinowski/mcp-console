@@ -1,0 +1,13 @@
+---
+exit_code: 1
+stdout: |
+  MCP Console doctor
+  Server: OK
+  R: SKIP (disabled)
+  Checking Python...
+  Python: FAIL
+  [input requested: "doctor fixture input: "]
+  [waiting for stdin]
+  check requested interactive input
+  Shutdown: OK
+  Doctor found 1 failed check.

@@ -10,6 +10,7 @@ mod cli;
 mod config;
 mod configure_client;
 mod console_paths;
+mod doctor;
 #[cfg(unix)]
 mod input_watch;
 #[cfg(any(unix, windows))]
@@ -63,6 +64,21 @@ fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let mut overrides = cli.overrides;
     match cli.command {
+        cli::Command::Doctor {
+            overrides: command_overrides,
+            no_sandbox,
+            writable_root,
+            timeout,
+        } => {
+            if let Err(error) = overrides.extend(command_overrides) {
+                return exit_with_error(error);
+            }
+            match doctor::run(&overrides, no_sandbox, writable_root, timeout) {
+                Ok(true) => ExitCode::SUCCESS,
+                Ok(false) => ExitCode::FAILURE,
+                Err(error) => exit_with_error(error),
+            }
+        }
         cli::Command::ConfigureClient(options) => match configure_client::run(&options) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),
