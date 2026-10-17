@@ -1351,6 +1351,146 @@ def test_project_shadow_warning_follows_client_discovery(binary: Path) -> Transc
     return records
 
 
+def test_global_path_aliases_are_not_project_overrides(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        for alias in ("relative parent", "absolute parent"):
+            project = root / alias
+            workspace = project / "child"
+            workspace.mkdir(parents=True)
+            (project / ".git").write_text("gitdir: fixture\n")
+            path = project / ".codex/config.toml"
+            home = (
+                "../.codex"
+                if alias == "relative parent"
+                else str(workspace / "../.codex")
+            )
+            environment = {"CODEX_HOME": home}
+            first = configure(
+                binary, root, workspace, "codex", extra_environment=environment
+            )
+            assert first.returncode == 0 and first.stderr == "", first
+            previous = path.read_bytes()
+            preview = configure(
+                binary,
+                root,
+                workspace,
+                "codex",
+                "--no-auto-load",
+                "--dry-run",
+                extra_environment=environment,
+            )
+            assert preview.returncode == 0 and preview.stderr == "", preview
+            assert path.read_bytes() == previous
+            repeated = configure(
+                binary,
+                root,
+                workspace,
+                "codex",
+                "--no-auto-load",
+                extra_environment=environment,
+            )
+            assert repeated.returncode == 0 and repeated.stderr == "", repeated
+            assert server(read_config(path, "codex"), "codex")["omit_tools_from"] == []
+            project_entry = configure(
+                binary, root, workspace, "codex", "--scope", "project"
+            )
+            assert project_entry.returncode == 0 and project_entry.stderr == "", (
+                project_entry
+            )
+            override = workspace / ".codex/config.toml"
+            before = {file: file.read_bytes() for file in (path, override)}
+            genuine_override = configure(
+                binary,
+                root,
+                workspace,
+                "codex",
+                "--dry-run",
+                extra_environment=environment,
+            )
+            assert genuine_override.returncode == 0, genuine_override
+            assert str(override) in genuine_override.stderr, genuine_override
+            assert genuine_override.stderr.count("Warning:") == 1, genuine_override
+            assert {file: file.read_bytes() for file in before} == before
+            records.append(
+                {
+                    "alias": alias,
+                    "global_entry": "not a project override",
+                    "separate_project_entry": "warns",
+                }
+            )
+    return records
+
+
+@requires(POSIX)
+def test_global_symlink_aliases_are_not_project_overrides(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        for client, alias in (
+            ("codex", "directory"),
+            ("codex", "file"),
+            ("claude", "file"),
+        ):
+            project = root / f"{client}-{alias}"
+            workspace = project / "child"
+            workspace.mkdir(parents=True)
+            (project / ".git").write_text("gitdir: fixture\n")
+            first = configure(binary, root, project, client, "--scope", "project")
+            assert first.returncode == 0 and first.stderr == "", first
+            path = project / (
+                ".codex/config.toml" if client == "codex" else ".mcp.json"
+            )
+            home = root / f"{client}-{alias}-home"
+            if alias == "directory":
+                link = home
+                link.symlink_to(path.parent, target_is_directory=True)
+            else:
+                home.mkdir()
+                link = home / ("config.toml" if client == "codex" else ".claude.json")
+                link.symlink_to(path)
+            environment = {
+                "CODEX_HOME" if client == "codex" else "CLAUDE_CONFIG_DIR": str(home)
+            }
+            previous = path.read_bytes()
+            preview = configure(
+                binary,
+                root,
+                workspace,
+                client,
+                "--pin-version",
+                "0.0.5",
+                "--dry-run",
+                extra_environment=environment,
+            )
+            assert preview.returncode == 0 and preview.stderr == "", preview
+            assert path.read_bytes() == previous
+            result = configure(
+                binary,
+                root,
+                workspace,
+                client,
+                "--pin-version",
+                "0.0.5",
+                extra_environment=environment,
+            )
+            assert result.returncode == 0 and result.stderr == "", result
+            assert link.is_symlink()
+            assert (
+                server(read_config(path, client), client)["args"][0]
+                == "mcp-console@0.0.5"
+            )
+            records.append(
+                {
+                    "client": client,
+                    "alias": f"{alias} symlink",
+                    "global_entry": "not a project override",
+                }
+            )
+    return records
+
+
 def test_global_registration_rejects_malformed_project_configuration(
     binary: Path,
 ) -> Transcript:
