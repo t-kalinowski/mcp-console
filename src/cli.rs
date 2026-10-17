@@ -144,6 +144,13 @@ pub enum Command {
         relay: Option<PathBuf>,
     },
 
+    /// Warm a server selected by client configuration
+    #[command(hide = true)]
+    WarmupServer {
+        #[arg(value_name = "COMMAND", required = true, num_args = 1.., allow_hyphen_values = true, trailing_var_arg = true)]
+        command: Vec<OsString>,
+    },
+
     /// Configure clients to launch MCP Console and expose its tools
     #[command(after_help = CONFIGURE_CLIENT_EXAMPLES, display_order = 4)]
     ConfigureClient(ConfigureClientOptions),

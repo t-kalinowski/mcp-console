@@ -88,6 +88,11 @@ fn main() -> ExitCode {
                 Err(error) => exit_with_error(error),
             }
         }
+        cli::Command::WarmupServer { command } => match warmup::run_server(&command) {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::FAILURE,
+            Err(error) => exit_with_error(error),
+        },
         cli::Command::ConfigureClient(options) => match configure_client::run(&options) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => exit_with_error(error),

@@ -67,23 +67,8 @@ impl Launch {
     }
 
     pub(super) fn arguments(&self, client: ConfigureClient, serve_args: &[String]) -> Vec<String> {
-        self.arguments_for("serve", client, serve_args)
-    }
-
-    pub(super) fn warmup_command(&self, client: ConfigureClient, serve_args: &[String]) -> Command {
-        let mut command = Command::new(&self.command);
-        command.args(self.arguments_for("warmup", client, serve_args));
-        command
-    }
-
-    fn arguments_for(
-        &self,
-        subcommand: &str,
-        client: ConfigureClient,
-        serve_args: &[String],
-    ) -> Vec<String> {
         let mut args = self.args.clone();
-        args.push(subcommand.into());
+        args.push("serve".into());
         match client {
             ConfigureClient::Codex => args.extend([
                 "--default-config".into(),
@@ -94,6 +79,20 @@ impl Launch {
         // Explicit overrides and files take precedence over client defaults.
         args.extend_from_slice(serve_args);
         args
+    }
+
+    pub(super) fn warmup_command(
+        &self,
+        client: ConfigureClient,
+        serve_args: &[String],
+    ) -> Result<Command, String> {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let mut command = Command::new(executable);
+        command
+            .arg("warmup-server")
+            .arg(&self.command)
+            .args(self.arguments(client, serve_args));
+        Ok(command)
     }
 
     pub(super) fn prepare(&self, dry_run: bool) -> Result<(), String> {

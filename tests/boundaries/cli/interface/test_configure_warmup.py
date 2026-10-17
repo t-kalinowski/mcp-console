@@ -118,13 +118,12 @@ def test_starts_one_detached_warmup_with_the_selected_launch(
                         {
                             "arguments": sys.argv[1:],
                             "directory": os.getcwd(),
-                            "detached": os.getsid(0) == os.getpid(),
-                            "stdin": sys.stdin.read(),
+                            "session": os.getsid(0),
+                            "request": json.loads(sys.stdin.readline())["method"],
                         }
                     )
                 )
                 temporary.replace(record)
-                print("warmup stdout", flush=True)
                 print("warmup stderr", file=sys.stderr, flush=True)
                 with open(os.environ["TEST_WARMUP_RELEASE"], "rb", buffering=0) as gate:
                     assert gate.read(1) == b"1"
@@ -176,7 +175,7 @@ def test_starts_one_detached_warmup_with_the_selected_launch(
                 observed = json.loads(invocation.read_text())
                 expected_arguments = [
                     "mcp-console@9.8.7",
-                    "warmup",
+                    "serve",
                     "--default-config",
                     "sandbox.profile=inherit_codex",
                     "--no-project-config",
@@ -186,8 +185,8 @@ def test_starts_one_detached_warmup_with_the_selected_launch(
                 assert observed == {
                     "arguments": expected_arguments,
                     "directory": str(project),
-                    "detached": True,
-                    "stdin": "",
+                    "session": pid,
+                    "request": "initialize",
                 }, observed
                 log = Path(matches[0][1])
                 assert log.parent == root / "console-home/logs", log
@@ -202,10 +201,16 @@ def test_starts_one_detached_warmup_with_the_selected_launch(
                     assert pid in events.wait(10), "warmup fixture did not exit"
                 release.close()
         assert log.read_text() == (
-            "warmup stdout\nwarmup stderr\nwarmup fixture failure\n"
+            "MCP Console warmup\n"
+            "warmup stderr\n"
+            "warmup fixture failure\n"
+            "Server: FAIL\nconnection closed: initialize response\n"
+            "Shutdown: FAIL\nserver exited with status 7\n"
+            "Warmup found 2 failed checks.\n"
         )
         observed["arguments"][-1] = "<output>"
         observed["directory"] = "<project>"
+        observed["session"] = "<warmup-pid>"
         return [
             {
                 "fixture": "uvx records its launch, waits at a gate, then exits with status 7",
@@ -214,6 +219,82 @@ def test_starts_one_detached_warmup_with_the_selected_launch(
                 "log": log.read_text(),
             }
         ]
+
+
+@requires(POSIX, R, SQL)
+def test_pinned_serve_only_release_warms_runtimes(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        invocation = root / "invocation.json"
+        script = root / "uvx.py"
+        script.write_text(
+            # fmt: python
+            code("""
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                package, command, *arguments = sys.argv[1:]
+                assert package == "mcp-console@0.0.1", package
+                if command != "serve":
+                    raise SystemExit(f"this release supports serve, not {command}")
+                Path(os.environ["TEST_WARMUP_INVOCATION"]).write_text(json.dumps(sys.argv[1:]))
+                binary = os.environ["TEST_WARMUP_BINARY"]
+                os.execv(binary, [binary, command, *arguments])
+                """),
+            encoding="utf-8",
+        )
+        commands = root / "commands"
+        commands.mkdir()
+        wrapper = commands / "uvx"
+        wrapper.write_text(
+            "#!/bin/sh\nexec " + shlex.join([sys.executable, str(script)]) + ' "$@"\n',
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o755)
+        result = configure(
+            binary,
+            root,
+            "claude",
+            "--pin-version",
+            "0.0.1",
+            "--",
+            "--no-config",
+            extra_environment={
+                "PATH": str(commands) + os.pathsep + os.environ["PATH"],
+                "TEST_WARMUP_BINARY": str(binary),
+                "TEST_WARMUP_INVOCATION": str(invocation),
+            },
+        )
+        assert result.returncode == 0 and not result.stderr, result
+        match = re.search(
+            r"^Background warmup started \(PID (\d+)\)\. Log: (.+)$",
+            result.stdout,
+            re.MULTILINE,
+        )
+        assert match is not None, result
+        pid = int(match[1])
+        log = Path(match[2])
+        with Events() as events:
+            try:
+                events.watch_process(pid)
+            except ProcessLookupError:
+                pass
+            else:
+                assert pid in events.wait(60), log.read_text()
+        assert log.read_text() == (
+            "MCP Console warmup\n"
+            "Server: OK\n"
+            "Checking R...\nR: OK\n"
+            "Checking Python...\nPython: OK\n"
+            "Checking SQL...\nSQL: OK\n"
+            "Shutdown: OK\n"
+            "All checks passed. Runtime caches are warm.\n"
+        ), log.read_text()
+        arguments = json.loads(invocation.read_text())
+        assert arguments == ["mcp-console@0.0.1", "serve", "--no-config"]
+        return [{"arguments": arguments, "log": log.read_text()}]
 
 
 @requires(POSIX, R, SQL)

@@ -1,5 +1,6 @@
 //! Exercise a real stdio server using the same launch settings as `serve`.
 
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
@@ -51,6 +52,19 @@ pub(crate) fn run(
     for root in writable_roots {
         command.arg("--writable-root").arg(root);
     }
+    check(command, Duration::from_secs(timeout.into()))
+}
+
+/// Client setup supplies its exact saved server launch; older releases only
+/// need to implement `serve` and the public MCP interface, not `warmup`.
+pub(crate) fn run_server(arguments: &[OsString]) -> Result<bool, Box<dyn std::error::Error>> {
+    let (program, arguments) = arguments.split_first().expect("required server command");
+    let mut command = Command::new(program);
+    command.args(arguments);
+    check(command, Duration::from_secs(600))
+}
+
+fn check(mut command: Command, timeout: Duration) -> Result<bool, Box<dyn std::error::Error>> {
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -66,7 +80,6 @@ pub(crate) fn run(
         let mut child = command.spawn()?;
         let stdout = child.stdout.take().expect("piped server stdout");
         let stdin = child.stdin.take().expect("piped server stdin");
-        let timeout = Duration::from_secs(timeout.into());
         let mut failures = 0;
         match tokio::time::timeout(timeout, ().serve((stdout, stdin))).await {
             Ok(Ok(mut client)) => {

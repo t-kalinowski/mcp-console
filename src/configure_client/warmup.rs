@@ -28,7 +28,7 @@ pub(super) fn start(
         .map_err(|error| format!("cannot create warmup log: {error}"))?;
     let stdout = log.try_clone().map_err(|error| error.to_string())?;
     // One job per setup invocation, using the first selected client's settings.
-    let mut command = launch.warmup_command(options.clients[0], &options.serve_args);
+    let mut command = launch.warmup_command(options.clients[0], &options.serve_args)?;
     command
         .current_dir(directory)
         .stdin(Stdio::null())
@@ -60,7 +60,7 @@ pub(super) fn start(
     #[allow(clippy::zombie_processes)]
     let pid = command
         .spawn()
-        .map_err(|error| format!("cannot launch {}: {error}", launch.command))?
+        .map_err(|error| format!("cannot launch warmup: {error}"))?
         .id();
     println!(
         "Background warmup started (PID {pid}). Log: {}",

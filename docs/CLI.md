@@ -36,7 +36,8 @@ It returns without waiting for runtime checks or package preparation.
 Use `--no-warmup` to skip this step; `--dry-run` previews it without starting a job.
 Logs remain in `logs/warmup-*.log` under [Console home](ENVIRONMENT.md#server-paths-and-executable-discovery), normally `~/.agents/console` or the directory selected by `MCP_CONSOLE_HOME`.
 
-Warmup uses the first selected client's executable, version, and launch arguments.
+The configuring executable runs the warmup checks against the first selected client's `serve` command, preserving its version and launch arguments.
+Pinned releases can predate the `warmup` subcommand.
 It runs in `--directory PATH` when supplied, otherwise the current directory, and uses the [standalone warmup permissions](#check-your-installation).
 Later client sessions may start in other directories or inherit different permissions.
 Warmup errors appear in the log and do not undo registration; a failure to launch prints a warning.
