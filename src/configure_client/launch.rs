@@ -63,12 +63,27 @@ impl Launch {
                 .map_err(|_| "Executable path is not valid UTF-8")?;
             launch.args.clear();
         }
-        launch.args.push("serve".into());
         Ok(launch)
     }
 
     pub(super) fn arguments(&self, client: ConfigureClient, serve_args: &[String]) -> Vec<String> {
+        self.arguments_for("serve", client, serve_args)
+    }
+
+    pub(super) fn warmup_command(&self, client: ConfigureClient, serve_args: &[String]) -> Command {
+        let mut command = Command::new(&self.command);
+        command.args(self.arguments_for("warmup", client, serve_args));
+        command
+    }
+
+    fn arguments_for(
+        &self,
+        subcommand: &str,
+        client: ConfigureClient,
+        serve_args: &[String],
+    ) -> Vec<String> {
         let mut args = self.args.clone();
+        args.push(subcommand.into());
         match client {
             ConfigureClient::Codex => args.extend([
                 "--default-config".into(),

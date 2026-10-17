@@ -23,6 +23,7 @@ Examples:
 const CONFIGURE_CLIENT_EXAMPLES: &str = "\
 Prints each configuration file and setting changed. Unrelated settings are
 preserved. Use --dry-run to preview or apply the changes manually.
+Starts cache warming in the background; use --no-warmup to skip it.
 Codex launches default to the client's sandbox permissions; configuration files
 can select another profile. Arguments after -- customize the serve settings.
 
@@ -303,7 +304,11 @@ pub struct ConfigureClientOptions {
     #[arg(long)]
     pub no_auto_load: bool,
 
-    /// Print proposed settings and any installation command without writing files or installing
+    /// Skip the background runtime checks and cache warming after configuration
+    #[arg(long)]
+    pub no_warmup: bool,
+
+    /// Preview setup without writing files, installing, or starting background warmup
     #[arg(long)]
     pub dry_run: bool,
 

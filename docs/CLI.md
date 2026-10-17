@@ -14,6 +14,7 @@ mcp-console configure-client codex
 mcp-console configure-client claude --directory . --dry-run
 mcp-console configure-client claude --directory /path/to/project
 mcp-console configure-client claude --no-auto-load
+mcp-console configure-client claude --no-warmup
 mcp-console configure-client codex --pin-version current
 mcp-console configure-client codex --pin-version v0.0.5
 mcp-console configure-client claude --no-uvx
@@ -30,6 +31,16 @@ When Claude Code is selected, its reserved names (`workspace`, `claude-in-chrome
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) so `uvx` is on the client's `PATH`.
 The client itself does not need to be installed when writing its configuration.
 
+After registration, setup starts one background `warmup` and prints its PID and log path.
+It returns without waiting for runtime checks or package preparation.
+Use `--no-warmup` to skip this step; `--dry-run` previews it without starting a job.
+Logs remain in `logs/warmup-*.log` under [Console home](ENVIRONMENT.md#server-paths-and-executable-discovery), normally `~/.agents/console` or the directory selected by `MCP_CONSOLE_HOME`.
+
+Warmup uses the first selected client's executable, version, and launch arguments.
+It runs in `--directory PATH` when supplied, otherwise the current directory, and uses the [standalone warmup permissions](#check-your-installation).
+Later client sessions may start in other directories or inherit different permissions.
+Warmup errors appear in the log and do not undo registration; a failure to launch prints a warning.
+
 Codex launches include `--default-config sandbox.profile=inherit_codex` to [inherit the client's sandbox permissions](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex) when configuration files do not select a profile.
 This applies to uvx and `--no-uvx` launches.
 Global and project configuration take precedence over this client default.
@@ -45,7 +56,7 @@ The default uvx command has no version suffix.
 `--pin-version VERSION` appends a Console version suffix after `@`, for example `mcp-console@v0.0.5` or `mcp-console@latest`.
 `--pin-version current` saves the concrete version running setup, so later launches stay on that version.
 Exact versions use PEP 440 syntax and are validated before configuration changes; `latest` and `current` are also accepted, while version ranges and invalid suffixes are rejected.
-Package availability is checked by uv when the client launches the server.
+Package availability is checked by uv when warmup or the client launches Console.
 For Codex, pinned versions must support `--default-config` and `sandbox.profile=inherit_codex`.
 An unqualified uvx command may reuse an installed or cached version; `latest` requests the latest available release at launch.
 
@@ -89,7 +100,8 @@ It does not evaluate client trust, approvals, profiles, managed settings, or Cla
 An unreadable or malformed project file encountered by this check causes an error before installation or writes.
 
 The command prints the selected scope, file path, and fields it sets.
-Use `--dry-run` to preview those settings and any persistent installation without writing files or installing, or to apply them manually.
+Use `--dry-run` to preview settings, any persistent installation, and background warmup without writing files, installing, or starting a job.
+You can also apply the printed settings manually.
 Existing settings outside the printed fields are preserved, including other servers, environment variables, and client preferences.
 TOML key comments and comments around replaced values are preserved.
 Comments inside the managed `args` and `omit_tools_from` arrays are discarded when those arrays are replaced.
