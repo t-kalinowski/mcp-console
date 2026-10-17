@@ -29,6 +29,7 @@ from support.checkpoints import wait_for_path
 from support.installation import native_console
 from support.normalization import code
 from support.r import r_test_environment
+from windows_distribution import NATIVE_SUFFIXES, inspect_artifacts
 
 from windows_cargo import WindowsCargo  # noqa: F401 -- include build acceptance
 from windows_relay import WindowsRelay  # noqa: F401 -- include protocol acceptance
@@ -411,6 +412,68 @@ def exercise_later_callbacks(session: Session) -> None:
 
 @unittest.skipUnless(os.name == "nt", "native Windows packaging")
 class WindowsPackaging(unittest.TestCase):
+    def test_native_distribution_has_no_redistributable_vc_runtime(self):
+        paths = {NATIVE_BINARY} | {
+            path
+            for path in (NATIVE_BINARY.parent.parent / "libexec").rglob("*")
+            if path.suffix.lower() in NATIVE_SUFFIXES
+        }
+        inspect_artifacts((path, path.read_bytes()) for path in sorted(paths))
+
+    def test_distribution_audit_checks_normal_and_delayed_imports(self):
+        with tempfile.TemporaryDirectory(prefix="console PE imports ") as directory:
+            root = Path(directory)
+            source = root / "main.rs"
+            source.write_text('fn main() { println!("PE import fixture"); }\n')
+            for kind in ("normal", "delayed", "static"):
+                with self.subTest(imports=kind):
+                    binary = root / f"{kind}.exe"
+                    build = subprocess.run(
+                        [
+                            sys.executable,
+                            ROOT / "scripts/with-checkout",
+                            "rustc",
+                            source,
+                            "-o",
+                            binary,
+                            "-C",
+                            "target-feature="
+                            + ("+" if kind == "static" else "-")
+                            + "crt-static",
+                            *(
+                                [
+                                    "-C",
+                                    "link-arg=/DELAYLOAD:VCRUNTIME140.dll",
+                                    "-C",
+                                    "link-arg=delayimp.lib",
+                                ]
+                                if kind == "delayed"
+                                else []
+                            ),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    self.assertEqual(build.returncode, 0, build.stderr)
+                    wheel = root / f"{kind}.whl"
+                    with zipfile.ZipFile(wheel, "w") as archive:
+                        archive.write(
+                            binary, f"fixture.data/data/libexec/{binary.name}"
+                        )
+                    audit = subprocess.run(
+                        [sys.executable, ROOT / "tests/windows_distribution.py", wheel],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    if kind == "static":
+                        self.assertEqual(audit.returncode, 0, audit.stderr)
+                        self.assertIn("kernel32.dll", audit.stdout.lower())
+                    else:
+                        self.assertNotEqual(audit.returncode, 0)
+                        self.assertIn(f"{kind} import VCRUNTIME140.dll", audit.stderr)
+
     def test_concurrent_build_waits_and_recovers_after_failure(self):
         with ExitStack() as cleanup:
             root = Path(
