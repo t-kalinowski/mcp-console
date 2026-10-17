@@ -17,7 +17,7 @@ mcp-console configure-client claude --no-auto-load
 mcp-console configure-client codex --pin-version current
 mcp-console configure-client codex --pin-version v0.0.5
 mcp-console configure-client claude --no-uvx
-mcp-console configure-client codex --name console-local -- --writable-root /data
+mcp-console configure-client codex --scope project --name console-local -- --writable-root /data
 ```
 
 `configure-client` registers a stdio MCP server named `console` that launches `uvx mcp-console serve`.
@@ -36,7 +36,7 @@ Global and project configuration take precedence over this client default.
 Arguments after `--` customize the launch; use `-c` to override configuration files too, for example:
 
 ```sh
-mcp-console configure-client codex -- -c sandbox.profile=workspace
+mcp-console configure-client codex --scope project -- -c sandbox.profile=workspace
 ```
 
 To pass `--no-sandbox`, also clear the generated policy with `-c sandbox=null`.
@@ -80,10 +80,16 @@ Add `--directory PATH` to select another existing project directory; relative pa
 | Claude Code | `.mcp.json`           | `$CLAUDE_CONFIG_DIR/.claude.json`, default `~/.claude.json` |
 
 [Codex](https://learn.chatgpt.com/docs/config-file/config-basic#configuration-precedence) and [Claude Code](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence) give loaded project entries precedence over same-named global entries.
-Global registration leaves existing project entries unchanged.
+Global registration leaves existing project entries unchanged and warns when it finds one that may take precedence, including during `--dry-run`.
+The warning identifies the nearest matching project file.
 If an earlier registration created a project entry, rerun setup with `--scope project` from that project directory, or select it with `--scope project --directory PATH`.
 Earlier automatic registrations used the Git root.
 To use global settings instead, remove only that server's entry from the project configuration listed above.
+
+The check searches from the current directory through Codex's project root, using `project_root_markers` from its user configuration or `.git` by default; without a matching marker it checks only the current directory.
+For Claude Code, it checks ancestor `.mcp.json` files, including above Git roots.
+It does not evaluate client trust, approvals, profiles, managed settings, or Claude Code's private local entries.
+An unreadable or malformed project file encountered by this check causes an error before installation or writes.
 
 The command prints the selected scope, file path, and fields it sets.
 Use `--dry-run` to preview those settings and any persistent installation without writing files or installing, or to apply them manually.

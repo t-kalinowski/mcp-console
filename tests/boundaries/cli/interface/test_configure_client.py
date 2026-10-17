@@ -1172,6 +1172,222 @@ def test_project_directory_rejects_invalid_targets_and_scopes(
     return records
 
 
+def test_global_registration_warns_about_legacy_project_entries(
+    binary: Path,
+) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        for client in ("codex", "claude"):
+            for marker in ("directory", "worktree"):
+                project = root / f"{client}-{marker}"
+                workspace = project / "src" / "nested"
+                workspace.mkdir(parents=True)
+                if marker == "directory":
+                    (project / ".git").mkdir()
+                    (project / ".git/HEAD").write_text("ref: refs/heads/main\n")
+                else:
+                    (project / ".git").write_text("gitdir: fixture\n")
+                relative = ".codex/config.toml" if client == "codex" else ".mcp.json"
+                legacy = configure(binary, root, workspace, client, "--scope", "auto")
+                assert legacy.returncode == 0 and legacy.stderr == "", legacy
+                project_path = project / relative
+                previous = project_path.read_bytes()
+                global_path = (
+                    root
+                    / f"{client}-home"
+                    / ("config.toml" if client == "codex" else ".claude.json")
+                )
+                arguments = (
+                    client,
+                    "--pin-version",
+                    "0.0.5",
+                    "--no-auto-load",
+                    "--",
+                    "--writable-root",
+                    "output",
+                )
+                global_before = (
+                    global_path.read_bytes() if global_path.exists() else None
+                )
+                preview = configure(binary, root, workspace, client, "--dry-run")
+                assert preview.returncode == 0, preview
+                assert str(project_path) in preview.stderr, preview
+                assert "may take precedence" in preview.stderr, preview
+                assert (
+                    global_path.read_bytes() if global_path.exists() else None
+                ) == global_before
+                result = configure(binary, root, workspace, *arguments)
+                assert result.returncode == 0, result
+                assert result.stderr == preview.stderr, result
+                assert project_path.read_bytes() == previous
+                entry = server(read_config(global_path, client), client)
+                assert entry["args"][0] == "mcp-console@0.0.5"
+                assert entry["args"][-2:] == ["--writable-root", "output"]
+                assert (
+                    entry["omit_tools_from"] == []
+                    if client == "codex"
+                    else not entry["alwaysLoad"]
+                )
+                records.append(
+                    {
+                        "client": client,
+                        "git_marker": marker,
+                        "stderr": result.stderr.replace(
+                            str(project_path), "<PROJECT_CONFIG>"
+                        ),
+                        "project_entry": "unchanged",
+                    }
+                )
+    return records
+
+
+def test_project_shadow_warning_follows_client_discovery(binary: Path) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        for client in ("codex", "claude"):
+            for case in (
+                "current directory",
+                "closest ancestor",
+                "unrelated server",
+                "above Git root",
+                "outside Git",
+                "custom root marker",
+                "disabled root search",
+            ):
+                home = root / f"{client}-{case}"
+                project = home / "project"
+                workspace = project / "src" / "nested"
+                workspace.mkdir(parents=True)
+                (project / ".git").write_text("gitdir: fixture\n")
+                relative = ".codex/config.toml" if client == "codex" else ".mcp.json"
+                expected = None
+                if case == "current directory":
+                    selected = workspace
+                elif case == "closest ancestor":
+                    selected = workspace.parent
+                elif case in (
+                    "above Git root",
+                    "outside Git",
+                    "custom root marker",
+                    "disabled root search",
+                ):
+                    selected = home
+                else:
+                    selected = project
+                if case in ("outside Git", "custom root marker"):
+                    (project / ".git").unlink()
+                if case == "custom root marker":
+                    (home / ".project-root").touch()
+                if client == "codex" and case in (
+                    "custom root marker",
+                    "disabled root search",
+                ):
+                    config = home / "codex-home/config.toml"
+                    config.parent.mkdir()
+                    config.write_text(
+                        'project_root_markers = [".project-root"]\n'
+                        if case == "custom root marker"
+                        else "project_root_markers = []\n"
+                    )
+                name = "other" if case == "unrelated server" else "console"
+                path = selected / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(
+                    f'[mcp_servers.{name}]\ncommand = "old"\n'
+                    if client == "codex"
+                    else json.dumps({"mcpServers": {name: {"command": "old"}}})
+                )
+                if case == "closest ancestor":
+                    ancestor = project / relative
+                    ancestor.parent.mkdir(parents=True, exist_ok=True)
+                    ancestor.write_bytes(path.read_bytes())
+                    unrelated = workspace / relative
+                    unrelated.parent.mkdir(parents=True, exist_ok=True)
+                    unrelated.write_text(
+                        '[mcp_servers.other]\ncommand = "other"\n'
+                        if client == "codex"
+                        else json.dumps({"mcpServers": {"other": {"command": "other"}}})
+                    )
+                before = {
+                    file: file.read_bytes()
+                    for file in home.rglob("*")
+                    if file.is_file()
+                }
+                if case != "unrelated server" and (
+                    client == "claude"
+                    or case
+                    not in ("above Git root", "outside Git", "disabled root search")
+                ):
+                    expected = path
+                result = configure(binary, home, workspace, client, "--dry-run")
+                assert result.returncode == 0, result
+                if expected is None:
+                    assert result.stderr == "", result
+                else:
+                    assert str(expected) in result.stderr, result
+                    assert result.stderr.count("Warning:") == 1, result
+                assert {
+                    file: file.read_bytes()
+                    for file in home.rglob("*")
+                    if file.is_file()
+                } == before
+                records.append(
+                    {"client": client, "case": case, "warning": expected is not None}
+                )
+        workspace = root / "global-is-project"
+        workspace.mkdir()
+        for attempt in range(2):
+            result = configure(
+                binary,
+                root,
+                workspace,
+                "codex",
+                extra_environment={"CODEX_HOME": ".codex"},
+            )
+            assert result.returncode == 0 and result.stderr == "", result
+        records.append({"global_file_in_cwd": "not reported as a project override"})
+    return records
+
+
+def test_global_registration_rejects_malformed_project_configuration(
+    binary: Path,
+) -> Transcript:
+    records = []
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        for client in ("codex", "claude"):
+            workspace = root / client
+            workspace.mkdir()
+            path = workspace / (
+                ".codex/config.toml" if client == "codex" else ".mcp.json"
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("malformed [", encoding="utf-8")
+            before = {
+                file: file.read_bytes() for file in root.rglob("*") if file.is_file()
+            }
+            result = configure(
+                binary, root, workspace, "codex", "claude", "--scope", "global"
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            assert str(path) in result.stderr, result
+            assert "Cannot inspect project configuration" in result.stderr, result
+            assert {
+                file: file.read_bytes() for file in root.rglob("*") if file.is_file()
+            } == before
+            records.append(
+                {
+                    "client": client,
+                    "exit_code": result.returncode,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr.replace(str(path), "<PROJECT_CONFIG>"),
+                }
+            )
+    return records
+
+
 def test_dry_run_and_auto_load_opt_out(binary: Path) -> Transcript:
     records = []
     with TemporaryDirectory() as temporary:
