@@ -73,6 +73,9 @@ Delete completed entries and empty sections as part of the change that resolves 
 
 ## Unselected proposals, not release blockers
 
+An opt-in Git-aware write policy and a separate project-configuration trust mechanism remain future design questions.
+Resolve project authorization independently of Git before making workspace writes more automatic.
+
 The [design archive](../design-sketches/README.md) describes viewers, a sidecar API, typed object/table inspection, named sessions, separate runtime threads, and SQL-only execution without either language runtime.
 Several sketches also assume old compute targets or an R-hosted Python design.
 

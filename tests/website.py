@@ -386,28 +386,11 @@ class WebsiteTests(unittest.TestCase):
             for code in self.pages[self.site / "getting-started.html"].code_blocks
             for line in code.splitlines()
         ]
-        profile_commands = [
-            command for command in commands if "-c sandbox.profile=workspace" in command
-        ]
-        write_commands = [
-            command for command in commands if "--writable-root" in command
-        ]
-        self.assertTrue(profile_commands)
-        self.assertTrue(write_commands)
-        for command in profile_commands + write_commands:
-            with self.subTest(command=command):
-                arguments = command.split()
-                self.assertEqual(
-                    arguments[:3], ["uvx", "mcp-console", "configure-client"]
-                )
-                self.assertIn(arguments[3], ("codex", "claude"))
-                self.assertIn("--", arguments)
-        self.assertLess(
-            commands.index(profile_commands[0]), commands.index(write_commands[0])
-        )
-        self.assertLess(
-            commands.index("mkdir output"), commands.index(write_commands[0])
-        )
+        self.assertIn("uvx mcp-console config init", commands)
+        for command in commands:
+            if "configure-client" in command:
+                self.assertNotIn("sandbox.profile=workspace", command)
+                self.assertNotIn("--writable-root", command)
         for name in ("CONFIGURATION", "SANDBOX_CONFIGURATION"):
             with self.subTest(page=name):
                 self.assertTrue(
@@ -417,6 +400,45 @@ class WebsiteTests(unittest.TestCase):
                         for line in code.splitlines()
                     )
                 )
+
+    def test_permission_examples_distinguish_global_and_project_scope(self) -> None:
+        soup = BeautifulSoup((self.site / "CLI.html").read_text(), "html.parser")
+        examples = (
+            ("allow-workspace-writes-across-projects", "global"),
+            ("grant-writes-to-one-directory", "project"),
+        )
+        identifiers = [identifier for identifier, _ in examples]
+        self.assertEqual(
+            [section["id"] for section in soup.find_all("section", id=identifiers)],
+            identifiers,
+        )
+        for identifier, scope in examples:
+            with self.subTest(scope=scope):
+                section = soup.find(id=identifier)
+                commands = [
+                    line.strip()
+                    for code in section.select("pre code")
+                    for line in code.get_text().splitlines()
+                ]
+                command = next(
+                    command for command in commands if "configure-client" in command
+                )
+                arguments = command.split()
+                self.assertEqual(
+                    arguments[:3], ["uvx", "mcp-console", "configure-client"]
+                )
+                self.assertIn(arguments[3], ("codex", "claude"))
+                scope_option = arguments.index("--scope")
+                self.assertEqual(arguments[scope_option + 1], scope)
+                self.assertLess(scope_option, arguments.index("--"))
+                if scope == "project":
+                    self.assertIn("sandbox.profile=read_only", arguments)
+                    self.assertIn("--writable-root", arguments)
+                    self.assertLess(
+                        commands.index("mkdir output"), commands.index(command)
+                    )
+                else:
+                    self.assertIn("sandbox.profile=workspace", arguments)
 
     def test_reference_tables_have_keyboard_accessible_scroll_regions(self) -> None:
         for name in ("CONFIGURATION.html", "REQUIREMENTS.html", "python/index.html"):

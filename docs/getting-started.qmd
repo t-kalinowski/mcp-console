@@ -63,33 +63,24 @@ Without inheritance or a configured profile, the default sandbox permits host-fi
 
 ### Allow project writes {#allow-project-writes}
 
-If you registered with `--scope project`, include that option in both `configure-client` commands below and run them from the same project directory.
-
-To let the agent save files in its workspace, pass the workspace profile after `--` when registering your client:
+To let the agent save files in one project, create Console configuration in the directory where the client launches it:
 
 ```sh
-uvx mcp-console configure-client claude -- -c sandbox.profile=workspace
+uvx mcp-console config init
 ```
 
-Use `codex` in place of `claude` for Codex.
-
+This creates `.agents/console/config.yaml` selecting the workspace profile, including outside Git.
+If the file already exists, edit it instead.
+Restart the client to load the settings.
 The profile permits ordinary writes in Console's launch directory while protecting workspace metadata such as `.git` and `.agents`.
 Host-file reads remain allowed and direct network access remains restricted.
-For project-specific settings, [`uvx mcp-console config init`](CONFIGURATION.md#create-a-configuration-file) creates a configuration file with this profile.
 
-To add a single writable directory, create it in the workspace and pass its path after `--`:
+The command-line reference covers [workspace writes across projects](CLI.md#allow-workspace-writes-across-projects) and [grants for individual directories](CLI.md#grant-writes-to-one-directory).
+See [Sandbox configuration](SANDBOX_CONFIGURATION.md) for the permission rules.
 
-```sh
-mkdir output
-uvx mcp-console configure-client claude -- --writable-root output
-```
-
-The flag adds a write grant without selecting the workspace profile.
-Restart the client after changing its registration.
-See [Sandbox configuration](SANDBOX_CONFIGURATION.md) for filesystem and network permissions.
-
-Project configuration can select executables and widen permissions.
-Review it before opening an unfamiliar project; `--no-project-config` skips that layer.
+Console loads project configuration automatically, and it can select executables or widen permissions.
+Review and authorize it before launching Console in an unfamiliar project; `--no-project-config` skips that layer.
+Being inside Git does not establish trust.
 
 For interpreter selection and package setup, see [Configuration](CONFIGURATION.md) and [Packages and environments](REQUIREMENTS.md).
 

@@ -154,12 +154,35 @@ sandbox:
 The [workspace profile](SANDBOX_CONFIGURATION.md#workspace-profile) allows project writes while keeping workspace metadata read-only.
 It retains the default private temporary storage and restricted networking.
 
-To add a writable path through the client command instead:
+Each `configure-client` call replaces that entry's managed launch arguments.
+Include every server option you want to retain when changing its permissions, and restart the client afterward.
+
+### Allow workspace writes across projects
+
+To select workspace writes for future launches across projects, update the global client registration explicitly:
 
 ```sh
-mcp-console serve --writable-root .
+uvx mcp-console configure-client claude --scope global -- -c sandbox.profile=workspace
 ```
 
+The profile uses each future launch directory as the workspace; running setup does not bind it to the setup directory.
+The `-c` setting overrides profiles selected in configuration files or inherited from the client.
+Use this option when you want that write policy across projects.
+An existing project client entry may take precedence over the global entry; see [client configuration](#configure-a-client).
+
+### Grant writes to one directory
+
+To add a writable path through a project client entry, create the directory before registering the grant:
+
+```sh
+mkdir output
+uvx mcp-console configure-client claude --scope project -- -c sandbox.profile=read_only --writable-root output
+```
+
+Use `codex` in place of `claude` for Codex.
+The client chooses Console's launch directory, and Console resolves `output` there.
+The `read_only` base restricts ordinary workspace writes; `--writable-root` adds the explicit grant.
+Other configured filesystem permissions still apply.
 `--writable-root PATH` may be repeated.
 It adds filesystem grants without selecting the workspace profile, does not create missing directories, and remains subject to more specific permission rules.
 [Sandbox configuration](SANDBOX_CONFIGURATION.md) documents path rules and protected metadata.
