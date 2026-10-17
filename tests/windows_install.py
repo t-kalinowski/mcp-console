@@ -71,6 +71,9 @@ if __name__ == "__main__":
             "WindowsConsole.test_python_without_r",
             "WindowsConsole.test_r_initializes_before_python",
             "WindowsConsole.test_python_initializes_before_r",
+            "WindowsConsole.test_python_sleep_interrupt",
+            "WindowsConsole.test_sql_with_r",
+            "WindowsSandbox.test_network_enabled_sql",
             environment=os.environ
             | {
                 "MCP_CONSOLE_TEST_BINARY": str(binary),
@@ -128,5 +131,7 @@ if __name__ == "__main__":
             "-v",
             "WindowsConsole.test_python_initializes_before_r",
             "WindowsConsole.test_r_initializes_before_python",
+            "WindowsConsole.test_python_sleep_interrupt",
+            "WindowsConsole.test_sql_with_r",
             environment=environment,
         )

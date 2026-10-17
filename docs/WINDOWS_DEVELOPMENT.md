@@ -72,4 +72,5 @@ Keep embedded R sources in LF form as specified by `.gitattributes`.
 For Linux workflows under WSL, use an independent Linux checkout and follow [WSL development](DEVELOPMENT.md#windows-development-through-wsl2).
 
 Windows uses native pipes, events, and process handles rather than Unix signals/descriptors.
+Workers dispatch interpreter interrupts through the system UCRT's signal table, independently of Console's static CRT, so blocking Python calls and temporary native SQL handlers still wake.
 Those implementation choices do not create different public MCP message shapes.

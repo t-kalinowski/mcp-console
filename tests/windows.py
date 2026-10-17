@@ -935,6 +935,12 @@ class WindowsConsole(unittest.TestCase):
         self.addCleanup(session.close)
         session.initialize()
         self.assertIn("42", json.dumps(session.send(r="answer <- 42L; answer")))
+        self.assertIn(
+            "running;", json.dumps(session.send(r="Sys.sleep(60)", timeout_ms=100))
+        )
+        self.assertNotIn(
+            "running;", json.dumps(session.send(control="interrupt", timeout_ms=2000))
+        )
         self.assertIn("42", json.dumps(session.send(r="answer")))
         self.assertIn(
             "FALSE", json.dumps(session.send(control="restart", r="exists('answer')"))
@@ -1010,20 +1016,28 @@ class WindowsConsole(unittest.TestCase):
                 session.close()
 
     def test_python_sleep_interrupt(self):
-        session = self.session(defer_bootstrap=True)
-        session.send(python="import time; saved = 42")
-        for initialize_r in (False, True):
-            with self.subTest(initialize_r=initialize_r):
-                if initialize_r:
-                    self.assertIn("42", json.dumps(session.send(r="42")))
-                self.assertIn(
-                    "running;",
-                    json.dumps(session.send(python="time.sleep(60)", timeout_ms=100)),
-                )
-                result = session.send(control="interrupt", timeout_ms=2000)
-                self.assertIn("KeyboardInterrupt", json.dumps(result))
-                self.assertNotIn("running;", json.dumps(result))
-                self.assertIn("42", json.dumps(session.send(python="saved")))
+        for order in ("python", "python-r", "r-python"):
+            with self.subTest(order=order):
+                session = Session(defer_bootstrap=True)
+                try:
+                    session.initialize()
+                    if order == "r-python":
+                        self.assertIn("42", json.dumps(session.send(r="42")))
+                    session.send(python="import time; saved = 42")
+                    if order == "python-r":
+                        self.assertIn("42", json.dumps(session.send(r="42")))
+                    self.assertIn(
+                        "running;",
+                        json.dumps(
+                            session.send(python="time.sleep(60)", timeout_ms=100)
+                        ),
+                    )
+                    result = session.send(control="interrupt", timeout_ms=2000)
+                    self.assertIn("KeyboardInterrupt", json.dumps(result))
+                    self.assertNotIn("running;", json.dumps(result))
+                    self.assertIn("42", json.dumps(session.send(python="saved")))
+                finally:
+                    session.close()
 
     def test_interrupt_then_input_after_r_attachment(self):
         session = self.session(defer_bootstrap=True)
