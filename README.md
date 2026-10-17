@@ -26,14 +26,14 @@ uv tool install mcp-console
 Register Console with your client:
 
 ```sh
-mcp-console configure-client codex
-# Or: mcp-console configure-client claude
+mcp-console configure-client codex --scope global
+# Or: mcp-console configure-client claude --scope global
 ```
 
 This registers Console globally, configures the client to launch `uvx mcp-console serve`, and loads Console tools up front.
-Use `--scope project` to register it for the current directory instead.
+Replace `--scope global` with `--scope project` to register it for the current directory instead.
 Use `--dry-run` to preview the settings or `--no-auto-load` to keep the client's default tool discovery.
-You can also start with `uvx mcp-console configure-client codex claude` to configure both clients without first installing Console.
+You can also start with `uvx mcp-console configure-client codex claude --scope global` to configure both clients without first installing Console.
 Use `--pin-version VERSION` to select the Console version resolved by uvx, or `--no-uvx` to configure an absolute executable path.
 `--pin-version current` pins the version running setup.
 See [client setup](docs/getting-started.qmd#connect-your-client) for project/global scope and other clients.

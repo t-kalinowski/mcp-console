@@ -29,15 +29,15 @@ To install the development version, follow [Build from source](BUILD_FROM_SOURCE
 Register Console with the client you use:
 
 ```sh
-uvx mcp-console configure-client codex
-uvx mcp-console configure-client claude
+uvx mcp-console configure-client codex --scope global
+uvx mcp-console configure-client claude --scope global
 ```
 
 This registers Console globally, so it is available across projects, and loads its tools up front.
 Restart the client after setup.
 Your client launches Console on the same host, usually in the workspace where the agent is working.
 
-To register it for the current directory, add `--scope project`.
+To register it for the current directory, replace `--scope global` with `--scope project`.
 See [client configuration](CLI.md#configure-a-client) for updating earlier project registrations, other MCP clients, version pinning, and launch options.
 
 ## Try an analysis
