@@ -543,13 +543,21 @@ def test_control_only_interrupt_returns_while_explicit_preparation_settles(
             ) -> None:
                 nonlocal interrupt_waiting
                 preparation = client.start_send(**preparation_arguments)
-                resolver_started.wait(description)
+                readable, _, _ = select.select(
+                    [resolver_started.descriptor, client.stdout], [], [], 10
+                )
+                if client.stdout in readable:
+                    client.receive(preparation)
+                    raise AssertionError(
+                        f"{description} returned before its checkpoint: {preparation}"
+                    )
+                resolver_started.wait(description, timeout=0, client=client)
 
                 interrupt = client.start_send(
                     control="interrupt",
                     timeout_ms=0,
                 )
-                resolver_interrupted.wait(f"{description} interrupt")
+                resolver_interrupted.wait(f"{description} interrupt", client=client)
                 interrupt_waiting = True
                 readable, _, _ = select.select([client.stdout], [], [], 3)
                 assert client.stdout in readable, (
