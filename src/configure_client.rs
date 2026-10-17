@@ -210,6 +210,9 @@ fn shadowing_project_configuration(
                 ));
             }
         };
+        // Hard-linked configuration paths share in-place edits. This diagnostic
+        // deduplicates relative-path and symlink aliases; hard-link identity is
+        // outside its supported scope.
         if resolved_path.is_some() && resolved_path != global_path {
             let source = match fs::read_to_string(&path) {
                 Ok(source) => Some(source),
