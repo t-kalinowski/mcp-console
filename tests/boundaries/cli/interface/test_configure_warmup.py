@@ -72,14 +72,18 @@ def test_failed_registration_does_not_start_a_job(binary: Path) -> Transcript:
         configuration.write_text("not JSON", encoding="utf-8")
         result = configure(binary, root, "codex", "claude")
         assert result.returncode == 1 and not result.stdout, result
-        assert "Cannot configure" in result.stderr, result
+        assert result.stderr == (
+            f"Cannot configure {configuration}: expected ident at line 1 column 2\n"
+        ), result
         assert configuration.read_text() == "not JSON"
         assert not (root / "codex-home").exists()
         assert not (root / "console-home").exists()
         return [
             {
                 "exit_code": result.returncode,
-                "stderr": result.stderr.replace(str(root), "<workspace>"),
+                "stderr": result.stderr.replace(
+                    str(configuration), "<workspace>/claude-home/.claude.json"
+                ),
                 "warmup_started": False,
             }
         ]
