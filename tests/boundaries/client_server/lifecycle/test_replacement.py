@@ -143,12 +143,12 @@ def test_reports_replacement_startup_failure_and_retry(
         }, result
 
         startup_control.write_text("ready", encoding="utf-8")
-        client.send(
+        # Package preparation can consume one observation budget. Collect the
+        # admitted cell's exact output without resubmitting it.
+        client.expect(
+            "[starting new worker]\nzod R requirement: prepared=true\n",
             r="report managed R requirement",
             requirements={"r": ["praise"]},
-        )
-        assert last_tool_text(client) == (
-            "[starting new worker]\nzod R requirement: prepared=true\n"
         )
         return client.finish()
 
