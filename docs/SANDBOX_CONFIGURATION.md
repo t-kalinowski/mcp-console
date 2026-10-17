@@ -290,6 +290,7 @@ It is not read-only HTTPS, does not intercept TLS, and does not guarantee side-e
 
 Domain rules use hostnames, not URLs, paths, or host-and-port restrictions.
 Exact names match that host only; `*.example.org` matches subdomains but not the apex, and `**.example.org` matches both.
+Patterns support `*` and `?` wildcards; character classes such as `[0-9]` are rejected.
 Matching deny rules win.
 Native IP-literal forms are also accepted.
 
