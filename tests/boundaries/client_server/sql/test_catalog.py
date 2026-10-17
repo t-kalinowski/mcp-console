@@ -48,10 +48,9 @@ def test_prepares_extensions_while_unrelated_metadata_is_inaccessible(
                 if provider == "r":
                     # fmt: r
                     check = code(r"""
-                        stopifnot(
-                          DBI::dbGetQuery(.console$sql_connection(), "SELECT 42 AS answer")$answer ==
-                            42L
-                        )
+                        con <- .console$sql_connection()
+                        result <- DBI::dbGetQuery(con, "SELECT 42 AS answer")
+                        stopifnot(result$answer == 42L)
                         cat("connection retained\n")
                         """)
                 else:
