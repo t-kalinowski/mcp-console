@@ -100,6 +100,16 @@ SQL connections stay in their owning runtime.
 Actual R capability chooses the default managed provider independently of public language visibility or initialization order.
 Selecting or attaching another runtime must not replace a user-selected connection.
 
+Each SQL provider retains one native result and its bounded preview/lookahead rows.
+The public last-result handle consumes those rows before fetching more in its owning runtime.
+A handle combines on-demand materialization, bounded chunks, and explicit release without a query-history or storage layer.
+An accessor that repeatedly materialized a prefix would require replay or unbounded retention; capture requested with the original query would require anticipating later transfer.
+Native DBI/DB-API queries remain available when callers want to own their result lifecycle directly.
+R managed DuckDB fetches exact Nanoarrow chunks and formats its preview in a separate scratch catalog so formatting cannot invalidate the retained query.
+Other DBI paths keep native data frames; Python keeps driver rows and closes only result objects distinct from the selected connection.
+The router and selection callbacks invalidate results across language boundaries without initializing another runtime.
+Observable consumption, conversion, and lifetime rules belong in the [runtime reference](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result).
+
 Configured SQL startup code runs once per worker after its helpers are installed.
 A failed startup cannot be silently replayed or replaced with a fallback connection.
 Native R profiles run earlier, inside the worker boundary, before Console's managed graphics device.

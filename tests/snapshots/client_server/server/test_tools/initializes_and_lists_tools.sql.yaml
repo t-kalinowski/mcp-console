@@ -77,7 +77,15 @@ result:
               Evaluate one complete SQL cell through the active connection. Managed
               DuckDB keeps a persistent catalog. Results are bounded table previews
               that abbreviate long text cells; query focused subsets or aggregates.
-              The selected driver supplies its own SQL dialect and types. Managed
+              Retrieve that result without replay through `.console$sql_last_result()`
+              or `_console.sql_last_result()` in the connection's owning language; its
+              `fetch(n)` consumes successive chunks, starting with the original
+              preview. Omitting n materializes all remaining rows. Close abandoned
+              handles; another SQL cell or connection selection invalidates them.
+              Direct connection use can invalidate native fetch state; close the
+              handle first. A retained result can hold database resources and locks.
+              Transfer retrieved data using the existing language bridge. The selected
+              driver supplies its own SQL dialect and types. Managed
               conveniences/extensions apply only to DuckDB. Read SQLite with `ATTACH
               'path' AS name (TYPE sqlite, READ_ONLY)`. With a sandbox, attach
               existing DuckDB databases outside writable paths using `ATTACH 'path' AS

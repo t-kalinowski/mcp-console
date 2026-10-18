@@ -1,0 +1,200 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  python: |
+    import sqlite3
+
+
+    class CountCursor:
+        def __init__(self):
+            self.native = selected.native.cursor()
+            self.closed = False
+            self.fetches = []
+            selected.cursors.append(self)
+
+        def execute(self, source):
+            selected.executions += 1
+            self.native.execute(source)
+            return self
+
+        @property
+        def description(self):
+            return self.native.description
+
+        def fetchmany(self, n):
+            self.fetches.append(n)
+            return self.native.fetchmany(
+                min(n, 2) if getattr(selected, "short", False) else n
+            )
+
+        def fetchall(self):
+            self.fetches.append("all")
+            return self.native.fetchall()
+
+        def close(self):
+            self.closed = True
+            self.native.close()
+
+
+    class CountConnection:
+        def __init__(self):
+            self.native = sqlite3.connect(":memory:")
+            self.executions = 0
+            self.cursors = []
+
+        def cursor(self):
+            return CountCursor()
+
+
+    selected = CountConnection()
+    _console.sql_connection(selected)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: |-
+    WITH RECURSIVE rows(i) AS (
+                VALUES (0) UNION ALL SELECT i + 1 FROM rows WHERE i < 56
+            ) SELECT i, 9223372036854775807 AS big, NULL AS missing,
+                zeroblob(200) AS payload, 'original' AS c05, 6 AS c06,
+                7 AS c07, 8 AS c08, 9 AS c09, 10 AS c10, 11 AS c11,
+                12 AS c12, 'complete column' AS c13 FROM rows
+result:
+  content:
+    - type: text
+      text: |
+        i  | big                 | missing | payload                                                                                                      | c05        | c06 | c07 | c08 | c09 | c10 | c11 | c12
+        ---+---------------------+---------+--------------------------------------------------------------------------------------------------------------+------------+-----+-----+-----+-----+-----+-----+----
+        0  | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        1  | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        2  | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        3  | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        4  | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        5  | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        6  | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        7  | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        8  | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        9  | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        10 | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        11 | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        12 | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        13 | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        14 | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        15 | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        16 | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        17 | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        18 | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        19 | 9223372036854775807 | NULL    | b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\… | 'original' | 6   | 7   | 8   | 9   | 10  | 11  | 12
+        [additional rows omitted]
+        [1 additional column omitted]
+        [cell values truncated to 160 characters]
+  isError: false
+---
+send:
+  python: |
+    result = _console.sql_last_result()
+    assert result is _console.sql_last_result()
+    assert selected.executions == 1
+    cursor = selected.cursors[-1]
+    assert cursor.fetches == [21] and not cursor.closed
+    assert len(result.columns) == 13 and result.columns[-1] == "c13"
+    assert result.fetch(0) == [] and cursor.fetches == [21]
+    first = result.fetch(5)
+    assert cursor.fetches == [21]
+    second = result.fetch(19)
+    assert cursor.fetches == [21, 3]
+    third = result.fetch(33)
+    assert cursor.fetches == [21, 3, 33]
+    assert result.fetch(1) == [] and cursor.closed
+    assert result.fetch() == []
+    rows = first + second + third
+    assert [row[0] for row in rows] == list(range(57))
+    assert all(row[1] == 9223372036854775807 for row in rows)
+    assert all(row[2] is None and row[3] == bytes(200) for row in rows)
+    assert all(row[12] == "complete column" for row in rows)
+    assert selected.executions == 1
+    assert "pandas" not in __import__("sys").modules
+    print("bounded chunks preserve every row and column")
+result:
+  content:
+    - type: text
+      text: |
+        bounded chunks preserve every row and column
+  isError: false
+---
+send:
+  sql: SELECT 1 AS id WHERE FALSE
+result:
+  content:
+    - type: text
+      text: |
+        id
+        --
+        [0 rows]
+  isError: false
+---
+send:
+  python: |
+    empty = _console.sql_last_result()
+    assert empty.columns == ("id",) and empty.fetch() == []
+    assert selected.cursors[-1].closed
+    try:
+        result.fetch(1)
+    except RuntimeError as error:
+        assert "invalidated" in str(error)
+    else:
+        raise AssertionError("previous result remained usable")
+    print("empty results retain columns and release cursors")
+result:
+  content:
+    - type: text
+      text: |
+        empty results retain columns and release cursors
+  isError: false
+---
+send:
+  python: selected.short = True
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: |-
+    WITH RECURSIVE rows(i) AS (
+                VALUES (0) UNION ALL SELECT i + 1 FROM rows WHERE i < 56
+            ) SELECT i FROM rows
+result:
+  content:
+    - type: text
+      text: |
+        i
+        -
+        0
+        1
+  isError: false
+---
+send:
+  python: |
+    result = _console.sql_last_result()
+    cursor = selected.cursors[-1]
+    assert not cursor.closed and cursor.fetches == [21]
+    first = result.fetch(3)
+    second = result.fetch(10)
+    assert len(first) == 3 and len(second) == 2
+    assert not cursor.closed and cursor.fetches == [21, 1, 10]
+    rest = result.fetch()
+    assert first + second + rest == [(i,) for i in range(57)]
+    assert cursor.closed
+    print("short native batches do not imply exhaustion")
+result:
+  content:
+    - type: text
+      text: |
+        short native batches do not imply exhaustion
+  isError: false

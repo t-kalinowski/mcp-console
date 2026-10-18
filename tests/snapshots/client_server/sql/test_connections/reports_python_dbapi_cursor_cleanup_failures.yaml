@@ -39,6 +39,14 @@ result:
         answer
         ------
         42
+  isError: false
+---
+send:
+  python: _console.sql_last_result().close()
+result:
+  content:
+    - type: text
+      text: |
         Error: selected DB-API cleanup failure
   isError: false
 ---

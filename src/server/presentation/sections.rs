@@ -53,7 +53,7 @@ pub(super) const R_RUNTIME: &str = r#"Evaluate one complete R cell in persistent
 
 pub(super) const R_BRIDGE: &str = " Access Python globals through `py$name`.";
 
-pub(super) const R_SQL: &str = r#" `.console$sql_connection()` returns the active native DBI connection for DBI/dplyr, or errors if another runtime owns SQL. Select a user-owned DBI connection for SQL cells with `.console$sql_connection(connection)`; restore managed DuckDB with `.console$sql_connection(NULL)`. Never disconnect the managed connection; restore it before disconnecting a selection."#;
+pub(super) const R_SQL: &str = r#" `.console$sql_connection()` returns the active native DBI connection for DBI/dplyr, or errors if another runtime owns SQL. Select a user-owned DBI connection for SQL cells with `.console$sql_connection(connection)`; restore managed DuckDB with `.console$sql_connection(NULL)`. Never disconnect the managed connection; restore it before disconnecting a selection. After R-owned SQL, `result <- .console$sql_last_result()` retrieves a handle without re-executing SQL. `result$fetch(n)` consumes up to n rows, including the original preview first; omit n to materialize all remaining rows. Managed DuckDB returns a Nanoarrow stream preserving exact types; other DBI connections return native data frames. Convert streams with `as.data.frame()` only when its type conversions suit the data. `result$close()` releases the retained result."#;
 
 pub(super) const R_PLOTS: &str = r#" Default-device plots return as PNGs and finalize at cell end, including after errors; draw each plot in one cell. Explicit devices are not captured. Set persistent dimensions in inches and DPI with `options(console.plot.width_in = ..., console.plot.height_in = ..., console.plot.dpi = ...)`."#;
 
@@ -70,7 +70,7 @@ pub(super) const PYTHON_INSTALLED: &str =
 
 pub(super) const PYTHON_BRIDGE: &str = " Access R globals and call functions through `r.name`.";
 
-pub(super) const PYTHON_SQL: &str = r#" Select a user-owned DB-API connection for SQL cells with `_console.sql_connection(connection)`; restore managed DuckDB with `_console.sql_connection(None)`."#;
+pub(super) const PYTHON_SQL: &str = r#" Select a user-owned DB-API connection for SQL cells with `_console.sql_connection(connection)`; restore managed DuckDB with `_console.sql_connection(None)`. After Python-owned SQL, `result = _console.sql_last_result()` retrieves a handle without re-executing SQL. `result.fetch(n)` consumes up to n native rows, including the original preview first; omit n to materialize all remaining rows. Column names are in `result.columns`; optional `pandas.DataFrame(rows, columns=result.columns)` conversion follows pandas' type rules. `result.close()` releases retained cursors distinct from the connection."#;
 
 pub(super) const PYTHON_SQL_R: &str =
     " For R-owned DuckDB, bind Python frames to an R name through `r` before querying.";
@@ -93,7 +93,7 @@ pub(super) const CONTROL_END: &str = r#". A following cell runs only if prior wo
 
 pub(super) const CONTROL_END_SELECTED: &str = r#". A following cell runs only if prior work stops. `restart` discards live state, including debugger and unread input; same-call stdin/code go only to the replacement."#;
 
-pub(super) const SQL_RUNTIME: &str = r#"Evaluate one complete SQL cell through the active connection. Managed DuckDB keeps a persistent catalog. Results are bounded table previews that abbreviate long text cells; query focused subsets or aggregates. The selected driver supplies its own SQL dialect and types."#;
+pub(super) const SQL_RUNTIME: &str = r#"Evaluate one complete SQL cell through the active connection. Managed DuckDB keeps a persistent catalog. Results are bounded table previews that abbreviate long text cells; query focused subsets or aggregates. Retrieve that result without replay through `.console$sql_last_result()` or `_console.sql_last_result()` in the connection's owning language; its `fetch(n)` consumes successive chunks, starting with the original preview. Omitting n materializes all remaining rows. Close abandoned handles; another SQL cell or connection selection invalidates them. Direct connection use can invalidate native fetch state; close the handle first. A retained result can hold database resources and locks. Transfer retrieved data using the existing language bridge. The selected driver supplies its own SQL dialect and types."#;
 
 pub(super) const SQL_R_FRAMES: &str = r#" With R-owned managed DuckDB, query R data frames by name; DuckDB tables/views take precedence."#;
 

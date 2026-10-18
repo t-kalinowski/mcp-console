@@ -157,6 +157,28 @@ SQL previews show at most 20 rows and 12 columns, and long values may be shorten
 They are not complete exports.
 Fetch and save the full result explicitly when you need the whole dataset.
 
+You can decide to use a result after inspecting its preview, without running the SQL again.
+Retrieve it in the connection's owning language:
+
+```r
+result <- .console$sql_last_result()
+first <- result$fetch(100L)
+result$close()
+```
+
+```python
+result = _console.sql_last_result()
+first = result.fetch(100)
+result.close()
+```
+
+Fetches consume successive rows, starting with the original preview and including every column.
+Omitting the row limit materializes all remaining rows in memory.
+R managed DuckDB returns a Nanoarrow stream that preserves exact database types; selected DBI connections return native data frames, and Python returns native rows with column names in `result.columns`.
+Convert explicitly when a data frame is useful.
+Close an abandoned handle to release resources; another SQL cell or connection selection invalidates it.
+See [result retrieval](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result) for conversion choices, driver limits, and lifetime rules.
+
 ## Plots and images
 
 R plots are captured as PNG images at the end of a cell.

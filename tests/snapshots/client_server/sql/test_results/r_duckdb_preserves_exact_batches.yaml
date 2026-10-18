@@ -1,0 +1,208 @@
+---
+!same-as MCP initialization for this execution mode
+---
+send:
+  r: |
+    metrics <- new.env()
+    metrics$executions <- 0L
+    metrics$fetches <- numeric()
+    suppressMessages(invisible(trace(
+      "dbSendQueryArrow",
+      where = asNamespace("DBI"),
+      print = FALSE,
+      tracer = quote(
+        .GlobalEnv$metrics$executions <- .GlobalEnv$metrics$executions + 1L
+      )
+    )))
+    suppressMessages(invisible(trace(
+      "dbFetchArrowChunk",
+      where = asNamespace("DBI"),
+      print = FALSE,
+      tracer = quote(
+        .GlobalEnv$metrics$fetches <- c(
+          .GlobalEnv$metrics$fetches,
+          list(...)$chunk_size
+        )
+      )
+    )))
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: |-
+    CREATE SEQUENCE executions;
+                SELECT i::INTEGER AS id, nextval('executions') AS execution,
+                    9223372036854775807::BIGINT AS big,
+                    12345678901234567890123456789.123456789::DECIMAL(38,9) AS exact,
+                    NULL::VARCHAR AS missing, repeat('x', 1000) AS long_value,
+                    [1, NULL, 3] AS items, {'label': 'original'} AS person,
+                    9 AS c09, 10 AS c10, 11 AS c11, 12 AS c12,
+                    'complete column' AS c13
+                FROM range(57) AS t(i)
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 20 × 12
+                id execution                 big                                   exact missing  long_value                                                                 items per…¹   c09   c10   c11   c12
+           <int32>   <int64>             <int64>                     <decimal128(38, 9)> <string> <string>                                                                   <lis> <str> <int> <int> <int> <int>
+         1       0         1 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+         2       1         2 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+         3       2         3 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+         4       3         4 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+         5       4         5 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+         6       5         6 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+         7       6         7 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+         8       7         8 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+         9       8         9 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        10       9        10 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        11      10        11 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        12      11        12 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        13      12        13 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        14      13        14 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        15      14        15 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        16      15        16 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        17      16        17 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        18      17        18 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        19      18        19 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        20      19        20 9223372036854775807 12345678901234567890123456789.123456789 NULL     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx… [1, … {'la…     9    10    11    12
+        # ℹ abbreviated name: ¹​person
+        [additional rows omitted]
+        [1 additional column omitted]
+        [cell values truncated to 160 characters]
+  isError: false
+---
+send:
+  r: |
+    result <- .console$sql_last_result()
+    stopifnot(identical(result, .console$sql_last_result()))
+    first <- result$fetch(5L)
+    second <- result$fetch(19L)
+    third <- result$fetch(33L)
+    empty <- result$fetch(1L)
+    stopifnot(inherits(first, "nanoarrow_array_stream"))
+    a <- nanoarrow::collect_array_stream(first)
+    b <- nanoarrow::collect_array_stream(second)
+    c <- nanoarrow::collect_array_stream(third)
+    batches <- c(a, b, c)
+    stopifnot(length(nanoarrow::collect_array_stream(empty)) == 0L)
+    stopifnot(length(result$columns) == 13L)
+    ids <- unlist(lapply(batches, function(x) as.vector(x$children$id)))
+    stopifnot(identical(ids, 0:56))
+    schema <- nanoarrow::infer_nanoarrow_schema(a[[1L]])
+    stopifnot(grepl("int64", format(schema$children$big)))
+    stopifnot(grepl("decimal128(38, 9)", format(schema$children$exact), fixed = TRUE))
+    # Compare exact native buffers from every chunk with their original
+    # preview row, without a lossy data-frame conversion or SQL replay.
+    big <- as.raw(c(rep(255L, 7L), 127L))
+    exact <- as.raw(c(21L, 95L, 216L, 228L, 80L, 144L, 73L, 196L,
+      19L, 51L, 2L, 240L, 246L, 176L, 73L, 9L))
+    for (batch in batches) {
+      stopifnot(length(batch$children) == 13L)
+      stopifnot(all(as.vector(batch$children$missing) |> is.na()))
+      stopifnot(all(nchar(as.vector(batch$children$long_value)) == 1000L))
+      stopifnot(all(as.vector(batch$children$c13) == "complete column"))
+      for (field in c("big", "exact")) {
+        column <- batch$children[[field]]
+        expected <- get(field)
+        bytes <- as.raw(column$buffers[[2L]])
+        start <- column$offset * length(expected)
+        stopifnot(identical(
+          bytes[seq.int(start + 1L, start + column$length * length(expected))],
+          rep(expected, column$length)
+        ))
+      }
+    }
+    sequences <- unlist(lapply(batches, function(x) as.vector(x$children$execution)))
+    stopifnot(identical(as.numeric(sequences), as.numeric(1:57)))
+    stopifnot(metrics$executions == 1L)
+    stopifnot(identical(metrics$fetches, c(21, 3, 33, 1)))
+    suppressMessages(invisible(untrace("dbSendQueryArrow", where = asNamespace("DBI"))))
+    suppressMessages(invisible(untrace("dbFetchArrowChunk", where = asNamespace("DBI"))))
+    stopifnot(DBI::dbGetQuery(.console$sql_connection(), "SELECT currval('executions') AS n")$n == 57)
+    writeLines("exact batches retain the preview, lookahead, and remaining rows")
+result:
+  content:
+    - type: text
+      text: |
+        exact batches retain the preview, lookahead, and remaining rows
+  isError: false
+---
+send:
+  sql: SELECT NULL::DECIMAL(10,2) AS amount WHERE FALSE
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 0 × 1
+        # ℹ 1 variable: amount <decimal128(10, 2)>
+        [0 rows]
+  isError: false
+---
+send:
+  r: |
+    empty <- .console$sql_last_result()$fetch()
+    stopifnot(grepl(
+      "decimal128(10, 2)",
+      format(empty$get_schema()$children$amount),
+      fixed = TRUE
+    ))
+    stopifnot(is.null(empty$get_next()))
+    writeLines("empty stream keeps its exact schema")
+result:
+  content:
+    - type: text
+      text: |
+        empty stream keeps its exact schema
+  isError: false
+---
+send:
+  sql: |-
+    SET TimeZone = 'America/New_York';
+                SELECT TIMESTAMPTZ '2026-10-18 12:00:00+00' AS zoned FROM range(30)
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 20 × 1
+           zoned                                
+           <timestamp('us', 'America/New_York')>
+         1 2026-10-18 08:00:00-04               
+         2 2026-10-18 08:00:00-04               
+         3 2026-10-18 08:00:00-04               
+         4 2026-10-18 08:00:00-04               
+         5 2026-10-18 08:00:00-04               
+         6 2026-10-18 08:00:00-04               
+         7 2026-10-18 08:00:00-04               
+         8 2026-10-18 08:00:00-04               
+         9 2026-10-18 08:00:00-04               
+        10 2026-10-18 08:00:00-04               
+        11 2026-10-18 08:00:00-04               
+        12 2026-10-18 08:00:00-04               
+        13 2026-10-18 08:00:00-04               
+        14 2026-10-18 08:00:00-04               
+        15 2026-10-18 08:00:00-04               
+        16 2026-10-18 08:00:00-04               
+        17 2026-10-18 08:00:00-04               
+        18 2026-10-18 08:00:00-04               
+        19 2026-10-18 08:00:00-04               
+        20 2026-10-18 08:00:00-04               
+        [additional rows omitted]
+  isError: false
+---
+send:
+  r: |
+    result <- .console$sql_last_result()
+    chunk <- result$fetch(5L)
+    stopifnot(grepl("America/New_York", chunk$get_schema()$children$zoned$format))
+    result$close()
+    writeLines("timestamp preview and retained schema keep the connection timezone")
+result:
+  content:
+    - type: text
+      text: |
+        timestamp preview and retained schema keep the connection timezone
+  isError: false

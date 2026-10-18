@@ -1,5 +1,6 @@
 # MCP Console's private Python DB-API SQL backend.
 import _mcp_console as _runtime
+import _mcp_console_services as _services
 import builtins as _builtins
 import traceback as _traceback
 import unicodedata as _unicodedata
@@ -15,6 +16,87 @@ _PROVIDER_MANAGED = 1
 _PROVIDER_HANDLED = 2
 _UNSET = object()
 _r_selected = False
+_last_result = None
+_result_epoch = 0
+
+
+def _close_candidates(connection: object, candidates: tuple) -> None:
+    seen = set()
+    for candidate in candidates:
+        if candidate is None or candidate is connection or id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        try:
+            close = getattr(candidate, "close", None)
+            if callable(close):
+                close()
+        except Exception as error:
+            print(f"Error: {error}")
+        except BaseException:
+            _traceback.print_exc()
+
+
+class _SqlResult:
+    def __init__(self, connection, candidates, cursor, rows) -> None:
+        self.columns = tuple(column[0] for column in cursor.description)
+        self._connection = connection
+        self._candidates = candidates
+        self._cursor = cursor
+        self._rows = rows
+        self._closed = None
+        if not rows:
+            self._release()
+
+    def _release(self) -> None:
+        candidates, self._candidates = self._candidates, ()
+        self._cursor = None
+        _close_candidates(self._connection, candidates)
+        self._connection = None
+
+    def close(self) -> None:
+        self._closed = "closed"
+        self._rows = []
+        self._release()
+
+    def fetch(self, n: int | None = None) -> list:
+        if n is not None and (type(n) is not int or n < 0):
+            raise ValueError("`n` must be a nonnegative integer or None")
+        if self._closed is not None:
+            raise RuntimeError(f"SQL result is {self._closed}")
+        try:
+            take = len(self._rows) if n is None else min(n, len(self._rows))
+            rows, self._rows = self._rows[:take], self._rows[take:]
+            remaining = None if n is None else n - take
+            if self._cursor is not None and (remaining is None or remaining > 0):
+                if remaining is None:
+                    fetched = list(self._cursor.fetchall())
+                else:
+                    fetched = list(self._cursor.fetchmany(remaining))
+                rows.extend(fetched)
+                if remaining is None or not fetched:
+                    self._release()
+            return rows
+        except BaseException:
+            self.close()
+            raise
+
+
+def _invalidate_result() -> None:
+    global _last_result, _result_epoch
+    _result_epoch += 1
+    result, _last_result = _last_result, None
+    if result is not None:
+        result.close()
+        result._closed = "invalidated"
+
+
+def sql_last_result() -> _SqlResult:
+    if _last_result is None:
+        raise RuntimeError(
+            "No retained Python SQL result; retrieve in the connection's owning language"
+        )
+    return _last_result
+
 
 try:
     _connection
@@ -48,12 +130,16 @@ def sql_connection(connection: object = _UNSET) -> object:
         return _connection
 
     if connection is None:
+        _services.close_r_sql_result()
+        _invalidate_result()
         _r_selected = False
         _connection = None
         _restore_managed = True
         return None
 
     _validate_connection(connection)
+    _services.close_r_sql_result()
+    _invalidate_result()
     _r_selected = False
     _connection = connection
     _restore_managed = False
@@ -67,6 +153,7 @@ def has_selected_connection() -> bool:
 def use_r():
     global _connection, _restore_managed, _r_selected
 
+    _invalidate_result()
     _r_selected = True
 
     _connection = None
@@ -214,7 +301,7 @@ def _fallback_show(cursor):
         )
         if len(output.encode("utf-8")) + 1 <= _RESPONSE_BYTES:
             print(output)
-            return
+            return fetched
         if visible_rows > 0:
             visible_rows -= 1
         elif visible_columns > 1:
@@ -224,12 +311,15 @@ def _fallback_show(cursor):
 
 
 def _evaluate(source):
+    global _last_result
     connection = _connection
     if connection is None:
         raise RuntimeError("no Python DB-API connection is selected")
 
     executor = None
     result = None
+    retained = False
+    epoch = _result_epoch
     try:
         execute = getattr(connection, "execute", None)
         executor = connection if callable(execute) else connection.cursor()
@@ -239,29 +329,26 @@ def _evaluate(source):
         )
         if getattr(result_cursor, "description", None) is None:
             return None
-        _fallback_show(result_cursor)
+        rows = _fallback_show(result_cursor)
+        # Driver callbacks can select another connection while producing rows.
+        # Display this cell, but do not publish a result after its invalidation.
+        if epoch == _result_epoch:
+            _last_result = _SqlResult(
+                connection, (result, executor), result_cursor, rows
+            )
+            retained = True
     except Exception as error:
         print(f"Error: {error}")
     except BaseException:
         _traceback.print_exc()
     finally:
-        seen = set()
-        for candidate in (result, executor):
-            if candidate is None or candidate is connection or id(candidate) in seen:
-                continue
-            seen.add(id(candidate))
-            try:
-                close = getattr(candidate, "close", None)
-                if callable(close):
-                    close()
-            except Exception as error:
-                print(f"Error: {error}")
-            except BaseException:
-                _traceback.print_exc()
+        if not retained:
+            _close_candidates(connection, (result, executor))
     return None
 
 
 def _dispatch(source):
+    _invalidate_result()
     if _r_selected:
         return _PROVIDER_R
     if _connection is not None or _select_native_connection():
@@ -277,7 +364,9 @@ def dispatch(source):
     return _runtime.without_automatic_resolution(_dispatch, source)
 
 
-_builtins._console = _SimpleNamespace(sql_connection=sql_connection)
+_builtins._console = _SimpleNamespace(
+    sql_connection=sql_connection, sql_last_result=sql_last_result
+)
 
 
 def take_managed_restore_request():

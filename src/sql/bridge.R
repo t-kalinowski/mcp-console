@@ -3,6 +3,8 @@ base::local(
     managed_connection <- NULL
     rendering_connection <- NULL
     selected_connection <- NULL
+    last_result <- NULL
+    result_epoch <- 0
     source <- NULL
     printer_ready <- FALSE
     preview_rows <- 20L
@@ -74,11 +76,8 @@ base::local(
     }
 
     ensure_rendering_connection <- function() {
-      if (identical(selected_connection, managed_connection)) {
-        return(managed_connection)
-      }
-      # User DBI previews must not depend on the managed database or its options.
-      # This scratch catalog opens only for a DBI preview, never the SQL default.
+      # Formatting must not execute another statement on a retained cursor's
+      # connection. It also stays independent of the user's catalog and options.
       if (is.null(rendering_connection)) {
         rendering_connection <<- open_connection()
       }
@@ -142,6 +141,7 @@ base::local(
           stop("`connection` must be a valid DBIConnection or NULL")
         }
       }
+      close_last_result()
       invisible(.Call("mcp_console_sql_use_r"))
       selected_connection <<- connection
       invisible(NULL)
@@ -191,6 +191,7 @@ base::local(
     }
 
     restore_managed_connection <- function() {
+      close_last_result()
       selected_connection <<- NULL
       1L
     }
@@ -200,6 +201,14 @@ base::local(
     base::makeActiveBinding("py", function() reticulate::py, tools)
     console <- new.env(parent = emptyenv())
     console$sql_connection <- sql_connection
+    console$sql_last_result <- function() {
+      if (is.null(last_result)) {
+        stop(
+          "No retained R SQL result; retrieve in the connection's owning language"
+        )
+      }
+      last_result$public
+    }
     base::assign(".console", console, envir = tools)
 
     ensure_printer <- function() {
@@ -252,61 +261,183 @@ base::local(
       sub("^<nanoarrow_schema (.*)>$", "\\1", format(schema))
     }
 
-    fetch_query <- function() {
-      result <- send_query_arrow()
-      tryCatch(
-        {
-          if (result@stmt_lst$return_type != "QUERY_RESULT") {
-            return(NULL)
-          }
+    close_last_result <- function() {
+      result_epoch <<- result_epoch + 1
+      previous <- last_result
+      last_result <<- NULL
+      if (!is.null(previous)) {
+        previous$invalidate()
+      }
+      1L
+    }
 
-          stream <- DBI::dbFetchArrow(
-            result,
-            chunk_size = preview_rows + 1L
-          )
-          tryCatch(
-            {
-              schema <- stream$get_schema()
-              batch <- stream$get_next(schema)
-              if (!is.null(batch) && batch$length == 0L) {
-                batch <- NULL
-              }
-              list(schema = schema, batch = batch)
-            },
-            finally = stream$release()
-          )
-        },
-        finally = DBI::dbClearResult(result)
+    retain_result <- function(result, buffer, schema = NULL) {
+      arrow <- inherits(result, "DBIResultArrow")
+      columns <- if (arrow) names(schema$children) else names(buffer)
+      empty <- if (arrow) NULL else buffer[integer(), , drop = FALSE]
+      offset <- 0L
+      closed <- NULL
+
+      release <- function() {
+        previous <- result
+        result <<- NULL
+        if (!is.null(previous) && DBI::dbIsValid(previous)) {
+          DBI::dbClearResult(previous)
+        }
+      }
+      close <- function(reason = "closed") {
+        closed <<- reason
+        buffer <<- NULL
+        release()
+        invisible(NULL)
+      }
+      count <- function(data) {
+        if (is.null(data)) {
+          0L
+        } else if (arrow) {
+          data$length
+        } else {
+          nrow(data)
+        }
+      }
+      fetch <- function(n = NULL) {
+        stopifnot(
+          is.null(n) ||
+            (is.numeric(n) &&
+              length(n) == 1L &&
+              !is.na(n) &&
+              is.finite(n) &&
+              n >= 0 &&
+              n == floor(n) &&
+              n <= .Machine$integer.max)
+        )
+        if (!is.null(closed)) {
+          stop(paste("SQL result is", closed))
+        }
+        complete <- FALSE
+        on.exit(if (!complete) close())
+        if (!is.null(result) && !DBI::dbIsValid(result)) {
+          stop("SQL result is no longer valid")
+        }
+        remaining <- if (is.null(n)) Inf else n
+        parts <- list()
+        while (remaining > 0 && (!is.null(buffer) || !is.null(result))) {
+          if (is.null(buffer)) {
+            size <- min(remaining, 65536L)
+            buffer <<- if (arrow) {
+              DBI::dbFetchArrowChunk(result, chunk_size = size)
+            } else {
+              DBI::dbFetch(result, n = size)
+            }
+            offset <<- 0L
+            if (DBI::dbHasCompleted(result)) {
+              release()
+            }
+            if (count(buffer) == 0L) {
+              buffer <<- NULL
+              break
+            }
+          }
+          take <- min(remaining, count(buffer) - offset)
+          part <- if (arrow) {
+            # Slice the record's children, retaining their native buffers and
+            # nested values. No R scalar conversion (notably DECIMAL/int64).
+            nanoarrow::nanoarrow_array_modify(
+              buffer,
+              list(
+                length = take,
+                children = lapply(buffer$children, function(column) {
+                  nanoarrow::nanoarrow_array_modify(
+                    column,
+                    list(
+                      offset = column$offset + offset,
+                      length = take,
+                      null_count = if (column$null_count == 0L) 0L else -1L
+                    )
+                  )
+                })
+              )
+            )
+          } else {
+            buffer[seq.int(offset + 1L, offset + take), , drop = FALSE]
+          }
+          parts[[length(parts) + 1L]] <- part
+          remaining <- remaining - take
+          offset <<- offset + take
+          if (offset == count(buffer)) buffer <<- NULL
+        }
+        output <- if (arrow) {
+          nanoarrow::basic_array_stream(parts, schema = schema)
+        } else if (length(parts)) {
+          do.call(rbind, parts)
+        } else {
+          empty
+        }
+        complete <- TRUE
+        output
+      }
+      if (DBI::dbHasCompleted(result)) {
+        release()
+      }
+      if (count(buffer) == 0L) {
+        buffer <- NULL
+      }
+      list(
+        public = list(columns = columns, fetch = fetch, close = close),
+        invalidate = function() close("invalidated")
       )
     }
 
+    fetch_query <- function() {
+      epoch <- result_epoch
+      result <- send_query_arrow()
+      retained <- FALSE
+      on.exit(if (!retained) DBI::dbClearResult(result))
+      if (result@stmt_lst$return_type != "QUERY_RESULT") {
+        return(NULL)
+      }
+
+      batch <- DBI::dbFetchArrowChunk(result, chunk_size = preview_rows + 1L)
+      schema <- nanoarrow::infer_nanoarrow_schema(batch)
+      if (epoch == result_epoch) {
+        last_result <<- retain_result(result, batch, schema = schema)
+        retained <- TRUE
+      }
+      if (!is.null(batch) && batch$length == 0L) {
+        batch <- NULL
+      }
+      list(schema = schema, batch = batch)
+    }
+
     fetch_dbi <- function() {
+      epoch <- result_epoch
       # DBI has no dialect-neutral way to classify a cell before dispatch.
       # Commands that need the statement interface run through DBI from R.
       result <- DBI::dbSendQuery(selected_connection, source)
-      tryCatch(
-        {
-          # DuckDB exposes a Count column even for non-query statements.
-          # Fetching those results warns instead of returning a query preview.
-          if (
-            inherits(result, "duckdb_result") &&
-              result@stmt_lst$return_type != "QUERY_RESULT"
-          ) {
-            return(NULL)
-          }
-          if (nrow(DBI::dbColumnInfo(result)) == 0L) {
-            return(NULL)
-          }
-          data <- DBI::dbFetch(result, n = preview_rows + 1L)
-          schema <- nanoarrow::infer_nanoarrow_schema(data)
-          batch <- nanoarrow::as_nanoarrow_array(data, schema = schema)
-          if (batch$length == 0L) {
-            batch <- NULL
-          }
-          list(schema = schema, batch = batch)
-        },
-        finally = DBI::dbClearResult(result)
-      )
+      retained <- FALSE
+      on.exit(if (!retained) DBI::dbClearResult(result))
+      # DuckDB exposes a Count column even for non-query statements.
+      # Fetching those results warns instead of returning a query preview.
+      if (
+        inherits(result, "duckdb_result") &&
+          result@stmt_lst$return_type != "QUERY_RESULT"
+      ) {
+        return(NULL)
+      }
+      if (nrow(DBI::dbColumnInfo(result)) == 0L) {
+        return(NULL)
+      }
+      data <- DBI::dbFetch(result, n = preview_rows + 1L)
+      if (epoch == result_epoch) {
+        last_result <<- retain_result(result, data)
+        retained <- TRUE
+      }
+      schema <- nanoarrow::infer_nanoarrow_schema(data)
+      batch <- nanoarrow::as_nanoarrow_array(data, schema = schema)
+      if (batch$length == 0L) {
+        batch <- NULL
+      }
+      list(schema = schema, batch = batch)
     }
 
     stringify <- function(batch, schema, rows, columns, id) {
@@ -504,6 +635,24 @@ base::local(
         values <- rep(list(character()), columns)
         truncated <- rep(list(logical()), columns)
       } else {
+        # Timestamp schemas carry the source timezone. Preserve it when casting
+        # in the scratch catalog rather than querying the live result connection.
+        schema_timezones <- function(schema) {
+          c(
+            if (grepl("^ts[^:]*:.+", schema$format)) {
+              sub("^ts[^:]*:", "", schema$format)
+            },
+            unlist(lapply(schema$children, schema_timezones), use.names = FALSE)
+          )
+        }
+        zones <- unique(schema_timezones(schema))
+        if (length(zones) == 1L) {
+          rendering <- ensure_rendering_connection()
+          DBI::dbExecute(
+            rendering,
+            paste("SET TimeZone =", DBI::dbQuoteString(rendering, zones))
+          )
+        }
         cells <- stringify(batch, schema, rows, columns, id)
         values <- cells$values
         truncated <- cells$truncated
@@ -539,6 +688,8 @@ base::local(
     }
 
     evaluate_impl <- function(id) {
+      complete <- FALSE
+      on.exit(if (!complete) close_last_result())
       tryCatch(
         {
           ensure_connection()
@@ -564,6 +715,7 @@ base::local(
           if (!is.null(preview)) {
             render_preview(preview, id)
           }
+          complete <- TRUE
         },
         error = function(error) {
           cat("Error: ", conditionMessage(error), "\n", sep = "")
