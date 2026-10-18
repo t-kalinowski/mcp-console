@@ -48,7 +48,7 @@ website:
       - href: README.md
         text: Overview
       - getting-started.qmd
-      - section: How Console works
+      - section: Using Console
         contents:
         - BUILTIN_RUNTIME.md
         - REQUIREMENTS.md

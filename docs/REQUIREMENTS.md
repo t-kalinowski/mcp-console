@@ -162,16 +162,9 @@ See [Configure package sources](RESOLVER.md#configuration) for repository settin
 Windows preparation and `--no-sandbox` use host permissions.
 [Sandbox and trust](SANDBOX.md) describes the platform-specific limits.
 
-## Save an analysis {#saving-an-r-script}
+## Recordings {#saving-an-r-script}
 
-Accepted package requests persist across a session restart, not across new server connections.
-They are not a lockfile or an inventory of every installed package.
-
-A saved script must declare its own packages and inputs; it does not inherit live objects or the session's package declaration.
-An R script can use [ir frontmatter](https://r-lib.github.io/ir/run.html) for a separate `ir run script.R` invocation.
-
-A recorded QMD is a starting point for a report, not automatic reproducible replay.
-See [Render a reviewed copy](RECORDING.md#render-a-reviewed-copy).
+Package requirements are included in the session's [recordings](RECORDING.md), alongside code, output, and plots.
 
 <span id="inspecting-and-replacing-requirements"></span> <span id="accepted-requirement-input"></span> <span id="requirements-for-a-cell"></span> <span id="automatic-r-package-resolution"></span> <span id="automatic-python-import-resolution"></span> <span id="live-preparation"></span> <span id="live-r-preparation"></span> <span id="live-python-preparation"></span> <span id="duckdb-extension-preparation"></span> <span id="restarting-with-requirements"></span>
 
