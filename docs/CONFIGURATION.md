@@ -86,7 +86,6 @@ Recognized Conda installations are unsupported.
 Explicit selection overrides launch-time `RETICULATE_PYTHON`, uses preinstalled packages, and disables managed Python preparation.
 Existing selections accept no package or version settings.
 A broken selection fails rather than falling back.
-Python selection is unavailable with custom workers.
 
 To choose the first available candidate:
 
@@ -201,8 +200,7 @@ Startup runs inside the worker with its ordinary permissions.
 Console passes `--quiet`, `--interactive`, and `--no-save`, and does not save a workspace at shutdown.
 
 Set `r.vanilla: true` to request R's native `--vanilla` behavior.
-This affects the built-in worker, not discovery or dependency preparation, which remain profile-free.
-Explicit R settings are unsupported with custom workers/relays.
+This affects the session's R runtime; discovery and dependency preparation remain profile-free.
 
 Console attaches its bridges and managed graphics after native startup.
 Startup plots therefore use R's native device.

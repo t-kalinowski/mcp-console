@@ -3,7 +3,7 @@
 Console gives your agent an interactive workspace for R, Python, and SQL.
 You can ask it to explore data, refine an analysis, or try another approach while keeping the work already in memory.
 
-## Build on earlier work
+## Work iteratively {#build-on-earlier-work}
 
 Variables, imports, functions, and database tables remain available between calls.
 For example, after the agent fits a statistical model, you can ask it to inspect the residuals or plot predictions without loading the data and fitting the model again.
@@ -51,32 +51,34 @@ Here, SQL queries the R data frame through the default R-owned DuckDB connection
 Conversions follow reticulate's rules; some conversions need additional Python packages, such as pandas for data frames.
 The [runtime reference](RUNTIME_REFERENCE.md#r-and-python-interoperability) describes the language bridge and its helpers.
 
-## Choose languages and packages {#runtime-selection}
+## Tailor the runtime {#runtime-selection}
 
 <span id="r"></span> <span id="python"></span>
 
+You can tailor Console to a project's languages and dependencies.
+For example, [expose only Python and SQL](TOOL_CONFIGURATION.md#model-visible-languages), use an [existing Python environment](CONFIGURATION.md#python-environment-selection), or select a specific [R installation](CONFIGURATION.md#r-executable-selection).
+
+An existing Python environment uses the packages already installed there.
+For managed environments, you can [choose startup packages and control whether more may be prepared during the session](REQUIREMENTS.md).
+
 R and Python can each run without the other.
 SQL uses a database connection supplied by one of them.
-By default, Console prepares a Python environment and uses an in-memory DuckDB database for SQL.
 To let your agent use R, [install it separately](getting-started.qmd#install).
-
-You can select an [existing Python environment](CONFIGURATION.md#python-environment-selection) or an [R installation](CONFIGURATION.md#r-executable-selection).
-Console can prepare packages for managed environments; an existing Python environment uses the packages installed there.
-[Packages and environments](REQUIREMENTS.md) explains the defaults and how to control preparation.
 
 ## Work with databases {#sql-and-duckdb}
 
-The default DuckDB database keeps tables and views available for later queries.
-The agent can query R data frames by name when R owns the managed connection, as in the example above.
-With a Python-owned connection, it can register Python data frames for SQL queries.
-
 <span id="select-a-native-connection"></span>
 
-Your agent can also use a database connection opened from R or Python, including a connection to an existing database.
+Console can use any database with an R DBI or Python DB-API driver.
+Your agent can create a connection object in R or Python and select it for subsequent SQL calls, which then run against that database.
+
+By default, Console prepares an in-memory DuckDB database.
+The agent can use it to query data frames and keep tables and views available between calls.
+
 The selected connection determines the SQL dialect and transaction behavior.
 Access to database files and servers depends on the session's [filesystem and network permissions](SANDBOX.md).
 
-The [SQL connection reference](RUNTIME_REFERENCE.md#select-a-native-connection) covers supported connection types and selection.
+The [SQL connection reference](RUNTIME_REFERENCE.md#select-a-native-connection) shows how to select a connection from either language.
 You can also [configure a database connection at startup](CONFIGURATION.md#session-startup-source).
 
 ## Inspect help, plots, and results

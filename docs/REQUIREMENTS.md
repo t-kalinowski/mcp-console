@@ -22,19 +22,19 @@ For R, it updates the session's library paths.
 Adding DuckDB extensions preserves the SQL connection and tables.
 
 With explicit preparation, the agent declares the R packages, Python packages, or DuckDB extensions it needs in a tool call's `requirements` argument.
-For example, the agent can request `seaborn` alongside the code that imports it:
+For example, the agent can request `plotnine` alongside the code that imports it:
 
 ```javascript
 console.send({
-  requirements: { python: ["seaborn"] },
-  python: "import seaborn as sns",
+  requirements: { python: ["plotnine"] },
+  python: "import plotnine as p9",
 });
 ```
 
 Console prepares the requested packages or extensions before running the accompanying code.
 The agent can also make a request on its own.
 
-With implicit preparation, a call such as `library(palmerpenguins)` in R or `import seaborn` in Python can trigger preparation when a package is missing.
+With implicit preparation, a call such as `library(palmerpenguins)` in R or `import plotnine` in Python can trigger preparation when a package is missing.
 Console resolves the package and continues the load or import without rerunning the cell.
 
 R defaults to `implicit`, which also allows explicit package requests.
@@ -86,9 +86,15 @@ The agent can use available packages, but cannot ask Console to add packages or 
 
 ### `explicit`: also accept package requests
 
-In addition to preparing startup packages, Console accepts explicit package requests from the agent during the session.
-For example, the agent can request `seaborn` before running code that imports it.
-The request can accompany the code that uses the package, so a separate call is not required.
+In addition to preparing startup packages as `fixed` does, Console accepts explicit package requests from the agent during the session.
+The request can accompany the code that uses the package:
+
+```javascript
+console.send({
+  requirements: { python: ["plotnine"] },
+  python: "import plotnine as p9",
+});
+```
 
 Ordinary R package-loading calls and Python imports use available packages; they do not trigger preparation on their own.
 
@@ -98,7 +104,7 @@ This adds automatic preparation to everything `explicit` allows.
 When the agent's code tries to load a missing package, that operation can trigger Console to resolve and prepare it:
 
 - In R, an ordinary call such as `library(palmerpenguins)` or `loadNamespace("palmerpenguins")` can prepare the missing package and continue loading it.
-- In Python, an ordinary import such as `import seaborn` can prepare the missing package and continue importing it.
+- In Python, an ordinary import such as `import plotnine` can prepare the missing package and continue importing it.
 
 Preparation happens when execution reaches the load or import.
 The agent does not need to make a separate package request, and Console does not rerun the whole cell.
@@ -128,26 +134,23 @@ DuckDB extension preparation follows the policy of its managed provider.
 
 ## Use an existing Python environment
 
-To use a project's environment:
+By default, Console prepares and manages its own Python environment.
+You can instead use an environment you manage yourself, such as a project's virtual environment or a separate Python installation:
 
 ```yaml
 python: .venv
 ```
 
-Console uses the packages already installed there and does not manage Python package installation for that selection.
-Standard-library Python code needs no additional packages.
-Install third-party packages for the analysis you plan to run: for example, pandas for pandas operations, Matplotlib for pyplot plots, or DuckDB for the default Python-owned SQL connection.
+Console uses the selected environment as supplied, without resolving or installing Python packages.
+Console itself needs no third-party Python packages; a [compatible Python installation](CONFIGURATION.md#python-environment-selection) with its standard library is sufficient.
 
-A user-selected SQLite connection can provide SQL using Python's standard library.
-See [database connections](BUILTIN_RUNTIME.md#select-a-native-connection).
-
-The interpreter must still meet Console's [existing-environment requirements](CONFIGURATION.md#python-environment-selection), including the CPython version and shared embedding library.
-Selecting an existing environment changes package management; it does not grant extra filesystem or network permissions.
+Install the packages you want your agent to use in that environment, such as pandas for data frames, Matplotlib for plotting, and DuckDB for the default [Python-owned SQL connection](BUILTIN_RUNTIME.md#select-a-native-connection).
+The session's filesystem and network permissions still apply.
 
 ## Package sources and permissions {#host-resolution-and-trust}
 
 On macOS and Linux, Console resolves and prepares packages in a separate sandbox by default.
-It can read files, write to dependency caches and temporary directories, and download from allowed package and tooling hosts.
+The resolver sandbox limits writes to dependency caches and temporary directories and restricts network access to allowed package and tooling hosts.
 These permissions are separate from those of the agent's code.
 
 Default package sources include PyPI for Python and CRAN through Posit Package Manager for R.
@@ -175,5 +178,3 @@ See [Render a reviewed copy](RECORDING.md#render-a-reviewed-copy).
 For requirement actions, accepted input, and live-preparation semantics, see [Requirements API](REQUIREMENTS_API.md).
 
 <span id="custom-workers"></span>
-
-Custom workers follow the [worker conformance contract](WORKER_PROTOCOL.md#custom-worker-conformance).

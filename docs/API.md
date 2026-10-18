@@ -119,7 +119,7 @@ Register tools through the supplied adapters so the model receives the connected
 ## What is not a public compatibility contract
 
 Hidden worker/relay/resolver subcommands, internal `MCP_CONSOLE_*` handoffs, process layouts, and recording journal schemas are implementation interfaces.
-Console-owned private protocols evolve in lockstep; custom workers must match the current build.
+Console-owned private protocols evolve in lockstep.
 The separately pinned native runner and external MCP protocol retain their own contracts.
 
 Internal details belong in [Architecture](ARCHITECTURE.md), [Relay protocol](RELAY_PROTOCOL.md), and [Worker protocol](WORKER_PROTOCOL.md).

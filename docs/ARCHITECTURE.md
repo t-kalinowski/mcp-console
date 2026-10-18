@@ -60,7 +60,7 @@ Overrides apply after the selected files and before ordinary `-c` overrides; exp
 The adapter removes the file after synchronous materialization or the server's initialization handshake, when native capture has finished reading it.
 One connection-owned background task discovers runtimes, prepares defaults, and prelaunches the built-in worker.
 MCP initialization, tool discovery, and pings do not wait.
-Custom workers remain lazy.
+Workers supplied through internal testing hooks are launched on demand.
 
 With the `inherit_codex` sandbox profile, startup waits for the first `send` to capture client authority before creating any preparation or execution process.
 Capture happens in transport request order before asynchronous handler dispatch; a cancelled first request cannot let a later request select the connection's permissions.
