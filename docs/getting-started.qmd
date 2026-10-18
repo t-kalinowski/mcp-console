@@ -2,7 +2,7 @@
 title: Get started
 ---
 
-Install uv, connect Console to your MCP client, and try an analysis.
+Install uv, choose how to connect to Console, and try an analysis.
 No Console configuration file is required.
 
 ## Install
@@ -27,7 +27,11 @@ See [Check your installation](CLI.md#check-your-installation) for configuration 
 
 To install the development version, follow [Build from source](BUILD_FROM_SOURCE.md).
 
-## Connect your client
+## Connect to Console {#connect-your-client}
+
+Use an MCP client or integrate Console into your own R or Python application.
+
+### Codex and Claude Code
 
 Register Console with the client you use:
 
@@ -43,7 +47,20 @@ Restart the client after setup.
 Your client launches Console on the same host, usually in the workspace where the agent is working.
 
 To register Console for a specific project, run the command from the project directory and add `--directory .`.
-See [client configuration](CLI.md#configure-a-client) for updating earlier project registrations, other MCP clients, version pinning, and launch options.
+See [client configuration](CLI.md#configure-a-client) for updating earlier project registrations, version pinning, and launch options.
+
+### Other MCP clients
+
+Console supports MCP over standard input and output (stdio).
+In your client's MCP settings, use command `uvx` and arguments `["mcp-console", "serve"]`.
+See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
+
+### R and Python packages
+
+The [R package, `mcp.console`](../r/README.md), adds Console to an ellmer chat.
+The [Python package, `mcp_console`](PYTHON.md), provides synchronous and asynchronous clients and adapters for chatlas, OpenAI, and Anthropic.
+
+See [Client integration](CLIENTS.md) for package APIs and tool configuration.
 
 ## Try an analysis
 
