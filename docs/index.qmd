@@ -73,7 +73,7 @@ See [Packages and environments](REQUIREMENTS.md).
 Console is a **development preview** for macOS, Linux, and Windows x64.
 Run it on the same host as the MCP client.
 
-The default sandbox profile is `read_only`: it restricts network access and filesystem writes but places no restrictions on filesystem reads.
+Without [client permission inheritance](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex) or a configured profile, Console defaults to `read_only`: it restricts network access and filesystem writes but places no restrictions on filesystem reads.
 You can select a different profile or customize a profile by creating a [`.agents/console/config.yaml` file](CONFIGURATION.md) or supplying configuration arguments on the command line.
 Customizations let you manage network access through a [built-in proxy](SANDBOX_CONFIGURATION.md#proxy-modes-and-destinations) with domain allowlists or denylists, allow filesystem writes to specific paths, and block filesystem reads from selected paths.
 
