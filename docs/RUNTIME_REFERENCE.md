@@ -200,45 +200,40 @@ A preview is not a data export: fetch and save results explicitly when you need 
 After inspecting a SQL preview, retrieve its result in the connection's owning language:
 
 ```r
-result <- .console$sql_last_result()
-first <- result$fetch(100L)
-rest <- result$fetch()
-result$close()
+first <- .console$sql_last_result(n = 100L)
+rest <- .console$sql_last_result()
 ```
 
 ```python
-result = _console.sql_last_result()
-first = result.fetch(100)
-rest = result.fetch()
-result.close()
+first = _console.sql_last_result(n=100)
+rest = _console.sql_last_result()
 ```
 
-Getting the handle does not fetch rows or execute SQL.
-Repeated accessor calls return the same handle.
-`fetch(n)` consumes up to `n` successive rows, starting with the original rows consumed for the preview, including its lookahead row.
+Each call returns fetched data, consuming up to `n` successive rows, starting with the original rows consumed for the preview, including its lookahead row.
 These are original values with every column, including columns and values abbreviated or omitted from the display.
 Rows are never reconstructed from text and the submitted SQL is never replayed.
-`columns` holds the complete column names in order, including duplicates.
 
 Omitting `n`, or passing `NULL` / `None`, materializes **all remaining rows** in memory.
 A nonnegative integer limits the rows fetched and materialized by that call; zero returns an empty result without advancing it.
 Calls consume successive rows rather than returning the same prefix.
 There is no rewind operation.
 After exhaustion, subsequent fetches return empty results with the original columns/schema.
-If a driver needs another fetch to discover exhaustion, the result remains open until that fetch, close, replacement, or restart.
+If a driver needs another fetch to discover exhaustion, the result remains open until that fetch, replacement, or restart.
 In particular, a short nonempty DB-API batch does not close the cursor; an empty fetch or `fetchall()` establishes exhaustion.
 
 Return types follow the owning provider:
 
-| Provider                                | `fetch()` result                                                          | Optional conversion                                                                                                                                 |
-| --------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Managed R DuckDB                        | `nanoarrow_array_stream` containing the fetched native batches and schema | `as.data.frame(stream)` for types supported by Nanoarrow's R conversion; an optional Arrow consumer can preserve types R cannot represent directly. |
-| Selected R DBI connection               | The driver's data frame, with its native column types                     | Ordinary R data-frame operations.                                                                                                                   |
-| Python DB-API, including managed DuckDB | A list of native driver rows                                              | `pandas.DataFrame(rows, columns=result.columns)` if pandas is installed; its conversion rules apply.                                                |
+| Provider                                | Returned data                                                               | Optional conversion                                                                                                                                 |
+| --------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Managed R DuckDB                        | `nanoarrow_array_stream` containing the fetched native batches and schema   | `as.data.frame(stream)` for types supported by Nanoarrow's R conversion; an optional Arrow consumer can preserve types R cannot represent directly. |
+| Selected R DBI connection               | The driver's data frame, with its native column types                       | Ordinary R data-frame operations.                                                                                                                   |
+| Python DB-API, including managed DuckDB | A dictionary with `rows` (native driver rows) and `columns` (ordered names) | `pandas.DataFrame(data["rows"], columns=data["columns"])` if pandas is installed; its conversion rules apply.                                       |
 
 R managed DuckDB keeps BIGINT, DECIMAL, nested values, and nulls in native Arrow buffers without requiring the R `arrow` package for retrieval.
 An R data-frame conversion can lose precision or reject types that R cannot represent; conversion is an explicit caller choice.
 Python retrieval does not require pandas, PyArrow, or another dataframe package.
+The Python column names include duplicates and remain available for empty results.
+The R stream contains only the batches fetched by this call: consuming it never fetches more database rows.
 The selected DBI/DB-API driver still owns its type mappings and any precision limits.
 For transfer to the other language, use the existing [R/Python bridge](#r-and-python-interoperability) after retrieval and choose suitable conversions.
 
@@ -246,7 +241,7 @@ Console initially fetches at most 21 rows for its preview and retains those rows
 It does not eagerly fetch, copy, count, or spool the complete result.
 Later bounded fetches use the saved rows first and request only the remaining row allowance from the driver.
 Database engines and drivers can independently evaluate ahead or buffer/materialize data internally; Console's row limits do not control those allocations.
-Returned chunks belong to the caller and can outlive the handle.
+Returned data belongs to the caller and remains usable after cleanup or another SQL cell.
 Native buffers may retain the bounded batch from which a smaller chunk was sliced.
 The retained rows include complete values and columns, so their memory cost depends on row width rather than the text preview budget.
 R preview formatting also keeps a scratch DuckDB connection until worker shutdown.
@@ -255,27 +250,24 @@ R preview formatting also keeps a scratch DuckDB connection until worker shutdow
 
 Only the latest SQL cell has a retained result.
 The accessor errors before a result exists, after a SQL cell without a row result, or in the other language.
-Another SQL cell invalidates the previous handle before execution, including when the new SQL fails or is interrupted.
-An accepted connection selection or reset also invalidates it, even when selecting the same connection.
-Invalidated handles cannot fetch again; already returned data remains usable.
+Another SQL cell discards the previous result before execution, including when the new SQL fails or is interrupted.
+An accepted connection selection or reset also discards it, even when selecting the same connection.
 
-`close()` is idempotent and discards unread rows.
-Fetching after explicit close errors.
-An error or interrupt during retrieval closes that handle because the driver's position may have changed.
+An error or interrupt during retrieval discards the result because the driver's position may have changed.
 Unrelated language errors and interrupts preserve an idle result.
 Retrieval runs as ordinary R/Python code, with the existing `timeout_ms` polling and cooperative interruption behavior; an observation timeout does not cancel it.
-Restart or worker loss discards every handle and native resource.
+Restart or worker loss discards retained results and native resources.
 
-Console clears DBI results and closes distinct DB-API cursors on exhaustion, explicit close, invalidation, and retrieval failure.
+Console clears DBI results and closes distinct DB-API cursors automatically on exhaustion, replacement, and retrieval failure.
 It does not commit, roll back, disconnect a selected connection, or create another connection to execute the query.
 Retained results can hold statements, source data, engine buffers, transactions, or database locks.
-Dropping a local handle variable does not release Console's last-result reference: call `close()` when abandoning a result.
-For drivers such as Python DuckDB whose result cursor is the connection itself, closing the handle releases Console's rows and references but cannot independently release the connection's native result.
+Partial retrieval leaves the native result open until exhaustion, replacement, or restart; dropping returned data does not discard unread rows.
+For drivers such as Python DuckDB whose result cursor is the connection itself, cleanup releases Console's rows and references but cannot independently release the connection's native result.
 That state follows the driver's lifetime, usually until another execution, user-owned connection closure, or worker shutdown.
 
 Direct R/Python operations on the connection can invalidate or replace native fetch state.
-Close the handle before such operations.
-Console cannot portably detect every replacement, especially when Python's connection is itself the cursor; use while a handle is pending is unsupported.
+Finish retrieval or select the same connection again to discard unread rows before such operations.
+Console cannot portably detect every replacement, especially when Python's connection is itself the cursor; direct use while a result is pending is unsupported.
 Driver invalidation errors are reported without query replay or recovery through another connection.
 
 ## Plots and images

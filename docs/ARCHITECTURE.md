@@ -101,12 +101,12 @@ Actual R capability chooses the default managed provider independently of public
 Selecting or attaching another runtime must not replace a user-selected connection.
 
 Each SQL provider retains one native result and its bounded preview/lookahead rows.
-The public last-result handle consumes those rows before fetching more in its owning runtime.
-A handle combines on-demand materialization, bounded chunks, and explicit release without a query-history or storage layer.
-An accessor that repeatedly materialized a prefix would require replay or unbounded retention; capture requested with the original query would require anticipating later transfer.
+The public last-result function consumes those rows before fetching more in its owning runtime, with an optional row limit.
+It returns fetched data and automatically releases native resources on exhaustion, replacement, or retrieval failure.
+Successive calls advance the result; repeatedly returning a prefix would require replay or unbounded retention.
 Native DBI/DB-API queries remain available when callers want to own their result lifecycle directly.
 R managed DuckDB fetches exact Nanoarrow chunks and formats its preview in a separate scratch catalog so formatting cannot invalidate the retained query.
-Other DBI paths keep native data frames; Python keeps driver rows and closes only result objects distinct from the selected connection.
+Other DBI paths keep native data frames; Python returns driver rows with ordered column names and closes only result objects distinct from the selected connection.
 The router and selection callbacks invalidate results across language boundaries without initializing another runtime.
 Observable consumption, conversion, and lifetime rules belong in the [runtime reference](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result).
 

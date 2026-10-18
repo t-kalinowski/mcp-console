@@ -96,22 +96,23 @@ result:
 ---
 send:
   python: |
-    result = _console.sql_last_result()
-    assert result is _console.sql_last_result()
     assert selected.executions == 1
     cursor = selected.cursors[-1]
     assert cursor.fetches == [21] and not cursor.closed
-    assert len(result.columns) == 13 and result.columns[-1] == "c13"
-    assert result.fetch(0) == [] and cursor.fetches == [21]
-    first = result.fetch(5)
+    empty = _console.sql_last_result(0)
+    assert empty["rows"] == [] and cursor.fetches == [21]
+    assert len(empty["columns"]) == 13 and empty["columns"][-1] == "c13"
+    first = _console.sql_last_result(5)
     assert cursor.fetches == [21]
-    second = result.fetch(19)
+    second = _console.sql_last_result(19)
     assert cursor.fetches == [21, 3]
-    third = result.fetch(33)
+    third = _console.sql_last_result(33)
     assert cursor.fetches == [21, 3, 33]
-    assert result.fetch(1) == [] and cursor.closed
-    assert result.fetch() == []
-    rows = first + second + third
+    assert _console.sql_last_result(1) == empty and cursor.closed
+    assert _console.sql_last_result() == empty
+    rows = first["rows"] + second["rows"] + third["rows"]
+    assert first["columns"] == second["columns"] == third["columns"]
+    assert not hasattr(first, "fetch") and not hasattr(first, "close")
     assert [row[0] for row in rows] == list(range(57))
     assert all(row[1] == 9223372036854775807 for row in rows)
     assert all(row[2] is None and row[3] == bytes(200) for row in rows)
@@ -140,14 +141,9 @@ result:
 send:
   python: |
     empty = _console.sql_last_result()
-    assert empty.columns == ("id",) and empty.fetch() == []
+    assert empty == {"columns": ("id",), "rows": []}
     assert selected.cursors[-1].closed
-    try:
-        result.fetch(1)
-    except RuntimeError as error:
-        assert "invalidated" in str(error)
-    else:
-        raise AssertionError("previous result remained usable")
+    assert first["rows"][0][0] == 0
     print("empty results retain columns and release cursors")
 result:
   content:
@@ -181,14 +177,13 @@ result:
 ---
 send:
   python: |
-    result = _console.sql_last_result()
     cursor = selected.cursors[-1]
     assert not cursor.closed and cursor.fetches == [21]
-    first = result.fetch(3)
-    second = result.fetch(10)
+    first = _console.sql_last_result(3)["rows"]
+    second = _console.sql_last_result(10)["rows"]
     assert len(first) == 3 and len(second) == 2
     assert not cursor.closed and cursor.fetches == [21, 1, 10]
-    rest = result.fetch()
+    rest = _console.sql_last_result()["rows"]
     assert first + second + rest == [(i,) for i in range(57)]
     assert cursor.closed
     print("short native batches do not imply exhaustion")
@@ -197,4 +192,61 @@ result:
     - type: text
       text: |
         short native batches do not imply exhaustion
+  isError: false
+---
+send:
+  python: selected.short = False
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: SELECT 10 AS value UNION ALL SELECT 20
+result:
+  content:
+    - type: text
+      text: |
+        value
+        -----
+        10
+        20
+  isError: false
+---
+send:
+  python: |
+    abandoned = selected.cursors[-1]
+    saved = _console.sql_last_result(n=1)
+    assert saved == {"columns": ("value",), "rows": [(10,)]}
+    assert not abandoned.closed
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: SELECT 30 AS replacement
+result:
+  content:
+    - type: text
+      text: |
+        replacement
+        -----------
+        30
+  isError: false
+---
+send:
+  python: |
+    assert abandoned.closed
+    assert _console.sql_last_result() == {"columns": ("replacement",), "rows": [(30,)]}
+    assert selected.cursors[-1].closed
+    assert saved == {"columns": ("value",), "rows": [(10,)]}
+    print("replacement cleans up unread rows and preserves returned data")
+result:
+  content:
+    - type: text
+      text: |
+        replacement cleans up unread rows and preserves returned data
   isError: false

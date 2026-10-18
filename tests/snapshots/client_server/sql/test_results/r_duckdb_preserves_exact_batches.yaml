@@ -77,19 +77,16 @@ result:
 ---
 send:
   r: |
-    result <- .console$sql_last_result()
-    stopifnot(identical(result, .console$sql_last_result()))
-    first <- result$fetch(5L)
-    second <- result$fetch(19L)
-    third <- result$fetch(33L)
-    empty <- result$fetch(1L)
+    first <- .console$sql_last_result(5L)
+    second <- .console$sql_last_result(19L)
+    third <- .console$sql_last_result(33L)
+    empty <- .console$sql_last_result(1L)
     stopifnot(inherits(first, "nanoarrow_array_stream"))
     a <- nanoarrow::collect_array_stream(first)
     b <- nanoarrow::collect_array_stream(second)
     c <- nanoarrow::collect_array_stream(third)
     batches <- c(a, b, c)
     stopifnot(length(nanoarrow::collect_array_stream(empty)) == 0L)
-    stopifnot(length(result$columns) == 13L)
     ids <- unlist(lapply(batches, function(x) as.vector(x$children$id)))
     stopifnot(identical(ids, 0:56))
     schema <- nanoarrow::infer_nanoarrow_schema(a[[1L]])
@@ -144,7 +141,7 @@ result:
 ---
 send:
   r: |
-    empty <- .console$sql_last_result()$fetch()
+    empty <- .console$sql_last_result()
     stopifnot(grepl(
       "decimal128(10, 2)",
       format(empty$get_schema()$children$amount),
@@ -195,10 +192,9 @@ result:
 ---
 send:
   r: |
-    result <- .console$sql_last_result()
-    chunk <- result$fetch(5L)
+    chunk <- .console$sql_last_result(5L)
     stopifnot(grepl("America/New_York", chunk$get_schema()$children$zoned$format))
-    result$close()
+    rest <- .console$sql_last_result()
     writeLines("timestamp preview and retained schema keep the connection timezone")
 result:
   content:

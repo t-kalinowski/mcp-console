@@ -51,22 +51,15 @@ result:
 ---
 send:
   python: |
-    closed = _console.sql_last_result()
-    closed.close()
-    closed.close()
-    try:
-        closed.fetch()
-    except RuntimeError as error:
-        assert "closed" in str(error)
-    else:
-        raise AssertionError("closed result fetched rows")
+    previous = _console.sql_last_result(5)
+    assert previous == {"columns": ("i",), "rows": [(i,) for i in range(5)]}
     assert connection.in_transaction
-    print("explicit close is idempotent")
+    print("retrieval returns data and preserves the transaction")
 result:
   content:
     - type: text
       text: |
-        explicit close is idempotent
+        retrieval returns data and preserves the transaction
   isError: false
 ---
 send:
@@ -104,14 +97,6 @@ result:
   isError: false
 ---
 send:
-  python: previous = _console.sql_last_result()
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
   sql: SELECT * FROM missing_table
 result:
   content:
@@ -122,13 +107,13 @@ result:
 ---
 send:
   python: |
-    for fetch in (previous.fetch, _console.sql_last_result):
-        try:
-            fetch()
-        except RuntimeError:
-            pass
-        else:
-            raise AssertionError("stale result survived failed SQL")
+    try:
+        _console.sql_last_result()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("stale result survived failed SQL")
+    assert previous["rows"] == [(i,) for i in range(5)]
     assert connection.in_transaction
     print("failed SQL invalidates the previous result")
 result:
@@ -173,14 +158,6 @@ result:
   isError: false
 ---
 send:
-  python: previous = _console.sql_last_result()
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
   r: .console$sql_connection(NULL)
 result:
   content:
@@ -191,9 +168,9 @@ result:
 send:
   python: |
     try:
-        previous.fetch(1)
-    except RuntimeError as error:
-        assert "invalidated" in str(error)
+        _console.sql_last_result(1)
+    except RuntimeError:
+        pass
     else:
         raise AssertionError("stale Python result")
     assert connection.in_transaction
@@ -240,14 +217,6 @@ result:
   isError: false
 ---
 send:
-  r: previous <- .console$sql_last_result()
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
   python: _console.sql_connection(connection)
 result:
   content:
@@ -257,8 +226,8 @@ result:
 ---
 send:
   r: |
-    message <- tryCatch(previous$fetch(1L), error = conditionMessage)
-    stopifnot(grepl("invalidated", message))
+    message <- tryCatch(.console$sql_last_result(1L), error = conditionMessage)
+    stopifnot(grepl("No retained", message))
     writeLines("Python selection invalidates R results")
 result:
   content:

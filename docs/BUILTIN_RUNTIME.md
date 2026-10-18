@@ -161,22 +161,20 @@ You can decide to use a result after inspecting its preview, without running the
 Retrieve it in the connection's owning language:
 
 ```r
-result <- .console$sql_last_result()
-first <- result$fetch(100L)
-result$close()
+first <- .console$sql_last_result(n = 100L)
 ```
 
 ```python
-result = _console.sql_last_result()
-first = result.fetch(100)
-result.close()
+first = _console.sql_last_result(n=100)
 ```
 
 Fetches consume successive rows, starting with the original preview and including every column.
 Omitting the row limit materializes all remaining rows in memory.
-R managed DuckDB returns a Nanoarrow stream that preserves exact database types; selected DBI connections return native data frames, and Python returns native rows with column names in `result.columns`.
+R managed DuckDB returns a Nanoarrow stream containing the fetched batches with exact database types; selected DBI connections return native data frames.
+Python returns a dictionary with native `rows` and ordered `columns`, without requiring pandas.
 Convert explicitly when a data frame is useful.
-Close an abandoned handle to release resources; another SQL cell or connection selection invalidates it.
+Cleanup is automatic on exhaustion, another SQL cell, connection selection, or a retrieval error or interrupt.
+Partial retrieval keeps unread rows available until then.
 See [result retrieval](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result) for conversion choices, driver limits, and lifetime rules.
 
 ## Plots and images

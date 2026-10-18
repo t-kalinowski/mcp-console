@@ -83,15 +83,7 @@ result:
   isError: false
 ---
 send:
-  python: result = _console.sql_last_result()
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
-  python: rows = result.fetch(30)
+  python: data = _console.sql_last_result(30)
   timeout_ms: 0
 result:
   content:
@@ -122,9 +114,9 @@ result:
 ---
 send:
   python: |
-    assert rows == [(i,) for i in range(30)]
+    assert data == {"columns": ("i",), "rows": [(i,) for i in range(30)]}
     assert connection.latest.calls == 2
-    result.close()
+    _console.sql_connection(connection)
     assert connection.latest.closed
     print("resumed retrieval keeps the preview prefix")
 result:
@@ -169,15 +161,7 @@ result:
   isError: false
 ---
 send:
-  python: result = _console.sql_last_result()
-result:
-  content:
-    - type: text
-      text: "[done]"
-  isError: false
----
-send:
-  python: result.fetch(30)
+  python: _console.sql_last_result(30)
   timeout_ms: 0
 result:
   content:
@@ -204,8 +188,8 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<mcp-console:python:e6>", line 1, in <module>
-          File "<string>", line 74, in fetch
+          File "<mcp-console:python:e4>", line 1, in <module>
+          File "<string>", line 69, in sql_last_result
           File "<mcp-console:python:e1>", line 22, in fetchmany
         KeyboardInterrupt
   isError: false
@@ -214,9 +198,9 @@ send:
   python: |
     assert connection.latest.closed
     try:
-        result.fetch(1)
+        _console.sql_last_result(1)
     except RuntimeError as error:
-        assert "closed" in str(error)
+        assert "No retained" in str(error)
     else:
         raise AssertionError("interrupted cursor remained usable")
     print("interrupted retrieval releases the cursor")

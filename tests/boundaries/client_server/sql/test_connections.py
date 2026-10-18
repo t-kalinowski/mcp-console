@@ -156,7 +156,7 @@ def test_gets_selects_and_resets_the_active_native_connection(
             except TypeError as error:
                 print(error)
             assert _console.sql_connection() is selected
-            _console.sql_last_result().close()
+            _ = _console.sql_last_result()
             selected.close()
             """)
         client.send(python=python)
@@ -697,6 +697,9 @@ def test_reports_python_dbapi_cursor_cleanup_failures(
             def fetchmany(self, size):
                 return [(42,)][:size]
 
+            def fetchall(self):
+                return []
+
             def close(self):
                 raise RuntimeError("selected DB-API cleanup failure")
 
@@ -714,8 +717,8 @@ def test_reports_python_dbapi_cursor_cleanup_failures(
     client.send(sql="ANSWER")
     output = last_tool_text(client)
     assert "answer" in output and "42" in output
-    # A nonempty preview retains the cursor until consumption or explicit close.
-    client.send(python="_console.sql_last_result().close()")
+    # Retrieving all remaining rows automatically releases the native cursor.
+    client.send(python="_ = _console.sql_last_result()")
     output = last_tool_text(client)
     assert "Error: selected DB-API cleanup failure" in output
 

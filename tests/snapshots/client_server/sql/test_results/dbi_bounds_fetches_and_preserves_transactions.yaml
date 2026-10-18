@@ -102,19 +102,18 @@ result:
 ---
 send:
   r: |
-    result <- .console$sql_last_result()
     stopifnot(identical(metrics$fetches, 21), metrics$clears == 0L)
-    stopifnot(nrow(result$fetch(0L)) == 0L)
-    a <- result$fetch(5L)
+    stopifnot(nrow(.console$sql_last_result(0L)) == 0L)
+    a <- .console$sql_last_result(5L)
     stopifnot(identical(metrics$fetches, 21))
-    b <- result$fetch(19L)
+    b <- .console$sql_last_result(19L)
     stopifnot(identical(metrics$fetches, c(21, 3)))
-    c <- result$fetch()
+    c <- .console$sql_last_result()
     rows <- rbind(a, b, c)
     stopifnot(identical(rows$i, 0:56), all(is.na(rows$missing)))
-    stopifnot(identical(result$columns, names(rows)))
+    stopifnot(identical(names(rows), c("i", "missing", "label")))
     stopifnot(metrics$executions == 1L, metrics$clears == 1L)
-    stopifnot(nrow(result$fetch()) == 0L)
+    stopifnot(nrow(.console$sql_last_result()) == 0L)
     DBI::dbRollback(sqlite)
     stopifnot(DBI::dbGetQuery(sqlite, "SELECT count(*) AS n FROM transaction_state")$n == 0L)
     writeLines("DBI fetch bounds and native transaction retained")
@@ -139,7 +138,7 @@ result:
 send:
   r: |
     result <- .console$sql_last_result()
-    stopifnot(identical(result$columns, "id"), nrow(result$fetch()) == 0L)
+    stopifnot(identical(names(result), "id"), nrow(result) == 0L)
     writeLines("empty DBI frame preserves columns")
 result:
   content:
@@ -184,7 +183,7 @@ result:
   isError: false
 ---
 send:
-  r: result <- .console$sql_last_result(); metrics$gate <- TRUE
+  r: metrics$gate <- TRUE
 result:
   content:
     - type: text
@@ -192,7 +191,7 @@ result:
   isError: false
 ---
 send:
-  r: result$fetch(30L)
+  r: .console$sql_last_result(30L)
   timeout_ms: 0
 result:
   content:
@@ -222,7 +221,7 @@ result:
 ---
 send:
   r: |
-    stopifnot(grepl("closed", tryCatch(result$fetch(1L), error = conditionMessage)))
+    stopifnot(grepl("No retained", tryCatch(.console$sql_last_result(1L), error = conditionMessage)))
     stopifnot(metrics$clears == 3L, DBI::dbIsValid(sqlite))
     writeLines("interrupted DBI fetch closes its result")
 result:
@@ -269,17 +268,88 @@ result:
 ---
 send:
   r: |
-    result <- .console$sql_last_result()
     metrics$fail <- TRUE
-    message <- tryCatch(result$fetch(30L), error = conditionMessage)
+    message <- tryCatch(.console$sql_last_result(30L), error = conditionMessage)
     stopifnot(identical(message, "native fetch failed"), metrics$clears == 4L)
     metrics$fail <- FALSE
-    .console$sql_connection(NULL)
-    DBI::dbDisconnect(sqlite)
     writeLines("failed DBI fetch closes its result")
 result:
   content:
     - type: text
       text: |
         failed DBI fetch closes its result
+  isError: false
+---
+send:
+  sql: |-
+    WITH RECURSIVE rows(i) AS (
+                VALUES (0) UNION ALL SELECT i + 1 FROM rows WHERE i < 56
+            ) SELECT i FROM rows
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 20 × 1
+                 i
+           <int32>
+         1       0
+         2       1
+         3       2
+         4       3
+         5       4
+         6       5
+         7       6
+         8       7
+         9       8
+        10       9
+        11      10
+        12      11
+        13      12
+        14      13
+        15      14
+        16      15
+        17      16
+        18      17
+        19      18
+        20      19
+        [additional rows omitted]
+  isError: false
+---
+send:
+  r: |
+    saved <- .console$sql_last_result(n = 5L)
+    stopifnot(identical(saved$i, 0:4), metrics$clears == 4L)
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: SELECT 99 AS replacement
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 1 × 1
+          replacement
+              <int32>
+        1          99
+  isError: false
+---
+send:
+  r: |
+    replacement <- .console$sql_last_result()
+    stopifnot(identical(replacement$replacement, 99L))
+    stopifnot(identical(saved$i, 0:4), metrics$clears == 6L)
+    .console$sql_connection(NULL)
+    DBI::dbDisconnect(sqlite)
+    writeLines(
+      "DBI replacement clears unread results without changing returned data"
+    )
+result:
+  content:
+    - type: text
+      text: |
+        DBI replacement clears unread results without changing returned data
   isError: false

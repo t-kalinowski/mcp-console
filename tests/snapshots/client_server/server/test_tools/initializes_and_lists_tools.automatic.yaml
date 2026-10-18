@@ -94,14 +94,14 @@ result:
               DBI connection for SQL cells with `.console$sql_connection(connection)`;
               restore managed DuckDB with `.console$sql_connection(NULL)`. Never
               disconnect the managed connection; restore it before disconnecting a
-              selection. After R-owned SQL, `result <- .console$sql_last_result()`
-              retrieves a handle without re-executing SQL. `result$fetch(n)` consumes
-              up to n rows, including the original preview first; omit n to
-              materialize all remaining rows. Managed DuckDB returns a Nanoarrow
-              stream preserving exact types; other DBI connections return native data
-              frames. Convert streams with `as.data.frame()` only when its type
-              conversions suit the data. `result$close()` releases the retained
-              result. Default-device plots return as PNGs and finalize at cell end,
+              selection. After R-owned SQL, `.console$sql_last_result(n = 100)`
+              retrieves up to n successive rows, including the original preview first,
+              without re-executing SQL; omit n to materialize all remaining rows.
+              Managed DuckDB returns a Nanoarrow stream of fetched batches preserving
+              exact types; other DBI connections return native data frames. Convert
+              streams with `as.data.frame()` only when its type conversions suit the
+              data. Cleanup is automatic on exhaustion, replacement, or retrieval
+              failure. Default-device plots return as PNGs and finalize at cell end,
               including after errors; draw each plot in one cell. Explicit devices are
               not captured. Set persistent dimensions in inches and DPI with
               `options(console.plot.width_in = ..., console.plot.height_in = ...,
@@ -118,22 +118,23 @@ result:
               names. Access R globals and call functions through `r.name`. Select a
               user-owned DB-API connection for SQL cells with
               `_console.sql_connection(connection)`; restore managed DuckDB with
-              `_console.sql_connection(None)`. After Python-owned SQL, `result =
-              _console.sql_last_result()` retrieves a handle without re-executing SQL.
-              `result.fetch(n)` consumes up to n native rows, including the original
-              preview first; omit n to materialize all remaining rows. Column names
-              are in `result.columns`; optional `pandas.DataFrame(rows,
-              columns=result.columns)` conversion follows pandas' type rules.
-              `result.close()` releases retained cursors distinct from the connection.
-              For R-owned DuckDB, bind Python frames to an R name through `r` before
-              querying. `_console.sql_connection()` returns the active native Python
-              connection, or errors if SQL uses R; on Python-owned DuckDB, register
-              frames with `_console.sql_connection().register(name, frame)` (globals
-              are not scanned). `matplotlib.pyplot.show()` returns open figures as
-              PNGs immediately and closes them. At cell end, even after errors,
-              remaining open figures return as PNGs and close; `show()` is optional.
-              Closing an unshown figure suppresses capture. R plots through `r` follow
-              the R plot rules.
+              `_console.sql_connection(None)`. After Python-owned SQL, `data =
+              _console.sql_last_result(n=100)` retrieves up to n successive native
+              rows, including the original preview first, without re-executing SQL;
+              omit n to materialize all remaining rows. It returns a dictionary with
+              `rows` and ordered `columns`, without requiring pandas. Optional
+              `pandas.DataFrame(data["rows"], columns=data["columns"])` conversion
+              follows pandas' type rules. Cleanup is automatic on exhaustion,
+              replacement, or retrieval failure; connections stay open. For R-owned
+              DuckDB, bind Python frames to an R name through `r` before querying.
+              `_console.sql_connection()` returns the active native Python connection,
+              or errors if SQL uses R; on Python-owned DuckDB, register frames with
+              `_console.sql_connection().register(name, frame)` (globals are not
+              scanned). `matplotlib.pyplot.show()` returns open figures as PNGs
+              immediately and closes them. At cell end, even after errors, remaining
+              open figures return as PNGs and close; `show()` is optional. Closing an
+              unshown figure suppresses capture. R plots through `r` follow the R plot
+              rules.
             type:
               - string
               - "null"
@@ -142,22 +143,23 @@ result:
               Evaluate one complete SQL cell through the active connection. Managed
               DuckDB keeps a persistent catalog. Results are bounded table previews
               that abbreviate long text cells; query focused subsets or aggregates.
-              Retrieve that result without replay through `.console$sql_last_result()`
-              or `_console.sql_last_result()` in the connection's owning language; its
-              `fetch(n)` consumes successive chunks, starting with the original
-              preview. Omitting n materializes all remaining rows. Close abandoned
-              handles; another SQL cell or connection selection invalidates them.
-              Direct connection use can invalidate native fetch state; close the
-              handle first. A retained result can hold database resources and locks.
-              Transfer retrieved data using the existing language bridge. The selected
-              driver supplies its own SQL dialect and types. With R-owned managed
-              DuckDB, query R data frames by name; DuckDB tables/views take
-              precedence. Use DBI from an R cell for commands requiring the statement
-              interface. Managed conveniences/extensions apply only to DuckDB. Read
-              SQLite with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. With a
-              sandbox, attach existing DuckDB databases outside writable paths using
-              `ATTACH 'path' AS name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`,
-              `SUMMARIZE`, or `EXPLAIN`; CLI dot commands are not supported.
+              Retrieve data without replay through `.console$sql_last_result(n = 100)`
+              or `_console.sql_last_result(n=100)` in the connection's owning
+              language. Each call consumes successive rows, starting with the original
+              preview; omit n to materialize all remaining rows. Cleanup is automatic
+              on exhaustion, another SQL cell, connection selection, or a retrieval
+              error or interrupt. A partially consumed result can hold database
+              resources and locks. Before direct connection use, finish retrieval or
+              select that connection again to discard unread rows. Transfer retrieved
+              data using the existing language bridge. The selected driver supplies
+              its own SQL dialect and types. With R-owned managed DuckDB, query R data
+              frames by name; DuckDB tables/views take precedence. Use DBI from an R
+              cell for commands requiring the statement interface. Managed
+              conveniences/extensions apply only to DuckDB. Read SQLite with `ATTACH
+              'path' AS name (TYPE sqlite, READ_ONLY)`. With a sandbox, attach
+              existing DuckDB databases outside writable paths using `ATTACH 'path' AS
+              name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, or
+              `EXPLAIN`; CLI dot commands are not supported.
             type:
               - string
               - "null"

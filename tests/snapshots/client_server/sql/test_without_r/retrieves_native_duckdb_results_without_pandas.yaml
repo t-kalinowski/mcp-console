@@ -44,19 +44,17 @@ send:
     from decimal import Decimal
     import sys
 
-    result = _console.sql_last_result()
-    assert result.columns == ("i", "executed", "big", "exact", "missing", "long_value")
-    first = result.fetch(5)
-    second = result.fetch(19)
-    rest = result.fetch()
-    assert result.fetch() == []
-    rows = first + second + rest
+    first = _console.sql_last_result(5)
+    assert first["columns"] == ("i", "executed", "big", "exact", "missing", "long_value")
+    second = _console.sql_last_result(19)
+    rest = _console.sql_last_result()
+    assert _console.sql_last_result()["rows"] == []
+    rows = first["rows"] + second["rows"] + rest["rows"]
     assert [row[0] for row in rows] == list(range(57))
     assert [row[1] for row in rows] == list(range(1, 58))
     assert all(row[2] == 9223372036854775807 for row in rows)
     assert all(row[3] == Decimal("12345678901234567890123456789.123456789") for row in rows)
     assert all(row[4] is None and row[5] == "x" * 1000 for row in rows)
-    result.close()
     connection = _console.sql_connection()
     assert connection.execute("SELECT currval('executions')").fetchone() == (57,)
     assert "pandas" not in sys.modules
@@ -82,13 +80,12 @@ result:
 send:
   python: |
     result = _console.sql_last_result()
-    assert result.fetch() == [(42,)]
-    result.close()
+    assert result == {"columns": ("answer",), "rows": [(42,)]}
     assert _console.sql_connection() is connection
-    print("closing a connection cursor keeps the managed catalog")
+    print("automatic cleanup keeps the managed catalog")
 result:
   content:
     - type: text
       text: |
-        closing a connection cursor keeps the managed catalog
+        automatic cleanup keeps the managed catalog
   isError: false

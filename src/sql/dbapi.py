@@ -36,49 +36,10 @@ def _close_candidates(connection: object, candidates: tuple) -> None:
             _traceback.print_exc()
 
 
-class _SqlResult:
-    def __init__(self, connection, candidates, cursor, rows) -> None:
-        self.columns = tuple(column[0] for column in cursor.description)
-        self._connection = connection
-        self._candidates = candidates
-        self._cursor = cursor
-        self._rows = rows
-        self._closed = None
-        if not rows:
-            self._release()
-
-    def _release(self) -> None:
-        candidates, self._candidates = self._candidates, ()
-        self._cursor = None
-        _close_candidates(self._connection, candidates)
-        self._connection = None
-
-    def close(self) -> None:
-        self._closed = "closed"
-        self._rows = []
-        self._release()
-
-    def fetch(self, n: int | None = None) -> list:
-        if n is not None and (type(n) is not int or n < 0):
-            raise ValueError("`n` must be a nonnegative integer or None")
-        if self._closed is not None:
-            raise RuntimeError(f"SQL result is {self._closed}")
-        try:
-            take = len(self._rows) if n is None else min(n, len(self._rows))
-            rows, self._rows = self._rows[:take], self._rows[take:]
-            remaining = None if n is None else n - take
-            if self._cursor is not None and (remaining is None or remaining > 0):
-                if remaining is None:
-                    fetched = list(self._cursor.fetchall())
-                else:
-                    fetched = list(self._cursor.fetchmany(remaining))
-                rows.extend(fetched)
-                if remaining is None or not fetched:
-                    self._release()
-            return rows
-        except BaseException:
-            self.close()
-            raise
+def _release_result(result: dict) -> None:
+    connection, candidates = result["connection"], result["candidates"]
+    result["connection"], result["candidates"], result["cursor"] = None, (), None
+    _close_candidates(connection, candidates)
 
 
 def _invalidate_result() -> None:
@@ -86,16 +47,34 @@ def _invalidate_result() -> None:
     _result_epoch += 1
     result, _last_result = _last_result, None
     if result is not None:
-        result.close()
-        result._closed = "invalidated"
+        _release_result(result)
 
 
-def sql_last_result() -> _SqlResult:
+def sql_last_result(n: int | None = None) -> dict:
+    if n is not None and (type(n) is not int or n < 0):
+        raise ValueError("`n` must be a nonnegative integer or None")
     if _last_result is None:
         raise RuntimeError(
             "No retained Python SQL result; retrieve in the connection's owning language"
         )
-    return _last_result
+    result = _last_result
+    try:
+        take = len(result["rows"]) if n is None else min(n, len(result["rows"]))
+        rows = result["rows"][:take]
+        del result["rows"][:take]
+        remaining = None if n is None else n - take
+        cursor = result["cursor"]
+        if cursor is not None and (remaining is None or remaining > 0):
+            fetched = list(
+                cursor.fetchall() if remaining is None else cursor.fetchmany(remaining)
+            )
+            rows.extend(fetched)
+            if remaining is None or not fetched:
+                _release_result(result)
+        return {"columns": result["columns"], "rows": rows}
+    except BaseException:
+        _invalidate_result()
+        raise
 
 
 try:
@@ -333,10 +312,16 @@ def _evaluate(source):
         # Driver callbacks can select another connection while producing rows.
         # Display this cell, but do not publish a result after its invalidation.
         if epoch == _result_epoch:
-            _last_result = _SqlResult(
-                connection, (result, executor), result_cursor, rows
-            )
+            _last_result = {
+                "connection": connection,
+                "candidates": (result, executor),
+                "cursor": result_cursor,
+                "rows": rows,
+                "columns": tuple(column[0] for column in result_cursor.description),
+            }
             retained = True
+            if not rows:
+                _release_result(_last_result)
     except Exception as error:
         print(f"Error: {error}")
     except BaseException:

@@ -201,14 +201,7 @@ base::local(
     base::makeActiveBinding("py", function() reticulate::py, tools)
     console <- new.env(parent = emptyenv())
     console$sql_connection <- sql_connection
-    console$sql_last_result <- function() {
-      if (is.null(last_result)) {
-        stop(
-          "No retained R SQL result; retrieve in the connection's owning language"
-        )
-      }
-      last_result$public
-    }
+    console$sql_last_result <- function(n = NULL) fetch_last_result(n)
     base::assign(".console", console, envir = tools)
 
     ensure_printer <- function() {
@@ -265,127 +258,116 @@ base::local(
       result_epoch <<- result_epoch + 1
       previous <- last_result
       last_result <<- NULL
-      if (!is.null(previous)) {
-        previous$invalidate()
+      if (!is.null(previous$result) && DBI::dbIsValid(previous$result)) {
+        DBI::dbClearResult(previous$result)
       }
       1L
     }
 
     retain_result <- function(result, buffer, schema = NULL) {
-      arrow <- inherits(result, "DBIResultArrow")
-      columns <- if (arrow) names(schema$children) else names(buffer)
-      empty <- if (arrow) NULL else buffer[integer(), , drop = FALSE]
-      offset <- 0L
-      closed <- NULL
-
-      release <- function() {
-        previous <- result
-        result <<- NULL
-        if (!is.null(previous) && DBI::dbIsValid(previous)) {
-          DBI::dbClearResult(previous)
-        }
-      }
-      close <- function(reason = "closed") {
-        closed <<- reason
-        buffer <<- NULL
-        release()
-        invisible(NULL)
-      }
-      count <- function(data) {
-        if (is.null(data)) {
-          0L
-        } else if (arrow) {
-          data$length
-        } else {
-          nrow(data)
-        }
-      }
-      fetch <- function(n = NULL) {
-        stopifnot(
-          is.null(n) ||
-            (is.numeric(n) &&
-              length(n) == 1L &&
-              !is.na(n) &&
-              is.finite(n) &&
-              n >= 0 &&
-              n == floor(n) &&
-              n <= .Machine$integer.max)
-        )
-        if (!is.null(closed)) {
-          stop(paste("SQL result is", closed))
-        }
-        complete <- FALSE
-        on.exit(if (!complete) close())
-        if (!is.null(result) && !DBI::dbIsValid(result)) {
-          stop("SQL result is no longer valid")
-        }
-        remaining <- if (is.null(n)) Inf else n
-        parts <- list()
-        while (remaining > 0 && (!is.null(buffer) || !is.null(result))) {
-          if (is.null(buffer)) {
-            size <- min(remaining, 65536L)
-            buffer <<- if (arrow) {
-              DBI::dbFetchArrowChunk(result, chunk_size = size)
-            } else {
-              DBI::dbFetch(result, n = size)
-            }
-            offset <<- 0L
-            if (DBI::dbHasCompleted(result)) {
-              release()
-            }
-            if (count(buffer) == 0L) {
-              buffer <<- NULL
-              break
-            }
-          }
-          take <- min(remaining, count(buffer) - offset)
-          part <- if (arrow) {
-            # Slice the record's children, retaining their native buffers and
-            # nested values. No R scalar conversion (notably DECIMAL/int64).
-            nanoarrow::nanoarrow_array_modify(
-              buffer,
-              list(
-                length = take,
-                children = lapply(buffer$children, function(column) {
-                  nanoarrow::nanoarrow_array_modify(
-                    column,
-                    list(
-                      offset = column$offset + offset,
-                      length = take,
-                      null_count = if (column$null_count == 0L) 0L else -1L
-                    )
-                  )
-                })
-              )
-            )
-          } else {
-            buffer[seq.int(offset + 1L, offset + take), , drop = FALSE]
-          }
-          parts[[length(parts) + 1L]] <- part
-          remaining <- remaining - take
-          offset <<- offset + take
-          if (offset == count(buffer)) buffer <<- NULL
-        }
-        output <- if (arrow) {
-          nanoarrow::basic_array_stream(parts, schema = schema)
-        } else if (length(parts)) {
-          do.call(rbind, parts)
-        } else {
-          empty
-        }
-        complete <- TRUE
-        output
-      }
       if (DBI::dbHasCompleted(result)) {
-        release()
-      }
-      if (count(buffer) == 0L) {
-        buffer <- NULL
+        DBI::dbClearResult(result)
+        result <- NULL
       }
       list(
-        public = list(columns = columns, fetch = fetch, close = close),
-        invalidate = function() close("invalidated")
+        result = result,
+        buffer = buffer,
+        offset = 0L,
+        schema = schema,
+        empty = if (is.null(schema)) buffer[integer(), , drop = FALSE]
       )
+    }
+
+    fetch_last_result <- function(n) {
+      stopifnot(
+        is.null(n) ||
+          (is.numeric(n) &&
+            length(n) == 1L &&
+            !is.na(n) &&
+            is.finite(n) &&
+            n >= 0 &&
+            n == floor(n) &&
+            n <= .Machine$integer.max)
+      )
+      if (is.null(last_result)) {
+        stop(
+          "No retained R SQL result; retrieve in the connection's owning language"
+        )
+      }
+      pending <- last_result
+      epoch <- result_epoch
+      complete <- FALSE
+      on.exit({
+        if (epoch == result_epoch) {
+          if (complete) last_result <<- pending else close_last_result()
+        }
+      })
+      if (!is.null(pending$result) && !DBI::dbIsValid(pending$result)) {
+        stop("SQL result is no longer valid")
+      }
+      arrow <- !is.null(pending$schema)
+      remaining <- if (is.null(n)) Inf else n
+      parts <- list()
+      while (
+        remaining > 0 && (!is.null(pending$buffer) || !is.null(pending$result))
+      ) {
+        if (is.null(pending$buffer)) {
+          size <- min(remaining, 65536L)
+          pending$buffer <- if (arrow) {
+            DBI::dbFetchArrowChunk(pending$result, chunk_size = size)
+          } else {
+            DBI::dbFetch(pending$result, n = size)
+          }
+          pending$offset <- 0L
+          if (DBI::dbHasCompleted(pending$result)) {
+            DBI::dbClearResult(pending$result)
+            pending$result <- NULL
+          }
+        }
+        count <- if (arrow) pending$buffer$length else nrow(pending$buffer)
+        if (count == 0L) {
+          pending$buffer <- NULL
+          break
+        }
+        take <- min(remaining, count - pending$offset)
+        parts[[length(parts) + 1L]] <- if (arrow) {
+          # Slice children, keeping native buffers and nested values exact.
+          nanoarrow::nanoarrow_array_modify(
+            pending$buffer,
+            list(
+              length = take,
+              children = lapply(pending$buffer$children, function(column) {
+                nanoarrow::nanoarrow_array_modify(
+                  column,
+                  list(
+                    offset = column$offset + pending$offset,
+                    length = take,
+                    null_count = if (column$null_count == 0L) 0L else -1L
+                  )
+                )
+              })
+            )
+          )
+        } else {
+          pending$buffer[
+            seq.int(pending$offset + 1L, pending$offset + take),
+            ,
+            drop = FALSE
+          ]
+        }
+        remaining <- remaining - take
+        pending$offset <- pending$offset + take
+        if (pending$offset == count) pending$buffer <- NULL
+      }
+      output <- if (arrow) {
+        nanoarrow::basic_array_stream(parts, schema = pending$schema)
+      } else if (length(parts)) {
+        do.call(rbind, parts)
+      } else {
+        pending$empty
+      }
+      complete <- TRUE
+      output
     }
 
     fetch_query <- function() {

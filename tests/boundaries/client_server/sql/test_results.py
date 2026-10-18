@@ -87,22 +87,23 @@ def test_python_consumes_preview_and_bounded_chunks(
             "bounded chunks preserve every row and column\n",
             # fmt: python
             python=code("""
-                result = _console.sql_last_result()
-                assert result is _console.sql_last_result()
                 assert selected.executions == 1
                 cursor = selected.cursors[-1]
                 assert cursor.fetches == [21] and not cursor.closed
-                assert len(result.columns) == 13 and result.columns[-1] == "c13"
-                assert result.fetch(0) == [] and cursor.fetches == [21]
-                first = result.fetch(5)
+                empty = _console.sql_last_result(0)
+                assert empty["rows"] == [] and cursor.fetches == [21]
+                assert len(empty["columns"]) == 13 and empty["columns"][-1] == "c13"
+                first = _console.sql_last_result(5)
                 assert cursor.fetches == [21]
-                second = result.fetch(19)
+                second = _console.sql_last_result(19)
                 assert cursor.fetches == [21, 3]
-                third = result.fetch(33)
+                third = _console.sql_last_result(33)
                 assert cursor.fetches == [21, 3, 33]
-                assert result.fetch(1) == [] and cursor.closed
-                assert result.fetch() == []
-                rows = first + second + third
+                assert _console.sql_last_result(1) == empty and cursor.closed
+                assert _console.sql_last_result() == empty
+                rows = first["rows"] + second["rows"] + third["rows"]
+                assert first["columns"] == second["columns"] == third["columns"]
+                assert not hasattr(first, "fetch") and not hasattr(first, "close")
                 assert [row[0] for row in rows] == list(range(57))
                 assert all(row[1] == 9223372036854775807 for row in rows)
                 assert all(row[2] is None and row[3] == bytes(200) for row in rows)
@@ -118,14 +119,9 @@ def test_python_consumes_preview_and_bounded_chunks(
             # fmt: python
             python=code("""
                 empty = _console.sql_last_result()
-                assert empty.columns == ("id",) and empty.fetch() == []
+                assert empty == {"columns": ("id",), "rows": []}
                 assert selected.cursors[-1].closed
-                try:
-                    result.fetch(1)
-                except RuntimeError as error:
-                    assert "invalidated" in str(error)
-                else:
-                    raise AssertionError("previous result remained usable")
+                assert first["rows"][0][0] == 0
                 print("empty results retain columns and release cursors")
                 """),
         )
@@ -139,17 +135,39 @@ def test_python_consumes_preview_and_bounded_chunks(
             "short native batches do not imply exhaustion\n",
             # fmt: python
             python=code("""
-                result = _console.sql_last_result()
                 cursor = selected.cursors[-1]
                 assert not cursor.closed and cursor.fetches == [21]
-                first = result.fetch(3)
-                second = result.fetch(10)
+                first = _console.sql_last_result(3)["rows"]
+                second = _console.sql_last_result(10)["rows"]
                 assert len(first) == 3 and len(second) == 2
                 assert not cursor.closed and cursor.fetches == [21, 1, 10]
-                rest = result.fetch()
+                rest = _console.sql_last_result()["rows"]
                 assert first + second + rest == [(i,) for i in range(57)]
                 assert cursor.closed
                 print("short native batches do not imply exhaustion")
+                """),
+        )
+        client.expect(python="selected.short = False")
+        client.send(sql="SELECT 10 AS value UNION ALL SELECT 20")
+        client.expect(
+            # fmt: python
+            python=code("""
+                abandoned = selected.cursors[-1]
+                saved = _console.sql_last_result(n=1)
+                assert saved == {"columns": ("value",), "rows": [(10,)]}
+                assert not abandoned.closed
+                """),
+        )
+        client.send(sql="SELECT 30 AS replacement")
+        client.expect(
+            "replacement cleans up unread rows and preserves returned data\n",
+            # fmt: python
+            python=code("""
+                assert abandoned.closed
+                assert _console.sql_last_result() == {"columns": ("replacement",), "rows": [(30,)]}
+                assert selected.cursors[-1].closed
+                assert saved == {"columns": ("value",), "rows": [(10,)]}
+                print("replacement cleans up unread rows and preserves returned data")
                 """),
         )
         return client.finish()
@@ -205,19 +223,16 @@ def test_r_duckdb_preserves_exact_batches(
             "exact batches retain the preview, lookahead, and remaining rows\n",
             # fmt: r
             r=code("""
-                result <- .console$sql_last_result()
-                stopifnot(identical(result, .console$sql_last_result()))
-                first <- result$fetch(5L)
-                second <- result$fetch(19L)
-                third <- result$fetch(33L)
-                empty <- result$fetch(1L)
+                first <- .console$sql_last_result(5L)
+                second <- .console$sql_last_result(19L)
+                third <- .console$sql_last_result(33L)
+                empty <- .console$sql_last_result(1L)
                 stopifnot(inherits(first, "nanoarrow_array_stream"))
                 a <- nanoarrow::collect_array_stream(first)
                 b <- nanoarrow::collect_array_stream(second)
                 c <- nanoarrow::collect_array_stream(third)
                 batches <- c(a, b, c)
                 stopifnot(length(nanoarrow::collect_array_stream(empty)) == 0L)
-                stopifnot(length(result$columns) == 13L)
                 ids <- unlist(lapply(batches, function(x) as.vector(x$children$id)))
                 stopifnot(identical(ids, 0:56))
                 schema <- nanoarrow::infer_nanoarrow_schema(a[[1L]])
@@ -259,7 +274,7 @@ def test_r_duckdb_preserves_exact_batches(
             "empty stream keeps its exact schema\n",
             # fmt: r
             r=code("""
-                empty <- .console$sql_last_result()$fetch()
+                empty <- .console$sql_last_result()
                 stopifnot(grepl(
                   "decimal128(10, 2)",
                   format(empty$get_schema()$children$amount),
@@ -278,10 +293,9 @@ def test_r_duckdb_preserves_exact_batches(
             "timestamp preview and retained schema keep the connection timezone\n",
             # fmt: r
             r=code("""
-                result <- .console$sql_last_result()
-                chunk <- result$fetch(5L)
+                chunk <- .console$sql_last_result(5L)
                 stopifnot(grepl("America/New_York", chunk$get_schema()$children$zoned$format))
-                result$close()
+                rest <- .console$sql_last_result()
                 writeLines("timestamp preview and retained schema keep the connection timezone")
                 """),
         )
@@ -363,19 +377,18 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
             "DBI fetch bounds and native transaction retained\n",
             # fmt: r
             r=code("""
-                result <- .console$sql_last_result()
                 stopifnot(identical(metrics$fetches, 21), metrics$clears == 0L)
-                stopifnot(nrow(result$fetch(0L)) == 0L)
-                a <- result$fetch(5L)
+                stopifnot(nrow(.console$sql_last_result(0L)) == 0L)
+                a <- .console$sql_last_result(5L)
                 stopifnot(identical(metrics$fetches, 21))
-                b <- result$fetch(19L)
+                b <- .console$sql_last_result(19L)
                 stopifnot(identical(metrics$fetches, c(21, 3)))
-                c <- result$fetch()
+                c <- .console$sql_last_result()
                 rows <- rbind(a, b, c)
                 stopifnot(identical(rows$i, 0:56), all(is.na(rows$missing)))
-                stopifnot(identical(result$columns, names(rows)))
+                stopifnot(identical(names(rows), c("i", "missing", "label")))
                 stopifnot(metrics$executions == 1L, metrics$clears == 1L)
-                stopifnot(nrow(result$fetch()) == 0L)
+                stopifnot(nrow(.console$sql_last_result()) == 0L)
                 DBI::dbRollback(sqlite)
                 stopifnot(DBI::dbGetQuery(sqlite, "SELECT count(*) AS n FROM transaction_state")$n == 0L)
                 writeLines("DBI fetch bounds and native transaction retained")
@@ -387,7 +400,7 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
             # fmt: r
             r=code("""
                 result <- .console$sql_last_result()
-                stopifnot(identical(result$columns, "id"), nrow(result$fetch()) == 0L)
+                stopifnot(identical(names(result), "id"), nrow(result) == 0L)
                 writeLines("empty DBI frame preserves columns")
                 """),
         )
@@ -395,8 +408,8 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
             VALUES (0) UNION ALL SELECT i + 1 FROM rows WHERE i < 56
         ) SELECT i FROM rows"""
         client.send(sql=query)
-        client.expect(r="result <- .console$sql_last_result(); metrics$gate <- TRUE")
-        client.send(r="result$fetch(30L)", timeout_ms=0)
+        client.expect(r="metrics$gate <- TRUE")
+        client.send(r=".console$sql_last_result(30L)", timeout_ms=0)
         wait_for_evaluation_output(
             client,
             '[input requested: "fetch> "]\n[waiting for stdin]',
@@ -407,7 +420,7 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
             "interrupted DBI fetch closes its result\n",
             # fmt: r
             r=code("""
-                stopifnot(grepl("closed", tryCatch(result$fetch(1L), error = conditionMessage)))
+                stopifnot(grepl("No retained", tryCatch(.console$sql_last_result(1L), error = conditionMessage)))
                 stopifnot(metrics$clears == 3L, DBI::dbIsValid(sqlite))
                 writeLines("interrupted DBI fetch closes its result")
                 """),
@@ -417,14 +430,34 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
             "failed DBI fetch closes its result\n",
             # fmt: r
             r=code("""
-                result <- .console$sql_last_result()
                 metrics$fail <- TRUE
-                message <- tryCatch(result$fetch(30L), error = conditionMessage)
+                message <- tryCatch(.console$sql_last_result(30L), error = conditionMessage)
                 stopifnot(identical(message, "native fetch failed"), metrics$clears == 4L)
                 metrics$fail <- FALSE
+                writeLines("failed DBI fetch closes its result")
+                """),
+        )
+        client.send(sql=query)
+        client.expect(
+            # fmt: r
+            r=code("""
+                saved <- .console$sql_last_result(n = 5L)
+                stopifnot(identical(saved$i, 0:4), metrics$clears == 4L)
+                """),
+        )
+        client.send(sql="SELECT 99 AS replacement")
+        client.expect(
+            "DBI replacement clears unread results without changing returned data\n",
+            # fmt: r
+            r=code("""
+                replacement <- .console$sql_last_result()
+                stopifnot(identical(replacement$replacement, 99L))
+                stopifnot(identical(saved$i, 0:4), metrics$clears == 6L)
                 .console$sql_connection(NULL)
                 DBI::dbDisconnect(sqlite)
-                writeLines("failed DBI fetch closes its result")
+                writeLines(
+                  "DBI replacement clears unread results without changing returned data"
+                )
                 """),
         )
         return client.finish()
@@ -453,52 +486,43 @@ def test_invalidates_closes_and_restarts(
         ) SELECT i FROM rows"""
         client.send(sql=query)
         client.expect(
-            "explicit close is idempotent\n",
+            "retrieval returns data and preserves the transaction\n",
             # fmt: python
             python=code("""
-                closed = _console.sql_last_result()
-                closed.close()
-                closed.close()
-                try:
-                    closed.fetch()
-                except RuntimeError as error:
-                    assert "closed" in str(error)
-                else:
-                    raise AssertionError("closed result fetched rows")
+                previous = _console.sql_last_result(5)
+                assert previous == {"columns": ("i",), "rows": [(i,) for i in range(5)]}
                 assert connection.in_transaction
-                print("explicit close is idempotent")
+                print("retrieval returns data and preserves the transaction")
                 """),
         )
         client.send(sql=query)
-        client.expect(python="previous = _console.sql_last_result()")
         client.send(sql="SELECT * FROM missing_table")
         assert "missing_table" in last_tool_text(client)
         client.expect(
             "failed SQL invalidates the previous result\n",
             # fmt: python
             python=code("""
-                for fetch in (previous.fetch, _console.sql_last_result):
-                    try:
-                        fetch()
-                    except RuntimeError:
-                        pass
-                    else:
-                        raise AssertionError("stale result survived failed SQL")
+                try:
+                    _console.sql_last_result()
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError("stale result survived failed SQL")
+                assert previous["rows"] == [(i,) for i in range(5)]
                 assert connection.in_transaction
                 print("failed SQL invalidates the previous result")
                 """),
         )
         client.send(sql=query)
-        client.expect(python="previous = _console.sql_last_result()")
         client.expect(r=".console$sql_connection(NULL)")
         client.expect(
             "R selection invalidates Python results without committing\n",
             # fmt: python
             python=code("""
                 try:
-                    previous.fetch(1)
-                except RuntimeError as error:
-                    assert "invalidated" in str(error)
+                    _console.sql_last_result(1)
+                except RuntimeError:
+                    pass
                 else:
                     raise AssertionError("stale Python result")
                 assert connection.in_transaction
@@ -508,14 +532,13 @@ def test_invalidates_closes_and_restarts(
                 """),
         )
         client.send(sql="SELECT i::INTEGER AS id FROM range(57) AS t(i)")
-        client.expect(r="previous <- .console$sql_last_result()")
         client.expect(python="_console.sql_connection(connection)")
         client.expect(
             "Python selection invalidates R results\n",
             # fmt: r
             r=code("""
-                message <- tryCatch(previous$fetch(1L), error = conditionMessage)
-                stopifnot(grepl("invalidated", message))
+                message <- tryCatch(.console$sql_last_result(1L), error = conditionMessage)
+                stopifnot(grepl("No retained", message))
                 writeLines("Python selection invalidates R results")
                 """),
         )
@@ -620,8 +643,7 @@ def test_slow_fetch_polls_interrupts_and_releases_cursors(
             VALUES (0) UNION ALL SELECT i + 1 FROM rows WHERE i < 56
         ) SELECT i FROM rows"""
         client.send(sql=query)
-        client.expect(python="result = _console.sql_last_result()")
-        client.send(python="rows = result.fetch(30)", timeout_ms=0)
+        client.send(python="data = _console.sql_last_result(30)", timeout_ms=0)
         wait_for_evaluation_output(
             client,
             '[input requested: "fetch> "]\n[waiting for stdin]',
@@ -632,16 +654,15 @@ def test_slow_fetch_polls_interrupts_and_releases_cursors(
             "resumed retrieval keeps the preview prefix\n",
             # fmt: python
             python=code("""
-                assert rows == [(i,) for i in range(30)]
+                assert data == {"columns": ("i",), "rows": [(i,) for i in range(30)]}
                 assert connection.latest.calls == 2
-                result.close()
+                _console.sql_connection(connection)
                 assert connection.latest.closed
                 print("resumed retrieval keeps the preview prefix")
                 """),
         )
         client.send(sql=query)
-        client.expect(python="result = _console.sql_last_result()")
-        client.send(python="result.fetch(30)", timeout_ms=0)
+        client.send(python="_console.sql_last_result(30)", timeout_ms=0)
         wait_for_evaluation_output(
             client,
             '[input requested: "fetch> "]\n[waiting for stdin]',
@@ -655,9 +676,9 @@ def test_slow_fetch_polls_interrupts_and_releases_cursors(
             python=code("""
                 assert connection.latest.closed
                 try:
-                    result.fetch(1)
+                    _console.sql_last_result(1)
                 except RuntimeError as error:
-                    assert "closed" in str(error)
+                    assert "No retained" in str(error)
                 else:
                     raise AssertionError("interrupted cursor remained usable")
                 print("interrupted retrieval releases the cursor")
