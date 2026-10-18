@@ -47,11 +47,11 @@ See [Requirements API](REQUIREMENTS_API.md) for request details.
 
 Console prepares these packages and extensions at startup:
 
-| Runtime | Packages or extensions                                                                                    |
-| ------- | --------------------------------------------------------------------------------------------------------- |
-| R       | `tidyverse`, `dplyr`, `dbplyr`, `reticulate`, `DBI`, `duckdb`, `arrow`, `nanoarrow`, `yyjsonr`, `ggplot2` |
-| Python  | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                                      |
-| DuckDB  | `icu`, `json`, `sqlite`, when the managed provider is available                                           |
+| Runtime | Packages or extensions                                                                           |
+| ------- | ------------------------------------------------------------------------------------------------ |
+| R       | `tidyverse`, `dplyr`, `dbplyr`, `reticulate`, `DBI`, `duckdb`, `nanoarrow`, `yyjsonr`, `ggplot2` |
+| Python  | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                             |
+| DuckDB  | `icu`, `json`, `sqlite`, when the managed provider is available                                  |
 
 Preparation makes packages available; the agent still uses ordinary imports, R package-loading calls, or database extension-loading commands in its code.
 Extensions already built into the selected DuckDB do not need downloading.
@@ -64,8 +64,7 @@ You can replace the default startup package lists in `config.yaml`:
 r:
   packages: [dplyr, ggplot2]
 python:
-  managed:
-    packages: [numpy, pandas]
+  packages: [numpy, pandas]
 ```
 
 An omitted list keeps the defaults.
@@ -120,9 +119,8 @@ r:
   packages: [dplyr]
   resolution: explicit
 python:
-  managed:
-    packages: [numpy, pandas]
-    resolution: fixed
+  packages: [numpy, pandas]
+  resolution: fixed
 ```
 
 R's `disabled` policy turns off all managed R package preparation, including Console's R infrastructure.
