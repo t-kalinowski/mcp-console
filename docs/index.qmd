@@ -75,9 +75,6 @@ Without [client permission inheritance](SANDBOX_CONFIGURATION.md#inherit-permiss
 You can select a different profile or customize a profile by creating a [`.agents/console/config.yaml` file](CONFIGURATION.md) or supplying configuration arguments on the command line.
 Customizations let you manage network access through a [built-in proxy](SANDBOX_CONFIGURATION.md#proxy-modes-and-destinations) with domain allowlists or denylists, allow filesystem writes to specific paths, and block filesystem reads from selected paths.
 
-Project configuration is trusted input and may widen permissions.
-Dependency preparation has a separate policy.
-
 [Recordings](RECORDING.md) capture input and output from an MCP Console session.
 They are unredacted, so check for secrets before sharing session files.
 For example, a recording may include a secret printed by code the agent ran.
