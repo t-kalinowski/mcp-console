@@ -208,9 +208,15 @@ impl Client {
                 restart_required: _,
                 r_requirements,
                 r_changed,
+                ..
             } = delta;
             let managed_r = if r_changed {
-                match self.resolve_managed_r(generation, &environment.r_resolver, r_requirements) {
+                match self.resolve_managed_r(
+                    generation,
+                    &environment.r_resolver,
+                    r_requirements,
+                    Vec::new(),
+                ) {
                     Ok(managed_r) => Some(managed_r),
                     Err(failure) => {
                         return self

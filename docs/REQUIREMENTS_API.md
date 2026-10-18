@@ -47,6 +47,8 @@ An explicitly requested restart still occurs for unchanged requirements.
 
 Inspection returns `requirements`, `prepared`, and `runtime_requirements` in structured content.
 `requirements` is the editable user declaration; `runtime_requirements` identifies additional runtime infrastructure.
+Skipped built-in defaults are absent from the accepted declaration.
+Plain restart retains that accepted declaration; `reset` retries the captured startup defaults under the configured resolution policies.
 During resolution, inspection reports the last commit, not an in-progress candidate.
 During initial startup it may instead return `[worker starting]`.
 

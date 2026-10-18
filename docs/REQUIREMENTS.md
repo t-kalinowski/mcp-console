@@ -16,6 +16,9 @@ By default, managed sessions request these optional packages and extensions:
 | DuckDB  | `icu`, `json`, `sqlite`, when the managed provider is available                                           |
 
 These are starter packages, not prerequisites for every analysis.
+Built-in convenience defaults are prepared on a best-effort basis: Console reports each failed default, skips it, and continues with the other defaults.
+Required runtime infrastructure remains strict, including packages used by the R/Python bridge and SQL adapters.
+Default DuckDB extensions follow the same best-effort rule; an extension requested explicitly remains required.
 Extensions already built into the selected DuckDB do not need downloading.
 
 Supply a package list to replace a managed runtime's optional defaults:
@@ -29,6 +32,7 @@ python:
 ```
 
 An omitted list keeps the defaults; `[]` requests no optional packages.
+Packages listed explicitly in configuration or requested by the agent are required, even if they also appear in the built-in defaults.
 An empty list does not remove runtime infrastructure, existing packages, or cached installations.
 
 [Configuration](CONFIGURATION.md#startup-package-declarations) covers interpreter versions and startup settings.

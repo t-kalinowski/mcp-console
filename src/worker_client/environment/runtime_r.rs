@@ -81,7 +81,12 @@ impl Client {
         }
 
         let managed = self
-            .resolve_managed_r(&generation, &environment.r_resolver, requirements)
+            .resolve_managed_r(
+                &generation,
+                &environment.r_resolver,
+                requirements,
+                Vec::new(),
+            )
             .map_err(RuntimeRResolutionFailure::from)?;
         if !environment.duckdb_extensions.is_empty() {
             let extensions = environment
