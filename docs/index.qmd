@@ -9,7 +9,7 @@ toc: false
 sidebar: false
 ---
 
-MCP Console lets your agent run R, Python, and SQL in a persistent session, with the interpreters and DuckDB embedded in the same process.
+MCP Console lets your agent run R, Python, and SQL in a persistent session.
 Data, objects, and models stay in memory between calls, so follow-up work doesn't require repeating setup.
 
 Code runs in an [OS-level sandbox](SANDBOX.md) by default.
@@ -29,6 +29,7 @@ Previews keep long output out of the model's context, while [recordings](RECORDI
 
 ## Use one language or combine them {#one-workspace-three-languages}
 
+Console embeds R, Python, and DuckDB in the same process.
 The agent can switch between R, Python, and SQL on any turn, choosing the language and libraries that make each task easiest or most efficient.
 It can reuse live data and models across languages without exporting and reloading intermediate files.
 
