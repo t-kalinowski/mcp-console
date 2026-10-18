@@ -23,11 +23,12 @@ Console is a **development preview** for macOS, Linux, and Windows x64.
 ## Work iteratively
 
 Console gives agents the interactive affordances of a REPL, so they can work iteratively: run code, inspect results, and decide what to try next.
-They can refine plots, read help, pause in a debugger, and continue after an interruption.
-Long computations can keep running between calls.
+They can refine plots, read help, respond to interactive prompts, and step through code in a debugger.
+Long computations can keep running between calls, and agents can interrupt work or restart an unresponsive session.
 
 The environment is designed for agents, with help and output formatted for them.
-For example, Console guards against large results accidentally flooding the model's context.
+For example, Console collapses progress bar redraws and guards against large results accidentally flooding the model's context.
+The agent can inspect oversized output in more detail when needed, without rerunning the computation.
 
 ## Use one language or combine them {#one-workspace-three-languages}
 
