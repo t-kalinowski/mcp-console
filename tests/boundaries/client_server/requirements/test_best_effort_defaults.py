@@ -204,6 +204,74 @@ def test_failed_python_default_with_r(binary: Path, execution: Execution) -> Tra
             return client.finish()
 
 
+@requires(POSIX, command("uv"))
+@executions(DIRECT)
+def test_reset_restores_extensions_after_python_duckdb_default_recovers(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        tools = root / "tools"
+        tools.mkdir()
+        (tools / "python3").symlink_to(sys.executable)
+        recorded, _ = recording_uv_environment(root, fail_requirement="duckdb")
+        (tools / "uv").symlink_to(recorded["RETICULATE_UV"])
+        env = environment(tools, inherited=recorded)
+        with McpClient(
+            binary, execution.serve("-c", "cache=host"), env, root
+        ) as client:
+            client.transcript.append(
+                {
+                    "scenario": "Reset restores default extensions after Python's DuckDB package becomes available.",
+                    "fixture": "The uv wrapper rejects duckdb during startup; its failure marker is removed before plain restart and reset.",
+                }
+            )
+            client.initialize_and_list_tools()
+            inspect(client)
+            result = client.send(
+                python="1 + 1", timeout_ms=int(client.response_timeout * 1_000)
+            )
+            assert not result.get("isError"), result
+            text = last_tool_text(client)
+            assert "skipping default Python package `duckdb`" in text, text
+            assert "synthetic uv failure" in text, text
+            assert text.endswith("2\n"), text
+            result["content"][0]["text"] = normalize_python_resolution_error(text)
+            accepted = inspect(client)
+            assert accepted["requirements"]["python"] == [
+                "numpy",
+                "pandas",
+                "matplotlib",
+                "plotnine",
+            ], accepted
+            assert accepted["requirements"]["duckdb"] == [], accepted
+
+            Path(recorded["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"]).unlink()
+            client.send(control="restart")
+            assert inspect(client) == accepted
+            client.expect("2\n", python="1 + 1")
+            result = client.send(
+                control="restart",
+                requirements={"action": "reset"},
+                timeout_ms=int(client.response_timeout * 1_000),
+            )
+            assert not result.get("isError"), result
+            restored = inspect(client)
+            assert restored == {
+                **accepted,
+                "requirements": {
+                    **accepted["requirements"],
+                    "python": [*accepted["requirements"]["python"], "duckdb"],
+                    "duckdb": ["icu", "json", "sqlite"],
+                },
+            }, restored
+            client.expect(
+                "sqlite available\n",
+                python="import duckdb; duckdb.sql('LOAD sqlite'); print('sqlite available')",
+            )
+            return client.finish()
+
+
 @requires(POSIX, R, command("ir"), command("uv"))
 @executions(DIRECT)
 def test_runtime_r_requirement_failure_stays_fatal(

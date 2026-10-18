@@ -270,8 +270,8 @@ impl ClientConfiguration {
             selection.r_settings = r_settings;
             selection.r_home = r_home;
             selection.installation = installation;
-            // Reset retains startup intent even when every extension was skipped.
-            if extensions.is_some() {
+            // Reset retains managed startup intent even if DuckDB was unavailable.
+            if python_only && managed.is_some() {
                 startup.native_duckdb = crate::local_runtime::DEFAULT_DUCKDB_EXTENSIONS
                     .iter()
                     .map(|extension| (*extension).into())
