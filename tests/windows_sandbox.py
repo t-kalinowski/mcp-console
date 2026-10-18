@@ -139,9 +139,15 @@ def worker_session(environment=None, *, overrides=(), **options):
 
     environment = dict(os.environ if environment is None else environment)
     environment.setdefault("MCP_CONSOLE_CACHE_DIR", worker_dependency_cache().name)
+    # Keep explicit compatibility selections, including managed Python.
+    python_default = (
+        ()
+        if environment.get("RETICULATE_PYTHON")
+        else ("python=" + json.dumps(sys.executable),)
+    )
     return Session(
         environment,
-        overrides=("r.packages=[]", "python=" + json.dumps(sys.executable), *overrides),
+        overrides=("r.packages=[]", *python_default, *overrides),
         **options,
     )
 
@@ -362,14 +368,13 @@ class WindowsSandbox(unittest.TestCase):
                     ]
                 ),
                 RETICULATE_PYTHON="managed",
-                UV_PYTHON_PREFERENCE="system",
-                UV_PYTHON_DOWNLOADS="never",
             )
             environment.pop("R_HOME", None)
             session = worker_session(
                 environment,
                 sandbox=True,
                 overrides=[
+                    'python={packages: ["duckdb==1.5.6"], version: "3.14"}',
                     'sandbox.network="enabled"',
                     'environment={mcp_console_managed_tempdir: "0", mcp_console_matplotlib_cache: "project"}',
                 ],
