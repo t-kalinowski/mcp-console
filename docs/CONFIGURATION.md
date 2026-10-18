@@ -86,7 +86,6 @@ Recognized Conda installations are unsupported.
 Explicit selection overrides launch-time `RETICULATE_PYTHON`, uses preinstalled packages, and disables managed Python preparation.
 Existing selections accept no package or version settings.
 A broken selection fails rather than falling back.
-Python selection is unavailable with custom workers.
 
 To choose the first available candidate:
 
@@ -111,15 +110,23 @@ For an explicitly managed environment without a fallback list:
 
 ```yaml
 python:
-  managed:
-    version: ">=3.12,<3.14"
-    packages: [numpy, pandas]
+  version: ">=3.12,<3.14"
+  packages: [numpy, pandas]
 ```
+
+`python.packages`, `python.version`, and `python.resolution` select managed Python.
+The nested `python.managed` form remains supported, including inside `first_available`.
+Do not combine these direct fields with `existing`, `managed`, or `first_available` in the same mapping.
+An empty `python: {}` explicitly selects managed Python with its defaults.
 
 Managed selection uses uv-managed CPython, not a fallback interpreter on `PATH`.
 It excludes interpreters older than CPython 3.10 before ranking available versions or applying version constraints.
 Without R, it requires `uv` on the execution host.
-Omitted `python` retains the launch-time `RETICULATE_PYTHON` compatibility behavior described in [Environment](ENVIRONMENT.md).
+Omitted or `null` `python` retains the launch-time `RETICULATE_PYTHON` compatibility behavior described in [Environment](ENVIRONMENT.md).
+
+Before merging configuration layers, Console expands the direct managed fields to `python.managed`.
+Flat and nested settings in separate layers therefore combine with the same [merge rules](#merge-rules).
+`config resolve` continues to print the nested form.
 
 ## R executable selection
 
@@ -152,8 +159,7 @@ Executables and code they load remain trusted inputs, not immutable sandbox asse
 r:
   packages: [dplyr, dbplyr, ggplot2]
 python:
-  managed:
-    packages: [numpy, pandas, matplotlib]
+  packages: [numpy, pandas, matplotlib]
 ```
 
 Omitting a package list keeps that runtime's defaults.
@@ -169,7 +175,7 @@ See [Dependencies](REQUIREMENTS.md) for default packages, accepted requirement s
 
 ## Dependency-resolution policies
 
-Use `r.resolution` and `python.managed.resolution` to choose `implicit`, `explicit`, or `fixed`.
+Use `r.resolution` and `python.resolution` to choose `implicit`, `explicit`, or `fixed`.
 R defaults to `implicit`; managed Python defaults to `explicit`, so the agent declares dependencies through `requirements.python` before importing them.
 R also accepts `disabled`; for preinstalled-only Python, select an existing environment.
 
@@ -178,20 +184,18 @@ r:
   packages: [dplyr]
   resolution: explicit
 python:
-  managed:
-    packages: [numpy, pandas]
-    resolution: fixed
+  packages: [numpy, pandas]
+  resolution: fixed
 ```
 
-The [policy table](REQUIREMENTS.md#resolution-policy-admission) defines what each mode permits.
+See [resolution policies](REQUIREMENTS.md#resolution-policy-admission) for what each mode permits.
 These settings govern Console's preparation, not arbitrary installation code or network access inside cells.
 
 To let missing Python imports request package preparation, opt in through `config.yaml`:
 
 ```yaml
 python:
-  managed:
-    resolution: implicit
+  resolution: implicit
 ```
 
 ## Native R startup
@@ -201,8 +205,7 @@ Startup runs inside the worker with its ordinary permissions.
 Console passes `--quiet`, `--interactive`, and `--no-save`, and does not save a workspace at shutdown.
 
 Set `r.vanilla: true` to request R's native `--vanilla` behavior.
-This affects the built-in worker, not discovery or dependency preparation, which remain profile-free.
-Explicit R settings are unsupported with custom workers/relays.
+This affects the session's R runtime; discovery and dependency preparation remain profile-free.
 
 Console attaches its bridges and managed graphics after native startup.
 Startup plots therefore use R's native device.
@@ -235,7 +238,7 @@ Startup code has ordinary worker permissions and may have side effects.
 Failure or interruption withholds SQL until explicit restart; there is no managed fallback or automatic replay.
 Restart may repeat earlier side effects.
 After success, resetting the SQL connection restores managed DuckDB without rerunning startup.
-See [SQL connections](BUILTIN_RUNTIME.md#sql-and-duckdb).
+See [SQL connections](RUNTIME_REFERENCE.md#sql-and-duckdb).
 
 ## Shared environment
 
