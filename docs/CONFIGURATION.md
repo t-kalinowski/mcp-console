@@ -235,7 +235,7 @@ Startup code has ordinary worker permissions and may have side effects.
 Failure or interruption withholds SQL until explicit restart; there is no managed fallback or automatic replay.
 Restart may repeat earlier side effects.
 After success, resetting the SQL connection restores managed DuckDB without rerunning startup.
-See [SQL connections](BUILTIN_RUNTIME.md#sql-and-duckdb).
+See [SQL connections](RUNTIME_REFERENCE.md#sql-and-duckdb).
 
 ## Shared environment
 

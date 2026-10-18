@@ -40,7 +40,7 @@ It can reuse live data and models across languages without exporting and reloadi
 
 R and Python can each run without the other.
 
-See [Working with R, Python, and SQL](BUILTIN_RUNTIME.md) for examples, database connections, and plots.
+See [Sessions and languages](BUILTIN_RUNTIME.md) for examples, database connections, and plots.
 
 ## Review the agent's work
 

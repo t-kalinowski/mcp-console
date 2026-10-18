@@ -1,7 +1,7 @@
 # Runtime behavior reference
 
 Detailed language behavior for client authors and integrations.
-Start with [Working with R, Python, and SQL](BUILTIN_RUNTIME.md) for the user guide.
+Start with [Sessions and languages](BUILTIN_RUNTIME.md) for the user guide.
 
 One connection owns one persistent session.
 Globals, imports, options, database state, and unread input survive between cells.

@@ -15,8 +15,8 @@ Sandboxed Windows sessions require a host that supports [MXC](SANDBOX_CONFIGURAT
 
 If Console fails to start on Linux, see [Linux host compatibility](LINUX_COMPATIBILITY.md) for missing libraries or sandbox restrictions.
 
-To use R, install it separately, for example with [rig](https://github.com/r-lib/rig#id-installation) and `rig add release`.
-Python and SQL also work without R.
+To let your agent use R, install it separately, for example with [rig](https://github.com/r-lib/rig#id-installation) and `rig add release`.
+Python and SQL work without R.
 The first session may download Python and packages.
 
 To check your installation and prepare runtime and package caches before opening a client, run `uvx mcp-console warmup`.
@@ -75,7 +75,7 @@ Then ask:
 > Which observations does the model fit poorly?
 > Show a plot and the path to the recorded session.
 
-See [Working with R, Python, and SQL](BUILTIN_RUNTIME.md) for examples.
+See [Sessions and languages](BUILTIN_RUNTIME.md) for an example of how your agent can combine languages and build on earlier work.
 
 ## Choose permissions
 

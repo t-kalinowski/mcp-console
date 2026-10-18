@@ -216,7 +216,7 @@ The native close callback retires that registration; cell cleanup closes only re
 An explicit user device that reuses a closed managed device's number remains open and uncaptured, even when it also reuses the filename template exposed by `.Devices`.
 The public [plot cases](../tests/boundaries/client_server/r/test_plots.py) cover both distinct and reused templates, drawing in a later cell, and explicit closure.
 The [C trampoline](../src/r_graphics.c) invokes the backend outside Rust lookup/notification frames and locks because R callbacks can `longjmp`; Rust is notified only after normal return.
-Any replacement must preserve these boundaries and the [existing plot contract](BUILTIN_RUNTIME.md#plots-and-images).
+Any replacement must preserve these boundaries and the [existing plot contract](RUNTIME_REFERENCE.md#plots-and-images).
 
 ## Where to look in source
 

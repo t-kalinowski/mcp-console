@@ -103,7 +103,7 @@ The built-in runtimes expose the following session helpers:
 | Python `_console.sql_connection()`                                              | Get, select, or reset a native SQL connection owned by Python. |
 | R `console.plot.width_in`, `console.plot.height_in`, `console.plot.dpi` options | Configure captured plot dimensions and resolution.             |
 
-The [runtime guide](BUILTIN_RUNTIME.md) defines ownership and examples.
+The [runtime reference](RUNTIME_REFERENCE.md) defines ownership and examples.
 These helpers do not make R and Python connection objects interchangeable.
 
 ## CLI and configuration
