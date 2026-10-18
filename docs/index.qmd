@@ -10,7 +10,7 @@ sidebar: false
 ---
 
 MCP Console lets your agent run R, Python, and SQL in a persistent session.
-Data, objects, and models stay in memory between calls, so follow-up work doesn't require repeating setup.
+Session state persists between calls, so follow-up work doesn't require repeating setup.
 
 Code runs in an [OS-level sandbox](SANDBOX.md) by default.
 Console prepares environments and packages automatically; no Console configuration file is required.
@@ -18,6 +18,8 @@ Console prepares environments and packages automatically; no Console configurati
 ::: {.home-links}
 [Get started](getting-started.qmd){.btn .btn-primary} [User guides](README.md){.btn .btn-outline-primary}
 :::
+
+Console is a **development preview** for macOS, Linux, and Windows x64.
 
 ## Work iteratively
 
@@ -66,15 +68,10 @@ See [Packages and environments](REQUIREMENTS.md).
 - **Large datasets:** keep data and intermediate results in memory for follow-up questions.
 - **Debugging and package development:** pause execution and inspect live objects where a failure occurs.
 
-## Status and trust
+## Control access to files and networks {#status-and-trust}
 
-Console is a **development preview** for macOS, Linux, and Windows x64.
-Run it on the same host as the MCP client.
+Console's default `read_only` sandbox profile restricts network access and filesystem writes.
+It does not restrict filesystem reads.
 
-Without [client permission inheritance](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex) or a configured profile, Console defaults to `read_only`: it restricts network access and filesystem writes but places no restrictions on filesystem reads.
-You can select a different profile or customize a profile by creating a [`.agents/console/config.yaml` file](CONFIGURATION.md) or supplying configuration arguments on the command line.
-Customizations let you manage network access through a [built-in proxy](SANDBOX_CONFIGURATION.md#proxy-modes-and-destinations) with domain allowlists or denylists, allow filesystem writes to specific paths, and block filesystem reads from selected paths.
-
-[Recordings](RECORDING.md) capture input and output from an MCP Console session.
-They are unredacted, so check for secrets before sharing session files.
-For example, a recording may include a secret printed by code the agent ran.
+You can allow writes to selected paths, block reads from selected paths, and control network access with domain allowlists or denylists.
+See [Sandbox configuration](SANDBOX_CONFIGURATION.md) for profiles, custom permissions, and inheriting permissions from Codex.
