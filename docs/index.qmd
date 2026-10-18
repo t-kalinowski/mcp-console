@@ -9,8 +9,7 @@ toc: false
 sidebar: false
 ---
 
-MCP Console lets your agent run R, Python, and SQL in a persistent session.
-Session state persists between calls, so follow-up work doesn't require repeating setup.
+MCP Console preserves session state between calls, so your agent can work in R, Python, and SQL without repeating setup.
 
 Code runs in an [OS-level sandbox](SANDBOX.md) by default.
 Console prepares environments and packages automatically; no Console configuration file is required.
@@ -27,7 +26,8 @@ Console gives agents the interactive affordances of a REPL, so they can work ite
 They can refine plots, read help, pause in a debugger, and continue after an interruption.
 Long computations can keep running between calls.
 
-Previews keep long output out of the model's context, while [recordings](RECORDING.md) retain logs and plots for later inspection.
+The environment is designed for agents, with help and output formatted for them.
+For example, Console guards against large results accidentally flooding the model's context.
 
 ## Use one language or combine them {#one-workspace-three-languages}
 
@@ -40,6 +40,11 @@ It can reuse live data and models across languages without exporting and reloadi
 R and Python can each run without the other.
 
 See [Working with R, Python, and SQL](BUILTIN_RUNTIME.md) for examples, database connections, and plots.
+
+## Review the agent's work
+
+[Recordings](RECORDING.md) retain code, output, and plots so you can see what the agent ran in Console and inspect the results.
+They also provide a starting point for reproducible analyses and reports.
 
 ## Build on Console
 
