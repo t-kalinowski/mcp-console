@@ -232,6 +232,7 @@ impl Client {
                     generation,
                     &environment,
                     &extensions,
+                    &[],
                 ) {
                     return self.finish_environment_resolution_failure(generation, intent, failure);
                 }
@@ -248,7 +249,7 @@ impl Client {
                 }
                 let duckdb_extensions = duckdb_extensions.iter().cloned().collect::<Vec<_>>();
                 if let Err(failure) =
-                    self.resolve_duckdb_extensions(generation, &targets, &duckdb_extensions)
+                    self.resolve_duckdb_extensions(generation, &targets, &duckdb_extensions, &[])
                 {
                     return self.finish_environment_resolution_failure(generation, intent, failure);
                 }

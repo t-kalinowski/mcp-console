@@ -82,57 +82,6 @@ result:
   isError: false
 ---
 send:
-  requirements:
-    action: get
-  timeout_ms: 600000
-result:
-  content:
-    - type: text
-      text: |-
-        {
-          "requirements": {
-            "r": [],
-            "python": [
-              "numpy",
-              "pandas",
-              "matplotlib",
-              "duckdb"
-            ],
-            "duckdb": [
-              "icu",
-              "json",
-              "sqlite"
-            ],
-            "python_version": [],
-            "exclude_newer": null
-          },
-          "prepared": true,
-          "runtime_requirements": {
-            "r": [],
-            "python": []
-          }
-        }
-  structuredContent:
-    requirements:
-      r: []
-      python:
-        - numpy
-        - pandas
-        - matplotlib
-        - duckdb
-      duckdb:
-        - icu
-        - json
-        - sqlite
-      python_version: []
-      exclude_newer: ~
-    prepared: true
-    runtime_requirements:
-      r: []
-      python: []
-  isError: false
----
-send:
   python: import numpy; print('Python default available')
 result:
   content:

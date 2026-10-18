@@ -39,7 +39,7 @@ def test_failed_r_default_preserves_other_defaults_and_explicit_failures(
                 }
             )
             client.initialize_and_list_tools()
-            inspect(client)
+            accepted = inspect(client)
             result = client.send(
                 python="answer = 40; print(answer + 2)",
                 timeout_ms=int(client.response_timeout * 1_000),
@@ -49,7 +49,6 @@ def test_failed_r_default_preserves_other_defaults_and_explicit_failures(
             assert "skipping default R package `tidyverse`" in text, text
             assert "synthetic `ir` failure for tidyverse" in text, text
             assert text.endswith("42\n"), text
-            accepted = inspect(client)
             assert "tidyverse" not in accepted["requirements"]["r"], accepted
             assert "ggplot2" in accepted["requirements"]["r"], accepted
             assert "nanoarrow" in accepted["runtime_requirements"]["r"], accepted
@@ -92,15 +91,7 @@ def test_failed_python_default_preserves_other_defaults_and_explicit_failures(
         (tools / "python3").symlink_to(sys.executable)
         recorded, _ = recording_uv_environment(root, fail_requirement="plotnine")
         (tools / "uv").symlink_to(recorded["RETICULATE_UV"])
-        env = environment(tools)
-        env.update(
-            {
-                name: value
-                for name, value in recorded.items()
-                if name.startswith("MCP_CONSOLE_TEST_")
-                or name in ("RETICULATE_UV", "UV_TOOL_DIR")
-            }
-        )
+        env = environment(tools, inherited=recorded)
         with McpClient(
             binary, execution.serve("-c", "cache=host"), env, root
         ) as client:
@@ -111,7 +102,7 @@ def test_failed_python_default_preserves_other_defaults_and_explicit_failures(
                 }
             )
             client.initialize_and_list_tools()
-            inspect(client)
+            accepted = inspect(client)
             result = client.send(
                 python="answer = 40; print(answer + 2)",
                 timeout_ms=int(client.response_timeout * 1_000),
@@ -122,7 +113,6 @@ def test_failed_python_default_preserves_other_defaults_and_explicit_failures(
             assert "synthetic uv failure" in text, text
             assert text.endswith("42\n"), text
             result["content"][0]["text"] = normalize_python_resolution_error(text)
-            accepted = inspect(client)
             assert accepted["requirements"]["python"] == [
                 "numpy",
                 "pandas",
@@ -186,7 +176,7 @@ def test_failed_python_default_with_r(binary: Path, execution: Execution) -> Tra
                 }
             )
             client.initialize_and_list_tools()
-            inspect(client)
+            accepted = inspect(client)
             result = client.send(
                 r="1 + 1", timeout_ms=int(client.response_timeout * 1_000)
             )
@@ -195,7 +185,7 @@ def test_failed_python_default_with_r(binary: Path, execution: Execution) -> Tra
             assert "skipping default Python package `plotnine`" in text, text
             assert text.endswith("[1] 2\n"), text
             result["content"][0]["text"] = normalize_python_resolution_error(text)
-            assert inspect(client)["requirements"]["python"] == [
+            assert accepted["requirements"]["python"] == [
                 "numpy",
                 "pandas",
                 "matplotlib",
@@ -227,7 +217,7 @@ def test_reset_restores_extensions_after_python_duckdb_default_recovers(
                 }
             )
             client.initialize_and_list_tools()
-            inspect(client)
+            accepted = inspect(client)
             result = client.send(
                 python="1 + 1", timeout_ms=int(client.response_timeout * 1_000)
             )
@@ -237,7 +227,6 @@ def test_reset_restores_extensions_after_python_duckdb_default_recovers(
             assert "synthetic uv failure" in text, text
             assert text.endswith("2\n"), text
             result["content"][0]["text"] = normalize_python_resolution_error(text)
-            accepted = inspect(client)
             assert accepted["requirements"]["python"] == [
                 "numpy",
                 "pandas",
@@ -343,15 +332,7 @@ def test_configured_python_default_stays_required(
         (tools / "python3").symlink_to(sys.executable)
         recorded, _ = recording_uv_environment(root, fail_requirement="plotnine")
         (tools / "uv").symlink_to(recorded["RETICULATE_UV"])
-        env = environment(tools)
-        env.update(
-            {
-                name: value
-                for name, value in recorded.items()
-                if name.startswith("MCP_CONSOLE_TEST_")
-                or name in ("RETICULATE_UV", "UV_TOOL_DIR")
-            }
-        )
+        env = environment(tools, inherited=recorded)
         with McpClient(
             binary,
             execution.serve(
@@ -400,7 +381,7 @@ def test_failed_default_duckdb_extension_stays_explicitly_required(
                 }
             )
             client.initialize_and_list_tools()
-            inspect(client)
+            accepted = inspect(client)
             result = client.send(
                 python="answer = 40; print(answer + 2)",
                 timeout_ms=int(client.response_timeout * 1_000),
@@ -410,7 +391,6 @@ def test_failed_default_duckdb_extension_stays_explicitly_required(
             assert "skipping default DuckDB extension `sqlite`" in text, text
             assert "fixture DuckDB extension sqlite is unavailable" in text, text
             assert text.endswith("42\n"), text
-            accepted = inspect(client)
             assert accepted["requirements"]["duckdb"] == ["icu", "json"], accepted
             result = client.send(
                 requirements={"duckdb": ["sqlite"]}, python="answer = 0"
@@ -441,15 +421,7 @@ def test_failed_python_duckdb_default_stays_explicitly_required(
         recorded, _ = recording_uv_environment(root)
         recorded["MCP_CONSOLE_TEST_UV_PYTHON"] = str(provider)
         (tools / "uv").symlink_to(recorded["RETICULATE_UV"])
-        env = environment(tools)
-        env.update(
-            {
-                name: value
-                for name, value in recorded.items()
-                if name.startswith("MCP_CONSOLE_TEST_")
-                or name in ("RETICULATE_UV", "UV_TOOL_DIR")
-            }
-        )
+        env = environment(tools, inherited=recorded)
         with McpClient(
             binary, execution.serve("-c", "cache=host"), env, root
         ) as client:
@@ -460,7 +432,7 @@ def test_failed_python_duckdb_default_stays_explicitly_required(
                 }
             )
             client.initialize_and_list_tools()
-            inspect(client)
+            accepted = inspect(client)
             result = client.send(
                 python="answer = 40; print(answer + 2)",
                 timeout_ms=int(client.response_timeout * 1_000),
@@ -470,7 +442,6 @@ def test_failed_python_duckdb_default_stays_explicitly_required(
             assert "skipping default DuckDB extension `sqlite`" in text, text
             assert "fixture DuckDB extension sqlite is unavailable" in text, text
             assert text.endswith("42\n"), text
-            accepted = inspect(client)
             assert accepted["requirements"]["duckdb"] == ["icu", "json"], accepted
             result = client.send(
                 requirements={"duckdb": ["sqlite"]}, python="answer = 0"

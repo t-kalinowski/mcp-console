@@ -98,6 +98,7 @@ impl Client {
                 &generation,
                 std::slice::from_ref(&managed),
                 &extensions,
+                &[],
             )
             .map_err(RuntimeRResolutionFailure::from)?;
         }
