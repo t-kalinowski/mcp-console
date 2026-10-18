@@ -2,9 +2,9 @@
 
 Start with [Get started](getting-started.qmd) to install Console and connect your MCP client.
 
-## How Console works
+## Using Console
 
-<span id="use-console"></span> <span id="work-with-console"></span>
+<span id="use-console"></span> <span id="work-with-console"></span> <span id="how-console-works"></span>
 
 [Sessions and languages](BUILTIN_RUNTIME.md) explains how your agent builds on earlier work, combines R, Python, and SQL, and inspects results.
 

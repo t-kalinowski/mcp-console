@@ -188,7 +188,7 @@ python:
   resolution: fixed
 ```
 
-The [policy table](REQUIREMENTS.md#resolution-policy-admission) defines what each mode permits.
+See [resolution policies](REQUIREMENTS.md#resolution-policy-admission) for what each mode permits.
 These settings govern Console's preparation, not arbitrary installation code or network access inside cells.
 
 To let missing Python imports request package preparation, opt in through `config.yaml`:
