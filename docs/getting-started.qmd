@@ -19,8 +19,7 @@ To use R, install it separately, for example with [rig](https://github.com/r-lib
 Python and SQL also work without R.
 The first session may download Python and packages.
 
-To check your installation and prepare those caches before opening a client, run `uvx mcp-console warmup`.
-Without R, use `uvx mcp-console warmup -c 'languages=[python,sql]'`.
+To check your installation and prepare runtime and package caches before opening a client, run `uvx mcp-console warmup`.
 See [Check your installation](CLI.md#check-your-installation) for configuration and diagnostics.
 
 ### Build from source
@@ -81,7 +80,7 @@ See [Working with R, Python, and SQL](BUILTIN_RUNTIME.md) for examples.
 ## Choose permissions
 
 For Codex configured above, Console defaults to the client's sandbox permissions; configuration files can select another profile.
-Without inheritance or a configured profile, the default sandbox permits host-file reads and private temporary writes, but not ordinary workspace writes or direct network access.
+Without inheritance or a configured profile, the default sandbox permits file reads and private temporary writes, but not ordinary workspace writes or direct network access.
 **It does not protect readable secrets.**
 
 ### Allow project writes {#allow-project-writes}
@@ -92,18 +91,16 @@ To let the agent save files in one project, create Console configuration in the 
 uvx mcp-console config init
 ```
 
-This creates `.agents/console/config.yaml` selecting the workspace profile, including outside Git.
-If the file already exists, edit it instead.
+This creates `.agents/console/config.yaml` with `sandbox.profile: workspace`.
 Restart the client to load the settings.
-The profile permits ordinary writes in Console's launch directory while protecting workspace metadata such as `.git` and `.agents`.
-Host-file reads remain allowed and direct network access remains restricted.
+The `workspace` profile allows writes in Console's launch directory except in sensitive locations such as `.agents` and `.git`.
+File reads remain allowed and direct network access remains restricted.
 
 The command-line reference covers [workspace writes across projects](CLI.md#allow-workspace-writes-across-projects) and [grants for individual directories](CLI.md#grant-writes-to-one-directory).
 See [Sandbox configuration](SANDBOX_CONFIGURATION.md) for the permission rules.
 
 Console loads project configuration automatically, and it can select executables or widen permissions.
 Review and authorize it before launching Console in an unfamiliar project; `--no-project-config` skips that layer.
-Being inside Git does not establish trust.
 
 For interpreter selection and package setup, see [Configuration](CONFIGURATION.md) and [Packages and environments](REQUIREMENTS.md).
 
