@@ -75,10 +75,9 @@ class WebsiteTests(unittest.TestCase):
             ignore=shutil.ignore_patterns("docs", "*.Rcheck", "*.tar.gz"),
         )
         shutil.copytree(ROOT / "python", docs.parent / "python")
-        shutil.copytree(
-            ROOT / "tests/snapshots/cli/interface/test_help",
-            docs.parent / "tests/snapshots/cli/interface/test_help",
-        )
+        for suite in ("test_help", "test_config_init"):
+            relative = Path("tests/snapshots/cli/interface") / suite
+            shutil.copytree(ROOT / relative, docs.parent / relative)
         for name in ("pyproject.toml", "great-docs.yml", "LICENSE"):
             shutil.copy2(ROOT / name, docs.parent / name)
         for directory in (docs, docs / "benchmarks"):

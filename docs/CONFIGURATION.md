@@ -1,3 +1,8 @@
+---
+filters:
+  - _filters/config-init.py
+---
+
 # Configuration
 
 Console works without a configuration file.
@@ -65,6 +70,14 @@ Configuration-source flags such as `--config-file` and `--no-config` are not acc
 The command validates settings without starting interpreters or preparing packages, creates the configuration directory if needed, and reports the file path and contents.
 An existing destination causes an error and is left untouched, including with `--dry-run` or `-c`.
 `--dry-run` prints the proposed path and contents without creating files or directories.
+
+### Generated configuration
+
+With no overrides, `config init` generates this `config.yaml`:
+
+::: {.config-init-template}
+[View the generated configuration](../tests/snapshots/cli/interface/test_config_init/dry_run_previews_the_created_contents.yaml).
+:::
 
 ## Python environment selection
 

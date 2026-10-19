@@ -132,6 +132,8 @@ Internal commands remain covered by acceptance tests.
 To publish another public command, add it to the explicit allowlist in `docs/_filters/cli-help.py` and the independent expected command list in `tests/website.py`.
 When CLI help changes, regenerate snapshots with `scripts/test --update cli/interface/test_help`, inspect the diff, and rerun without `--update`.
 Never hand-edit snapshots; website rendering does not build or run Console.
+The configuration page also embeds the complete starter file from the `config init` acceptance snapshot through `docs/_filters/config-init.py`.
+Changes to the generated starter appear on the website when that snapshot is regenerated.
 Quarto's post-render scripts build `docs/_site/r/` and `docs/_site/python/`.
 Python reference uses static source analysis, and the R workflow vignette displays its examples without execution, so API credentials and a Console executable are not required for those builds.
 

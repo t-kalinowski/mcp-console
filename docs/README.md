@@ -6,7 +6,7 @@ Start with [Get started](getting-started.qmd) to install Console and connect you
 
 <span id="use-console"></span> <span id="work-with-console"></span> <span id="how-console-works"></span>
 
-[Sessions and languages](BUILTIN_RUNTIME.md) explains how your agent builds on earlier work, combines R, Python, and SQL, and inspects results.
+[Sessions and languages](BUILTIN_RUNTIME.md) shows how your agent can run code, query databases, and inspect help, plots, and results.
 
 [Packages and environments](REQUIREMENTS.md) explains automatic package preparation and existing environments.
 [Recordings and reports](RECORDING.md) explains retained output and report creation.

@@ -153,7 +153,7 @@ The session's filesystem and network permissions still apply.
 
 ## Package sources and permissions {#host-resolution-and-trust}
 
-Console resolves and prepares packages in a separate native sandbox by default, including MXC on Windows.
+Console resolves and prepares packages in a separate native sandbox by default.
 The resolver sandbox limits writes to dependency caches and temporary directories and restricts network access to allowed package and tooling hosts.
 These permissions are separate from those of the agent's code.
 
