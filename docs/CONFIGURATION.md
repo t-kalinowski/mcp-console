@@ -71,7 +71,7 @@ Dotted paths such as `r.packages` show nesting.
 | `startup`                            | Mapping or `null`                                       | <span id="session-startup-source"></span> [Select a database connection at startup](RUNTIME_CONFIGURATION.md#session-startup-source).                               |
 | `sandbox`                            | Mapping or `null`                                       | [Set filesystem and network permissions](SANDBOX_CONFIGURATION.md).                                                                                                 |
 | `resolver`                           | Mapping                                                 | [Configure package sources and preparation](RESOLVER.md#configuration).                                                                                             |
-| `cache`                              | `console`, `host`, or `null`                            | <span id="cache-selection"></span> [Choose package cache locations](RESOLVER.md#cache-locations).                                                                   |
+| `cache`                              | `managed`, `host`, a directory mapping, or `null`       | <span id="cache-selection"></span> [Choose package cache locations](RESOLVER.md#cache-locations).                                                                   |
 | `inherit_environment`, `environment` | Boolean; mapping of names to strings                    | <span id="shared-environment"></span> [Set environment values and inheritance](ENVIRONMENT.md#where-to-set-variables).                                              |
 | `languages`                          | Nonempty list of `r`, `python`, and/or `sql`; or `null` | <span id="model-visible-languages"></span> [Choose the languages exposed to the agent](TOOL_CONFIGURATION.md#model-visible-languages).                              |
 | `tool`                               | Mapping                                                 | <span id="tool-descriptions-and-parameters"></span> [Customize tool descriptions and parameters](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters).           |
@@ -214,7 +214,7 @@ R exposes the same operations through its [configuration workflow](https://t-kal
 ## Paths
 
 Relative paths use the launch directory, including paths written in a global file.
-A leading `~` expands to the launching user's home in interpreter selectors, sandbox and resolver filesystem paths, supported Unix-socket paths, configuration filenames, and `--writable-root`.
+A leading `~` expands to the launching user's home in interpreter selectors, `cache.directory`, sandbox and resolver filesystem paths, supported Unix-socket paths, configuration filenames, and `--writable-root`.
 `MCP_CONSOLE_HOME` also accepts a leading `~`.
 
 Expansion uses a nonempty, absolute `HOME` from the launch environment.

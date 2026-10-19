@@ -30,17 +30,20 @@ See [the trust boundary](#trust-boundary).
 
 ## Cache locations
 
-| Value of `cache`  | Behavior                                                                                                                                                 |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `console`         | Use Console-specific dependency caches and generated resolver write grants. Requires sandboxing.                                                         |
-| `host`            | Use ordinary host cache locations and installed package environments where supported. Selecting host caches does not itself disable resolver sandboxing. |
-| Omitted or `null` | Use `console` for sandboxed execution, or `host` with `--no-sandbox`.                                                                                    |
+| Value of `cache`    | Behavior                                                                                                                                                 |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `managed`           | Use Console-specific dependency caches and generated resolver write grants. Requires sandboxing.                                                         |
+| `host`              | Use ordinary host cache locations and installed package environments where supported. Selecting host caches does not itself disable resolver sandboxing. |
+| `{directory: PATH}` | Use managed dependency caches under `<directory>/dependencies` for preparation and workers. Requires sandboxing.                                         |
+| Omitted or `null`   | Use `managed` for sandboxed execution, or `host` with `--no-sandbox`.                                                                                    |
+
+`console` is an alias for `managed`; configuration exports use `managed`.
 
 With [Codex inheritance](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex), the automatic choice waits for client permissions: sandboxed profiles use Console caches; full access uses host caches.
 `config resolve --full` retains `cache: null` for this pending choice.
 Existing Python uses its preinstalled packages in either mode.
 
-Console-specific caches use these dependency directories:
+Managed caches use these default dependency directories:
 
 | Platform | Default dependency directory                    |
 | -------- | ----------------------------------------------- |
@@ -50,9 +53,22 @@ Console-specific caches use these dependency directories:
 
 An absolute `XDG_CACHE_HOME` selects `<XDG_CACHE_HOME>/mcp-console/dependencies` on every platform.
 Windows has user-profile/home fallbacks when `LOCALAPPDATA` is unavailable.
-Set `MCP_CONSOLE_CACHE_DIR` to an absolute directory to use `<MCP_CONSOLE_CACHE_DIR>/dependencies` instead.
-It takes precedence over `XDG_CACHE_HOME` and platform defaults; an unset or empty value retains the default selection.
-Selection uses the resolver's effective environment and is captured for the server connection.
+To relocate Console-managed caches, set `cache.directory` in the configuration:
+
+```yaml
+cache:
+  directory: /absolute/path/to/console-cache
+```
+
+Dependency caches go under `<directory>/dependencies` for both package preparation and workers.
+`cache.directory` must be a nonempty path.
+Relative directories use the launch directory; a leading `~` follows the shared [path rules](CONFIGURATION.md#paths).
+Put the path under `directory`; a bare path such as `cache: /path/to/cache` is not accepted.
+This path takes precedence over environment variables and platform defaults.
+Configuration and recordings keep their existing locations.
+With `cache: managed`, the launch-time `MCP_CONSOLE_CACHE_DIR` environment variable selects the cache root ahead of `XDG_CACHE_HOME` and platform defaults; an unset or empty value retains the default selection.
+Environment-based selection uses the resolver's effective environment.
+The selected location is captured for the server connection and retained across worker restarts.
 `MCP_CONSOLE_HOME` moves configuration and recordings, not these caches.
 
 Console redirects supported package/cache variables beneath that directory.
@@ -70,7 +86,7 @@ cache: host
 This retains resolver sandboxing but changes the default cache locations and write grants.
 `MCP_CONSOLE_CACHE_DIR` is ignored with `cache: host`.
 Shared cache writes can affect artifacts later used outside Console.
-`--no-sandbox` defaults to host caches and rejects `cache: console` and explicit sandbox policies.
+`--no-sandbox` defaults to host caches and rejects managed caches, including custom directories, and explicit sandbox policies.
 To keep other file settings while disabling enforcement, clear inherited permission nodes:
 
 ```sh
