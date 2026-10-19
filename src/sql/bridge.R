@@ -309,6 +309,8 @@ base::local(
       # Its conversion boundary is duckdb_result_data_frame().
       arrow <- !is.null(pending$schema)
       remaining <- if (is.null(n)) Inf else n
+      # Arrow conversion skips the consumed prefix of the first saved batch.
+      offset <- if (is.null(pending$buffer)) 0L else pending$offset
       parts <- list()
       while (
         remaining > 0 && (!is.null(pending$buffer) || !is.null(pending$result))
@@ -333,23 +335,7 @@ base::local(
         }
         take <- min(remaining, count - pending$offset)
         parts[[length(parts) + 1L]] <- if (arrow) {
-          # Slice children, keeping native buffers and nested values exact.
-          nanoarrow::nanoarrow_array_modify(
-            pending$buffer,
-            list(
-              length = take,
-              children = lapply(pending$buffer$children, function(column) {
-                nanoarrow::nanoarrow_array_modify(
-                  column,
-                  list(
-                    offset = column$offset + pending$offset,
-                    length = take,
-                    null_count = if (column$null_count == 0L) 0L else -1L
-                  )
-                )
-              })
-            )
-          )
+          pending$buffer
         } else {
           pending$buffer[
             seq.int(pending$offset + 1L, pending$offset + take),
@@ -362,7 +348,7 @@ base::local(
         if (pending$offset == count) pending$buffer <- NULL
       }
       output <- if (arrow) {
-        duckdb_result_data_frame(parts, pending$schema)
+        duckdb_result_data_frame(parts, pending$schema, n, offset)
       } else if (length(parts)) {
         do.call(rbind, parts)
       } else {
@@ -432,7 +418,7 @@ base::local(
     # Ask DuckDB to convert only the fetched rows; never replay the source SQL
     # or use Nanoarrow's R type mappings. Delete when streaming dbFetch(n)
     # replaces retained Arrow retrieval; see the upstream link above.
-    duckdb_result_data_frame <- function(batches, schema) {
+    duckdb_result_data_frame <- function(batches, schema, n, offset) {
       # Positional scratch names prevent DuckDB from repairing duplicates.
       # Restore the original labels after the driver's data-frame conversion.
       children <- schema$children
@@ -444,16 +430,23 @@ base::local(
       data <- query_arrow(
         batches,
         scratch_schema,
-        "result",
         function(connection, relation) {
-          paste("SELECT * FROM", DBI::dbQuoteIdentifier(connection, relation))
+          # Let DuckDB select the requested rows from the saved batches. This
+          # avoids manually slicing Arrow buffers, offsets, and null counts.
+          paste(
+            "SELECT * FROM",
+            DBI::dbQuoteIdentifier(connection, relation),
+            if (!is.null(n)) paste("LIMIT", n),
+            "OFFSET",
+            offset
+          )
         }
       )
       names(data) <- names(schema$children)
       data
     }
 
-    query_arrow <- function(batches, schema, id, query) {
+    query_arrow <- function(batches, schema, query) {
       render_connection <- ensure_rendering_connection()
       table <- list(schema = schema, batches = batches)
       export_batches <- function(
@@ -474,7 +467,7 @@ base::local(
           list(children = table$schema$children[columns])
         )
         arrays <- lapply(table$batches, function(batch) {
-          # Keep full column lengths; the SQL query controls preview row limits.
+          # Keep full column lengths; the SQL query controls row selection.
           array <- nanoarrow::nanoarrow_array_modify(
             batch,
             list(children = batch$children[columns])
@@ -488,24 +481,9 @@ base::local(
       export_schema <- function(table, pointer) {
         nanoarrow::nanoarrow_pointer_export(table$schema, pointer)
       }
-      occupied <- DBI::dbGetQuery(
-        render_connection,
-        paste(
-          "SELECT lower(table_name) AS name",
-          "FROM system.information_schema.tables"
-        )
-      )$name
-      occupied <- c(
-        occupied,
-        tolower(duckdb::duckdb_list_arrow(render_connection))
-      )
-      relation_base <- paste0("__mcp_console_arrow_", id)
-      relation <- relation_base
-      suffix <- 0L
-      while (tolower(relation) %in% occupied) {
-        suffix <- suffix + 1L
-        relation <- paste0(relation_base, "_", suffix)
-      }
+      # This private catalog runs one conversion at a time and unregisters it
+      # on exit, so no user-table collision checks or per-cell names are needed.
+      relation <- "__mcp_console_arrow"
 
       # DuckDB's public R wrapper builds Arrow Scanner/Expression callbacks.
       # Export only the fetched C Data batches. Both callers use unfiltered
@@ -521,7 +499,7 @@ base::local(
       DBI::dbGetQuery(render_connection, query(render_connection, relation))
     }
 
-    stringify <- function(batch, schema, rows, columns, id) {
+    stringify <- function(batch, schema, rows, columns) {
       names <- sprintf("column_%02d", seq_len(columns))
       truncated_names <- sprintf("truncated_%02d", seq_len(columns))
       children <- schema$children[seq_len(columns)]
@@ -533,7 +511,6 @@ base::local(
       output <- query_arrow(
         list(batch),
         schema,
-        id,
         function(render_connection, relation) {
           identifiers <- DBI::dbQuoteIdentifier(render_connection, names)
           cast_projection <- paste0(
@@ -667,7 +644,7 @@ base::local(
       paste(c(output, markers), collapse = "\n")
     }
 
-    render_preview <- function(preview, id) {
+    render_preview <- function(preview) {
       schema <- preview$schema
       batch <- preview$batch
       total_columns <- length(schema$children)
@@ -708,7 +685,7 @@ base::local(
             paste("SET TimeZone =", DBI::dbQuoteString(rendering, zones))
           )
         }
-        cells <- stringify(batch, schema, rows, columns, id)
+        cells <- stringify(batch, schema, rows, columns)
         values <- cells$values
         truncated <- cells$truncated
       }
@@ -742,7 +719,7 @@ base::local(
       }
     }
 
-    evaluate_impl <- function(id) {
+    evaluate_impl <- function() {
       complete <- FALSE
       on.exit(if (!complete) close_last_result())
       tryCatch(
@@ -768,7 +745,7 @@ base::local(
             fetch_dbi()
           }
           if (!is.null(preview)) {
-            render_preview(preview, id)
+            render_preview(preview)
           }
           complete <- TRUE
         },
@@ -785,7 +762,7 @@ base::local(
       interrupted <<- FALSE
       # Observe the condition without handling it; R_tryEval remains the boundary.
       withCallingHandlers(
-        evaluate_impl(id),
+        evaluate_impl(),
         interrupt = function(condition) interrupted <<- TRUE,
         error = function(condition) interrupted <<- FALSE
       )

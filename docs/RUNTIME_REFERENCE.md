@@ -209,16 +209,15 @@ first = _console.sql_last_result(n=100)
 rest = _console.sql_last_result()
 ```
 
-Each call returns fetched data, consuming up to `n` successive rows, starting with the original rows consumed for the preview, including its lookahead row.
-Results include every column and complete values abbreviated or omitted from the display, using the provider's type conversions described below.
-Rows are never reconstructed from text and the submitted SQL is never replayed.
+Retrieval starts at the beginning of the SQL result; each call consumes up to `n` successive rows.
+Retrieved data includes every column and the complete values abbreviated or omitted from the preview, using the driver's type conversions.
+The SQL is never replayed.
 
 Omitting `n`, or passing `NULL` / `None`, materializes **all remaining rows** in memory.
 A nonnegative whole number limits the rows fetched and materialized by that call; zero returns an empty result without advancing it.
-Calls consume successive rows rather than returning the same prefix.
 There is no rewind operation.
-After exhaustion, subsequent fetches return empty results with the original columns/schema.
-If a driver needs another fetch to discover exhaustion, the result remains open until that fetch, replacement, or restart.
+After exhaustion, subsequent calls return empty results.
+Column names, including duplicates, remain available for empty results; R data frames also retain their column types.
 
 Return types follow the owning provider:
 
@@ -227,46 +226,35 @@ Return types follow the owning provider:
 | R DBI, including managed DuckDB         | A data frame using the driver's R column conversions                        |
 | Python DB-API, including managed DuckDB | A dictionary with `rows` (native driver rows) and `columns` (ordered names) |
 
-R column types follow the database driver.
 Managed DuckDB returns BIGINT and DECIMAL as numeric columns, which may lose precision; nested values become list or data-frame columns.
 Configure driver type options when creating a [native connection](#select-a-native-connection), before selecting it for SQL cells.
 For example, `DBI::dbConnect(duckdb::duckdb(), bigint = "integer64")` enables DuckDB's `bit64::integer64` columns.
-DuckDB's `bigint` is a connection option; passing it to `dbFetch()` does not change conversion.
-Python retrieval does not require pandas, PyArrow, or another dataframe package.
+Python retrieval requires no dataframe package.
 If pandas is installed, `pandas.DataFrame(data["rows"], columns=data["columns"])` follows pandas' conversion rules.
-The Python column names include duplicates and remain available for empty results.
-R data frames also retain the original column names, including duplicates, and column types for empty results.
-The selected DBI/DB-API driver still owns its type mappings and any precision limits.
-For transfer to the other language, use the existing [R/Python bridge](#r-and-python-interoperability) after retrieval and choose suitable conversions.
+Use the [R/Python bridge](#r-and-python-interoperability) to transfer retrieved data between languages.
 
-Console retains the preview rows and fetches more rows on demand.
-Database engines and drivers can independently evaluate ahead or buffer/materialize data internally; Console's row limits do not control those allocations.
+Console fetches more rows on demand; database engines and drivers may buffer additional data internally.
+The row limit bounds Console's retrieval, not those driver allocations or the size of individual values.
 Returned data belongs to the caller and remains usable after cleanup or another SQL cell.
-The retained rows include complete values and columns, so their memory cost depends on row width rather than the text preview budget.
 
 #### Result lifetime
 
-Only the latest SQL cell has a retained result.
-The accessor errors before a result exists, after a SQL cell without a row result, or in the other language.
-Another SQL cell discards the previous result before execution, including when the new SQL fails or is interrupted.
-An accepted connection selection or reset also discards it, even when selecting the same connection.
+Only the latest SQL cell's result is available, in its owning language.
+Another SQL cell discards it before execution, even if the new SQL fails.
+Selecting a connection, including the same connection or a reset, also discards it.
+Calling the function when no result is available raises an error.
 
-An error or interrupt during retrieval discards the result because the driver's position may have changed.
+Cleanup is automatic on exhaustion, replacement, a fetch error or interrupt, and restart or worker loss.
 Unrelated language errors and interrupts preserve an idle result.
-Retrieval runs as ordinary R/Python code, with the existing `timeout_ms` polling and cooperative interruption behavior; an observation timeout does not cancel it.
-Restart or worker loss discards retained results and native resources.
+Retrieval uses ordinary R/Python polling and interruption; an observation timeout does not cancel it.
+Cleanup does not close a selected connection or commit or roll back its transaction.
 
-Console clears DBI results and closes distinct DB-API cursors automatically on exhaustion, replacement, and retrieval failure.
-It does not commit, roll back, disconnect a selected connection, or create another connection to execute the query.
-Retained results can hold statements, source data, engine buffers, transactions, or database locks.
-Partial retrieval leaves the native result open until exhaustion, replacement, or restart; dropping returned data does not discard unread rows.
-For drivers such as Python DuckDB whose result cursor is the connection itself, cleanup releases Console's rows and references but cannot independently release the connection's native result.
-That state follows the driver's lifetime, usually until another execution, user-owned connection closure, or worker shutdown.
+Unread results can hold database resources and locks until exhaustion, replacement, or restart; dropping returned data does not discard unread rows.
+Some drivers need an additional fetch to establish exhaustion.
+Python DuckDB may retain native result buffers until another query or connection closure.
 
-Direct R/Python operations on the connection can invalidate or replace native fetch state.
-Finish retrieval or select the same connection again to discard unread rows before such operations.
-Console cannot portably detect every replacement, especially when Python's connection is itself the cursor; direct use while a result is pending is unsupported.
-Driver invalidation errors are reported without query replay or recovery through another connection.
+Before using the connection directly from R or Python, finish retrieval or select the same connection again to discard unread rows.
+Direct connection use while a result is pending is unsupported: it can invalidate the result without Console detecting the change.
 
 ## Plots and images
 
