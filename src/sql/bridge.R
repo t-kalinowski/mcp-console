@@ -265,6 +265,8 @@ base::local(
     }
 
     retain_result <- function(result, buffer, schema = NULL) {
+      # Driver completion and cleanup callbacks can change the selection.
+      # Build this candidate before checking the epoch for publication.
       if (DBI::dbHasCompleted(result)) {
         DBI::dbClearResult(result)
         result <- NULL
@@ -366,15 +368,17 @@ base::local(
       epoch <- result_epoch
       result <- send_query_arrow()
       retained <- FALSE
-      on.exit(if (!retained) DBI::dbClearResult(result))
+      on.exit(if (!retained && !is.null(result)) DBI::dbClearResult(result))
       if (result@stmt_lst$return_type != "QUERY_RESULT") {
         return(NULL)
       }
 
       batch <- DBI::dbFetchArrowChunk(result, chunk_size = preview_rows + 1L)
       schema <- nanoarrow::infer_nanoarrow_schema(batch)
+      candidate <- retain_result(result, batch, schema = schema)
+      result <- candidate$result
       if (epoch == result_epoch) {
-        last_result <<- retain_result(result, batch, schema = schema)
+        last_result <<- candidate
         retained <- TRUE
       }
       if (!is.null(batch) && batch$length == 0L) {
@@ -389,7 +393,7 @@ base::local(
       # Commands that need the statement interface run through DBI from R.
       result <- DBI::dbSendQuery(selected_connection, source)
       retained <- FALSE
-      on.exit(if (!retained) DBI::dbClearResult(result))
+      on.exit(if (!retained && !is.null(result)) DBI::dbClearResult(result))
       # DuckDB exposes a Count column even for non-query statements.
       # Fetching those results warns instead of returning a query preview.
       if (
@@ -402,8 +406,10 @@ base::local(
         return(NULL)
       }
       data <- DBI::dbFetch(result, n = preview_rows + 1L)
+      candidate <- retain_result(result, data)
+      result <- candidate$result
       if (epoch == result_epoch) {
-        last_result <<- retain_result(result, data)
+        last_result <<- candidate
         retained <- TRUE
       }
       schema <- nanoarrow::infer_nanoarrow_schema(data)

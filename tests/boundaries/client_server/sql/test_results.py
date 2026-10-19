@@ -34,6 +34,7 @@ def test_python_consumes_preview_and_bounded_chunks(
                         self.native = selected.native.cursor()
                         self.closed = False
                         self.fetches = []
+                        self.select_on_metadata = False
                         selected.cursors.append(self)
 
                     def execute(self, source):
@@ -43,13 +44,18 @@ def test_python_consumes_preview_and_bounded_chunks(
 
                     @property
                     def description(self):
+                        if self.select_on_metadata:
+                            self.select_on_metadata = False
+                            _console.sql_connection(replacement)
                         return self.native.description
 
                     def fetchmany(self, n):
                         self.fetches.append(n)
-                        return self.native.fetchmany(
+                        rows = self.native.fetchmany(
                             min(n, 2) if getattr(selected, "short", False) else n
                         )
+                        self.select_on_metadata = getattr(selected, "select_on_metadata", False)
+                        return rows
 
                     def fetchall(self):
                         self.fetches.append("all")
@@ -168,6 +174,39 @@ def test_python_consumes_preview_and_bounded_chunks(
                 assert selected.cursors[-1].closed
                 assert saved == {"columns": ("value",), "rows": [(10,)]}
                 print("replacement cleans up unread rows and preserves returned data")
+                """),
+        )
+        client.expect(
+            # fmt: python
+            python=code("""
+                replacement = sqlite3.connect(":memory:")
+                selected.select_on_metadata = True
+                """),
+        )
+        client.send(sql="SELECT 41 AS previous_connection")
+        client.expect(
+            "selection during metadata reading discards and closes the old result\n",
+            # fmt: python
+            python=code("""
+                assert _console.sql_connection() is replacement
+                assert selected.cursors[-1].closed
+                try:
+                    _console.sql_last_result()
+                except RuntimeError as error:
+                    assert "No retained" in str(error)
+                else:
+                    raise AssertionError("metadata callback published a stale result")
+                print("selection during metadata reading discards and closes the old result")
+                """),
+        )
+        client.send(sql="SELECT 99 AS selected_connection")
+        client.expect(
+            # fmt: python
+            python=code("""
+                assert _console.sql_last_result() == {
+                    "columns": ("selected_connection",),
+                    "rows": [(99,)],
+                }
                 """),
         )
         return client.finish()
@@ -403,6 +442,7 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
                 metrics$clears <- 0L
                 metrics$gate <- FALSE
                 metrics$fail <- FALSE
+                metrics$select_on <- NULL
                 setClass(
                   "CountConnection",
                   contains = "DBIConnection",
@@ -438,17 +478,28 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
                   DBI::dbIsValid(dbObj@native)
                 })
                 setMethod("dbHasCompleted", "CountResult", function(res, ...) {
-                  DBI::dbHasCompleted(res@native)
+                  completed <- DBI::dbHasCompleted(res@native)
+                  if (identical(metrics$select_on, "completed")) {
+                    metrics$select_on <- NULL
+                    .console$sql_connection(next_connection)
+                  }
+                  completed
                 })
                 setMethod("dbClearResult", "CountResult", function(res, ...) {
                   metrics$clears <- metrics$clears + 1L
-                  DBI::dbClearResult(res@native)
+                  cleared <- DBI::dbClearResult(res@native)
+                  if (identical(metrics$select_on, "clear")) {
+                    metrics$select_on <- NULL
+                    .console$sql_connection(next_connection)
+                  }
+                  cleared
                 })
                 sqlite <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")
                 invisible(DBI::dbExecute(sqlite, "CREATE TABLE transaction_state (id INTEGER)"))
                 DBI::dbBegin(sqlite)
                 invisible(DBI::dbExecute(sqlite, "INSERT INTO transaction_state VALUES (1)"))
-                .console$sql_connection(new("CountConnection", native = sqlite))
+                counted <- new("CountConnection", native = sqlite)
+                .console$sql_connection(counted)
                 """),
         )
         client.send(
@@ -536,11 +587,45 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
                 replacement <- .console$sql_last_result()
                 stopifnot(identical(replacement$replacement, 99L))
                 stopifnot(identical(saved$i, 0:4), metrics$clears == 6L)
-                .console$sql_connection(NULL)
-                DBI::dbDisconnect(sqlite)
                 writeLines(
                   "DBI replacement clears unread results without changing returned data"
                 )
+                """),
+        )
+        client.expect(
+            r='next_connection <- DBI::dbConnect(RSQLite::SQLite(), ":memory:")'
+        )
+        for callback in ("completed", "clear"):
+            client.expect(
+                # fmt: r
+                r=code(f"""
+                    .console$sql_connection(counted)
+                    clears_before <- metrics$clears
+                    metrics$select_on <- "{callback}"
+                    """),
+            )
+            client.send(sql=query if callback == "completed" else "SELECT 42 AS id")
+            client.expect(
+                f"DBI {callback} callback discards the old result\n",
+                # fmt: r
+                r=code(f"""
+                    stopifnot(identical(.console$sql_connection(), next_connection))
+                    message <- tryCatch(.console$sql_last_result(), error = conditionMessage)
+                    stopifnot(is.character(message), grepl("No retained", message, fixed = TRUE))
+                    stopifnot(metrics$clears == clears_before + 1L, DBI::dbIsValid(sqlite))
+                    writeLines("DBI {callback} callback discards the old result")
+                    """),
+            )
+            client.send(sql="SELECT 123 AS selected_connection")
+            client.expect(
+                r="stopifnot(identical(.console$sql_last_result()$selected_connection, 123L))"
+            )
+        client.expect(
+            # fmt: r
+            r=code("""
+                .console$sql_connection(NULL)
+                DBI::dbDisconnect(sqlite)
+                DBI::dbDisconnect(next_connection)
                 """),
         )
         return client.finish()

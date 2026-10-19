@@ -11,6 +11,7 @@ send:
             self.native = selected.native.cursor()
             self.closed = False
             self.fetches = []
+            self.select_on_metadata = False
             selected.cursors.append(self)
 
         def execute(self, source):
@@ -20,13 +21,18 @@ send:
 
         @property
         def description(self):
+            if self.select_on_metadata:
+                self.select_on_metadata = False
+                _console.sql_connection(replacement)
             return self.native.description
 
         def fetchmany(self, n):
             self.fetches.append(n)
-            return self.native.fetchmany(
+            rows = self.native.fetchmany(
                 min(n, 2) if getattr(selected, "short", False) else n
             )
+            self.select_on_metadata = getattr(selected, "select_on_metadata", False)
+            return rows
 
         def fetchall(self):
             self.fetches.append("all")
@@ -249,4 +255,66 @@ result:
     - type: text
       text: |
         replacement cleans up unread rows and preserves returned data
+  isError: false
+---
+send:
+  python: |
+    replacement = sqlite3.connect(":memory:")
+    selected.select_on_metadata = True
+result:
+  content:
+    - type: text
+      text: "[done]"
+  isError: false
+---
+send:
+  sql: SELECT 41 AS previous_connection
+result:
+  content:
+    - type: text
+      text: |
+        previous_connection
+        -------------------
+        41
+  isError: false
+---
+send:
+  python: |
+    assert _console.sql_connection() is replacement
+    assert selected.cursors[-1].closed
+    try:
+        _console.sql_last_result()
+    except RuntimeError as error:
+        assert "No retained" in str(error)
+    else:
+        raise AssertionError("metadata callback published a stale result")
+    print("selection during metadata reading discards and closes the old result")
+result:
+  content:
+    - type: text
+      text: |
+        selection during metadata reading discards and closes the old result
+  isError: false
+---
+send:
+  sql: SELECT 99 AS selected_connection
+result:
+  content:
+    - type: text
+      text: |
+        selected_connection
+        -------------------
+        99
+  isError: false
+---
+send:
+  python: |
+    assert _console.sql_last_result() == {
+        "columns": ("selected_connection",),
+        "rows": [(99,)],
+    }
+result:
+  content:
+    - type: text
+      text: "[done]"
   isError: false

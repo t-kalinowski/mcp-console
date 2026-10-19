@@ -309,7 +309,8 @@ def _evaluate(source):
         if getattr(result_cursor, "description", None) is None:
             return None
         rows = _fallback_show(result_cursor)
-        # Driver callbacks can select another connection while producing rows.
+        columns = tuple(column[0] for column in result_cursor.description)
+        # Driver callbacks can select another connection while reading metadata.
         # Display this cell, but do not publish a result after its invalidation.
         if epoch == _result_epoch:
             _last_result = {
@@ -317,7 +318,7 @@ def _evaluate(source):
                 "candidates": (result, executor),
                 "cursor": result_cursor,
                 "rows": rows,
-                "columns": tuple(column[0] for column in result_cursor.description),
+                "columns": columns,
             }
             retained = True
             if not rows:
