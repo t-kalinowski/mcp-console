@@ -9,16 +9,16 @@ Use configuration files to customize Console's default settings for a project or
 
 ## Files and precedence
 
-When Console starts, it looks for configuration in two places:
+When Console starts, it reads configuration from these sources, in order:
 
-| File    | Default location                                                    | Use                              |
-| ------- | ------------------------------------------------------------------- | -------------------------------- |
-| Global  | `~/.agents/console/config.yaml`                                     | Settings shared across projects. |
-| Project | `.agents/console/config.yaml` in the directory where Console starts | Settings for that project.       |
+| Source       | Location or option                                                  | Use                              |
+| ------------ | ------------------------------------------------------------------- | -------------------------------- |
+| Global file  | `~/.agents/console/config.yaml`                                     | Settings shared across projects. |
+| Project file | `.agents/console/config.yaml` in the directory where Console starts | Settings for that project.       |
+| Command line | `-c KEY=VALUE`                                                      | Settings for this launch.        |
 
-Console reads the global file first, then the project file.
-Project settings take precedence over matching global settings; settings the project does not specify keep their global values.
-Command-line `-c` overrides take precedence over both files.
+You can use all three together.
+Console layers them in the order shown: later settings override matching earlier settings, while other settings stay in effect.
 Neither file is required.
 
 See [Merge rules](#merge-rules) for how nested settings combine, or [Choose which files to load](#choose-which-files-to-load) to select a different file or skip either location.
