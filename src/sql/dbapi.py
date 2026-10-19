@@ -39,7 +39,8 @@ def _close_candidates(connection: object, candidates: tuple) -> None:
 def _release_result(result: dict) -> None:
     connection, candidates = result["connection"], result["candidates"]
     result["connection"], result["candidates"], result["cursor"] = None, (), None
-    _close_candidates(connection, candidates)
+    # Cleanup also runs from language cells, outside the SQL dispatch guard.
+    _runtime.without_automatic_resolution(_close_candidates, connection, candidates)
 
 
 def _invalidate_result() -> None:
