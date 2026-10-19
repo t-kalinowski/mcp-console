@@ -74,8 +74,7 @@ object, or \code{\link[=materialize_console_config]{materialize_console_config()
 \code{\link[=prune_console_config]{prune_console_config()}} produces a compact view of nondefault settings.
 \code{\link[=console_tool]{console_tool()}} discovers files when \code{config} is omitted.
 
-The following launch-time discovery interface is retained for existing callers.
-\code{ConfigDiscovery()} explicitly enables global and project file discovery.
+\code{ConfigDiscovery()} explicitly enables global and project file discovery at launch.
 Disable either source with \code{global = FALSE} or \code{project = FALSE}. Project
 discovery reads \code{.agents/console/config.yaml} in \code{console_tool()}'s launch
 directory; no ancestor directories are searched. Files can select runtimes,

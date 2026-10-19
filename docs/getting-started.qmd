@@ -46,7 +46,7 @@ Restart the client after setup.
 Your client launches Console on the same host, usually in the workspace where the agent is working.
 
 To register Console for a specific project, run the command from the project directory and add `--directory .`.
-See [client configuration](CLI.md#configure-a-client) for updating earlier project registrations, version pinning, and launch options.
+See [client configuration](CLI.md#configure-a-client) for project registration, version pinning, and launch options.
 
 ### Other MCP clients
 

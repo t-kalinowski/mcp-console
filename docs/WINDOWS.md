@@ -5,7 +5,6 @@ sidebar: guides
 # Windows
 
 Windows uses the shared installation, configuration, and runtime guides.
-This page keeps links from earlier documentation working.
 
 <span id="install-and-run"></span>
 

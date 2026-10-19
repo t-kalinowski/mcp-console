@@ -91,8 +91,7 @@ Relative paths start at the current directory; setup does not search Git parents
 [Codex](https://learn.chatgpt.com/docs/config-file/config-basic#configuration-precedence) and [Claude Code](https://code.claude.com/docs/en/mcp#scope-hierarchy-and-precedence) give loaded project entries precedence over same-named global entries.
 Global registration leaves existing project entries unchanged and warns when it finds one that may take precedence, including during `--dry-run`.
 The warning identifies the nearest matching project file.
-If an earlier registration created a project entry, rerun setup with `--directory PATH` for that project directory.
-Earlier automatic registrations used the Git root.
+To update an existing project entry, rerun setup with `--directory PATH` for that project directory.
 To use global settings instead, remove only that server's entry from the project configuration listed above.
 
 The check searches from the current directory through Codex's project root, using `project_root_markers` from its user configuration or `.git` by default; without a matching marker it checks only the current directory.

@@ -4,11 +4,9 @@ sidebar: guides
 
 # Configuration reference
 
-The configuration reference is now organized by task.
 Start with [Configuration files](CONFIGURATION.md) for file discovery, merging, and a settings index, or choose a topic below.
-This page preserves links to the former combined reference.
 
-| Topic                                                                            | Current reference                                                                    |
+| Topic                                                                            | Reference                                                                            |
 | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
 | <span id="top-level-settings"></span> Top-level settings                         | [Top-level settings](CONFIGURATION.md#settings-by-task)                              |
 | <span id="r"></span> R installation and startup                                  | [R installation and startup](RUNTIME_CONFIGURATION.md#r-executable-selection)        |

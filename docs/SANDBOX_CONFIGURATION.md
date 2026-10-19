@@ -470,7 +470,7 @@ The host must permit the executable and downloaded interpreter DLLs; this is sep
 The native default is bubblewrap.
 Namespace failure does not trigger a backend switch or unsandboxed retry.
 The inherited-procfs alternative keeps the same backend and policy.
-Standalone `linux_backend: landlock` has been removed and is rejected.
+Standalone `linux_backend: landlock` is rejected.
 See [Linux compatibility](LINUX_COMPATIBILITY.md#policy-and-backend-contract).
 
 ## Process cleanup {#supported-hosts-and-lifetime-limits}
