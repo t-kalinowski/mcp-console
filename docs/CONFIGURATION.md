@@ -43,14 +43,6 @@ Both commands create a [starter file](#generated-configuration) with commented e
 The starter uses `sandbox.profile: workspace`, which allows ordinary project writes; see [Sandbox permissions](SANDBOX_CONFIGURATION.md#profiles-and-temporary-storage).
 See [Initialization options](CLI.md#initialize-configuration) to preview the file, choose another project directory, or customize the starter.
 
-## Edit a configuration file
-
-Open the generated file and adjust the settings you need.
-Lines beginning with `##` explain settings; lines beginning with `#` show YAML examples you can uncomment.
-The [settings index](#settings-by-task) links to accepted values, defaults, and examples for each topic.
-
-Console reads configuration when the server starts, so start a new server connection after editing a file.
-
 ## Inspect the combined settings {#inspect-and-edit-resolved-configuration}
 
 From the directory where your client starts Console, inspect the combined settings:
