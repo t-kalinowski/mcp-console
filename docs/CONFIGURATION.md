@@ -5,7 +5,6 @@ filters:
 
 # Configuration files
 
-Console works without a configuration file.
 Use configuration files to keep settings for one project or share them across projects.
 
 ## Files and precedence
