@@ -64,6 +64,7 @@ Windows uv defaults use `LOCALAPPDATA/uv/cache` and `APPDATA/uv/{python,tools}`;
 
 Use `MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY` for a custom host extension cache.
 Otherwise managed installation and SQL use `.duckdb/extensions` under the resolver's effective home.
+On Windows, an absent or relative `HOME` falls back to an absolute `USERPROFILE` for that directory.
 The location is captured; changing it in a cell does not reconfigure preparation.
 Explicit filesystem policies must grant its writes.
 

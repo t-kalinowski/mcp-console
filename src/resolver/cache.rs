@@ -146,12 +146,11 @@ pub(crate) fn duckdb_extension_directory(
             .map(Some)
             .map_err(|error| error.to_string());
     }
-    let home = environment_path(settings, "HOME");
+    let home = environment_path(settings, "HOME").filter(|path| path.is_absolute());
     #[cfg(windows)]
-    let home = home.or_else(|| environment_path(settings, "USERPROFILE"));
-    Ok(home
-        .filter(|home| home.is_absolute())
-        .map(|home| home.join(".duckdb/extensions")))
+    let home = home
+        .or_else(|| environment_path(settings, "USERPROFILE").filter(|path| path.is_absolute()));
+    Ok(home.map(|home| home.join(".duckdb/extensions")))
 }
 
 #[cfg(any(unix, windows))]

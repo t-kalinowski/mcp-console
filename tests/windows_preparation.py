@@ -247,6 +247,43 @@ class WindowsPreparation(unittest.TestCase):
         )
 
     @requires_mxc(BINARY)
+    def test_host_cache_falls_back_to_userprofile_after_relative_home(self):
+        profile = self.root / "account"
+        extensions = profile / ".duckdb/extensions"
+        extensions.mkdir(parents=True)
+        self.environment.update(HOME="relative-home", USERPROFILE=str(profile))
+        self.environment.pop("MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY", None)
+        session = self.session(
+            overrides=(
+                "cache=host",
+                "r=null",
+                "resolver.sandbox.filesystem="
+                + json.dumps(
+                    {
+                        "read_only": [self.root.anchor],
+                        "read_write": [
+                            str(self.root / "cache/dependencies/uv"),
+                            str(extensions),
+                        ],
+                    }
+                ),
+            )
+        )
+        # fmt: python
+        result = session.send(
+            python=code("""
+            import os
+            from pathlib import Path
+
+            extensions = Path(os.environ["MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"])
+            assert extensions == Path(os.environ["USERPROFILE"]) / ".duckdb/extensions"
+            print("Host cache profile fallback")
+            """)
+        )
+        self.assertFalse(result.get("isError"), result)
+        self.assertIn("Host cache profile fallback", json.dumps(result))
+
+    @requires_mxc(BINARY)
     def test_explicit_filesystem_restriction_blocks_cache_writes(self):
         result = subprocess.run(
             [
