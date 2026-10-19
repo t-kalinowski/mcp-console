@@ -339,6 +339,21 @@ def test_r_duckdb_returns_driver_data_frames(
                 writeLines("successive fetches preserve all 300005 rows in source order")
                 """),
         )
+        client.send(sql="SELECT i::INTEGER AS id FROM range(57) AS t(i)")
+        client.expect(
+            "large R row limits retrieve the remaining rows\n",
+            # fmt: r
+            r=code("""
+                first <- .console$sql_last_result(5L)
+                rest <- .console$sql_last_result(.Machine$double.xmax)
+                stopifnot(identical(first$id, 0:4), identical(rest$id, 5:56))
+                stopifnot(identical(
+                  .console$sql_last_result(.Machine$double.xmax),
+                  rest[integer(), , drop = FALSE]
+                ))
+                writeLines("large R row limits retrieve the remaining rows")
+                """),
+        )
         client.send(sql="SELECT NULL::DECIMAL(10,2) AS amount WHERE FALSE")
         client.expect(
             "empty results keep the driver's column types\n",
@@ -543,7 +558,8 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
                 stopifnot(identical(metrics$fetches, 21))
                 b <- .console$sql_last_result(19L)
                 stopifnot(identical(metrics$fetches, c(21, 3)))
-                c <- .console$sql_last_result()
+                c <- .console$sql_last_result(2147483648)
+                stopifnot(identical(metrics$fetches, c(21, 3, 65536)))
                 rows <- rbind(a, b, c)
                 stopifnot(identical(rows$i, 0:56), all(is.na(rows$missing)))
                 stopifnot(identical(names(rows), c("i", "missing", "label")))

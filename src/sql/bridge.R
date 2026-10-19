@@ -296,8 +296,7 @@ base::local(
             !is.na(n) &&
             is.finite(n) &&
             n >= 0 &&
-            n == floor(n) &&
-            n <= .Machine$integer.max)
+            n == floor(n))
       )
       if (is.null(last_result)) {
         stop(
@@ -322,6 +321,7 @@ base::local(
       # Arrow conversion skips the consumed prefix of the first saved batch.
       offset <- if (is.null(pending$buffer)) 0L else pending$offset
       parts <- list()
+      fetched <- 0
       while (
         remaining > 0 && (!is.null(pending$buffer) || !is.null(pending$result))
       ) {
@@ -354,11 +354,13 @@ base::local(
           ]
         }
         remaining <- remaining - take
+        fetched <- fetched + take
         pending$offset <- pending$offset + take
         if (pending$offset == count) pending$buffer <- NULL
       }
       output <- if (arrow) {
-        duckdb_result_data_frame(parts, pending$schema, n, offset)
+        # Bound SQL LIMIT by fetched rows, not the caller's numeric allowance.
+        duckdb_result_data_frame(parts, pending$schema, fetched, offset)
       } else if (length(parts)) {
         do.call(rbind, parts)
       } else {
@@ -450,7 +452,8 @@ base::local(
           paste(
             "SELECT * FROM",
             DBI::dbQuoteIdentifier(connection, relation),
-            if (!is.null(n)) paste("LIMIT", n),
+            "LIMIT",
+            n,
             "OFFSET",
             offset
           )

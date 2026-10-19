@@ -127,7 +127,7 @@ Splitting interpreter threads would not solve process-wide environment mutation.
 DuckDB R 1.5.6 materializes ordinary DBI data-frame results before `dbFetch(n)` slices them.
 Managed R DuckDB therefore uses `dbSendQueryArrow()` and bounded `dbFetchArrowChunk()` calls in `fetch_duckdb()`.
 `duckdb_result_data_frame()` isolates the temporary conversion adapter: it passes only fetched batches through `query_arrow()` in a separate scratch catalog, then calls `dbGetQuery()` there for DuckDB's R column conversions.
-The conversion query uses `LIMIT` and `OFFSET` to select the requested rows, avoiding manual Arrow array slicing.
+The conversion query limits output to the rows consumed by the call, avoiding manual Arrow array slicing and passing oversized row allowances to SQL `LIMIT`.
 The scratch connection explicitly enables `preserve_insertion_order`; the offset only skips consumed rows in saved batches.
 The adapter never replays the submitted SQL, converts the unread result, or depends on the R `arrow` package.
 Selected DBI connections continue through `fetch_dbi()` and keep their driver's types and connection options.
