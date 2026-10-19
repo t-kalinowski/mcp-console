@@ -258,9 +258,17 @@ base::local(
       result_epoch <<- result_epoch + 1
       previous <- last_result
       last_result <<- NULL
-      if (!is.null(previous$result) && DBI::dbIsValid(previous$result)) {
-        DBI::dbClearResult(previous$result)
-      }
+      # Discard first; failed driver cleanup must not cancel the next action.
+      tryCatch(
+        {
+          if (!is.null(previous$result) && DBI::dbIsValid(previous$result)) {
+            DBI::dbClearResult(previous$result)
+          }
+        },
+        error = function(condition) {
+          cat("Error: ", conditionMessage(condition), "\n", sep = "")
+        }
+      )
       1L
     }
 

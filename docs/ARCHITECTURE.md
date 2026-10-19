@@ -103,6 +103,7 @@ Selecting or attaching another runtime must not replace a user-selected connecti
 Each SQL provider retains one native result and its bounded preview/lookahead rows.
 The public last-result function consumes those rows before fetching more in its owning runtime, with an optional row limit.
 It returns fetched data and automatically releases native resources on exhaustion, replacement, or retrieval failure.
+Cleanup errors are reported after invalidation and do not cancel replacement SQL or connection selection.
 Successive calls advance the result; repeatedly returning a prefix would require replay or unbounded retention.
 Native DBI/DB-API queries remain available when callers want to own their result lifecycle directly.
 R DBI connections use `dbSendQuery()` and bounded `dbFetch(n)` calls and retain the driver's data frames unchanged, apart from the managed DuckDB workaround below.

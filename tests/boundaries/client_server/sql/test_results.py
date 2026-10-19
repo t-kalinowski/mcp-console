@@ -464,6 +464,7 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
                 metrics$gate <- FALSE
                 metrics$fail <- FALSE
                 metrics$select_on <- NULL
+                metrics$cleanup_error <- FALSE
                 setClass(
                   "CountConnection",
                   contains = "DBIConnection",
@@ -512,6 +513,10 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
                   if (identical(metrics$select_on, "clear")) {
                     metrics$select_on <- NULL
                     .console$sql_connection(next_connection)
+                  }
+                  if (metrics$cleanup_error) {
+                    metrics$cleanup_error <- FALSE
+                    stop("native cleanup failed")
                   }
                   cleared
                 })
@@ -640,6 +645,31 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
             client.send(sql="SELECT 123 AS selected_connection")
             client.expect(
                 r="stopifnot(identical(.console$sql_last_result()$selected_connection, 123L))"
+            )
+        for action in ("query", "selection"):
+            client.expect(r=".console$sql_connection(counted)")
+            client.send(sql=query)
+            client.expect(r="metrics$cleanup_error <- TRUE")
+            if action == "query":
+                client.send(sql="SELECT 88 AS after_cleanup")
+                assert "Error: native cleanup failed" in last_tool_text(client)
+            else:
+                client.expect(
+                    "Error: native cleanup failed\n",
+                    r=".console$sql_connection(next_connection)",
+                )
+                client.expect(
+                    r="stopifnot(identical(.console$sql_connection(), next_connection))"
+                )
+                client.send(sql="SELECT 88 AS after_cleanup")
+            client.expect(
+                f"DBI cleanup error is reported and the {action} continues\n",
+                # fmt: r
+                r=code(f"""
+                    stopifnot(identical(.console$sql_last_result()$after_cleanup, 88L))
+                    stopifnot(DBI::dbIsValid(sqlite), DBI::dbIsValid(next_connection))
+                    writeLines("DBI cleanup error is reported and the {action} continues")
+                    """),
             )
         client.expect(
             # fmt: r
