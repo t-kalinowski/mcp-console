@@ -64,13 +64,22 @@ def sql_last_result(n: int | None = None) -> dict:
         del result["rows"][:take]
         remaining = None if n is None else n - take
         cursor = result["cursor"]
-        if cursor is not None and (remaining is None or remaining > 0):
-            fetched = list(
-                cursor.fetchall() if remaining is None else cursor.fetchmany(remaining)
-            )
-            rows.extend(fetched)
-            if remaining is None or not fetched:
+        if cursor is not None:
+            if remaining is None:
+                rows.extend(cursor.fetchall())
                 _release_result(result)
+            else:
+                while remaining > 0:
+                    # Native drivers need a bounded integer even when n is huge.
+                    size = min(remaining, 65536)
+                    fetched = list(cursor.fetchmany(size))
+                    rows.extend(fetched)
+                    remaining -= len(fetched)
+                    if not fetched:
+                        _release_result(result)
+                        break
+                    if len(fetched) < size:
+                        break
         return {"columns": result["columns"], "rows": rows}
     except BaseException:
         _invalidate_result()

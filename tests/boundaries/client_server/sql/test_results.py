@@ -176,6 +176,27 @@ def test_python_consumes_preview_and_bounded_chunks(
                 print("replacement cleans up unread rows and preserves returned data")
                 """),
         )
+        client.send(
+            sql="""WITH RECURSIVE rows(id) AS (
+            VALUES (0) UNION ALL SELECT id + 1 FROM rows WHERE id < 150122
+            ) SELECT id FROM rows"""
+        )
+        client.expect(
+            "large Python row limits use bounded driver fetches without losing rows\n",
+            # fmt: python
+            python=code("""
+                cursor = selected.cursors[-1]
+                data = _console.sql_last_result(10**100)
+                assert data == {
+                    "columns": ("id",),
+                    "rows": [(i,) for i in range(150123)],
+                }
+                assert max(cursor.fetches) <= 65536 and len(cursor.fetches) > 3
+                assert not cursor.closed
+                assert _console.sql_last_result(1)["rows"] == [] and cursor.closed
+                print("large Python row limits use bounded driver fetches without losing rows")
+                """),
+        )
         client.expect(
             # fmt: python
             python=code("""

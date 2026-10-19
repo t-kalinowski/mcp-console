@@ -258,6 +258,59 @@ result:
   isError: false
 ---
 send:
+  sql: |-
+    WITH RECURSIVE rows(id) AS (
+                VALUES (0) UNION ALL SELECT id + 1 FROM rows WHERE id < 150122
+                ) SELECT id FROM rows
+result:
+  content:
+    - type: text
+      text: |
+        id
+        --
+        0
+        1
+        2
+        3
+        4
+        5
+        6
+        7
+        8
+        9
+        10
+        11
+        12
+        13
+        14
+        15
+        16
+        17
+        18
+        19
+        [additional rows omitted]
+  isError: false
+---
+send:
+  python: |
+    cursor = selected.cursors[-1]
+    data = _console.sql_last_result(10**100)
+    assert data == {
+        "columns": ("id",),
+        "rows": [(i,) for i in range(150123)],
+    }
+    assert max(cursor.fetches) <= 65536 and len(cursor.fetches) > 3
+    assert not cursor.closed
+    assert _console.sql_last_result(1)["rows"] == [] and cursor.closed
+    print("large Python row limits use bounded driver fetches without losing rows")
+result:
+  content:
+    - type: text
+      text: |
+        large Python row limits use bounded driver fetches without losing rows
+  isError: false
+---
+send:
   python: |
     replacement = sqlite3.connect(":memory:")
     selected.select_on_metadata = True
