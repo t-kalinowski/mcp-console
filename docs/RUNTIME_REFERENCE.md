@@ -200,7 +200,7 @@ A preview is not a data export: fetch and save results explicitly when you need 
 After inspecting a SQL preview, retrieve its result in the connection's owning language:
 
 ```r
-first <- .console$sql_last_result(n = 100L)
+first <- .console$sql_last_result(n = 100)
 rest <- .console$sql_last_result()
 ```
 
@@ -214,7 +214,7 @@ Results include every column and complete values abbreviated or omitted from the
 Rows are never reconstructed from text and the submitted SQL is never replayed.
 
 Omitting `n`, or passing `NULL` / `None`, materializes **all remaining rows** in memory.
-A nonnegative integer limits the rows fetched and materialized by that call; zero returns an empty result without advancing it.
+A nonnegative whole number limits the rows fetched and materialized by that call; zero returns an empty result without advancing it.
 Calls consume successive rows rather than returning the same prefix.
 There is no rewind operation.
 After exhaustion, subsequent fetches return empty results with the original columns/schema.
@@ -225,14 +225,16 @@ Return types follow the owning provider:
 
 | Provider                                | Returned data                                                               |
 | --------------------------------------- | --------------------------------------------------------------------------- |
-| Managed R DuckDB                        | A data frame using DuckDB's own R column conversions                        |
-| Selected R DBI connection               | The driver's data frame, with its native column types                       |
+| R DBI, including managed DuckDB         | A data frame using the driver's R column conversions                        |
 | Python DB-API, including managed DuckDB | A dictionary with `rows` (native driver rows) and `columns` (ordered names) |
 
 R managed DuckDB fetches Arrow batches internally, then converts only the requested rows through DuckDB in a separate scratch connection.
 The function returns an ordinary data frame without requiring the R `arrow` package.
 DuckDB's standard R conversions apply: BIGINT and DECIMAL become numeric columns and may lose precision; nested values become list or data-frame columns.
 Console does not implement its own type mappings.
+Configure driver type options when creating a [native connection](#select-a-native-connection), before selecting it for SQL cells.
+For example, `DBI::dbConnect(duckdb::duckdb(), bigint = "integer64")` enables DuckDB's `bit64::integer64` columns.
+DuckDB's `bigint` is a connection option; passing it to `dbFetch()` does not change conversion.
 Python retrieval does not require pandas, PyArrow, or another dataframe package.
 If pandas is installed, `pandas.DataFrame(data["rows"], columns=data["columns"])` follows pandas' conversion rules.
 The Python column names include duplicates and remain available for empty results.

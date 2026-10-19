@@ -228,7 +228,7 @@ def test_r_duckdb_returns_driver_data_frames(
                 zero <- .console$sql_last_result(0L)
                 stopifnot(is.data.frame(zero), nrow(zero) == 0L, ncol(zero) == 14L)
                 stopifnot(identical(metrics$fetches, 21))
-                first <- .console$sql_last_result(5L)
+                first <- .console$sql_last_result(5)
                 second <- .console$sql_last_result(19L)
                 third <- .console$sql_last_result(33L)
                 empty <- .console$sql_last_result(1L)
@@ -332,6 +332,35 @@ def test_r_duckdb_returns_driver_data_frames(
                 message <- tryCatch(.console$sql_last_result(), error = conditionMessage)
                 stopifnot(grepl("No retained", message, fixed = TRUE))
                 writeLines("a driver conversion error discards the retained result")
+                """),
+        )
+        client.expect(
+            # fmt: r
+            r=code("""
+                configured <- DBI::dbConnect(duckdb::duckdb(), bigint = "integer64")
+                .console$sql_connection(configured)
+                """),
+        )
+        client.send(
+            sql="""SELECT i::INTEGER AS id, 9007199254740993::BIGINT AS big
+            FROM range(30) AS t(i)"""
+        )
+        client.expect(
+            "connection type options apply to retrieved data frames\n",
+            # fmt: r
+            r=code("""
+                first <- .console$sql_last_result(5)
+                rest <- .console$sql_last_result()
+                expected <- DBI::dbGetQuery(configured,
+                  "SELECT i::INTEGER AS id, 9007199254740993::BIGINT AS big FROM range(30) AS t(i)")
+                stopifnot(inherits(first$big, "integer64"))
+                stopifnot(identical(as.character(first$big), rep("9007199254740993", 5)))
+                # Binding driver batches can change their implicit row names.
+                # Compare all column values and types with the native driver.
+                stopifnot(identical(as.list(rbind(first, rest)), as.list(expected)))
+                .console$sql_connection(NULL)
+                DBI::dbDisconnect(configured, shutdown = TRUE)
+                writeLines("connection type options apply to retrieved data frames")
                 """),
         )
         return client.finish()
