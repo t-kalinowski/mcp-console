@@ -5,7 +5,7 @@ You can ask it to explore data, refine an analysis, or try another approach whil
 
 ## Work iteratively {#build-on-earlier-work}
 
-Your agent can inspect or modify the results of earlier calls without repeating the setup.
+Your agent can inspect or modify what's already in memory without repeating the setup.
 For example, after the agent fits a statistical model, you can ask it to inspect the residuals or plot predictions without loading the data and fitting the model again.
 An error does not undo changes made before the failure.
 
