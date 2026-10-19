@@ -6,56 +6,18 @@ filters:
 # Configuration files
 
 Console works without a configuration file.
-Use this page to create one, choose which files Console reads, combine settings, or inspect the result before launch.
+Use `mcp-console config init` to generate a starter file with commented examples, then edit it to choose interpreters, packages, and permissions.
 The [settings index](#settings-by-task) links to the accepted values, defaults, and behavior for each topic.
-
-For example, a project can select its existing Python environment and allow project writes:
-
-```yaml
-python: .venv
-sandbox:
-  profile: workspace
-```
-
-Save this in `.agents/console/config.yaml` in the directory where Console starts.
-The Python environment must already exist; Console uses its installed packages without managing them.
-See [Interpreters and startup](RUNTIME_CONFIGURATION.md) and [Sandbox permissions](SANDBOX_CONFIGURATION.md) for these settings.
 
 Configuration is trusted launcher input: it can select executables, supply credentials, and widen permissions.
 [File precedence](#files-and-precedence) explains automatic project loading and how to skip it.
 
-## Settings by task {#settings-by-task}
-
-<span id="top-level-settings"></span>
-
-Configuration must be a YAML or JSON mapping.
-Unknown fields are errors.
-Each reference below owns the complete settings and behavior for its topic; dotted paths such as `r.packages` show nesting.
-
-| Setting                              | Value or form                                           | Reference                                                                                                                                                           |
-| ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `r`                                  | Executable path, mapping, or `null`                     | <span id="r-executable-selection"></span> <span id="native-r-startup"></span> [Select R and its startup behavior](RUNTIME_CONFIGURATION.md#r-executable-selection). |
-| `python`                             | Executable/venv path, selection mapping, or `null`      | <span id="python-environment-selection"></span> [Select an existing or managed Python environment](RUNTIME_CONFIGURATION.md#python-environment-selection).          |
-| `r.packages`, `python.packages`      | Lists within the runtime mapping                        | <span id="startup-package-declarations"></span> [Choose startup packages](RUNTIME_CONFIGURATION.md#startup-package-declarations).                                   |
-| `r.resolution`, `python.resolution`  | Policy names within the runtime mapping                 | <span id="dependency-resolution-policies"></span> [Control package preparation](RUNTIME_CONFIGURATION.md#dependency-resolution-policies).                           |
-| `startup`                            | Mapping or `null`                                       | <span id="session-startup-source"></span> [Select a database connection at startup](RUNTIME_CONFIGURATION.md#session-startup-source).                               |
-| `sandbox`                            | Mapping or `null`                                       | [Set filesystem and network permissions](SANDBOX_CONFIGURATION.md).                                                                                                 |
-| `resolver`                           | Mapping                                                 | [Configure package sources and preparation](RESOLVER.md#configuration).                                                                                             |
-| `cache`                              | `console`, `host`, or `null`                            | <span id="cache-selection"></span> [Choose package cache locations](RESOLVER.md#cache-locations).                                                                   |
-| `inherit_environment`, `environment` | Boolean; mapping of names to strings                    | <span id="shared-environment"></span> [Set environment values and inheritance](ENVIRONMENT.md#where-to-set-variables).                                              |
-| `languages`                          | Nonempty list of `r`, `python`, and/or `sql`; or `null` | <span id="model-visible-languages"></span> [Choose the languages exposed to the agent](TOOL_CONFIGURATION.md#model-visible-languages).                              |
-| `tool`                               | Mapping                                                 | <span id="tool-descriptions-and-parameters"></span> [Customize tool descriptions and parameters](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters).           |
-
-For the underlying concepts, read [Packages and environments](REQUIREMENTS.md) and [Sandbox and trust](SANDBOX.md).
-For launch flags, see the [Command-line reference](CLI.md).
-
 ## Create a configuration file
+
+Run this command in your project directory:
 
 ```sh
 mcp-console config init
-mcp-console config init --global
-mcp-console config init --directory /path/to/project
-mcp-console config init -c r.resolution=disabled -c 'r.packages=[]' --dry-run
 ```
 
 By default, `config init` creates `.agents/console/config.yaml` in the current directory, including outside Git.
@@ -99,6 +61,31 @@ With no overrides, `config init` generates this `config.yaml`:
 ::: {.config-init-template}
 [View the generated configuration](../tests/snapshots/cli/interface/test_config_init/dry_run_previews_the_created_contents.yaml).
 :::
+
+## Settings by task {#settings-by-task}
+
+<span id="top-level-settings"></span>
+
+Configuration must be a YAML or JSON mapping.
+Unknown fields are errors.
+Each reference below owns the complete settings and behavior for its topic; dotted paths such as `r.packages` show nesting.
+
+| Setting                              | Value or form                                           | Reference                                                                                                                                                           |
+| ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `r`                                  | Executable path, mapping, or `null`                     | <span id="r-executable-selection"></span> <span id="native-r-startup"></span> [Select R and its startup behavior](RUNTIME_CONFIGURATION.md#r-executable-selection). |
+| `python`                             | Executable/venv path, selection mapping, or `null`      | <span id="python-environment-selection"></span> [Select an existing or managed Python environment](RUNTIME_CONFIGURATION.md#python-environment-selection).          |
+| `r.packages`, `python.packages`      | Lists within the runtime mapping                        | <span id="startup-package-declarations"></span> [Choose startup packages](RUNTIME_CONFIGURATION.md#startup-package-declarations).                                   |
+| `r.resolution`, `python.resolution`  | Policy names within the runtime mapping                 | <span id="dependency-resolution-policies"></span> [Control package preparation](RUNTIME_CONFIGURATION.md#dependency-resolution-policies).                           |
+| `startup`                            | Mapping or `null`                                       | <span id="session-startup-source"></span> [Select a database connection at startup](RUNTIME_CONFIGURATION.md#session-startup-source).                               |
+| `sandbox`                            | Mapping or `null`                                       | [Set filesystem and network permissions](SANDBOX_CONFIGURATION.md).                                                                                                 |
+| `resolver`                           | Mapping                                                 | [Configure package sources and preparation](RESOLVER.md#configuration).                                                                                             |
+| `cache`                              | `console`, `host`, or `null`                            | <span id="cache-selection"></span> [Choose package cache locations](RESOLVER.md#cache-locations).                                                                   |
+| `inherit_environment`, `environment` | Boolean; mapping of names to strings                    | <span id="shared-environment"></span> [Set environment values and inheritance](ENVIRONMENT.md#where-to-set-variables).                                              |
+| `languages`                          | Nonempty list of `r`, `python`, and/or `sql`; or `null` | <span id="model-visible-languages"></span> [Choose the languages exposed to the agent](TOOL_CONFIGURATION.md#model-visible-languages).                              |
+| `tool`                               | Mapping                                                 | <span id="tool-descriptions-and-parameters"></span> [Customize tool descriptions and parameters](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters).           |
+
+For the underlying concepts, read [Packages and environments](REQUIREMENTS.md) and [Sandbox and trust](SANDBOX.md).
+For launch flags, see the [Command-line reference](CLI.md).
 
 ## Files and precedence
 
