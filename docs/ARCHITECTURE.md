@@ -106,6 +106,7 @@ It returns fetched data and automatically releases native resources on exhaustio
 Successive calls advance the result; repeatedly returning a prefix would require replay or unbounded retention.
 Native DBI/DB-API queries remain available when callers want to own their result lifecycle directly.
 R managed DuckDB fetches exact Nanoarrow chunks and formats its preview in a separate scratch catalog so formatting cannot invalidate the retained query.
+Retrieval passes only its fetched batches through the same scratch catalog and returns DuckDB's data-frame conversions, keeping type mappings in the driver.
 Other DBI paths keep native data frames; Python returns driver rows with ordered column names and closes only result objects distinct from the selected connection.
 The router and selection callbacks invalidate results across language boundaries without initializing another runtime.
 Observable consumption, conversion, and lifetime rules belong in the [runtime reference](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result).

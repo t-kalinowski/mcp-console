@@ -91,18 +91,17 @@ result:
               `.console$sql_connection(connection)`; restore managed DuckDB with
               `.console$sql_connection(NULL)`. Never disconnect the managed
               connection; restore it before disconnecting a selection. After R-owned
-              SQL, `.console$sql_last_result(n = 100)` retrieves up to n successive
-              rows, including the original preview first, without re-executing SQL;
-              omit n to materialize all remaining rows. Managed DuckDB returns a
-              Nanoarrow stream of fetched batches preserving exact types; other DBI
-              connections return native data frames. Convert streams with
-              `as.data.frame()` only when its type conversions suit the data. Cleanup
-              is automatic on exhaustion, replacement, or retrieval failure.
-              Default-device plots return as PNGs and finalize at cell end, including
-              after errors; draw each plot in one cell. Explicit devices are not
-              captured. Set persistent dimensions in inches and DPI with
-              `options(console.plot.width_in = ..., console.plot.height_in = ...,
-              console.plot.dpi = ...)`.
+              SQL, `.console$sql_last_result(n = 100)` returns a data frame of up to n
+              successive rows, including the original preview first, without
+              re-executing SQL; omit n to materialize all remaining rows. Managed
+              DuckDB fetches Arrow batches internally and uses DuckDB's own data-frame
+              conversions; large integers and decimals may lose precision. Other DBI
+              connections return their native data frames. Cleanup is automatic on
+              exhaustion, replacement, or retrieval failure. Default-device plots
+              return as PNGs and finalize at cell end, including after errors; draw
+              each plot in one cell. Explicit devices are not captured. Set persistent
+              dimensions in inches and DPI with `options(console.plot.width_in = ...,
+              console.plot.height_in = ..., console.plot.dpi = ...)`.
             type:
               - string
               - "null"

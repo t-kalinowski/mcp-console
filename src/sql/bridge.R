@@ -76,8 +76,8 @@ base::local(
     }
 
     ensure_rendering_connection <- function() {
-      # Formatting must not execute another statement on a retained cursor's
-      # connection. It also stays independent of the user's catalog and options.
+      # Preview formatting and conversion must not execute another statement on
+      # a retained cursor's connection. Keep a separate scratch catalog.
       if (is.null(rendering_connection)) {
         rendering_connection <<- open_connection()
       }
@@ -360,7 +360,24 @@ base::local(
         if (pending$offset == count) pending$buffer <- NULL
       }
       output <- if (arrow) {
-        nanoarrow::basic_array_stream(parts, schema = pending$schema)
+        # Positional scratch names prevent DuckDB from repairing duplicates.
+        # Restore the original labels after the driver's data-frame conversion.
+        children <- pending$schema$children
+        names(children) <- sprintf("column_%02d", seq_along(children))
+        schema <- nanoarrow::nanoarrow_schema_modify(
+          pending$schema,
+          list(children = children)
+        )
+        data <- query_arrow(
+          parts,
+          schema,
+          "result",
+          function(connection, relation) {
+            paste("SELECT * FROM", DBI::dbQuoteIdentifier(connection, relation))
+          }
+        )
+        names(data) <- names(pending$schema$children)
+        data
       } else if (length(parts)) {
         do.call(rbind, parts)
       } else {
@@ -422,19 +439,10 @@ base::local(
       list(schema = schema, batch = batch)
     }
 
-    stringify <- function(batch, schema, rows, columns, id) {
+    query_arrow <- function(batches, schema, id, query) {
       render_connection <- ensure_rendering_connection()
-      names <- sprintf("column_%02d", seq_len(columns))
-      children <- schema$children[seq_len(columns)]
-      names(children) <- names
-      table <- list(
-        schema = nanoarrow::nanoarrow_schema_modify(
-          schema,
-          list(children = children)
-        ),
-        batch = batch
-      )
-      export_preview <- function(
+      table <- list(schema = schema, batches = batches)
+      export_batches <- function(
         table,
         pointer,
         projection = NULL,
@@ -451,14 +459,16 @@ base::local(
           table$schema,
           list(children = table$schema$children[columns])
         )
-        # DuckDB requires column arrays to retain the batch's length.
-        # Keep the lookahead row here and limit the formatting query below.
-        array <- nanoarrow::nanoarrow_array_modify(
-          table$batch,
-          list(children = table$batch$children[columns])
-        )
-        nanoarrow::nanoarrow_array_set_schema(array, schema)
-        stream <- nanoarrow::basic_array_stream(list(array), schema = schema)
+        arrays <- lapply(table$batches, function(batch) {
+          # Keep full column lengths; the SQL query controls preview row limits.
+          array <- nanoarrow::nanoarrow_array_modify(
+            batch,
+            list(children = batch$children[columns])
+          )
+          nanoarrow::nanoarrow_array_set_schema(array, schema)
+          array
+        })
+        stream <- nanoarrow::basic_array_stream(arrays, schema = schema)
         nanoarrow::nanoarrow_pointer_export(stream, pointer)
       }
       export_schema <- function(table, pointer) {
@@ -475,7 +485,7 @@ base::local(
         occupied,
         tolower(duckdb::duckdb_list_arrow(render_connection))
       )
-      relation_base <- paste0("__mcp_console_preview_", id)
+      relation_base <- paste0("__mcp_console_arrow_", id)
       relation <- relation_base
       suffix <- 0L
       while (tolower(relation) %in% occupied) {
@@ -484,17 +494,33 @@ base::local(
       }
 
       # DuckDB's public R wrapper builds Arrow Scanner/Expression callbacks.
-      # Export our bounded C Data batch directly, preserving types and precision.
-      # The formatting query has no filters, so no filter-expression callbacks
-      # are needed; it must never execute the user's SQL again.
+      # Export only the fetched C Data batches. Both callers use unfiltered
+      # scans, so no filter-expression callbacks or R Arrow package are needed.
+      # DuckDB owns conversion to R column types; the user's SQL is never replayed.
       duckdb:::rapi_register_arrow(
         render_connection@conn_ref,
         relation,
-        list(export_preview, NULL, NULL, NULL, export_schema),
+        list(export_batches, NULL, NULL, NULL, export_schema),
         table
       )
-      tryCatch(
-        {
+      on.exit(duckdb::duckdb_unregister_arrow(render_connection, relation))
+      DBI::dbGetQuery(render_connection, query(render_connection, relation))
+    }
+
+    stringify <- function(batch, schema, rows, columns, id) {
+      names <- sprintf("column_%02d", seq_len(columns))
+      truncated_names <- sprintf("truncated_%02d", seq_len(columns))
+      children <- schema$children[seq_len(columns)]
+      names(children) <- names
+      schema <- nanoarrow::nanoarrow_schema_modify(
+        schema,
+        list(children = children)
+      )
+      output <- query_arrow(
+        list(batch),
+        schema,
+        id,
+        function(render_connection, relation) {
           identifiers <- DBI::dbQuoteIdentifier(render_connection, names)
           cast_projection <- paste0(
             "CAST(preview.",
@@ -517,7 +543,6 @@ base::local(
             " END AS ",
             identifiers
           )
-          truncated_names <- sprintf("truncated_%02d", seq_len(columns))
           truncated_identifiers <- DBI::dbQuoteIdentifier(
             render_connection,
             truncated_names
@@ -530,7 +555,7 @@ base::local(
             ", false) AS ",
             truncated_identifiers
           )
-          query <- paste(
+          paste(
             "WITH strings AS (SELECT",
             cast_projection,
             "FROM",
@@ -540,16 +565,11 @@ base::local(
             "FROM strings LIMIT",
             rows
           )
-          output <- DBI::dbGetQuery(render_connection, query)
-          list(
-            values = as.list(output[names]),
-            truncated = as.list(output[truncated_names])
-          )
-        },
-        finally = duckdb::duckdb_unregister_arrow(
-          render_connection,
-          relation
-        )
+        }
+      )
+      list(
+        values = as.list(output[names]),
+        truncated = as.list(output[truncated_names])
       )
     }
 

@@ -210,7 +210,7 @@ rest = _console.sql_last_result()
 ```
 
 Each call returns fetched data, consuming up to `n` successive rows, starting with the original rows consumed for the preview, including its lookahead row.
-These are original values with every column, including columns and values abbreviated or omitted from the display.
+Results include every column and complete values abbreviated or omitted from the display, using the provider's type conversions described below.
 Rows are never reconstructed from text and the submitted SQL is never replayed.
 
 Omitting `n`, or passing `NULL` / `None`, materializes **all remaining rows** in memory.
@@ -223,17 +223,20 @@ In particular, a short nonempty DB-API batch does not close the cursor; an empty
 
 Return types follow the owning provider:
 
-| Provider                                | Returned data                                                               | Optional conversion                                                                                                                                 |
-| --------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Managed R DuckDB                        | `nanoarrow_array_stream` containing the fetched native batches and schema   | `as.data.frame(stream)` for types supported by Nanoarrow's R conversion; an optional Arrow consumer can preserve types R cannot represent directly. |
-| Selected R DBI connection               | The driver's data frame, with its native column types                       | Ordinary R data-frame operations.                                                                                                                   |
-| Python DB-API, including managed DuckDB | A dictionary with `rows` (native driver rows) and `columns` (ordered names) | `pandas.DataFrame(data["rows"], columns=data["columns"])` if pandas is installed; its conversion rules apply.                                       |
+| Provider                                | Returned data                                                               |
+| --------------------------------------- | --------------------------------------------------------------------------- |
+| Managed R DuckDB                        | A data frame using DuckDB's own R column conversions                        |
+| Selected R DBI connection               | The driver's data frame, with its native column types                       |
+| Python DB-API, including managed DuckDB | A dictionary with `rows` (native driver rows) and `columns` (ordered names) |
 
-R managed DuckDB keeps BIGINT, DECIMAL, nested values, and nulls in native Arrow buffers without requiring the R `arrow` package for retrieval.
-An R data-frame conversion can lose precision or reject types that R cannot represent; conversion is an explicit caller choice.
+R managed DuckDB fetches Arrow batches internally, then converts only the requested rows through DuckDB in a separate scratch connection.
+The function returns an ordinary data frame without requiring the R `arrow` package.
+DuckDB's standard R conversions apply: BIGINT and DECIMAL become numeric columns and may lose precision; nested values become list or data-frame columns.
+Console does not implement its own type mappings.
 Python retrieval does not require pandas, PyArrow, or another dataframe package.
+If pandas is installed, `pandas.DataFrame(data["rows"], columns=data["columns"])` follows pandas' conversion rules.
 The Python column names include duplicates and remain available for empty results.
-The R stream contains only the batches fetched by this call: consuming it never fetches more database rows.
+R data frames also retain the original column names, including duplicates, and column types for empty results.
 The selected DBI/DB-API driver still owns its type mappings and any precision limits.
 For transfer to the other language, use the existing [R/Python bridge](#r-and-python-interoperability) after retrieval and choose suitable conversions.
 
@@ -242,9 +245,8 @@ It does not eagerly fetch, copy, count, or spool the complete result.
 Later bounded fetches use the saved rows first and request only the remaining row allowance from the driver.
 Database engines and drivers can independently evaluate ahead or buffer/materialize data internally; Console's row limits do not control those allocations.
 Returned data belongs to the caller and remains usable after cleanup or another SQL cell.
-Native buffers may retain the bounded batch from which a smaller chunk was sliced.
 The retained rows include complete values and columns, so their memory cost depends on row width rather than the text preview budget.
-R preview formatting also keeps a scratch DuckDB connection until worker shutdown.
+R preview formatting and result conversion keep a scratch DuckDB connection until worker shutdown.
 
 #### Result lifetime
 

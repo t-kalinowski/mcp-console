@@ -175,7 +175,7 @@ def test_python_consumes_preview_and_bounded_chunks(
 
 @requires(R, SQL)
 @executions(RUNTIME)
-def test_r_duckdb_preserves_exact_batches(
+def test_r_duckdb_returns_driver_data_frames(
     binary: Path, execution: Execution
 ) -> Transcript:
     with McpClient(binary, execution.serve()) as client:
@@ -213,75 +213,65 @@ def test_r_duckdb_preserves_exact_batches(
                 9223372036854775807::BIGINT AS big,
                 12345678901234567890123456789.123456789::DECIMAL(38,9) AS exact,
                 NULL::VARCHAR AS missing, repeat('x', 1000) AS long_value,
-                [1, NULL, 3] AS items, {'label': 'original'} AS person,
+                [i::INTEGER, NULL, i::INTEGER + 2] AS items,
+                {'label': 'original', 'id': i::INTEGER} AS person,
                 9 AS c09, 10 AS c10, 11 AS c11, 12 AS c12,
-                'complete column' AS c13
+                'complete column' AS c13,
+                MAP(['key'], [9007199254740993::BIGINT]) AS mapping
             FROM range(57) AS t(i)"""
         )
         assert "9223372036854775807" in last_tool_text(client)
         client.expect(
-            "exact batches retain the preview, lookahead, and remaining rows\n",
+            "data frames use DuckDB types and retain every row without replay\n",
             # fmt: r
             r=code("""
+                zero <- .console$sql_last_result(0L)
+                stopifnot(is.data.frame(zero), nrow(zero) == 0L, ncol(zero) == 14L)
+                stopifnot(identical(metrics$fetches, 21))
                 first <- .console$sql_last_result(5L)
                 second <- .console$sql_last_result(19L)
                 third <- .console$sql_last_result(33L)
                 empty <- .console$sql_last_result(1L)
-                stopifnot(inherits(first, "nanoarrow_array_stream"))
-                a <- nanoarrow::collect_array_stream(first)
-                b <- nanoarrow::collect_array_stream(second)
-                c <- nanoarrow::collect_array_stream(third)
-                batches <- c(a, b, c)
-                stopifnot(length(nanoarrow::collect_array_stream(empty)) == 0L)
-                ids <- unlist(lapply(batches, function(x) as.vector(x$children$id)))
-                stopifnot(identical(ids, 0:56))
-                schema <- nanoarrow::infer_nanoarrow_schema(a[[1L]])
-                stopifnot(grepl("int64", format(schema$children$big)))
-                stopifnot(grepl("decimal128(38, 9)", format(schema$children$exact), fixed = TRUE))
-                # Compare exact native buffers from every chunk with their original
-                # preview row, without a lossy data-frame conversion or SQL replay.
-                big <- as.raw(c(rep(255L, 7L), 127L))
-                exact <- as.raw(c(21L, 95L, 216L, 228L, 80L, 144L, 73L, 196L,
-                  19L, 51L, 2L, 240L, 246L, 176L, 73L, 9L))
-                for (batch in batches) {
-                  stopifnot(length(batch$children) == 13L)
-                  stopifnot(all(as.vector(batch$children$missing) |> is.na()))
-                  stopifnot(all(nchar(as.vector(batch$children$long_value)) == 1000L))
-                  stopifnot(all(as.vector(batch$children$c13) == "complete column"))
-                  for (field in c("big", "exact")) {
-                    column <- batch$children[[field]]
-                    expected <- get(field)
-                    bytes <- as.raw(column$buffers[[2L]])
-                    start <- column$offset * length(expected)
-                    stopifnot(identical(
-                      bytes[seq.int(start + 1L, start + column$length * length(expected))],
-                      rep(expected, column$length)
-                    ))
-                  }
-                }
-                sequences <- unlist(lapply(batches, function(x) as.vector(x$children$execution)))
-                stopifnot(identical(as.numeric(sequences), as.numeric(1:57)))
+                stopifnot(is.data.frame(first), is.data.frame(second), is.data.frame(third))
+                stopifnot(identical(c(nrow(first), nrow(second), nrow(third)), c(5L, 19L, 33L)))
+                stopifnot(identical(empty, zero), identical(.console$sql_last_result(), zero))
                 stopifnot(metrics$executions == 1L)
                 stopifnot(identical(metrics$fetches, c(21, 3, 33, 1)))
                 suppressMessages(invisible(untrace("dbSendQueryArrow", where = asNamespace("DBI"))))
                 suppressMessages(invisible(untrace("dbFetchArrowChunk", where = asNamespace("DBI"))))
                 stopifnot(DBI::dbGetQuery(.console$sql_connection(), "SELECT currval('executions') AS n")$n == 57)
-                writeLines("exact batches retain the preview, lookahead, and remaining rows")
+                expected <- function(start, end) DBI::dbGetQuery(.console$sql_connection(), sprintf("
+                  SELECT i::INTEGER AS id, i + 1 AS execution,
+                    9223372036854775807::BIGINT AS big,
+                    12345678901234567890123456789.123456789::DECIMAL(38,9) AS exact,
+                    NULL::VARCHAR AS missing, repeat('x', 1000) AS long_value,
+                    [i::INTEGER, NULL, i::INTEGER + 2] AS items,
+                    {'label': 'original', 'id': i::INTEGER} AS person,
+                    9 AS c09, 10 AS c10, 11 AS c11, 12 AS c12,
+                    'complete column' AS c13,
+                    MAP(['key'], [9007199254740993::BIGINT]) AS mapping
+                  FROM range(%d, %d) AS t(i)
+                ", start, end))
+                stopifnot(identical(first, expected(0L, 5L)))
+                stopifnot(identical(second, expected(5L, 24L)))
+                stopifnot(identical(third, expected(24L, 57L)))
+                stopifnot(identical(zero, expected(0L, 0L)))
+                stopifnot(!"arrow" %in% loadedNamespaces())
+                writeLines("data frames use DuckDB types and retain every row without replay")
                 """),
         )
         client.send(sql="SELECT NULL::DECIMAL(10,2) AS amount WHERE FALSE")
         client.expect(
-            "empty stream keeps its exact schema\n",
+            "empty results keep the driver's column types\n",
             # fmt: r
             r=code("""
                 empty <- .console$sql_last_result()
-                stopifnot(grepl(
-                  "decimal128(10, 2)",
-                  format(empty$get_schema()$children$amount),
-                  fixed = TRUE
-                ))
-                stopifnot(is.null(empty$get_next()))
-                writeLines("empty stream keeps its exact schema")
+                expected <- DBI::dbGetQuery(
+                  .console$sql_connection(),
+                  "SELECT NULL::DECIMAL(10,2) AS amount WHERE FALSE"
+                )
+                stopifnot(identical(empty, expected))
+                writeLines("empty results keep the driver's column types")
                 """),
         )
         client.send(
@@ -290,13 +280,58 @@ def test_r_duckdb_preserves_exact_batches(
         )
         assert "2026-10-18 08:00:00-04" in last_tool_text(client)
         client.expect(
-            "timestamp preview and retained schema keep the connection timezone\n",
+            "timestamp retrieval uses DuckDB's data-frame conversion\n",
             # fmt: r
             r=code("""
                 chunk <- .console$sql_last_result(5L)
-                stopifnot(grepl("America/New_York", chunk$get_schema()$children$zoned$format))
                 rest <- .console$sql_last_result()
-                writeLines("timestamp preview and retained schema keep the connection timezone")
+                expected <- DBI::dbGetQuery(.console$sql_connection(),
+                  "SELECT TIMESTAMPTZ '2026-10-18 12:00:00+00' AS zoned FROM range(30)")
+                stopifnot(identical(rbind(chunk, rest), expected))
+                stopifnot(first$id[[1L]] == 0L)
+                writeLines("timestamp retrieval uses DuckDB's data-frame conversion")
+                """),
+        )
+        client.send(sql='SELECT 1 AS same, 2 AS same, 3 AS "has space"')
+        client.expect(
+            "data frames preserve duplicate and quoted column names\n",
+            # fmt: r
+            r=code("""
+                data <- .console$sql_last_result()
+                expected <- DBI::dbGetQuery(
+                  .console$sql_connection(),
+                  'SELECT 1 AS same, 2 AS same, 3 AS "has space"'
+                )
+                stopifnot(identical(data, expected))
+                writeLines("data frames preserve duplicate and quoted column names")
+                """),
+        )
+        client.send(
+            sql="""SET memory_limit = '64MB';
+            SELECT i FROM range(1000000000000) AS t(i)"""
+        )
+        client.expect(
+            "a bounded data frame does not materialize the complete SQL result\n",
+            # fmt: r
+            r=code("""
+                data <- .console$sql_last_result(3L)
+                stopifnot(identical(data$i, as.numeric(0:2)))
+                data <- .console$sql_last_result(25L)
+                stopifnot(identical(data$i, as.numeric(3:27)))
+                .console$sql_connection(NULL)
+                writeLines("a bounded data frame does not materialize the complete SQL result")
+                """),
+        )
+        client.send(sql="SELECT union_value(number := 42) AS tagged FROM range(30)")
+        client.expect(
+            "a driver conversion error discards the retained result\n",
+            # fmt: r
+            r=code("""
+                message <- tryCatch(.console$sql_last_result(1L), error = conditionMessage)
+                stopifnot(grepl("UNION", message, fixed = TRUE))
+                message <- tryCatch(.console$sql_last_result(), error = conditionMessage)
+                stopifnot(grepl("No retained", message, fixed = TRUE))
+                writeLines("a driver conversion error discards the retained result")
                 """),
         )
         return client.finish()
