@@ -196,6 +196,98 @@ def test_failed_python_default_with_r(binary: Path, execution: Execution) -> Tra
 
 @requires(POSIX, command("uv"))
 @executions(DIRECT)
+def test_reset_without_configured_duckdb_keeps_live_state(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        tools = root / "tools"
+        tools.mkdir()
+        (tools / "python3").symlink_to(sys.executable)
+        recorded, _ = recording_uv_environment(root)
+        (tools / "uv").symlink_to(recorded["RETICULATE_UV"])
+        env = environment(tools, inherited=recorded)
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c",
+                "cache=host",
+                "-c",
+                "python.managed.packages=[]",
+                "-c",
+                "python.managed.resolution=fixed",
+            ),
+            env,
+            root,
+        ) as client:
+            client.initialize_and_list_tools()
+            accepted = inspect(client)
+            assert accepted["requirements"]["python"] == [], accepted
+            assert accepted["requirements"]["duckdb"] == [], accepted
+            client.expect("42\n", python="answer = 42; print(answer)")
+            client.expect("[prepared]", requirements={"action": "reset"})
+            client.expect("42\n", python="answer")
+            return client.finish()
+
+
+@requires(POSIX, R, command("ir"), command("uv"))
+@executions(DIRECT)
+def test_fixed_r_reset_retries_skipped_defaults(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        env, _ = recording_ir_environment(root, fail_requirement="tidyverse")
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c",
+                "cache=host",
+                "-c",
+                "r.resolution=fixed",
+                "-c",
+                "python.managed.packages=[]",
+            ),
+            env,
+            root,
+        ) as client:
+            client.transcript.append(
+                {
+                    "scenario": "Fixed R resolution lets reset retry a skipped startup default.",
+                    "fixture": "The ir wrapper rejects tidyverse during startup and reset; deliberate add and set remain forbidden.",
+                }
+            )
+            client.initialize_and_list_tools()
+            accepted = inspect(client)
+            result = client.send(
+                r="answer <- 42; cat(answer, '\\n', sep = '')",
+                timeout_ms=int(client.response_timeout * 1_000),
+            )
+            assert not result.get("isError"), result
+            assert "skipping default R package `tidyverse`" in last_tool_text(client)
+            assert "tidyverse" not in accepted["requirements"]["r"], accepted
+            for action in ("add", "set"):
+                result = client.send(
+                    control="restart",
+                    requirements={"action": action, "r": ["tidyverse"]},
+                    r="answer <- 0",
+                )
+                assert result.get("isError"), result
+                assert "r.resolution=fixed" in last_result_text(client)
+            client.expect("42\n", r="cat(answer, '\\n', sep = '')")
+            result = client.send(
+                control="restart",
+                requirements={"action": "reset"},
+                timeout_ms=int(client.response_timeout * 1_000),
+            )
+            assert not result.get("isError"), result
+            assert "skipping default R package `tidyverse`" in last_tool_text(client)
+            assert inspect(client) == accepted
+            return client.finish()
+
+
+@requires(POSIX, command("uv"))
+@executions(DIRECT)
 def test_reset_restores_extensions_after_python_duckdb_default_recovers(
     binary: Path, execution: Execution
 ) -> Transcript:
@@ -208,24 +300,30 @@ def test_reset_restores_extensions_after_python_duckdb_default_recovers(
         (tools / "uv").symlink_to(recorded["RETICULATE_UV"])
         env = environment(tools, inherited=recorded)
         with McpClient(
-            binary, execution.serve("-c", "cache=host"), env, root
+            binary,
+            execution.serve(
+                "-c", "cache=host", "-c", "python.managed.resolution=fixed"
+            ),
+            env,
+            root,
         ) as client:
             client.transcript.append(
                 {
-                    "scenario": "Reset restores default extensions after Python's DuckDB package becomes available.",
+                    "scenario": "Fixed Python resolution lets reset restore the DuckDB default and its extensions after recovery.",
                     "fixture": "The uv wrapper rejects duckdb during startup; its failure marker is removed before plain restart and reset.",
                 }
             )
             client.initialize_and_list_tools()
             accepted = inspect(client)
             result = client.send(
-                python="1 + 1", timeout_ms=int(client.response_timeout * 1_000)
+                python="answer = 42; print(answer)",
+                timeout_ms=int(client.response_timeout * 1_000),
             )
             assert not result.get("isError"), result
             text = last_tool_text(client)
             assert "skipping default Python package `duckdb`" in text, text
             assert "synthetic uv failure" in text, text
-            assert text.endswith("2\n"), text
+            assert text.endswith("42\n"), text
             result["content"][0]["text"] = normalize_python_resolution_error(text)
             assert accepted["requirements"]["python"] == [
                 "numpy",
@@ -235,6 +333,15 @@ def test_reset_restores_extensions_after_python_duckdb_default_recovers(
             ], accepted
             assert accepted["requirements"]["duckdb"] == [], accepted
 
+            for action in ("add", "set"):
+                result = client.send(
+                    control="restart",
+                    requirements={"action": action, "python": ["duckdb"]},
+                    python="answer = 0",
+                )
+                assert result.get("isError"), result
+                assert "python.managed.resolution=fixed" in last_result_text(client)
+            client.expect("42\n", python="answer")
             Path(recorded["MCP_CONSOLE_TEST_UV_FAILURE_MARKER"]).unlink()
             client.send(control="restart")
             assert inspect(client) == accepted

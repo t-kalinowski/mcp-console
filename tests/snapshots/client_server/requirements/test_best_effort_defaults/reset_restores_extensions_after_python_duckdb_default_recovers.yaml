@@ -1,12 +1,12 @@
 ---
 scenario: >-
-  Reset restores default extensions after Python's DuckDB package becomes
-  available.
+  Fixed Python resolution lets reset restore the DuckDB default and its
+  extensions after recovery.
 fixture: >-
   The uv wrapper rejects duckdb during startup; its failure marker is
   removed before plain restart and reset.
 ---
-!same-as MCP initialization for this execution mode
+!same-as fixed MCP initialization for this execution mode
 ---
 send:
   requirements:
@@ -53,7 +53,7 @@ result:
   isError: false
 ---
 send:
-  python: 1 + 1
+  python: answer = 42; print(answer)
   timeout_ms: 600000
 result:
   content:
@@ -74,7 +74,46 @@ result:
         uv output:
         synthetic uv failure
         [output produced while idle]
-        2
+        42
+  isError: false
+---
+send:
+  control: restart
+  requirements:
+    action: add
+    python:
+      - duckdb
+  python: answer = 0
+result:
+  content:
+    - type: text
+      text: >-
+        [Python requirements cannot change under python.managed.resolution=fixed
+        (requirements.action=add)]
+  isError: true
+---
+send:
+  control: restart
+  requirements:
+    action: set
+    python:
+      - duckdb
+  python: answer = 0
+result:
+  content:
+    - type: text
+      text: >-
+        [Python requirements cannot change under python.managed.resolution=fixed
+        (requirements.action=set)]
+  isError: true
+---
+send:
+  python: answer
+result:
+  content:
+    - type: text
+      text: |
+        42
   isError: false
 ---
 send:

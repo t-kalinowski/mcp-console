@@ -310,7 +310,15 @@ impl RequirementDelta {
                 "Python",
             ),
         ] {
-            if changed && !policy.permits_deliberate_changes() {
+            // Reset replays captured startup intent, including skipped defaults.
+            let permitted = match action {
+                RequirementsAction::Reset => policy.prepares_startup(),
+                RequirementsAction::Add | RequirementsAction::Set => {
+                    policy.permits_deliberate_changes()
+                }
+                RequirementsAction::Get => unreachable!("inspection does not calculate candidates"),
+            };
+            if changed && !permitted {
                 return Err(policy.denial(language, operation));
             }
         }

@@ -166,14 +166,15 @@ Accepted declarations and filesystem effects have different lifetimes.
 
 Configuration chooses a policy independently for R and managed Python:
 
-| Policy                         | Prepare startup declaration | Explicit MCP changes | Automatic runtime additions |
-| ------------------------------ | --------------------------- | -------------------- | --------------------------- |
-| `implicit`                     | Yes                         | Yes                  | Yes                         |
-| `explicit`                     | Yes                         | Yes                  | No                          |
-| `fixed`                        | Yes                         | No                   | No                          |
-| R `disabled` / existing Python | No                          | No                   | No                          |
+| Policy                         | Prepare startup declaration | MCP `add` / `set` changes | Automatic runtime additions |
+| ------------------------------ | --------------------------- | ------------------------- | --------------------------- |
+| `implicit`                     | Yes                         | Yes                       | Yes                         |
+| `explicit`                     | Yes                         | Yes                       | No                          |
+| `fixed`                        | Yes                         | No                        | No                          |
+| R `disabled` / existing Python | No                          | No                        | No                          |
 
 Unchanged declarations remain no-ops.
+Under `fixed`, `reset` can retry skipped startup defaults.
 A mixed request is checked as a whole before preparation.
 `set` cannot omit a locked language to clear it, and `reset` or restart cannot unlock a policy.
 A policy change requires a new server connection.
