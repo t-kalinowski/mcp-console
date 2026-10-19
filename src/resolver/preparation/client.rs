@@ -200,7 +200,8 @@ struct Pending {
 const LABEL: &str = "local resolver";
 
 impl Preparation {
-    /// Inspect mutable interpreter code with the captured worker permissions.
+    /// Inspect mutable interpreter code with captured permissions: the resolver
+    /// policy on Windows, and the worker policy on Unix.
     pub(crate) fn inspect<T: serde::de::DeserializeOwned>(
         operation: Operation,
         mut settings: crate::settings::SandboxSettings,
@@ -210,13 +211,20 @@ impl Preparation {
     ) -> Result<T, String> {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
         let mut command = std::process::Command::new(&executable);
-        if no_sandbox {
+        // Windows inspection uses the resolver launcher below, including its
+        // platform environment during trusted installation warmup.
+        if no_sandbox || (cfg!(unix) && crate::warmup::trusted_preparation()) {
             crate::settings::configure_environment(&mut command, &settings);
         } else {
             crate::settings::preserve_environment(
                 &mut settings,
                 [("RETICULATE_PYTHON".as_ref(), None)],
             )?;
+            #[cfg(windows)]
+            {
+                command = crate::resolver::sandbox::command(settings, std::process::id())?;
+            }
+            #[cfg(unix)]
             command
                 .args(["sandbox", "--exit-with-parent"])
                 .arg(std::process::id().to_string())
@@ -275,19 +283,7 @@ impl Preparation {
                 &mut settings,
                 [("RETICULATE_PYTHON".as_ref(), python)],
             )?;
-            #[cfg(unix)]
-            let command = crate::resolver::sandbox::command(settings, std::process::id())?;
-            #[cfg(windows)]
-            let command = {
-                // Windows has no resolver proxy support yet. Keep its existing
-                // host execution, but use the captured Console cache environment.
-                let mut command = std::process::Command::new(
-                    std::env::current_exe().map_err(|error| error.to_string())?,
-                );
-                crate::settings::configure_environment(&mut command, &settings);
-                command
-            };
-            command
+            crate::resolver::sandbox::command(settings, std::process::id())?
         } else {
             let mut command = std::process::Command::new(
                 std::env::current_exe().map_err(|error| error.to_string())?,
@@ -312,6 +308,9 @@ impl Preparation {
         diagnostics: crate::process_output::Diagnostics,
         on_started: &dyn Fn(ResolverStopHandle) -> Result<(), String>,
     ) -> Result<(Self, Discovery), String> {
+        // The trusted-warmup hint belongs to the controller, not the resolver
+        // or any installation/build subprocess it starts.
+        command.env_remove(crate::warmup::PREPARATION_ENVIRONMENT);
         let native = command.get_args().next() == Some("sandbox".as_ref());
         #[cfg(unix)]
         command

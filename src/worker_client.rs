@@ -46,7 +46,6 @@ pub(crate) const DEFAULT_R_REQUIREMENTS: &[&str] = &[
     "reticulate",
     "DBI",
     "duckdb",
-    "arrow",
     "nanoarrow",
     "yyjsonr",
     "ggplot2",
@@ -383,6 +382,13 @@ impl Client {
 
     pub(crate) fn is_configured(&self) -> bool {
         self.0.configuration.get().is_some()
+    }
+
+    pub(crate) fn r_available(&self) -> Option<bool> {
+        self.0
+            .configuration
+            .get()
+            .map(|configuration| !configuration.python_only())
     }
 
     pub(crate) fn startup_finished(&self) -> bool {

@@ -23,8 +23,9 @@ It can choose executables, supply credentials, and widen permissions; global con
 Use `--no-project-config` when opening an unfamiliar project until its configuration has been authorized.
 
 Dependency preparation uses a separate policy.
-On macOS/Linux it normally has host reads, dependency-cache writes, and approved downloads.
-Windows preparation and `--no-sandbox` retain host permissions.
+It normally has host reads, dependency-cache writes, and approved downloads, including through MXC on Windows.
+[`warmup`](CLI.md#check-your-installation) prepares dependencies with host permissions and the configured caches; its runtime checks retain the worker sandbox.
+`--no-sandbox` selects host permissions for both preparation and evaluated code.
 Package installation and build hooks remain trusted code.
 See [Resolver configuration](RESOLVER.md).
 

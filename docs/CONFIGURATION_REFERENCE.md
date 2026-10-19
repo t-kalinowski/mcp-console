@@ -17,22 +17,22 @@ Use `mcp-console config resolve --full` to include your global, project, and com
 
 ## Top-level settings
 
-| Node                  | Accepted values                                         | Meaning and default                                                                                                                                                                                                      |
-| --------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `r`                   | Executable path, mapping, or `null`                     | Select R, its startup packages, and native startup behavior. Omission uses [normal R discovery](#r).                                                                                                                     |
-| `python`              | Executable/venv path, selection mapping, or `null`      | Select an existing or managed Python environment. Omission keeps [normal Python selection](#python).                                                                                                                     |
-| `languages`           | Nonempty list of `r`, `python`, and/or `sql`; or `null` | Choose source fields exposed to the agent. Default: `[r, python, sql]`. This does not install runtimes or change permissions.                                                                                            |
-| `startup`             | Mapping or `null`                                       | Run source that selects a SQL connection once per worker. Default: no startup source. See [Session startup](#session-startup).                                                                                           |
-| `cache`               | `console`, `host`, or `null`                            | Choose dependency cache locations. Default: `console` when sandboxed, `host` with `--no-sandbox`. See [Caches](#caches).                                                                                                 |
-| `inherit_environment` | `true` or `false`                                       | Inherit launch environment variables. Default: `true`. See [Environment](#environment).                                                                                                                                  |
-| `environment`         | Mapping of names to string values                       | Supply environment variables to execution and preparation. Default: `{}`.                                                                                                                                                |
-| `sandbox`             | Mapping or `null`                                       | Set evaluated-code permissions. Default: host reads, private temporary writes, and restricted networking. See [Sandbox](#sandbox).                                                                                       |
-| `resolver`            | Mapping                                                 | Set package-preparation environment and permissions independently. Default: host reads, cache writes, and a download proxy on macOS/Linux; host permissions on Windows. See [Package preparation](#package-preparation). |
-| `tool`                | Mapping                                                 | Customize tool descriptions, initialization instructions, and parameter visibility. Default: generated presentation. See [Tool presentation](#tool-presentation).                                                        |
+| Node                  | Accepted values                                         | Meaning and default                                                                                                                                                                                     |
+| --------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `r`                   | Executable path, mapping, or `null`                     | Select R, its startup packages, and native startup behavior. Omission uses [normal R discovery](#r).                                                                                                    |
+| `python`              | Executable/venv path, selection mapping, or `null`      | Select an existing or managed Python environment. Omission keeps [normal Python selection](#python).                                                                                                    |
+| `languages`           | Nonempty list of `r`, `python`, and/or `sql`; or `null` | Choose source fields exposed to the agent. Default: `[r, python, sql]`. This does not install runtimes or change permissions.                                                                           |
+| `startup`             | Mapping or `null`                                       | Run source that selects a SQL connection once per worker. Default: no startup source. See [Session startup](#session-startup).                                                                          |
+| `cache`               | `console`, `host`, or `null`                            | Choose dependency cache locations. Default: `console` when sandboxed, `host` with `--no-sandbox`. See [Caches](#caches).                                                                                |
+| `inherit_environment` | `true` or `false`                                       | Inherit launch environment variables. Default: `true`. See [Environment](#environment).                                                                                                                 |
+| `environment`         | Mapping of names to string values                       | Supply environment variables to execution and preparation. Default: `{}`.                                                                                                                               |
+| `sandbox`             | Mapping or `null`                                       | Set evaluated-code permissions. Default: host reads, private temporary writes, and restricted networking. See [Sandbox](#sandbox).                                                                      |
+| `resolver`            | Mapping                                                 | Set package-preparation environment and permissions independently. Default: host reads, cache writes, private temporary storage, and a download proxy. See [Package preparation](#package-preparation). |
+| `tool`                | Mapping                                                 | Customize tool descriptions, initialization instructions, and parameter visibility. Default: generated presentation. See [Tool presentation](#tool-presentation).                                       |
 
 Configuration is trusted launcher input and can widen permissions or select executables.
 Unknown fields are errors.
-For launch flags, including custom workers and `--no-sandbox`, see [Command-line reference](CLI.md).
+For launch flags such as `--no-sandbox`, see [Command-line reference](CLI.md).
 
 ## R
 
@@ -56,44 +56,48 @@ r:
 An explicit executable overrides installation hints and PATH discovery.
 Relative executable paths use the launch directory; a leading `~` follows the shared [path rules](CONFIGURATION.md#paths).
 The selected installation is retained across worker restarts.
-R settings require the built-in worker.
 See [R executable selection](CONFIGURATION.md#r-executable-selection) and [Native R startup](CONFIGURATION.md#native-r-startup).
 
 ## Python
 
 Choose one selection form:
 
-| Node                     | Accepted values             | Meaning                                                                                                     |
-| ------------------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `python`                 | Omitted or `null`           | Keep launch-time `RETICULATE_PYTHON` compatibility behavior; otherwise use managed selection.               |
-| `python`                 | A path string               | Use an existing Python executable or standard virtual environment. Equivalent to setting `python.existing`. |
-| `python.existing`        | A path string               | Use installed packages in that environment; Console does not manage its Python packages.                    |
-| `python.managed`         | Mapping                     | Prepare a uv-managed CPython environment with the settings below.                                           |
-| `python.first_available` | Nonempty list of candidates | Select the first available candidate from an ordered list.                                                  |
+| Node                     | Accepted values                  | Meaning                                                                                                      |
+| ------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `python`                 | Omitted or `null`                | Keep launch-time `RETICULATE_PYTHON` compatibility behavior; otherwise use managed selection.                |
+| `python`                 | A path string                    | Use an existing Python executable or standard virtual environment. Equivalent to setting `python.existing`.  |
+| `python`                 | Managed settings mapping or `{}` | Prepare a uv-managed CPython environment with the settings below. An empty mapping selects managed defaults. |
+| `python.existing`        | A path string                    | Use installed packages in that environment; Console does not manage its Python packages.                     |
+| `python.managed`         | Mapping                          | Nested form of the managed settings below.                                                                   |
+| `python.first_available` | Nonempty list of candidates      | Select the first available candidate from an ordered list.                                                   |
 
-A selection mapping contains exactly one of `python.existing`, `python.managed`, or `python.first_available`.
+A mapping contains either managed settings directly or exactly one of `python.existing`, `python.managed`, or `python.first_available`.
+Combining direct managed fields with a selection key in the same mapping is an error.
 Existing Python requires CPython 3.10 or newer with a usable shared embedding library.
 Venv directories need `pyvenv.cfg`; recognized Conda environments are unsupported.
 Interpreter paths use the launch directory and support a leading `~`, as R executable paths do.
-Python selection requires the built-in worker.
 
 ### Managed Python
 
-Fields under `python.managed`:
+Fields directly under `python` select managed Python:
 
-| Node                        | Accepted values                                                                      | Meaning and default                                                                                                                                                                                  |
-| --------------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `python.managed.version`    | One quoted Python version or constraint string, such as `"3.13"` or `">=3.12,<3.14"` | Restrict the managed CPython version. Omission adds no version constraint; CPython older than 3.10 is always excluded.                                                                               |
-| `python.managed.packages`   | List of named PEP 508 registry requirements                                          | Startup packages to prepare. Omission keeps the [default Python packages](REQUIREMENTS.md#defaults-and-startup-configuration); `[]` requests no optional packages. Preparation does not import them. |
-| `python.managed.resolution` | `implicit`, `explicit`, `fixed`                                                      | When Console may prepare Python packages. Default: `explicit`. Set `implicit` to opt in to preparation on missing imports. For preinstalled-only use, select an existing environment.                |
+| Node                | Accepted values                                                                      | Meaning and default                                                                                                                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `python.version`    | One quoted Python version or constraint string, such as `"3.13"` or `">=3.12,<3.14"` | Restrict the managed CPython version. Omission adds no version constraint; CPython older than 3.10 is always excluded.                                                                               |
+| `python.packages`   | List of named PEP 508 registry requirements                                          | Startup packages to prepare. Omission keeps the [default Python packages](REQUIREMENTS.md#defaults-and-startup-configuration); `[]` requests no optional packages. Preparation does not import them. |
+| `python.resolution` | `implicit`, `explicit`, `fixed`                                                      | When Console may prepare Python packages. Default: `explicit`. Set `implicit` to opt in to preparation on missing imports. For preinstalled-only use, select an existing environment.                |
 
 ```yaml
 python:
-  managed:
-    version: ">=3.12,<3.14"
-    packages: [numpy, pandas]
-    resolution: fixed
+  version: ">=3.12,<3.14"
+  packages: [numpy, pandas]
+  resolution: fixed
 ```
+
+These fields are also accepted under `python.managed`.
+Direct settings expand to that nested form before each configuration layer is merged, so files and command-line overrides can use either form.
+`config resolve` and validation diagnostics use the nested paths.
+Unlike omitted or `null` Python settings, `python: {}` explicitly selects managed Python and overrides launch-time `RETICULATE_PYTHON`.
 
 ### First available Python
 
@@ -123,7 +127,7 @@ See [Python environment selection](CONFIGURATION.md#python-environment-selection
 
 ## Resolution policies
 
-These values apply to `r.resolution` and `python.managed.resolution`, including a managed fallback candidate:
+These values apply to `r.resolution` and `python.resolution`, including nested managed settings and a managed fallback candidate:
 
 R defaults to `implicit`; managed Python defaults to `explicit`.
 
@@ -159,7 +163,6 @@ startup:
 ```
 
 Default: `null`, using managed DuckDB without user startup source.
-Configured startup requires the built-in worker and relay.
 Configured source runs once per worker, after runtime helpers are available and before the first SQL cell.
 Its encoded transport, including escaping, is limited to 32 KiB.
 Failure withholds SQL until explicit restart; restart can repeat earlier side effects.
@@ -199,7 +202,7 @@ See [Environment variables](ENVIRONMENT.md) for recognized host settings and [Pa
 Omitted or `null` selects the appropriate default for the launch.
 For the `inherit_codex` profile, automatic cache selection waits for client metadata: sandboxed profiles use Console caches, and inherited full access uses host caches.
 `config resolve --full` retains `cache: null` for that automatic choice.
-`cache: host` retains resolver sandboxing on macOS/Linux.
+`cache: host` retains resolver sandboxing.
 Existing Python still uses its preinstalled packages.
 See [Cache locations](RESOLVER.md#cache-locations) for directories, environment overrides, and write grants.
 
@@ -209,13 +212,13 @@ The following schema applies under both `sandbox` (evaluated code) and `resolver
 These are independent policies.
 Default worker permissions allow host-file reads, including readable secrets, and private temporary writes; ordinary workspace writes and direct networking are restricted.
 
-| Node                                                  | Accepted values                                                                  | Meaning and default                                                                                        |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `sandbox.profile`                                     | `read_only`, `workspace`, `inherit_codex`, an `inherit_codex` mapping, or `null` | Select the worker's base profile. Omitted or `null`: host-read baseline without workspace writes.          |
-| `resolver.sandbox.profile`                            | `read_only`, `workspace`, or `null`                                              | Select preparation filesystem permissions. Omitted, `null`, or `read_only`: no workspace profile.          |
-| `sandbox.tempdir`<br>`resolver.sandbox.tempdir`       | `managed`, `read_write`, `read_only`                                             | Select automatic temporary-storage grants. Default: `managed`.                                             |
-| `sandbox.filesystem`<br>`resolver.sandbox.filesystem` | Mapping                                                                          | Set concrete read, write, and deny paths. Omission retains generated defaults for that policy.             |
-| `sandbox.network`<br>`resolver.sandbox.network`       | `restricted`, `enabled`, or proxy mapping                                        | Select network access. Worker default: `restricted`; macOS/Linux resolver default: managed download proxy. |
+| Node                                                  | Accepted values                                                                  | Meaning and default                                                                               |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `sandbox.profile`                                     | `read_only`, `workspace`, `inherit_codex`, an `inherit_codex` mapping, or `null` | Select the worker's base profile. Omitted or `null`: host-read baseline without workspace writes. |
+| `resolver.sandbox.profile`                            | `read_only`, `workspace`, or `null`                                              | Select preparation filesystem permissions. Omitted, `null`, or `read_only`: no workspace profile. |
+| `sandbox.tempdir`<br>`resolver.sandbox.tempdir`       | `managed`, `read_write`, `read_only`                                             | Select automatic temporary-storage grants. Default: `managed`.                                    |
+| `sandbox.filesystem`<br>`resolver.sandbox.filesystem` | Mapping                                                                          | Set concrete read, write, and deny paths. Omission retains generated defaults for that policy.    |
+| `sandbox.network`<br>`resolver.sandbox.network`       | `restricted`, `enabled`, or proxy mapping                                        | Select network access. Worker default: `restricted`; resolver default: managed download proxy.    |
 
 `sandbox.profile: inherit_codex` inherits usable client sandbox metadata from the first `send`, before runtime preparation.
 Its default fallback is `read_only`: host reads, private temporary writes, and restricted networking before explicit local settings are applied.
@@ -230,7 +233,8 @@ See [Inherit permissions from Codex](SANDBOX_CONFIGURATION.md#inherit-permission
 
 Setting the whole `sandbox` or `resolver.sandbox` node to `null` clears inherited settings and restores that policy's built-in defaults.
 Enforcement remains enabled.
-Explicit policies conflict with `--no-sandbox`; Windows rejects explicit `resolver.sandbox` policies.
+Explicit policies conflict with `--no-sandbox`.
+Windows resolver policies use MXC and retain the same proxy limitations as worker policies.
 
 ### Workspace profile
 
@@ -275,11 +279,11 @@ See [Filesystem grants](RESOLVER.md#filesystem-grants) before supplying one.
 
 ### Network access
 
-| Value of `sandbox.network` or `resolver.sandbox.network` | Access                                                                                                                                            |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `restricted`                                             | Restricted native networking without a managed proxy. This is the worker default.                                                                 |
-| `enabled`                                                | Host networking while filesystem enforcement remains active.                                                                                      |
-| Mapping with `proxy`                                     | Restricted native networking plus a managed proxy and the optional socket/local-binding settings below. This is the macOS/Linux resolver default. |
+| Value of `sandbox.network` or `resolver.sandbox.network` | Access                                                                                                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `restricted`                                             | Restricted native networking without a managed proxy. This is the worker default.                                                     |
+| `enabled`                                                | Host networking while filesystem enforcement remains active.                                                                          |
+| Mapping with `proxy`                                     | Restricted native networking plus a managed proxy and the optional socket/local-binding settings below. This is the resolver default. |
 
 Selecting either scalar value removes the generated resolver proxy.
 A network mapping requires `sandbox.network.proxy` or `resolver.sandbox.network.proxy`; `full` is not a supported network value.
@@ -357,11 +361,11 @@ See [Sandbox configuration](SANDBOX_CONFIGURATION.md#unix-sockets-and-local-bind
 
 Fields under `resolver`:
 
-| Node                           | Accepted values                   | Meaning and default                                                                                                                                                               |
-| ------------------------------ | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resolver.inherit_environment` | `true` or `false`                 | Inherit launch variables for package preparation. Omission follows the top-level `inherit_environment` value.                                                                     |
-| `resolver.environment`         | Mapping of names to string values | Override individual shared `environment` values for preparation. Default: `{}`.                                                                                                   |
-| `resolver.sandbox`             | Sandbox mapping or `null`         | Independent preparation permissions using the [sandbox schema](#sandbox). On macOS/Linux, omission supplies host reads, cache writes, private temp storage, and a download proxy. |
+| Node                           | Accepted values                   | Meaning and default                                                                                                                                               |
+| ------------------------------ | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolver.inherit_environment` | `true` or `false`                 | Inherit launch variables for package preparation. Omission follows the top-level `inherit_environment` value.                                                     |
+| `resolver.environment`         | Mapping of names to string values | Override individual shared `environment` values for preparation. Default: `{}`.                                                                                   |
+| `resolver.sandbox`             | Sandbox mapping or `null`         | Independent preparation permissions using the [sandbox schema](#sandbox). Omission supplies host reads, cache writes, private temp storage, and a download proxy. |
 
 ```yaml
 resolver:
@@ -370,7 +374,8 @@ resolver:
     OMP_NUM_THREADS: "1"
 ```
 
-Windows preparation uses host permissions and rejects explicit `resolver.sandbox` settings.
+Windows uses MXC for preparation and runtime inspection.
+Explicit `allow_local_binding: false` is rejected with a managed proxy; use `network: restricted` to prohibit loopback access.
 The `cache` setting controls generated cache locations and grants.
 See [Package preparation and caches](RESOLVER.md) for mirrors, trust, and custom cache grants.
 

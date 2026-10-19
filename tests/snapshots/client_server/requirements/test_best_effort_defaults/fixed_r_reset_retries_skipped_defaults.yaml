@@ -18,7 +18,6 @@ result:
           "requirements": {
             "r": [
               "DBI",
-              "arrow",
               "dbplyr",
               "dplyr",
               "duckdb",
@@ -40,7 +39,6 @@ result:
           "runtime_requirements": {
             "r": [
               "DBI",
-              "arrow",
               "duckdb",
               "jsonlite",
               "nanoarrow",
@@ -56,7 +54,6 @@ result:
     requirements:
       r:
         - DBI
-        - arrow
         - dbplyr
         - dplyr
         - duckdb
@@ -75,7 +72,6 @@ result:
     runtime_requirements:
       r:
         - DBI
-        - arrow
         - duckdb
         - jsonlite
         - nanoarrow
@@ -164,7 +160,6 @@ result:
           "requirements": {
             "r": [
               "DBI",
-              "arrow",
               "dbplyr",
               "dplyr",
               "duckdb",
@@ -186,7 +181,6 @@ result:
           "runtime_requirements": {
             "r": [
               "DBI",
-              "arrow",
               "duckdb",
               "jsonlite",
               "nanoarrow",
@@ -202,7 +196,6 @@ result:
     requirements:
       r:
         - DBI
-        - arrow
         - dbplyr
         - dplyr
         - duckdb
@@ -221,7 +214,6 @@ result:
     runtime_requirements:
       r:
         - DBI
-        - arrow
         - duckdb
         - jsonlite
         - nanoarrow

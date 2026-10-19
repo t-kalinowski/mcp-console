@@ -12,11 +12,13 @@ from tempfile import TemporaryDirectory
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from boundaries.cli.interface.test_configure_client import environment
+from boundaries.cli.interface.test_warmup import trusted_warmup_environment
+from boundaries.client_server.server.test_no_r import no_r_environment
 from support.checkpoints import FifoCheckpoint, wait_for_path
 from support.events import Events
 from support.normalization import code
 from support.records import Transcript
-from support.requirements import POSIX, R, SQL, requires
+from support.requirements import POSIX, R, SANDBOX, SQL, requires
 from support.suites import run_this_suite
 
 
@@ -221,7 +223,7 @@ def test_starts_one_detached_warmup_with_the_selected_launch(
         ]
 
 
-@requires(POSIX, R, SQL)
+@requires(POSIX, SQL)
 def test_pinned_serve_only_release_warms_runtimes(binary: Path) -> Transcript:
     with TemporaryDirectory() as temporary:
         root = Path(temporary).resolve()
@@ -240,13 +242,18 @@ def test_pinned_serve_only_release_warms_runtimes(binary: Path) -> Transcript:
                 if command != "serve":
                     raise SystemExit(f"this release supports serve, not {command}")
                 Path(os.environ["TEST_WARMUP_INVOCATION"]).write_text(json.dumps(sys.argv[1:]))
+                # The server's runtime selection, rather than the driver's host
+                # environment, determines whether optional R is installed.
+                os.environ["PATH"] = os.environ["TEST_WARMUP_SERVER_PATH"]
+                for name in ("R_HOME", "R_LIBS", "R_LIBS_USER", "RETICULATE_PYTHON", "RETICULATE_UV"):
+                    os.environ.pop(name, None)
                 binary = os.environ["TEST_WARMUP_BINARY"]
                 os.execv(binary, [binary, command, *arguments])
                 """),
             encoding="utf-8",
         )
+        server_environment = no_r_environment(root)
         commands = root / "commands"
-        commands.mkdir()
         wrapper = commands / "uvx"
         wrapper.write_text(
             "#!/bin/sh\nexec " + shlex.join([sys.executable, str(script)]) + ' "$@"\n',
@@ -265,6 +272,7 @@ def test_pinned_serve_only_release_warms_runtimes(binary: Path) -> Transcript:
                 "PATH": str(commands) + os.pathsep + os.environ["PATH"],
                 "TEST_WARMUP_BINARY": str(binary),
                 "TEST_WARMUP_INVOCATION": str(invocation),
+                "TEST_WARMUP_SERVER_PATH": server_environment["PATH"],
             },
         )
         assert result.returncode == 0 and not result.stderr, result
@@ -286,7 +294,7 @@ def test_pinned_serve_only_release_warms_runtimes(binary: Path) -> Transcript:
         assert log.read_text() == (
             "MCP Console warmup\n"
             "Server: OK\n"
-            "Checking R...\nR: OK\n"
+            "Checking R...\nR: SKIP (not installed)\n"
             "Checking Python...\nPython: OK\n"
             "Checking SQL...\nSQL: OK\n"
             "Shutdown: OK\n"
@@ -328,6 +336,53 @@ def test_direct_launch_warms_real_runtimes(binary: Path) -> Transcript:
             "Shutdown: OK\n"
             "All checks passed. Runtime caches are warm.\n"
         )
+        return [{"configure_exit_code": result.returncode, "log": log.read_text()}]
+
+
+@requires(POSIX, SANDBOX)
+def test_background_warmup_uses_trusted_preparation(binary: Path) -> Transcript:
+    with TemporaryDirectory(prefix="console-warmup-", dir=Path.home()) as temporary:
+        root = Path(temporary).resolve()
+        resolver_environment = trusted_warmup_environment(root)
+        # Retain configure()'s isolated client configuration and Console home.
+        for name in ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "MCP_CONSOLE_HOME"):
+            resolver_environment.pop(name, None)
+        result = configure(
+            binary,
+            root,
+            "codex",
+            "--no-uvx",
+            "--directory",
+            str(root),
+            extra_environment=resolver_environment,
+        )
+        assert result.returncode == 0 and not result.stderr, result
+        match = re.search(
+            r"^Background warmup started \(PID (\d+)\)\. Log: (.+)$",
+            result.stdout,
+            re.MULTILINE,
+        )
+        assert match is not None, result
+        pid = int(match[1])
+        log = Path(match[2])
+        with Events() as events:
+            try:
+                events.watch_process(pid)
+            except ProcessLookupError:
+                pass
+            else:
+                assert pid in events.wait(60), log.read_text()
+        assert log.read_text() == (
+            "MCP Console warmup\n"
+            "Server: OK\n"
+            "R: SKIP (disabled)\n"
+            "Checking Python...\nPython: OK\n"
+            "SQL: SKIP (disabled)\n"
+            "Shutdown: OK\n"
+            "All checks passed. Runtime caches are warm.\n"
+        ), log.read_text()
+        assert (root / "host-write").read_text() == "trusted preparation"
+        assert (root / "cache/dependencies/uv/cache/warmup-environment.json").is_file()
         return [{"configure_exit_code": result.returncode, "log": log.read_text()}]
 
 

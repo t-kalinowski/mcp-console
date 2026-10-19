@@ -1,4 +1,4 @@
-//! Resolver policy is independent of worker grants and materialized on its host.
+//! Resolver launch preserves its environment independently of worker grants.
 
 use crate::settings::SandboxSettings;
 use serde_json::{Value, json};
@@ -9,6 +9,19 @@ pub(crate) fn command(settings: SandboxSettings, parent: u32) -> Result<Command,
         "resolver.environment: preparation requires an absolute HOME or MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY; configure one when inherit_environment is false",
     )?;
     let mut settings = materialize(settings)?;
+    #[cfg(windows)]
+    // MXC denies renv's junctions and Robocopy's restartable-copy operations.
+    // Use R's copier within the same cache grants, without privileged setup.
+    crate::settings::preserve_environment(
+        &mut settings,
+        [
+            (
+                "RENV_CONFIG_CACHE_SYMLINKS".as_ref(),
+                Some("FALSE".as_ref()),
+            ),
+            ("RENV_CONFIG_COPY_METHOD".as_ref(), Some("r".as_ref())),
+        ],
+    )?;
     crate::settings::preserve_environment(
         &mut settings,
         [(
@@ -18,16 +31,26 @@ pub(crate) fn command(settings: SandboxSettings, parent: u32) -> Result<Command,
     )?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let mut command = Command::new(&executable);
+    if crate::warmup::trusted_preparation() {
+        // Installation warmup populates the same caches, including platform
+        // package-tool settings, without native filesystem/network enforcement.
+        crate::settings::configure_environment(&mut command, &settings);
+    } else {
+        command
+            .args(["sandbox", "--exit-with-parent"])
+            .arg(parent.to_string())
+            .args(["--settings-env", crate::settings::ENVIRONMENT, "--"])
+            .arg(executable)
+            .env(
+                crate::settings::ENVIRONMENT,
+                serde_json::to_string(&settings).map_err(|error| error.to_string())?,
+            );
+    }
+    command.env(crate::local_runtime::DUCKDB_EXTENSION_DIRECTORY, directory);
+    #[cfg(windows)]
     command
-        .args(["sandbox", "--exit-with-parent"])
-        .arg(parent.to_string())
-        .args(["--settings-env", crate::settings::ENVIRONMENT, "--"])
-        .arg(executable)
-        .env(
-            crate::settings::ENVIRONMENT,
-            serde_json::to_string(&settings).map_err(|error| error.to_string())?,
-        )
-        .env(crate::local_runtime::DUCKDB_EXTENSION_DIRECTORY, directory);
+        .env("RENV_CONFIG_CACHE_SYMLINKS", "FALSE")
+        .env("RENV_CONFIG_COPY_METHOD", "r");
     Ok(command)
 }
 

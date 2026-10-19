@@ -23,7 +23,8 @@ server ── native runner → resolve → package tools     preparation
                                              └─ SQL providers
 ```
 
-On Windows, dependency preparation runs with host permissions rather than through a resolver sandbox.
+Windows uses the same preparation boundary through the pinned MXC companion.
+Per-operation Jobs confirm resolver descendant retirement inside that boundary; native policy and managed-proxy ownership stay with the companion.
 
 These processes run on the same host.
 Remote placement belongs to the client or deployment tooling.
@@ -60,7 +61,7 @@ Overrides apply after the selected files and before ordinary `-c` overrides; exp
 The adapter removes the file after synchronous materialization or the server's initialization handshake, when native capture has finished reading it.
 One connection-owned background task discovers runtimes, prepares defaults, and prelaunches the built-in worker.
 MCP initialization, tool discovery, and pings do not wait.
-Custom workers remain lazy.
+Workers supplied through internal testing hooks are launched on demand.
 
 With the `inherit_codex` sandbox profile, startup waits for the first `send` to capture client authority before creating any preparation or execution process.
 Capture happens in transport request order before asynchronous handler dispatch; a cancelled first request cannot let a later request select the connection's permissions.
@@ -134,6 +135,14 @@ Automatic replacement can reuse a generation, so bundled follow-up work also che
 The hidden `resolve` process materializes environments under the separate [resolver policy](RESOLVER.md).
 The preparation owner publishes a result only after its process and I/O cleanup contract completes.
 The server owns accepted declarations, not the materializer.
+
+Installation warmup captures a private launch hint and gives preparation host permissions without changing cache selection or worker enforcement.
+The controller removes that hint from resolver and worker launches so their subprocesses do not inherit it.
+Older selected releases may ignore the hint and retain ordinary preparation.
+
+Windows preparation adapts Rscript read/search checks with actual opens and directory listing because MXC denies R's impersonation-based ACL query even for readable files.
+The adapter retains the existing preparation Job, profile-free startup, and selected Rscript identity.
+It does not change existence, write, or file-execute checks; native operations continue to enforce explicit filesystem restrictions.
 
 For live changes, a resolved environment is provisional.
 The worker validates and activates it, then sends an acceptance receipt.
@@ -216,7 +225,7 @@ The native close callback retires that registration; cell cleanup closes only re
 An explicit user device that reuses a closed managed device's number remains open and uncaptured, even when it also reuses the filename template exposed by `.Devices`.
 The public [plot cases](../tests/boundaries/client_server/r/test_plots.py) cover both distinct and reused templates, drawing in a later cell, and explicit closure.
 The [C trampoline](../src/r_graphics.c) invokes the backend outside Rust lookup/notification frames and locks because R callbacks can `longjmp`; Rust is notified only after normal return.
-Any replacement must preserve these boundaries and the [existing plot contract](BUILTIN_RUNTIME.md#plots-and-images).
+Any replacement must preserve these boundaries and the [existing plot contract](RUNTIME_REFERENCE.md#plots-and-images).
 
 ## Where to look in source
 
@@ -274,7 +283,7 @@ Observable text and encoding behavior belongs in [Runtime reference](RUNTIME_REF
 Internal transport/activation names are not supported configuration.
 In particular, do not use the following to choose permissions or runtimes:
 
-`MCP_CONSOLE_LANGUAGES`, `MCP_CONSOLE_SANDBOX`, `MCP_CONSOLE_SANDBOX_SETTINGS`, `MCP_CONSOLE_SANDBOX_CONFIG`, `MCP_CONSOLE_STARTUP_FILE`, `MCP_CONSOLE_LOCAL_RUNTIME`, `MCP_CONSOLE_MANAGED_PYTHON`, `MCP_CONSOLE_R_LIBRARY`, `MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION`, `MCP_CONSOLE_MATPLOTLIB_CACHE`, or `MCP_CONSOLE_MANAGED_TEMPDIR`.
+`MCP_CONSOLE_LANGUAGES`, `MCP_CONSOLE_SANDBOX`, `MCP_CONSOLE_SANDBOX_SETTINGS`, `MCP_CONSOLE_SANDBOX_CONFIG`, `MCP_CONSOLE_STARTUP_FILE`, `MCP_CONSOLE_LOCAL_RUNTIME`, `MCP_CONSOLE_MANAGED_PYTHON`, `MCP_CONSOLE_R_LIBRARY`, `MCP_CONSOLE_DYNAMIC_ENVIRONMENT_RESOLUTION`, `MCP_CONSOLE_MATPLOTLIB_CACHE`, `MCP_CONSOLE_MANAGED_TEMPDIR`, or `MCP_CONSOLE_TRUSTED_WARMUP`.
 
 The `MCP_CONSOLE_SIDEBAND_*`, `MCP_CONSOLE_INTERRUPT_HANDLE`, and `MCP_CONSOLE_INPUT_READY_HANDLE` families belong to the [worker protocol](WORKER_PROTOCOL.md).
 A marker does not create a sandbox.

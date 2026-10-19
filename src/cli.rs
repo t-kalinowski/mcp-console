@@ -118,6 +118,10 @@ impl ConfigOverrides {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Check the configured server and runtimes and warm their caches
+    ///
+    /// Dependency preparation runs with host permissions, using the same caches
+    /// as serve. Run only trusted configuration and dependencies. Runtime checks
+    /// use the configured sandbox unless --no-sandbox is selected.
     #[command(display_order = 5)]
     Warmup {
         #[command(flatten)]
@@ -195,6 +199,14 @@ pub enum Command {
     /// Run the internal host resolver
     #[command(hide = true)]
     Resolve,
+
+    /// Run the internal Rscript preparation adapter
+    #[cfg(windows)]
+    #[command(hide = true)]
+    ResolverRscript {
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<OsString>,
+    },
 
     /// Run the internal worker relay
     #[command(hide = true)]
