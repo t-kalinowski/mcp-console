@@ -87,14 +87,6 @@ Dotted paths such as `r.packages` show nesting.
 For the underlying concepts, read [Packages and environments](REQUIREMENTS.md) and [Sandbox and trust](SANDBOX.md).
 For launch flags, see the [Command-line reference](CLI.md).
 
-## Generated configuration
-
-With no overrides, `config init` generates this `config.yaml`:
-
-::: {.config-init-template}
-[View the generated configuration](../tests/snapshots/cli/interface/test_config_init/dry_run_previews_the_created_contents.yaml).
-:::
-
 ## Choose which files to load
 
 Use these options to select or skip configuration files:
@@ -264,3 +256,11 @@ Use discovery exclusions to opt out.
 Older native-shaped YAML, `extends`, and camelCase permission fields are not accepted.
 Application profiles select workspace permissions or inherited client permissions with an explicit fallback; they are separate from complete native policy selectors.
 Use the public [sandbox schema](SANDBOX_CONFIGURATION.md); complete native JSON remains a separate explicit interface.
+
+## Generated configuration
+
+With no overrides, `config init` generates this `config.yaml`:
+
+::: {.config-init-template}
+[View the generated configuration](../tests/snapshots/cli/interface/test_config_init/dry_run_previews_the_created_contents.yaml).
+:::
