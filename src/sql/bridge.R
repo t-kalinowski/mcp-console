@@ -26,11 +26,9 @@ base::local(
       envir = globalenv()
     )
 
-    open_connection <- function() {
-      config <- list(
-        extension_directory = Sys.getenv(
-          "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
-        )
+    open_connection <- function(config = list()) {
+      config$extension_directory <- Sys.getenv(
+        "MCP_CONSOLE_DUCKDB_EXTENSION_DIRECTORY"
       )
       parent <- if (identical(Sys.getenv("MCP_CONSOLE_MANAGED_TEMPDIR"), "1")) {
         Sys.getenv("TMPDIR")
@@ -79,7 +77,9 @@ base::local(
       # Preview formatting and conversion must not execute another statement on
       # a retained cursor's connection. Keep a separate scratch catalog.
       if (is.null(rendering_connection)) {
-        rendering_connection <<- open_connection()
+        rendering_connection <<- open_connection(
+          config = list(preserve_insertion_order = "true")
+        )
       }
       rendering_connection
     }
@@ -431,8 +431,8 @@ base::local(
         batches,
         scratch_schema,
         function(connection, relation) {
-          # Let DuckDB select the requested rows from the saved batches. This
-          # avoids manually slicing Arrow buffers, offsets, and null counts.
+          # OFFSET only skips consumed rows in the saved batches, whose order
+          # the scratch connection preserves; it never paginates the source SQL.
           paste(
             "SELECT * FROM",
             DBI::dbQuoteIdentifier(connection, relation),
