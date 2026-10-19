@@ -101,6 +101,8 @@ The built-in runtimes expose the following session helpers:
 | R `py$name`                                                                     | Access a Python object through reticulate.                     |
 | R `.console$sql_connection()`                                                   | Get, select, or reset a native SQL connection owned by R.      |
 | Python `_console.sql_connection()`                                              | Get, select, or reset a native SQL connection owned by Python. |
+| R `.console$sql_last_result(n = NULL)`                                          | Retrieve successive rows from a SQL result owned by R.         |
+| Python `_console.sql_last_result(n=None)`                                       | Retrieve successive rows from a SQL result owned by Python.    |
 | R `console.plot.width_in`, `console.plot.height_in`, `console.plot.dpi` options | Configure captured plot dimensions and resolution.             |
 
 The [runtime reference](RUNTIME_REFERENCE.md) defines ownership and examples.

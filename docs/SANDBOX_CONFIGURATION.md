@@ -391,7 +391,7 @@ The current Codex metadata does not contain proxy endpoints, destination rules, 
 Console retains an explicitly configured managed proxy, including its destination rules and `allow_upstream_proxy` choice.
 Proxy environment variables passed to the server follow the ordinary environment-inheritance rules; metadata alone cannot reconstruct the client's proxy.
 Dependency preparation retains its separate resolver policy unless inherited full access disables sandboxing.
-Full access defaults to host caches; explicit `cache: console` remains invalid without sandboxing.
+Full access defaults to host caches; managed caches, including custom cache directories, require sandboxing.
 Inherited full access disables enforcement of local filesystem and network restrictions too.
 
 Missing metadata, an unsupported client profile, an invalid profile shape, or a malformed or unsupported filesystem entry makes the whole `inherit_codex` profile unavailable.
@@ -418,7 +418,7 @@ Explicit `sandbox` and `resolver.sandbox` mappings conflict with this flag; omit
 mcp-console serve --no-sandbox -c sandbox=null -c resolver.sandbox=null
 ```
 
-This mode defaults to host caches and rejects `cache: console`.
+This mode defaults to host caches and rejects managed caches, including custom cache directories.
 It removes native enforcement and native descendant cleanup, and omits managed temporary storage and temporary-environment redirection.
 Normal relay shutdown still reaps its direct worker, but Console does not add a temporary-storage cleanup guarantee.
 See [Temporary storage](#temporary-storage) for runtime-specific behavior.

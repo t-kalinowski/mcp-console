@@ -366,7 +366,7 @@ mcp-console serve --no-sandbox
 This runs evaluated code and dependency preparation with host permissions and removes native descendant-cleanup guarantees.
 It also disables [managed temporary storage](SANDBOX_CONFIGURATION.md#temporary-storage).
 It conflicts with writable-root options and explicit analysis or resolver sandbox settings.
-It uses host cache mode and rejects `cache: console`.
+It uses host cache mode and rejects managed caches, including custom cache directories.
 
 For a configuration exported for host execution, pass `--no-sandbox` to both `config resolve` and `serve`; the launch flag is not stored in YAML.
 See [Cache selection](RESOLVER.md#cache-locations) for clearing inherited permission settings deliberately.

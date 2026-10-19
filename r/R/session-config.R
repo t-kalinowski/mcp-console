@@ -388,7 +388,7 @@ ToolConfig <- S7::new_class(
 #' @param languages `NULL` or a character vector selecting `"r"`, `"python"`,
 #'   and/or `"sql"` tool inputs. This does not select the installed runtimes.
 #' @param cache `NULL`, `"managed"`, `"host"`, or `list(directory = "path")`.
-#'   `"console"` remains an alias for `"managed"`. A directory uses managed
+#'   `"console"` is an alias for `"managed"`. A directory uses managed
 #'   caches under `<directory>/dependencies` for preparation and workers.
 #'   Relative paths use the project directory; a leading `~` uses Console's
 #'   launch-home convention. Managed caches require sandboxing.

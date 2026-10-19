@@ -40,7 +40,7 @@ Both default to \code{TRUE} when \code{ConfigDiscovery()} is explicitly construc
 and/or \code{"sql"} tool inputs. This does not select the installed runtimes.}
 
 \item{cache}{\code{NULL}, \code{"managed"}, \code{"host"}, or \code{list(directory = "path")}.
-\code{"console"} remains an alias for \code{"managed"}. A directory uses managed
+\code{"console"} is an alias for \code{"managed"}. A directory uses managed
 caches under \verb{<directory>/dependencies} for preparation and workers.
 Relative paths use the project directory; a leading \code{~} uses Console's
 launch-home convention. Managed caches require sandboxing.}
