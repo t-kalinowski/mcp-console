@@ -270,8 +270,7 @@ class WindowsPreparation(unittest.TestCase):
             )
         )
         # fmt: python
-        result = session.send(
-            python=code("""
+        program = code("""
             import os
             from pathlib import Path
 
@@ -279,7 +278,7 @@ class WindowsPreparation(unittest.TestCase):
             assert extensions == Path(os.environ["USERPROFILE"]) / ".duckdb/extensions"
             print("Host cache profile fallback")
             """)
-        )
+        result = session.send(python=program)
         self.assertFalse(result.get("isError"), result)
         self.assertIn("Host cache profile fallback", json.dumps(result))
 
