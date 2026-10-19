@@ -260,6 +260,25 @@ def test_r_duckdb_returns_driver_data_frames(
                 writeLines("data frames use DuckDB types and retain every row without replay")
                 """),
         )
+        client.send(
+            sql="""SELECT i::INTEGER AS id FROM range(1, 300006) AS t(i)
+            ORDER BY id DESC"""
+        )
+        client.expect(
+            "successive fetches preserve all 300005 rows in source order\n",
+            # fmt: r
+            r=code("""
+                # Each large call spans several Arrow batches; the first also
+                # skips the consumed prefix of the saved preview batch.
+                sizes <- c(5L, 140000L, 7L, 140000L)
+                chunks <- lapply(sizes, function(n) .console$sql_last_result(n)$id)
+                chunks[[5L]] <- .console$sql_last_result()$id
+                stopifnot(identical(lengths(chunks), c(sizes, 19993L)))
+                stopifnot(identical(unlist(chunks, use.names = FALSE), 300005L:1L))
+                stopifnot(nrow(.console$sql_last_result()) == 0L)
+                writeLines("successive fetches preserve all 300005 rows in source order")
+                """),
+        )
         client.send(sql="SELECT NULL::DECIMAL(10,2) AS amount WHERE FALSE")
         client.expect(
             "empty results keep the driver's column types\n",

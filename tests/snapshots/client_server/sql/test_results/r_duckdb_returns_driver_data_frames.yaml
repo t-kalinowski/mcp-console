@@ -120,6 +120,58 @@ result:
   isError: false
 ---
 send:
+  sql: |-
+    SELECT i::INTEGER AS id FROM range(1, 300006) AS t(i)
+                ORDER BY id DESC
+result:
+  content:
+    - type: text
+      text: |
+        # A tibble: 20 × 1
+                id
+           <int32>
+         1  300005
+         2  300004
+         3  300003
+         4  300002
+         5  300001
+         6  300000
+         7  299999
+         8  299998
+         9  299997
+        10  299996
+        11  299995
+        12  299994
+        13  299993
+        14  299992
+        15  299991
+        16  299990
+        17  299989
+        18  299988
+        19  299987
+        20  299986
+        [additional rows omitted]
+  isError: false
+---
+send:
+  r: |
+    # Each large call spans several Arrow batches; the first also
+    # skips the consumed prefix of the saved preview batch.
+    sizes <- c(5L, 140000L, 7L, 140000L)
+    chunks <- lapply(sizes, function(n) .console$sql_last_result(n)$id)
+    chunks[[5L]] <- .console$sql_last_result()$id
+    stopifnot(identical(lengths(chunks), c(sizes, 19993L)))
+    stopifnot(identical(unlist(chunks, use.names = FALSE), 300005L:1L))
+    stopifnot(nrow(.console$sql_last_result()) == 0L)
+    writeLines("successive fetches preserve all 300005 rows in source order")
+result:
+  content:
+    - type: text
+      text: |
+        successive fetches preserve all 300005 rows in source order
+  isError: false
+---
+send:
   sql: SELECT NULL::DECIMAL(10,2) AS amount WHERE FALSE
 result:
   content:
