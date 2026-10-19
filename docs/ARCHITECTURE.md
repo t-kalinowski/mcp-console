@@ -105,9 +105,11 @@ The public last-result function consumes those rows before fetching more in its 
 It returns fetched data and automatically releases native resources on exhaustion, replacement, or retrieval failure.
 Successive calls advance the result; repeatedly returning a prefix would require replay or unbounded retention.
 Native DBI/DB-API queries remain available when callers want to own their result lifecycle directly.
-R managed DuckDB fetches exact Nanoarrow chunks and formats its preview in a separate scratch catalog so formatting cannot invalidate the retained query.
-Retrieval passes only its fetched batches through the same scratch catalog and returns DuckDB's data-frame conversions, keeping type mappings in the driver.
-Other DBI paths keep native data frames; Python returns driver rows with ordered column names and closes only result objects distinct from the selected connection.
+R DBI connections use `dbSendQuery()` and bounded `dbFetch(n)` calls and retain the driver's data frames unchanged, apart from the managed DuckDB workaround below.
+Python returns driver rows with ordered column names and closes only result objects distinct from the selected connection.
+Each provider initially fetches at most 21 preview/lookahead rows and requests only the remaining row allowance on later bounded fetches.
+Console does not eagerly fetch, copy, count, or spool the complete result; engines and drivers still own their internal buffering.
+An empty fetch or `fetchall()` establishes DB-API exhaustion; a short nonempty batch does not.
 The router and selection callbacks invalidate results across language boundaries without initializing another runtime.
 Observable consumption, conversion, and lifetime rules belong in the [runtime reference](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result).
 
@@ -117,6 +119,24 @@ Native R profiles run earlier, inside the worker boundary, before Console's mana
 
 The remaining process-environment constraint during late R initialization is recorded in [TODO](TODO.md#runtime-and-resource-limits).
 Splitting interpreter threads would not solve process-wide environment mutation.
+
+#### Managed DuckDB streaming workaround
+
+DuckDB R 1.5.6 materializes ordinary DBI data-frame results before `dbFetch(n)` slices them.
+Managed R DuckDB therefore uses `dbSendQueryArrow()` and bounded `dbFetchArrowChunk()` calls in `fetch_duckdb()`.
+`duckdb_result_data_frame()` isolates the temporary conversion adapter: it passes only fetched batches through `query_arrow()` in a separate scratch catalog, then calls `dbGetQuery()` there for DuckDB's R column conversions.
+The adapter never replays the submitted SQL, converts the unread result, or depends on the R `arrow` package.
+Selected DBI connections continue through `fetch_dbi()` and keep their driver's types and connection options.
+
+When the supported DuckDB R versions include [streaming data-frame results](https://github.com/duckdb/duckdb-r/pull/2587), enable that mode and use ordinary DBI fetching for managed retrieval too.
+Remove `duckdb_result_data_frame()` and the Arrow-specific retained-result buffer, slicing, and conversion branches.
+Keep the public row limits, successive consumption, exact preview formatting, and automatic cleanup unchanged.
+The existing public SQL result cases cover those contracts and driver conversion parity.
+Track this replacement in [TODO](TODO.md#runtime-and-resource-limits).
+
+Exact preview formatting also uses `query_arrow()` and the scratch catalog so formatting cannot invalidate a retained source query.
+Those shared preview facilities are separate from the temporary retrieval adapter and remain needed after it is removed.
+The scratch connection lives until worker shutdown.
 
 ## Generations and operations
 

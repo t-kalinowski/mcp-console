@@ -305,6 +305,8 @@ base::local(
       if (!is.null(pending$result) && !DBI::dbIsValid(pending$result)) {
         stop("SQL result is no longer valid")
       }
+      # Only managed DuckDB needs the temporary Arrow retrieval path below.
+      # Its conversion boundary is duckdb_result_data_frame().
       arrow <- !is.null(pending$schema)
       remaining <- if (is.null(n)) Inf else n
       parts <- list()
@@ -360,24 +362,7 @@ base::local(
         if (pending$offset == count) pending$buffer <- NULL
       }
       output <- if (arrow) {
-        # Positional scratch names prevent DuckDB from repairing duplicates.
-        # Restore the original labels after the driver's data-frame conversion.
-        children <- pending$schema$children
-        names(children) <- sprintf("column_%02d", seq_along(children))
-        schema <- nanoarrow::nanoarrow_schema_modify(
-          pending$schema,
-          list(children = children)
-        )
-        data <- query_arrow(
-          parts,
-          schema,
-          "result",
-          function(connection, relation) {
-            paste("SELECT * FROM", DBI::dbQuoteIdentifier(connection, relation))
-          }
-        )
-        names(data) <- names(pending$schema$children)
-        data
+        duckdb_result_data_frame(parts, pending$schema)
       } else if (length(parts)) {
         do.call(rbind, parts)
       } else {
@@ -387,7 +372,11 @@ base::local(
       output
     }
 
-    fetch_query <- function() {
+    # DuckDB R 1.5.6 materializes ordinary DBI results before dbFetch(n).
+    # Use its streaming Arrow result until the supported driver includes:
+    # https://github.com/duckdb/duckdb-r/pull/2587
+    # Then use the ordinary DBI retrieval path and remove its Arrow branches.
+    fetch_duckdb <- function() {
       epoch <- result_epoch
       result <- send_query_arrow()
       retained <- FALSE
@@ -437,6 +426,31 @@ base::local(
         batch <- NULL
       }
       list(schema = schema, batch = batch)
+    }
+
+    # Temporary conversion boundary for managed DuckDB's streaming workaround.
+    # Ask DuckDB to convert only the fetched rows; never replay the source SQL
+    # or use Nanoarrow's R type mappings. Delete when streaming dbFetch(n)
+    # replaces retained Arrow retrieval; see the upstream link above.
+    duckdb_result_data_frame <- function(batches, schema) {
+      # Positional scratch names prevent DuckDB from repairing duplicates.
+      # Restore the original labels after the driver's data-frame conversion.
+      children <- schema$children
+      names(children) <- sprintf("column_%02d", seq_along(children))
+      scratch_schema <- nanoarrow::nanoarrow_schema_modify(
+        schema,
+        list(children = children)
+      )
+      data <- query_arrow(
+        batches,
+        scratch_schema,
+        "result",
+        function(connection, relation) {
+          paste("SELECT * FROM", DBI::dbQuoteIdentifier(connection, relation))
+        }
+      )
+      names(data) <- names(schema$children)
+      data
     }
 
     query_arrow <- function(batches, schema, id, query) {
@@ -749,7 +763,7 @@ base::local(
           }
 
           preview <- if (identical(selected_connection, managed_connection)) {
-            fetch_query()
+            fetch_duckdb()
           } else {
             fetch_dbi()
           }

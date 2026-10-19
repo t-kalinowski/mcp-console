@@ -95,9 +95,7 @@ result:
               selection. After R-owned SQL, `.console$sql_last_result(n = 100)`
               returns a data frame of up to n successive rows, including the original
               preview first, without re-executing SQL; omit n to materialize all
-              remaining rows. Managed DuckDB fetches Arrow batches internally and uses
-              DuckDB's own data-frame conversions; large integers and decimals may
-              lose precision. Other DBI connections return their native data frames.
+              remaining rows. Column types and precision follow the database driver.
               Cleanup is automatic on exhaustion, replacement, or retrieval failure.
               Default-device plots return as PNGs and finalize at cell end, including
               after errors; draw each plot in one cell. Explicit devices are not

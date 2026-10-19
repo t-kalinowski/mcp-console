@@ -219,7 +219,6 @@ Calls consume successive rows rather than returning the same prefix.
 There is no rewind operation.
 After exhaustion, subsequent fetches return empty results with the original columns/schema.
 If a driver needs another fetch to discover exhaustion, the result remains open until that fetch, replacement, or restart.
-In particular, a short nonempty DB-API batch does not close the cursor; an empty fetch or `fetchall()` establishes exhaustion.
 
 Return types follow the owning provider:
 
@@ -228,10 +227,8 @@ Return types follow the owning provider:
 | R DBI, including managed DuckDB         | A data frame using the driver's R column conversions                        |
 | Python DB-API, including managed DuckDB | A dictionary with `rows` (native driver rows) and `columns` (ordered names) |
 
-R managed DuckDB fetches Arrow batches internally, then converts only the requested rows through DuckDB in a separate scratch connection.
-The function returns an ordinary data frame without requiring the R `arrow` package.
-DuckDB's standard R conversions apply: BIGINT and DECIMAL become numeric columns and may lose precision; nested values become list or data-frame columns.
-Console does not implement its own type mappings.
+R column types follow the database driver.
+Managed DuckDB returns BIGINT and DECIMAL as numeric columns, which may lose precision; nested values become list or data-frame columns.
 Configure driver type options when creating a [native connection](#select-a-native-connection), before selecting it for SQL cells.
 For example, `DBI::dbConnect(duckdb::duckdb(), bigint = "integer64")` enables DuckDB's `bit64::integer64` columns.
 DuckDB's `bigint` is a connection option; passing it to `dbFetch()` does not change conversion.
@@ -242,13 +239,10 @@ R data frames also retain the original column names, including duplicates, and c
 The selected DBI/DB-API driver still owns its type mappings and any precision limits.
 For transfer to the other language, use the existing [R/Python bridge](#r-and-python-interoperability) after retrieval and choose suitable conversions.
 
-Console initially fetches at most 21 rows for its preview and retains those rows with the live native result.
-It does not eagerly fetch, copy, count, or spool the complete result.
-Later bounded fetches use the saved rows first and request only the remaining row allowance from the driver.
+Console retains the preview rows and fetches more rows on demand.
 Database engines and drivers can independently evaluate ahead or buffer/materialize data internally; Console's row limits do not control those allocations.
 Returned data belongs to the caller and remains usable after cleanup or another SQL cell.
 The retained rows include complete values and columns, so their memory cost depends on row width rather than the text preview budget.
-R preview formatting and result conversion keep a scratch DuckDB connection until worker shutdown.
 
 #### Result lifetime
 
