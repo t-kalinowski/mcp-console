@@ -6,7 +6,7 @@ Learn how Console works, connect a client, or look up the settings and behavior 
 
 <span id="using-console"></span> <span id="use-console"></span> <span id="work-with-console"></span> <span id="how-console-works"></span>
 
-These pages form a short introduction you can read before installing Console or while getting to know it:
+These pages introduce Console and show how its pieces fit together:
 
 1. [Sessions and languages](BUILTIN_RUNTIME.md) shows how your agent can run code, query databases, and inspect help, plots, and results.
 2. [Packages and environments](REQUIREMENTS.md) explains how Console prepares packages, adds dependencies during an analysis, and uses environments you already manage.
