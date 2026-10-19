@@ -249,14 +249,6 @@ Without it, Console uses an absolute `HOME`.
 On Windows, an absent or empty `HOME` uses `USERPROFILE` or native user-home discovery.
 See [Recordings](RECORDING.md) for project-local storage.
 
-## Migration
-
-Global configuration now contributes defaults even when a project file exists.
-Use discovery exclusions to opt out.
-Older native-shaped YAML, `extends`, and camelCase permission fields are not accepted.
-Application profiles select workspace permissions or inherited client permissions with an explicit fallback; they are separate from complete native policy selectors.
-Use the public [sandbox schema](SANDBOX_CONFIGURATION.md); complete native JSON remains a separate explicit interface.
-
 ## Generated configuration
 
 With no overrides, `config init` generates this `config.yaml`:
