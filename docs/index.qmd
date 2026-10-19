@@ -50,7 +50,7 @@ They also provide a starting point for reproducible analyses and reports.
 ## Build on Console
 
 Build LLM applications on Console's persistent runtime.
-Replace the complete [tool description and instructions](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters), choose which language interfaces and parameters the model can use, and [preconfigure the runtime](CONFIGURATION.md).
+Replace the complete [tool description and instructions](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters), choose which language interfaces and parameters the model can use, and [preconfigure the runtime](RUNTIME_CONFIGURATION.md).
 Set [sandbox permissions](SANDBOX_CONFIGURATION.md) to control access to files and networks.
 
 For example, build a data chat with only SQL and a selected database connection, or a reporting assistant with a prepared R or Python environment.
@@ -63,7 +63,7 @@ To connect from your own application, see [Client integration](CLIENTS.md).
 By default, Console prepares packages for the session and reuses cached installations.
 The agent can request additional packages as it works.
 
-You can instead [select an existing Python environment](CONFIGURATION.md#python-environment-selection) or choose when Console may prepare dependencies.
+You can instead [select an existing Python environment](RUNTIME_CONFIGURATION.md#python-environment-selection) or choose when Console may prepare dependencies.
 See [Packages and environments](REQUIREMENTS.md).
 
 ## Where Console fits
@@ -80,4 +80,4 @@ Console's default `read_only` sandbox profile restricts network access and files
 It does not restrict filesystem reads.
 
 You can allow writes to selected paths, block reads from selected paths, and control network access with domain allowlists or denylists.
-See [Sandbox configuration](SANDBOX_CONFIGURATION.md) for profiles, custom permissions, and inheriting permissions from Codex.
+See [Sandbox permissions](SANDBOX_CONFIGURATION.md) for profiles, custom permissions, and inheriting permissions from Codex.

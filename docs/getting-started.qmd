@@ -97,12 +97,12 @@ The `workspace` profile allows writes in Console's launch directory except in se
 File reads remain allowed and direct network access remains restricted.
 
 The command-line reference covers [workspace writes across projects](CLI.md#allow-workspace-writes-across-projects) and [grants for individual directories](CLI.md#grant-writes-to-one-directory).
-See [Sandbox configuration](SANDBOX_CONFIGURATION.md) for the permission rules.
+See [Sandbox permissions](SANDBOX_CONFIGURATION.md) for the permission rules.
 
 Console loads project configuration automatically, and it can select executables or widen permissions.
 Review and authorize it before launching Console in an unfamiliar project; `--no-project-config` skips that layer.
 
-For interpreter selection and package setup, see [Configuration](CONFIGURATION.md) and [Packages and environments](REQUIREMENTS.md).
+For interpreter selection and package setup, see [Interpreters and startup](RUNTIME_CONFIGURATION.md) and [Packages and environments](REQUIREMENTS.md).
 
 ## Keep the session
 

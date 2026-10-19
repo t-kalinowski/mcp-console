@@ -250,6 +250,9 @@ class WebsiteTests(unittest.TestCase):
     def test_reading_paths_have_their_own_navigation(self) -> None:
         paths = (
             ("CONFIGURATION.html", "REQUIREMENTS.html", "SEND_OPERATIONS.html"),
+            ("RUNTIME_CONFIGURATION.html", "CONFIGURATION.html", "API.html"),
+            ("RUNTIME_REFERENCE.html", "CONFIGURATION.html", "API.html"),
+            ("CONFIGURATION_REFERENCE.html", "CONFIGURATION.html", "API.html"),
             ("API.html", "REQUIREMENTS_API.html", "SANDBOX_CONFIGURATION.html"),
             ("ARCHITECTURE.html", "WINDOWS_DEVELOPMENT.html", "REQUIREMENTS.html"),
         )
@@ -267,6 +270,7 @@ class WebsiteTests(unittest.TestCase):
                 navbar = soup.select_one(".navbar")
                 for label in (
                     "User guides",
+                    "Reference",
                     "Client integration",
                     "Development",
                     "Packages",

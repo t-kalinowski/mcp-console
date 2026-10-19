@@ -3,13 +3,13 @@ filters:
   - _filters/config-init.py
 ---
 
-# Configuration
+# Configuration files
 
 Console works without a configuration file.
-Use one to choose interpreters, startup packages, environment variables, and permissions.
+Use this page to create one, choose which files Console reads, combine settings, or inspect the result before launch.
+The [settings index](#settings-by-task) links to the accepted values, defaults, and behavior for each topic.
 
-For project settings, create `.agents/console/config.yaml` in the directory where Console will start.
-For example, to use the project's Python environment and allow project writes:
+For example, a project can select its existing Python environment and allow project writes:
 
 ```yaml
 python: .venv
@@ -17,15 +17,37 @@ sandbox:
   profile: workspace
 ```
 
-The Python environment must already exist.
-Standard-library code needs no additional packages; install third-party packages for the analysis you intend to run.
-Console does not manage Python package installation for an existing environment.
+Save this in `.agents/console/config.yaml` in the directory where Console starts.
+The Python environment must already exist; Console uses its installed packages without managing them.
+See [Interpreters and startup](RUNTIME_CONFIGURATION.md) and [Sandbox permissions](SANDBOX_CONFIGURATION.md) for these settings.
 
-Project configuration is trusted input and can widen permissions.
-See [Files and precedence](#files-and-precedence) before loading settings from an unfamiliar project.
-Worker and package-preparation permissions are independent; see [Sandbox configuration](SANDBOX_CONFIGURATION.md) and [Package preparation and caches](RESOLVER.md).
+Configuration is trusted launcher input: it can select executables, supply credentials, and widen permissions.
+[File precedence](#files-and-precedence) explains automatic project loading and how to skip it.
 
-[Configuration reference](CONFIGURATION_REFERENCE.md) lists every public field, its accepted values, and its default behavior.
+## Settings by task {#settings-by-task}
+
+<span id="top-level-settings"></span>
+
+Configuration must be a YAML or JSON mapping.
+Unknown fields are errors.
+Each reference below owns the complete settings and behavior for its topic; dotted paths such as `r.packages` show nesting.
+
+| Setting                              | Value or form                                           | Reference                                                                                                                                                           |
+| ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `r`                                  | Executable path, mapping, or `null`                     | <span id="r-executable-selection"></span> <span id="native-r-startup"></span> [Select R and its startup behavior](RUNTIME_CONFIGURATION.md#r-executable-selection). |
+| `python`                             | Executable/venv path, selection mapping, or `null`      | <span id="python-environment-selection"></span> [Select an existing or managed Python environment](RUNTIME_CONFIGURATION.md#python-environment-selection).          |
+| `r.packages`, `python.packages`      | Lists within the runtime mapping                        | <span id="startup-package-declarations"></span> [Choose startup packages](RUNTIME_CONFIGURATION.md#startup-package-declarations).                                   |
+| `r.resolution`, `python.resolution`  | Policy names within the runtime mapping                 | <span id="dependency-resolution-policies"></span> [Control package preparation](RUNTIME_CONFIGURATION.md#dependency-resolution-policies).                           |
+| `startup`                            | Mapping or `null`                                       | <span id="session-startup-source"></span> [Select a database connection at startup](RUNTIME_CONFIGURATION.md#session-startup-source).                               |
+| `sandbox`                            | Mapping or `null`                                       | [Set filesystem and network permissions](SANDBOX_CONFIGURATION.md).                                                                                                 |
+| `resolver`                           | Mapping                                                 | [Configure package sources and preparation](RESOLVER.md#configuration).                                                                                             |
+| `cache`                              | `console`, `host`, or `null`                            | <span id="cache-selection"></span> [Choose package cache locations](RESOLVER.md#cache-locations).                                                                   |
+| `inherit_environment`, `environment` | Boolean; mapping of names to strings                    | <span id="shared-environment"></span> [Set environment values and inheritance](ENVIRONMENT.md#where-to-set-variables).                                              |
+| `languages`                          | Nonempty list of `r`, `python`, and/or `sql`; or `null` | <span id="model-visible-languages"></span> [Choose the languages exposed to the agent](TOOL_CONFIGURATION.md#model-visible-languages).                              |
+| `tool`                               | Mapping                                                 | <span id="tool-descriptions-and-parameters"></span> [Customize tool descriptions and parameters](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters).           |
+
+For the underlying concepts, read [Packages and environments](REQUIREMENTS.md) and [Sandbox and trust](SANDBOX.md).
+For launch flags, see the [Command-line reference](CLI.md).
 
 ## Create a configuration file
 
@@ -44,11 +66,10 @@ The two options are mutually exclusive.
 These files are shared by clients that launch Console with the same configuration locations.
 Client registration remains a separate operation; see [Connect your client](getting-started.qmd#connect-your-client).
 
-The starter selects `sandbox.profile: workspace`, with comments explaining that it allows ordinary workspace writes and makes the project's `.git`, `.agents`, `.codex`, and `.aws` paths read-only.
+The starter selects `sandbox.profile: workspace`: ordinary workspace writes are allowed, while the project's `.git`, `.agents`, `.codex`, and `.aws` paths stay read-only.
 Other readable host files remain readable.
-Annotated examples cover temporary storage, network access and localhost services, package preparation, Python environments, environment variables, and cache locations.
+It includes commented examples for permissions, packages, interpreters, environment variables, and caches.
 Lines beginning with `##` are explanations; lines beginning with `#` are YAML examples to uncomment.
-The header links to the full configuration reference.
 
 Use repeated `-c` or `--config` assignments to override the starter settings, with the same ordering and merge rules as launch overrides.
 Assignments may appear before `config` or after `init`.
@@ -78,221 +99,6 @@ With no overrides, `config init` generates this `config.yaml`:
 ::: {.config-init-template}
 [View the generated configuration](../tests/snapshots/cli/interface/test_config_init/dry_run_previews_the_created_contents.yaml).
 :::
-
-## Python environment selection
-
-Select a preinstalled interpreter or standard virtual environment:
-
-```yaml
-python: .venv
-```
-
-Existing Python requires CPython 3.10 or newer with a usable shared embedding library.
-Standard-library code needs no third-party packages.
-
-The equivalent mapping is `python: {existing: .venv}`.
-A venv directory needs `pyvenv.cfg` and its ordinary `bin/python` or Windows `Scripts/python.exe`.
-On Windows, select a real interpreter or virtual environment, not a Windows App Execution Alias.
-Executable paths preserve venv identity and symlinks.
-Recognized Conda installations are unsupported.
-
-Explicit selection overrides launch-time `RETICULATE_PYTHON`, uses preinstalled packages, and disables managed Python preparation.
-Existing selections accept no package or version settings.
-A broken selection fails rather than falling back.
-
-To choose the first available candidate:
-
-```yaml
-python:
-  first_available:
-    - existing: .venv
-    - active_venv
-    - managed:
-        version: "3.13"
-        packages: [numpy, pandas, matplotlib]
-```
-
-`active_venv` reads the incoming `VIRTUAL_ENV`; the launcher must preserve it.
-Only absence advances to the next candidate.
-A present but broken environment fails.
-The list must be flat and nonempty, with at most one `active_venv` and at most one managed candidate.
-The managed candidate must be last.
-Exhausting it is an error.
-
-For an explicitly managed environment without a fallback list:
-
-```yaml
-python:
-  version: ">=3.12,<3.14"
-  packages: [numpy, pandas]
-```
-
-`python.packages`, `python.version`, and `python.resolution` select managed Python.
-The nested `python.managed` form remains supported, including inside `first_available`.
-Do not combine these direct fields with `existing`, `managed`, or `first_available` in the same mapping.
-An empty `python: {}` explicitly selects managed Python with its defaults.
-
-Managed selection uses uv-managed CPython, not a fallback interpreter on `PATH`.
-It excludes interpreters older than CPython 3.10 before ranking available versions or applying version constraints.
-Without R, it requires `uv` on the execution host.
-Omitted or `null` `python` retains the launch-time `RETICULATE_PYTHON` compatibility behavior described in [Environment](ENVIRONMENT.md).
-
-Before merging configuration layers, Console expands the direct managed fields to `python.managed`.
-Flat and nested settings in separate layers therefore combine with the same [merge rules](#merge-rules).
-`config resolve` continues to print the nested form.
-
-## R executable selection
-
-```yaml
-r: /opt/R/bin/R
-```
-
-Or combine selection with other R settings:
-
-```yaml
-r:
-  executable: /opt/R/bin/R
-  packages: [dplyr]
-  vanilla: true
-```
-
-Select an installed R executable or ordinary launcher, not a directory, Rscript, or command with arguments.
-Explicit selection overrides installation hints and PATH discovery.
-The scalar form expands to `r: {executable: PATH}` before merging.
-
-R and Python executable selectors follow the shared [path rules](#paths).
-
-Console retains the selected installation across restarts.
-If its captured executable/resources change incompatibly, start a new server connection.
-Executables and code they load remain trusted inputs, not immutable sandbox assets.
-
-## Startup package declarations
-
-```yaml
-r:
-  packages: [dplyr, dbplyr, ggplot2]
-python:
-  packages: [numpy, pandas, matplotlib]
-```
-
-Omitting a package list keeps that runtime's defaults.
-A supplied list replaces them; `[]` selects no optional packages.
-This does not remove infrastructure, installed packages, or caches.
-Preparation makes packages available without attaching or importing them.
-
-Managed Python `version` is one quoted version or constraint string.
-The selected fallback candidate can carry the same managed options.
-Later `requirements.reset` restores the effective startup declaration, not the contents of a subsequently edited file.
-
-See [Dependencies](REQUIREMENTS.md) for default packages, accepted requirement syntax, and live changes.
-
-## Dependency-resolution policies
-
-Use `r.resolution` and `python.resolution` to choose `implicit`, `explicit`, or `fixed`.
-R defaults to `implicit`; managed Python defaults to `explicit`, so the agent declares dependencies through `requirements.python` before importing them.
-R also accepts `disabled`; for preinstalled-only Python, select an existing environment.
-
-```yaml
-r:
-  packages: [dplyr]
-  resolution: explicit
-python:
-  packages: [numpy, pandas]
-  resolution: fixed
-```
-
-See [resolution policies](REQUIREMENTS.md#resolution-policy-admission) for what each mode permits.
-These settings govern Console's preparation, not arbitrary installation code or network access inside cells.
-
-To let missing Python imports request package preparation, opt in through `config.yaml`:
-
-```yaml
-python:
-  resolution: implicit
-```
-
-## Native R startup
-
-R uses normal startup by default: environment files, profiles, workspace restoration, `.First()`, and default-package attachment are R's responsibility.
-Startup runs inside the worker with its ordinary permissions.
-Console passes `--quiet`, `--interactive`, and `--no-save`, and does not save a workspace at shutdown.
-
-Set `r.vanilla: true` to request R's native `--vanilla` behavior.
-This affects the session's R runtime; discovery and dependency preparation remain profile-free.
-
-Console attaches its bridges and managed graphics after native startup.
-Startup plots therefore use R's native device.
-A profile diagnostic that R survives does not make the worker unusable.
-If R fails initialization or is interrupted, fix the file externally and explicitly restart; ordinary calls do not retry initialization.
-Edits to `.Rprofile` take effect on worker restart because R reads it again.
-
-## Session startup source
-
-`startup` selects a native SQL connection before the first SQL cell:
-
-```yaml
-startup:
-  language: python
-  code: |
-    import sqlite3
-    connection = sqlite3.connect(":memory:")
-    _console.sql_connection(connection)
-```
-
-Use `language: r` with a normal DBI connection and `.console$sql_connection(connection)` for R.
-The program runs after runtime helpers are available, once per worker generation.
-It must finish with a usable, user-created connection selected on that same interpreter.
-Retrieving or resetting the managed default does not satisfy startup.
-
-Source is captured at server launch and limited to 32 KiB in its encoded transport form, including escaping.
-It is not automatically echoed as a submitted cell, but emitted output and errors are visible.
-Startup code has ordinary worker permissions and may have side effects.
-
-Failure or interruption withholds SQL until explicit restart; there is no managed fallback or automatic replay.
-Restart may repeat earlier side effects.
-After success, resetting the SQL connection restores managed DuckDB without rerunning startup.
-See [SQL connections](RUNTIME_REFERENCE.md#sql-and-duckdb).
-
-## Shared environment
-
-```yaml
-environment:
-  OMP_NUM_THREADS: "4"
-resolver:
-  environment:
-    OMP_NUM_THREADS: "1"
-```
-
-The worker gets inherited launch values followed by `environment`.
-Preparation gets those values followed by `resolver.environment`.
-Console-owned runtime, cache, storage, proxy, and transport assignments take precedence afterward.
-
-`inherit_environment` defaults to true; `resolver.inherit_environment` defaults to the shared setting.
-False removes inherited workload values but preserves explicit mappings.
-It does not clear the supervisor's environment.
-Values must be strings; empty strings are values, not unsetting instructions.
-On Windows, each effective environment must have unique names under the process environment's case-insensitive comparison, including after file/CLI layering and shared/resolver merging.
-Use the same spelling when overriding a variable; `TEMP` and `temp` cannot both be configured.
-Names remain case-sensitive on Unix.
-
-Shared credentials also reach preparation.
-Environment changes inside cells do not reconfigure the resolver.
-See [Environment variables](ENVIRONMENT.md).
-
-## Cache selection
-
-Sandboxed sessions default to Console-specific caches.
-Set `MCP_CONSOLE_CACHE_DIR` to an absolute directory to relocate those caches.
-Set `cache: host` to reuse host cache locations.
-`--no-sandbox` defaults to host caches and rejects `cache: console` and explicit sandbox policies.
-The [`inherit_codex` profile](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex) also selects host caches when the first call requests full access.
-[Resolver caches](RESOLVER.md#cache-locations) documents locations and permission implications.
-
-To retain other file settings while disabling enforcement, clear inherited permission nodes explicitly:
-
-```sh
-mcp-console serve --no-sandbox -c sandbox=null -c resolver.sandbox=null
-```
 
 ## Files and precedence
 
@@ -329,43 +135,39 @@ Global settings and launch defaults, including inherited client permissions, are
 Settings are captured when the server starts.
 Editing YAML requires a new server connection; restarting a worker does not reload it.
 
-## Paths
+## Inspect and edit resolved configuration
 
-Relative paths use the launch directory, including paths written in a global file.
-A leading `~` expands to the launching user's home in interpreter selectors, sandbox and resolver filesystem paths, supported Unix-socket paths, configuration filenames, and `--writable-root`.
-`MCP_CONSOLE_HOME` also accepts a leading `~`.
-
-Expansion uses a nonempty, absolute `HOME` from the launch environment.
-On Windows, an absent or empty `HOME` uses `USERPROFILE` or native user-profile discovery.
-`R_USER`, `MCP_CONSOLE_HOME`, and child `environment` or `resolver.environment` overrides do not redefine that home.
-An invalid home is an error when expansion is needed.
-
-Only `~`, `~/...`, and, on Windows, `~\...` expand.
-Quote a standalone `"~"` in YAML, where an unquoted `~` means `null`.
-Use `./~/...` to name a literal `~` directory.
-`~user`, globs, and environment-variable references are not expanded.
-Expansion preserves symlinks and does not create directories.
-Settings expand after file and CLI layering; configuration filenames expand before reading.
-Materialized settings expose expanded home paths, including paths in Python candidate lists.
-Other strings, including environment values and startup programs, retain their contents.
-
-## Merge rules
-
-Mappings merge recursively.
-Lists, scalars, and `null` replace the earlier value.
-An empty mapping does not clear an existing mapping; an empty list does clear a list.
-Validation and defaults apply to the final merged settings.
-
-For example, global `environment: {KEEP: global, CHANGE: global}` and project `environment: {CHANGE: project}` retain `KEEP` and replace `CHANGE`.
-
-Use `null` followed by a new mapping to replace a whole branch through ordered overrides:
+Inspect the settings Console would use before starting a session:
 
 ```sh
-mcp-console serve -c sandbox.network=null -c 'sandbox.network={proxy: {mode: limited}}'
+mcp-console config resolve
+mcp-console config resolve --full > session.yaml
+# Review session.yaml, then launch with that file alone.
+mcp-console serve --config-file session.yaml
 ```
 
-The final value must still be valid for that setting.
-Changing one selector does not implicitly remove incompatible siblings.
+`config resolve` uses the same file selection, ordered `-c` overrides, and validation as `serve`.
+It does not start interpreters, prepare packages, or create session/cache directories.
+Use `--no-config` to skip discovered files, `--config-file PATH` for one required file, and `--format json` for JSON instead of YAML.
+To inspect the built-in defaults without launch overrides, run `mcp-console config resolve --no-config --full`.
+
+The default `--prune` omits values equal to the binary's built-in defaults, independently of discovered files.
+The comparison uses defaults for the same sandbox choice as the export.
+An unchanged configuration produces `{}`.
+Mappings are pruned recursively.
+Changed arrays and scalar values stay complete, including empty arrays and strings; overrides needed to preserve conditional defaults remain explicit.
+`--full` includes defaults and generated tool descriptions; it cannot be combined with `--prune`.
+See [Tool configuration](TOOL_CONFIGURATION.md#inspect-and-edit-resolved-configuration) before editing that generated text or schema metadata.
+
+Use the same launch directory for export and execution so relative paths retain their meaning.
+For host execution, pass `--no-sandbox` to both commands; launch flags are not stored in YAML.
+Runtime-dependent interpreter selection, automatic package lists, inherited environment values, and runtime-created cache and temporary paths remain policies.
+Python `first_available` retains its candidates, including `active_venv`; the next launch evaluates them against its own environment and filesystem.
+Managed fallback entries include their effective resolution policy even when an existing candidate is selected.
+An export does not pin installed dependencies or copy the host environment.
+Exported interpreter paths must be representable as UTF-8.
+
+R exposes the same operations through its [configuration workflow](https://t-kalinowski.github.io/mcp-console/r/reference/config-workflow.html).
 
 ## Command-line overrides
 
@@ -400,6 +202,56 @@ There is no variable expansion or file inclusion in these values.
 `-c` accepts an assignment, not a file path or root configuration document.
 The separate native `sandbox --config-env` interface cannot be combined with application configuration options; see [CLI](CLI.md).
 
+## Merge rules
+
+Mappings merge recursively.
+Lists, scalars, and `null` replace the earlier value.
+Validation and defaults apply to the final merged settings.
+
+| Value         | Effect                                                                                                           |
+| ------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Omitted field | Keep the earlier layer's value, or use the default when no layer supplies one.                                   |
+| `{}`          | Merge an empty mapping; do not clear earlier entries. Runtime shorthands are expanded first, as described below. |
+| `[]`          | Replace a list with an empty list, where allowed. `languages` and `python.first_available` must remain nonempty. |
+| `null`        | Replace the earlier value, where allowed. Clearing `sandbox` or `resolver.sandbox` restores the policy defaults. |
+| `""`          | Supply an empty string. This is valid for environment values and tool prose; it does not unset a variable.       |
+
+For example, global `environment: {KEEP: global, CHANGE: global}` and project `environment: {CHANGE: project}` retain `KEEP` and replace `CHANGE`.
+
+To replace a whole mapping, clear it and then supply the replacement through ordered overrides:
+
+```sh
+mcp-console serve -c sandbox.network=null -c 'sandbox.network={proxy: {mode: limited}}'
+```
+
+The final value must still be valid for that setting.
+For example, `sandbox.filesystem`, `sandbox.network.proxy`, `environment`, and `resolver` require mappings rather than `null`.
+Changing one selector does not implicitly remove incompatible siblings.
+
+Before merging each layer, Console expands an R path to `r.executable` and direct managed Python fields to `python.managed`.
+An empty `python: {}` also selects the managed form.
+Flat and nested runtime settings therefore merge at the same paths; [Interpreters and startup](RUNTIME_CONFIGURATION.md) describes the selection rules.
+
+## Paths
+
+Relative paths use the launch directory, including paths written in a global file.
+A leading `~` expands to the launching user's home in interpreter selectors, sandbox and resolver filesystem paths, supported Unix-socket paths, configuration filenames, and `--writable-root`.
+`MCP_CONSOLE_HOME` also accepts a leading `~`.
+
+Expansion uses a nonempty, absolute `HOME` from the launch environment.
+On Windows, an absent or empty `HOME` uses `USERPROFILE` or native user-profile discovery.
+`R_USER`, `MCP_CONSOLE_HOME`, and child `environment` or `resolver.environment` overrides do not redefine that home.
+An invalid home is an error when expansion is needed.
+
+Only `~`, `~/...`, and, on Windows, `~\...` expand.
+Quote a standalone `"~"` in YAML, where an unquoted `~` means `null`.
+Use `./~/...` to name a literal `~` directory.
+`~user`, globs, and environment-variable references are not expanded.
+Expansion preserves symlinks and does not create directories.
+Settings expand after file and CLI layering; configuration filenames expand before reading.
+Materialized settings expose expanded home paths, including paths in Python candidate lists.
+Other strings, including environment values and startup programs, retain their contents.
+
 ## Console home
 
 Set `MCP_CONSOLE_HOME` in the launching environment to a directory to relocate global configuration and fallback session storage.
@@ -409,44 +261,6 @@ The directory must be absolute after leading-`~` expansion; empty or relative va
 Without it, Console uses an absolute `HOME`.
 On Windows, an absent or empty `HOME` uses `USERPROFILE` or native user-home discovery.
 See [Recordings](RECORDING.md) for project-local storage.
-
-## Inspect and edit resolved configuration
-
-Inspect the settings Console would use before starting a session:
-
-```sh
-mcp-console config resolve
-mcp-console config resolve --full > session.yaml
-# Review session.yaml, then launch with that file alone.
-mcp-console serve --config-file session.yaml
-```
-
-`config resolve` uses the same file selection, ordered `-c` overrides, and validation as `serve`.
-It does not start interpreters, prepare packages, or create session/cache directories.
-Use `--no-config` for built-in settings without discovered files, `--config-file PATH` for one required file, and `--format json` for JSON instead of YAML.
-
-The default `--prune` omits values equal to the binary's built-in defaults, independently of discovered files.
-An unchanged configuration produces `{}`.
-Changed arrays and scalar values stay complete, including empty arrays and strings; overrides needed to preserve conditional defaults remain explicit.
-`--full` includes defaults and generated tool descriptions; it cannot be combined with `--prune`.
-See [Tool configuration](TOOL_CONFIGURATION.md#inspect-and-edit-resolved-configuration) before editing that generated text or schema metadata.
-
-Use the same launch directory for export and execution so relative paths retain their meaning.
-For host execution, pass `--no-sandbox` to both commands; launch flags are not stored in YAML.
-Runtime-dependent interpreter selection, automatic package lists, and inherited environment values remain policies.
-An export does not pin installed dependencies or copy the host environment.
-Exported interpreter paths must be representable as UTF-8.
-
-R exposes the same operations through its [configuration workflow](https://t-kalinowski.github.io/mcp-console/r/reference/config-workflow.html).
-
-## Model-visible languages
-
-See [language visibility](TOOL_CONFIGURATION.md#model-visible-languages).
-Visibility changes the exposed tool fields, not runtime isolation or permissions.
-
-## Tool descriptions and parameters
-
-See [Tool configuration](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters) for descriptions, initialization instructions, and parameter visibility.
 
 ## Migration
 

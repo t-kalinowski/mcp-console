@@ -56,7 +56,7 @@ The [runtime reference](RUNTIME_REFERENCE.md#r-and-python-interoperability) desc
 <span id="r"></span> <span id="python"></span>
 
 You can tailor Console to a project's languages and dependencies.
-For example, [expose only Python and SQL](TOOL_CONFIGURATION.md#model-visible-languages), use an [existing Python environment](CONFIGURATION.md#python-environment-selection), or select a specific [R installation](CONFIGURATION.md#r-executable-selection).
+For example, [expose only Python and SQL](TOOL_CONFIGURATION.md#model-visible-languages), use an [existing Python environment](RUNTIME_CONFIGURATION.md#python-environment-selection), or select a specific [R installation](RUNTIME_CONFIGURATION.md#r-executable-selection).
 
 An existing Python environment uses the packages already installed there.
 For managed environments, you can [choose startup packages and control whether more may be prepared during the session](REQUIREMENTS.md).
@@ -79,7 +79,7 @@ The selected connection determines the SQL dialect and transaction behavior.
 Access to database files and servers depends on the session's [filesystem and network permissions](SANDBOX.md).
 
 The [SQL connection reference](RUNTIME_REFERENCE.md#select-a-native-connection) shows how to select a connection from either language.
-You can also [configure a database connection at startup](CONFIGURATION.md#session-startup-source).
+You can also [configure a database connection at startup](RUNTIME_CONFIGURATION.md#session-startup-source).
 
 ## Inspect help, plots, and results
 
@@ -119,3 +119,5 @@ The recorded Quarto document provides a starting point for a report; review its 
 
 For precise language behavior, see the [runtime reference](RUNTIME_REFERENCE.md).
 [Client integration](CLIENTS.md) covers applications that call Console directly.
+
+Continue with [Packages and environments](REQUIREMENTS.md) to learn how Console prepares the libraries your agent uses.
