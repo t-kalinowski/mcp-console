@@ -9,7 +9,7 @@ Console works without a configuration file.
 Use `mcp-console config init` to generate a starter file with commented examples, then edit it to choose interpreters, packages, and permissions.
 The [settings index](#settings-by-task) links to the accepted values, defaults, and behavior for each topic.
 
-Configuration is trusted launcher input: it can select executables, supply credentials, and widen permissions.
+Configuration files can choose which programs Console runs, provide credentials, and change permissions.
 [File precedence](#files-and-precedence) explains automatic project loading and how to skip it.
 
 ## Create a configuration file
@@ -20,7 +20,7 @@ Run this command in your project directory:
 mcp-console config init
 ```
 
-By default, `config init` creates `.agents/console/config.yaml` in the current directory, including outside Git.
+By default, `config init` creates `.agents/console/config.yaml` in the current directory.
 It does not search parent directories.
 `--directory PATH` selects an existing project directory and interprets relative settings there.
 `--global` creates `$MCP_CONSOLE_HOME/config.yaml`, or `~/.agents/console/config.yaml` when the variable is unset.
