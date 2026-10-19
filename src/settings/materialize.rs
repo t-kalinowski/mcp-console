@@ -22,7 +22,7 @@ pub(crate) fn configuration(
     let cache = captured.cache.clone().unwrap_or(if no_sandbox {
         Cache::Host
     } else {
-        Cache::Console
+        Cache::Managed
     });
     if no_sandbox && !matches!(cache, Cache::Host) {
         return Err("Console caches require sandboxing; use cache: host with --no-sandbox".into());
@@ -74,9 +74,9 @@ pub(crate) fn configuration(
         Value::Null
     } else {
         match cache {
-            Cache::Console => json!("console"),
+            Cache::Managed => json!("managed"),
             Cache::Host => json!("host"),
-            Cache::Directory(path) => json!(path),
+            Cache::Directory(path) => json!({"directory": path}),
         }
     };
     value["inherit_environment"] =

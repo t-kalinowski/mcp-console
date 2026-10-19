@@ -33,15 +33,34 @@ stderr: >
 ---
 override: cache=relative-cache
 stderr: >
-  configuration with CLI overrides: cache: cache must be console, host, or
-  an absolute path; see docs/CONFIGURATION.md for the public format
+  configuration with CLI overrides: cache: expected managed, host, or a
+  directory mapping; see docs/CONFIGURATION.md for the public format
+---
+override: cache=/tmp/cache
+stderr: >
+  configuration with CLI overrides: cache: expected managed, host, or a
+  directory mapping; see docs/CONFIGURATION.md for the public format
 ---
 override: cache=42
 stderr: >
-  configuration with CLI overrides: cache: invalid type: integer `42`,
-  expected a string; see docs/CONFIGURATION.md for the public format
+  configuration with CLI overrides: cache: expected managed, host, or a
+  directory mapping; see docs/CONFIGURATION.md for the public format
 ---
-override: "cache={directory: /tmp/cache}"
+override: "cache={directory: ''}"
+stderr: |
+  configuration with CLI overrides: cache.directory must not be empty
+---
+override: "cache={directory: 42}"
 stderr: >
-  configuration with CLI overrides: cache: invalid type: map, expected a
-  string; see docs/CONFIGURATION.md for the public format
+  configuration with CLI overrides: cache: invalid type: integer `42`,
+  expected path string; see docs/CONFIGURATION.md for the public format
+---
+override: "cache={path: cache}"
+stderr: >
+  configuration with CLI overrides: cache: expected managed, host, or a
+  directory mapping; see docs/CONFIGURATION.md for the public format
+---
+override: "cache={directory: cache, unknown: true}"
+stderr: >
+  configuration with CLI overrides: cache: expected managed, host, or a
+  directory mapping; see docs/CONFIGURATION.md for the public format

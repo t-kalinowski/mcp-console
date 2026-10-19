@@ -14,7 +14,7 @@ pub(crate) fn configure(
     let selection = selection.unwrap_or(if no_sandbox {
         Cache::Host
     } else {
-        Cache::Console
+        Cache::Managed
     });
     // Console cache contents may have been produced by sandboxed code. Never
     // reuse them in a local session that removes native enforcement.
@@ -22,12 +22,12 @@ pub(crate) fn configure(
     // dependency storage, never the shared Console cache parent.
     let root = match selection {
         Cache::Host => return Ok(()),
-        Cache::Console | Cache::Directory(_) if no_sandbox => {
+        Cache::Managed | Cache::Directory(_) if no_sandbox => {
             return Err(
                 "Console caches require sandboxing; use cache: host with --no-sandbox".into(),
             );
         }
-        Cache::Console => console_root(resolver)?,
+        Cache::Managed => console_root(resolver)?,
         Cache::Directory(path) => path,
     }
     .join("dependencies");

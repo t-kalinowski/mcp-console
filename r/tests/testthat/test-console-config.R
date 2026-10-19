@@ -76,7 +76,17 @@ test_that("ConsoleConfig preserves schema shapes and separates launch choices", 
 
 test_that("ConsoleConfig preserves a custom cache directory", {
   cache <- file.path(tempdir(), "console cache")
-  expect_identical(as.list(ConsoleConfig(cache = cache)), list(cache = cache))
+  expect_identical(
+    as.list(ConsoleConfig(cache = list(directory = cache))),
+    list(cache = list(directory = cache))
+  )
+  expect_identical(
+    as.list(ConsoleConfig(cache = "managed")),
+    list(cache = "managed")
+  )
+  expect_error(ConsoleConfig(cache = cache), "cache")
+  expect_error(ConsoleConfig(cache = list(directory = "")), "cache")
+  expect_error(ConsoleConfig(cache = list(path = cache)), "cache")
 })
 
 test_that("resolution policies accept implicit and reject automatic", {

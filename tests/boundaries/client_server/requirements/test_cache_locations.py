@@ -291,7 +291,7 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
         env["CACHE_TEST_ROOT"] = str(cache)
         config = root / ".agents/console/config.yaml"
         config.parent.mkdir(parents=True)
-        config.write_text(json.dumps({"cache": str(cache.parent)}))
+        config.write_text(json.dumps({"cache": {"directory": str(cache.parent)}}))
         for name in CACHE_VARIABLES:
             env[name] = str(root / "host" / name)
         with McpClient(binary, ("serve",), env, root) as client:
@@ -483,7 +483,7 @@ def cache_locations(
                     }
                     env["MCP_CONSOLE_CACHE_DIR"] = str(root / "ignored-cache")
                 elif source in ("path", "path_cli", "path_isolated"):
-                    settings["cache"] = str(console_base)
+                    settings["cache"] = {"directory": str(console_base)}
                     env["MCP_CONSOLE_CACHE_DIR"] = str(root / "ignored-cache")
             elif source == "empty":
                 env["MCP_CONSOLE_CACHE_DIR"] = ""
@@ -601,7 +601,9 @@ def cache_locations(
             elif source == "path_cli":
                 settings["cache"] = "host"
                 config.write_text(json.dumps(settings))
-                arguments.extend(["-c", f"cache={json.dumps(str(console_base))}"])
+                arguments.extend(
+                    ["-c", f"cache.directory={json.dumps(str(console_base))}"]
+                )
             with McpClient(binary, arguments, env, root) as client:
                 client.initialize_and_list_tools()
                 if not host:

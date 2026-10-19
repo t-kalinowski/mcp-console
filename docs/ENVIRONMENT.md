@@ -94,12 +94,12 @@ See [uv's reference](https://docs.astral.sh/uv/reference/environment/) and [reso
 ## Cache and data locations
 
 [Resolver configuration](RESOLVER.md#cache-locations) owns root selection and host-cache permissions.
-Set `cache` to an absolute path in configuration to select the Console cache root for preparation and workers.
-With `cache: console`, `MCP_CONSOLE_CACHE_DIR` selects that root, taking precedence over XDG and platform defaults.
-An explicit `cache` path takes precedence over `MCP_CONSOLE_CACHE_DIR`.
+Set `cache.directory` in configuration to select the managed cache root for preparation and workers.
+With `cache: managed` (also accepted as `console`), `MCP_CONSOLE_CACHE_DIR` selects that root, taking precedence over XDG and platform defaults.
+An explicit `cache.directory` takes precedence over `MCP_CONSOLE_CACHE_DIR`.
 An unset or empty value uses the defaults; `cache: host` ignores it.
 Let `D` be the selected Console dependency directory.
-`cache: console` and an explicit cache path apply these assignments to preparation and eligible workers:
+`cache: managed` and an explicit cache directory apply these assignments to preparation and eligible workers:
 
 | Variables                                | Values                                                                                |
 | ---------------------------------------- | ------------------------------------------------------------------------------------- |

@@ -252,13 +252,14 @@ pub(super) fn render(value: Value, profile: Option<&ProfileSelection>) -> Result
         Field::new(
             "cache",
             "\
-## Cache options: console (default when sandboxed), host, or an absolute path.
+## Cache options: managed (default when sandboxed), host, or a directory mapping.
 ## Use host to reuse ordinary host package caches.
-## A path places dependency caches under <path>/dependencies.
+## directory places managed dependency caches under <directory>/dependencies.
+## Relative directories use the launch directory; a leading ~/ uses your home.
 ## It applies to package preparation and workers.
 ## Configuration and recordings stay in their existing locations.
 ",
-            "# cache: /absolute/path/to/console-cache\n",
+            "# cache:\n#   directory: /absolute/path/to/console-cache\n",
         ),
     ];
     let mut output = HEADER.to_owned();
