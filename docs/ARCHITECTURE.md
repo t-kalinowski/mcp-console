@@ -333,7 +333,30 @@ Keep detailed compatibility handling there rather than reproducing it across gui
 
 ## Recording ownership and failures
 
-`internal/events.jsonl` is the append-only journal underlying the Markdown and QMD projections.
+`capture/events.jsonl` is the append-only journal underlying the process-wide Markdown transcript and per-worker-session QMDs.
+The recorder stages capture privately in temporary storage until the transport receives the first `send` call.
+Publication preserves event sequence, timestamps, and the original process start time; processes without `send` discard temporary capture.
+Storage selection and recording identifiers retain their existing owners.
+
+The relay reports actual worker launch separately from readiness and exit.
+Recording session IDs count these launches independently of lifecycle generations.
+Source attachment records admission to a worker separately from execution; an interrupted pending source can have an attachment without a cell log.
+The worker reports cell entry; the tape switches text/image intervals at observed entry and completion, and retains the final interval through producer retirement.
+A tool call can collect several intervals or sessions.
+Recorded result byte ranges preserve the association after bounded preview assembly, including output claimed by later polls.
+Transport envelopes reference recorded tool payloads instead of duplicating them, and the delivery owner supplies write evidence without asserting client receipt.
+
+The recorder owns capture files and read-only completion; the output tape retains each open interval's producer ownership.
+Publication relocates shared file handles without changing that ownership.
+Images finish after writing, cell logs at completion, and idle intervals at the next cell or confirmed producer retirement.
+Session projections finish after session updates; process projections and events finish after worker retirement and response-delivery settlement.
+Permission errors use recording diagnostics, not computation errors.
+
+Runtime export uses the existing worker sideband to request a snapshot ending before the current cell began.
+The server reconstructs source and report content from capture, excluding the exporting call.
+It receives no destination path.
+The worker writes the returned content under its existing sandbox and filesystem permissions.
+No interpreter, SQL query, plot replay, or Quarto process participates in reconstruction.
 
 A journal or artifact failure disables further recording without stopping computation.
 A raw-log failure affects that file.
@@ -342,7 +365,7 @@ Diagnostics and notices report unavailable or partial retention.
 
 Journal events and generated projections are internal formats, not independently versioned public APIs.
 A journaled result records response assembly, not confirmed client receipt.
-See [Output and delivery](#output-and-delivery) for ownership and [Open work](TODO.md) for retention and export gaps.
+See [Output and delivery](#output-and-delivery) for ownership and [Open work](TODO.md) for remaining retention work.
 
 ## Developer terms
 
@@ -352,7 +375,8 @@ It owns admission, retained declarations, bounded responses, and recording.
 **Worker:** The process holding interpreter and database state.
 The built-in worker coordinates R, Python, and SQL on one execution thread.
 
-**Generation:** One worker lifetime and all work tied to it.
+**Generation:** A lifecycle ownership token for work that must not reach a replacement.
+It is not a recording session identifier; worker lifetimes are observed independently.
 Old input, callbacks, evaluations, and candidate commits must not reach its replacement.
 
 **Relay:** The process translating worker sideband and standard streams, delivering interruption, and reaping the direct worker.

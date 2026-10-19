@@ -256,6 +256,18 @@ Python DuckDB may retain native result buffers until another query or connection
 Before using the connection directly from R or Python, finish retrieval or select the same connection again to discard unread rows.
 Direct connection use while a result is pending is unsupported: it can invalidate the result without Console detecting the change.
 
+## Export the current session
+
+Use `.console$export_session(directory)` in R or `_console.export_session(directory)` in Python to create writable `session.qmd`, `session.md`, and referenced images in a new directory.
+The helper returns `qmd`, `markdown`, and `images` paths as an R list or a Python dictionary of `pathlib.Path` objects.
+R export does not initialize Python; Python export works without R.
+
+The snapshot ends before the calling cell began, excluding that cell's source and unfinished results.
+The QMD contains source and dependency metadata; the Markdown preserves recorded client-facing previews, errors, omission notices, and images without executing code or expanding raw logs.
+Later polls retain the results' original cell associations.
+The worker's normal filesystem permissions apply, and destination collisions or unavailable capture raise errors.
+See [Recordings and reports](RECORDING.md#export-a-working-copy) for the layout, delivery evidence, and limitations.
+
 ## Plots and images
 
 R's managed device returns PNG pages and finalizes open pages at cell end, including after language errors.

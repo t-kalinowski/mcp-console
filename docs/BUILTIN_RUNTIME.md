@@ -120,7 +120,9 @@ See [result retrieval](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result) for re
 
 [Recordings](RECORDING.md) retain the code, output, and plots so you can see what the agent did and inspect its results.
 Ask the agent for the recording's location.
-The recorded Quarto document provides a starting point for a report; review its code, inputs, and package requirements before rendering it.
+Use `.console$export_session("report")` in R or `_console.export_session("report")` in Python to copy the current session into writable source and result documents.
+The export ends before its calling cell began and does not execute the recorded code.
+Review the source, inputs, and package requirements before executing the QMD.
 
 For precise language behavior, see the [runtime reference](RUNTIME_REFERENCE.md).
 [Client integration](CLIENTS.md) covers applications that call Console directly.

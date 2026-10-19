@@ -40,9 +40,11 @@ The source enums are the complete schema; these are the principal message famili
 | To worker   | Evaluation/control   | `evaluate`, `shutdown`                                                                                                                            |
 | To worker   | Explicit preparation | `prepare_r`, `prepare_python`                                                                                                                     |
 | To worker   | Resolver replies     | `r_resolved`, `r_resolution_failed`, `python_resolved`, `python_resolution_failed`, `python_version_resolved`, `python_version_resolution_failed` |
-| From worker | Readiness/lifecycle  | `ready`, `runtime_initialized`, `r_initialization`, `completed`                                                                                   |
+| From worker | Readiness/lifecycle  | `ready`, `runtime_initialized`, `r_initialization`, `cell_started`, `completed`                                                                   |
 | From worker | Output/input         | `console_output`, `console_diagnostic`, `image`, `input_requested`, `input_received`, `input_cancelled`                                           |
 | From worker | Preparation results  | `r_prepared`, `r_preparation_failed`, `python_prepared`, `python_preparation_failed`, `python_preparation_rejected`                               |
+| To worker   | Session export       | `session_exported`                                                                                                                                |
+| From worker | Session export       | `export_session`                                                                                                                                  |
 | From worker | Resolver requests    | `resolve_r`, `resolve_python`, `resolve_python_version`                                                                                           |
 | From worker | Activation receipts  | `r_activated`, `r_activation_failed`, `python_activated`, `python_activation_failed`                                                              |
 
@@ -50,6 +52,10 @@ For example:
 
 ```json
 { "kind": "evaluate", "language": "python", "source": "2 + 2" }
+```
+
+```json
+{ "kind": "cell_started" }
 ```
 
 ```json
@@ -176,3 +182,16 @@ Explicit R/DuckDB preparation and optional runtime R callbacks must honor prepar
 
 [`tests/fixtures/zod`](../tests/fixtures/zod) exercises conformance; fixture commands are not protocol extensions.
 Use the [boundary tests](../tests/boundaries/README.md), not prose alone, to validate changes to either endpoint.
+
+## Recording and export
+
+`cell_started` is emitted when an accepted evaluation enters the worker coordinator, before its source executes.
+It establishes the observed execution interval; receipt of `evaluate` alone does not create an executed-cell log.
+`completed` ends that interval, while later observed text belongs to the post-cell interval.
+
+An executing runtime helper sends payload-free `export_session`.
+The server replies with `session_exported`, carrying `result` as a success bundle or an error string.
+The bundle contains reconstructed QMD, Markdown, referenced image bytes, and the managed recording location used to reject export destinations inside it.
+No destination path crosses to the server.
+The worker writes a new writable directory using its ordinary filesystem authority.
+Export shares the generation-owned command and callback lifetime; it does not initialize another runtime or replay source.

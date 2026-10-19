@@ -1,79 +1,148 @@
 # Recordings and reports
 
-Console keeps transcripts, text output, and plots on the machine where it runs.
-Ask the agent for the recorded session's path, or use the locations below.
-
-Recordings contain source, input, requirements, output, and artifacts **without redaction**.
-Review them before sharing.
-There is no aggregate quota or automatic cleanup, so remove old sessions deliberately.
+A recording belongs to one Console process, from startup to shutdown, and can contain several worker sessions.
+Its capture retains protocol events, submitted source, input, requirements, emitted text, and images **without redaction**.
+Review a recording before sharing it.
+There is no aggregate quota or automatic cleanup.
 
 ## Location and files
 
 If `.agents/console` already exists in the launch directory, recordings use `.agents/console/sessions/<run-id>/`.
 Otherwise they use `~/.agents/console/sessions/<run-id>/`; `MCP_CONSOLE_HOME` replaces that fallback Console directory.
+Console does not create a project `.agents` directory to select project storage.
+Existing recordings are not migrated or rewritten.
 
-Console does not create a project `.agents` directory just to select project storage.
-Recording starts when a call, startup output, or startup failure needs it.
+The first MCP `tools/call` request targeting `send` activates recording, including polls, controls, requirement requests, and rejected submissions.
+Initialization, discovery, pings, startup output, and startup failures alone do not create a persistent recording directory.
+Console temporarily retains the preceding capture and publishes it in its original order when `send` arrives.
+A process that exits without `send` discards that temporary capture.
+The recorded process start time remains separate from recording activation time.
 
-| File                      | Use                                                |
-| ------------------------- | -------------------------------------------------- |
-| `transcript.md`           | Read calls, results, and links to artifacts.       |
-| `transcript.qmd`          | Review submitted source and edit it into a report. |
-| `outputs/call-NNNNNN.log` | Read raw text from a code cell, up to 1 GiB.       |
-| `outputs/session.log`     | Read startup and idle text, up to 1 GiB.           |
-| `artifacts/`              | Find retained images.                              |
+```text
+<recording>/
+├── capture/
+│   ├── events.jsonl
+│   └── sessions/
+│       ├── 001/
+│       │   ├── startup.txt
+│       │   ├── startup-001.png
+│       │   ├── cell-001.txt
+│       │   ├── cell-001-001.png
+│       │   ├── cell-001-post.txt
+│       │   └── cell-002.txt
+│       └── 002/
+│           └── cell-001.txt
+├── transcript.md
+└── sessions/
+    ├── session-001.qmd
+    └── session-002.qmd
+```
 
-Returned paths refer to the Console host.
+`capture/events.jsonl` is the authoritative event record.
+It retains MCP requests, responses, notifications, environment information, worker transitions, source associations, output ranges, images, and assembled results.
+Routine protocol exchanges appear there without filling the readable transcript.
+Sequence numbers and timestamps establish observation order; filenames do not establish a timeline across independent streams.
+Preparation output observed before a worker exists is retained in process output events rather than assigned to a fabricated session.
+
+`transcript.md` covers the whole recording: calls, source, results, polls, input, controls, failures, session boundaries, and links to retained files.
+Each session QMD contains its submitted source and relevant dependency metadata, including failed and rejected source associated with that worker.
+It contains no captured results, images, polls, or controls.
+A session without source need not have a QMD.
+Both document types can be reconstructed from capture without executing recorded code.
+They are not checkpoints or guarantees of independent reproducibility.
+
+A new worker lifetime starts a new session, including automatic replacement.
+A restart request by itself does not establish a session, and interrupting a surviving worker keeps the same session.
+Cell numbers restart at one in each session.
+
+## Output intervals and omitted output
+
+Text observed before a session's first cell starts belongs to `startup.txt`.
+Text observed while a cell executes belongs to `cell-NNN.txt`.
+Text observed after completion and before the next cell starts belongs to `cell-NNN-post.txt`, including final shutdown output.
+If no cell starts, output stays in the startup interval.
+These intervals describe when Console observed output, not which computation caused it.
+Collecting output in a later poll does not change its ownership.
+
+Every executed cell gets a text file, even if empty.
+Startup and post-cell text files are created only when there is text to retain.
+Each retained image gets a separate numbered file in its interval.
+The existing image admission limits still apply; image omission events and response notices identify emissions that were not retained.
+Text and images can alternate; event text ranges preserve that interleaving while each interval keeps one text file.
+Console does not collect arbitrary files written by user code.
+
+Raw text retention is limited to 1 GiB per interval, independently of response preview limits.
+When Console omits response text, the notice points to retained logs and identifies unavailable or partially retained output.
+Reading a log does not consume pending output or execute the code again.
+Logs contain only text the language printers emitted; an abbreviated table display does not contain hidden rows.
+
+Returned recording paths refer to the Console host.
 Project paths are normally relative to the launch directory; fallback paths are absolute.
-A long-location notice may instead name a path relative to the selected Console directory.
+A long-location notice may use a path relative to the selected Console directory.
+Raw retention diagnostics name their interval file relative to the recording, so the location remains valid when temporary startup capture is published.
 
-## Retrieve omitted output
+## Export a working copy
 
-The agent can use its client's filesystem tools to read the named raw log.
-Console does not provide a file-reading tool.
-Rerunning a cell is not a way to retrieve its previous output.
+From R:
 
-Reading a log does not consume pending Console output.
-Logs receive text before preview truncation and are flushed when Console assembles a response, so they can be read while a cell runs.
-Notices identify output that was omitted from a response and distinguish partial retention from a complete recording.
-
-A log cannot recover values that a language printer or SQL preview never emitted.
-Fetch or save the complete data explicitly when it matters.
-
-## Render a reviewed copy
-
-`transcript.qmd` is a starting point for a report, **not a replay or checkpoint**.
-It can contain failed evaluations and rejected calls.
-It omits interactive input, control operations, output, and recorded images.
-
-Copy it before editing:
-
-```sh
-cp transcript.qmd report.qmd
+```r
+paths <- .console$export_session("analysis-report")
 ```
 
-Review the code, inputs, package declarations, and evaluation settings in `report.qmd`.
-Rendering executes code outside the Console sandbox.
+From Python, including a session without R:
 
-After reviewing the copy:
-
-```sh
-uv tool run --from r-lib-ir ir render report.qmd
+```python
+paths = _console.export_session("analysis-report")
 ```
 
-With `ir` already installed, use `ir render report.qmd`.
+The destination must not already exist and must be outside the managed recording.
+Console creates missing parent directories when the worker's filesystem permissions allow it.
+The helper returns `qmd`, `markdown`, and `images` paths: an R list of character paths or a Python dictionary containing `pathlib.Path` objects.
+R export does not initialize Python.
 
-Rendering requires R, even when the original session used only Python.
-SQL chunks need a user-supplied DBI connection.
-Package declarations are not a lockfile or a complete history of the environment.
+```text
+analysis-report/
+├── session.qmd
+├── session.md
+└── images/          # When the recorded results contain images
+```
 
-Some recordings disable evaluation because runtime information is unavailable or the session changed between incompatible dependency declarations.
-Review those boundaries and choose the rendering environment explicitly rather than simply enabling every chunk.
+The export includes the current worker session as recorded **before the cell invoking `export_session` began**.
+That cell's source and unfinished results are excluded.
+A later export takes a new snapshot; it does not update an earlier destination.
 
-## Recording failures
+`session.qmd` contains source and dependency metadata without captured output.
+Review the code and provide its required data, connections, and environment before executing it.
+The original working directory is descriptive metadata, not an execution root imposed on the copy.
 
-Recording can fail while computation continues.
-A notice identifies files or artifacts that are unavailable or only partially retained; do not assume all output was saved.
+`session.md` assembles recorded source and client-facing results into a report with output blocks, errors, and images.
+Results collected by later polls remain associated with their actual cells.
+Startup and between-cell output remain distinguishable, and polling/control request wrappers are omitted.
+Output previews and omission notices are preserved; the export does not expand raw logs into results the model was never shown.
+Raw logs mentioned in those notices are supplementary and are not copied.
+Included images use portable relative links.
 
-The recording journal and generated file formats are not independently versioned APIs.
-Implementation and failure-handling details belong in [Architecture](ARCHITECTURE.md#output-and-delivery).
+Export does not run Quarto, execute source, repeat SQL, or recompute plots.
+The worker writes the files under the same filesystem and sandbox permissions as submitted code.
+Destination collisions, permission denial, and unavailable capture produce runtime errors.
+Exported files are writable and do not depend on the original recording for their included content or images.
+
+A recorded result proves response assembly.
+Console also records whether the existing transport write completed; neither proves that a model read the result.
+An export labels responses without confirmed transport writes.
+
+## Managed files and failures
+
+The recording directory is a Console-managed record, not a working directory.
+Inspect it or export/copy material before editing.
+Completed files become read-only while preserving their privacy permissions.
+Cell logs and images can finish before the process; startup and post-cell logs stay writable until their boundaries, session QMDs until session updates finish, and events/transcript until process finalization.
+
+Read-only permissions discourage accidental edits; they are not a security boundary.
+Abrupt termination can leave files writable.
+Recording and projection failures do not stop computation.
+Diagnostics identify unavailable or partial capture, and a projection failure can leave capture usable.
+An explicit failed export is an error, not a successful partial report.
+
+The capture and generated document formats are internal formats without independent versioning.
+Implementation ownership is described in [Architecture](ARCHITECTURE.md#recording-ownership-and-failures).

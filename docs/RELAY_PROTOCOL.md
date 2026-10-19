@@ -39,15 +39,16 @@ The outer transport adds these commands:
 
 Additional relay events are:
 
-| Events                                                     | Payload                                      |
-| ---------------------------------------------------------- | -------------------------------------------- |
-| `stdout`, `stderr`                                         | UTF-8 `data`.                                |
-| `stdout_bytes`, `stderr_bytes`                             | Base64 `data`.                               |
-| `stdout_closed`, `stderr_closed`, `worker_sideband_closed` | None.                                        |
-| `interrupt_result`                                         | Matching `request_id`, optional `error`.     |
-| `shutdown_started`                                         | None; acceptance of the registered shutdown. |
-| `worker_exited`, `worker_signaled`                         | Exit `code` or termination `signal`.         |
-| `fatal`                                                    | Diagnostic `message`.                        |
+| Events                                                     | Payload                                                       |
+| ---------------------------------------------------------- | ------------------------------------------------------------- |
+| `stdout`, `stderr`                                         | UTF-8 `data`.                                                 |
+| `stdout_bytes`, `stderr_bytes`                             | Base64 `data`.                                                |
+| `stdout_closed`, `stderr_closed`, `worker_sideband_closed` | None.                                                         |
+| `interrupt_result`                                         | Matching `request_id`, optional `error`.                      |
+| `shutdown_started`                                         | None; acceptance of the registered shutdown.                  |
+| `worker_started`                                           | Worker `pid`, after launch and before forwarding its streams. |
+| `worker_exited`, `worker_signaled`                         | Exit `code` or termination `signal`.                          |
+| `fatal`                                                    | Diagnostic `message`.                                         |
 
 Payload-free frames contain only `kind`.
 A successful interrupt receipt means delivery was accepted, not that execution stopped.
