@@ -21,7 +21,6 @@ mcp-console config init
 ```
 
 By default, `config init` creates `.agents/console/config.yaml` in the current directory.
-It does not search parent directories.
 `--directory PATH` selects an existing project directory and interprets relative settings there.
 `--global` creates `$MCP_CONSOLE_HOME/config.yaml`, or `~/.agents/console/config.yaml` when the variable is unset.
 The two options are mutually exclusive.
