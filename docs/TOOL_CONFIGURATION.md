@@ -121,7 +121,7 @@ mcp-console config resolve --full > session.yaml
 mcp-console serve --config-file session.yaml
 ```
 
-See [Inspect and edit resolved configuration](CONFIGURATION.md#inspect-and-edit-resolved-configuration) for file selection, pruning, launch flags, and export limitations.
+See [Export a configuration](CONFIGURATION.md#export-a-configuration) for file selection, pruning, launch flags, and export limitations.
 The details below apply when editing generated tool text and parameter metadata.
 
 Tool prose is pruned against generated text for the selected languages, permissions, and timeout visibility.

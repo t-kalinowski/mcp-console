@@ -287,14 +287,40 @@ mcp-console config init --directory /path/to/project
 mcp-console config init -c r.resolution=disabled -c 'r.packages=[]' --dry-run
 ```
 
-`config init` writes an annotated `.agents/console/config.yaml` in the current directory, selecting `sandbox.profile: workspace` unless overridden.
-Use `--directory PATH` for another existing directory or `--global` for global settings; the two options are mutually exclusive.
-`--dry-run` prints the proposed path and contents without creating files or directories.
-Existing destinations cause an error and remain unchanged, including with `--dry-run`.
+By default, `config init` creates `.agents/console/config.yaml` in the current directory.
+`--directory PATH` selects an existing project directory and interprets relative settings there.
+`--global` creates `$MCP_CONSOLE_HOME/config.yaml`, or `~/.agents/console/config.yaml` when the variable is unset.
+The two options are mutually exclusive.
+These files are shared by clients that launch Console with the same configuration locations.
+Client registration remains a separate operation; see [Connect your client](getting-started.qmd#connect-your-client).
 
-Repeated `-c`/`--config` assignments customize the starter and may appear before `config` or after `init`.
-File-selection flags and `--default-config` are not accepted.
-See [Create a configuration file](CONFIGURATION.md#create-a-configuration-file) for destination paths, starter contents, and initialization behavior.
+The starter selects `sandbox.profile: workspace`: ordinary workspace writes are allowed, while the project's `.git`, `.agents`, `.codex`, and `.aws` paths stay read-only.
+Other readable host files remain readable.
+It includes commented examples for permissions, packages, interpreters, environment variables, and caches.
+Lines beginning with `##` are explanations; lines beginning with `#` are YAML examples to uncomment.
+
+Use repeated `-c` or `--config` assignments to override the starter settings, with the same ordering and merge rules as launch overrides.
+Assignments may appear before `config` or after `init`.
+Supplied sections show active YAML with their guidance; unconfigured sections retain commented examples.
+To start with read-only permissions instead, replace the starter profile:
+
+```sh
+mcp-console config init -c sandbox.profile=read_only
+```
+
+Later profile overrides replace the starter profile without retaining explicit workspace write grants.
+Filesystem settings add exceptions to the selected profile; to restrict writes to selected directories, choose `read_only` and supply those directories in `sandbox.filesystem.read_write`.
+
+Only the starter permissions and supplied settings are saved: initialization does not copy discovered global or project configuration or expand built-in defaults.
+Explicit values are retained even when they equal built-in defaults, so a new project layer can override different global values.
+Configuration-source flags such as `--config-file` and `--no-config` are not accepted.
+`--default-config` is a launch setting and is not accepted by initialization; use `-c` for settings to save in the new file.
+
+The command validates settings without starting interpreters or preparing packages, creates the configuration directory if needed, and reports the file path and contents.
+An existing destination causes an error and is left untouched, including with `--dry-run` or `-c`.
+`--dry-run` prints the proposed path and contents without creating files or directories.
+
+See [Configuration files](CONFIGURATION.md) for how these files are found and applied.
 
 ## Inspect configuration
 
@@ -309,7 +335,7 @@ The default output is YAML with built-in defaults omitted.
 Use `--full` to include defaults or `--format json` for JSON; `--full` and `--prune` are mutually exclusive.
 The [configuration options](#configuration-options) apply before `config` or after `resolve`.
 
-See [Inspect and edit resolved configuration](CONFIGURATION.md#inspect-and-edit-resolved-configuration) for pruning rules, relative paths, editable fields, and what an export retains.
+See [Export a configuration](CONFIGURATION.md#export-a-configuration) for pruning rules, relative paths, editable fields, and what an export retains.
 
 ## Windows sandbox requirements
 

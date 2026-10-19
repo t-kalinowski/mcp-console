@@ -6,68 +6,70 @@ filters:
 # Configuration files
 
 Console works without a configuration file.
-Use `mcp-console config init` to generate a starter file with commented examples, then edit it to choose interpreters, packages, and permissions.
-The [settings index](#settings-by-task) links to the accepted values, defaults, and behavior for each topic.
+Use configuration files to keep settings for one project or share them across projects.
 
-Configuration files can choose which programs Console runs, provide credentials, and change permissions.
-[File precedence](#files-and-precedence) explains automatic project loading and how to skip it.
+## Files and precedence
+
+When Console starts, it looks for configuration in two places:
+
+| File    | Default location                                                    | Use                              |
+| ------- | ------------------------------------------------------------------- | -------------------------------- |
+| Global  | `~/.agents/console/config.yaml`                                     | Settings shared across projects. |
+| Project | `.agents/console/config.yaml` in the directory where Console starts | Settings for that project.       |
+
+Console reads the global file first, then the project file.
+Project settings take precedence over matching global settings; settings the project does not specify keep their global values.
+Command-line `-c` overrides take precedence over both files.
+Neither file is required.
+
+See [Merge rules](#merge-rules) for how nested settings combine, or [Choose which files to load](#choose-which-files-to-load) to select a different file or skip either location.
+To change the global file's location, see [Console home](#console-home).
 
 ## Create a configuration file
 
-Run this command in your project directory:
+To create a project configuration, run this in your project directory:
 
 ```sh
 mcp-console config init
 ```
 
-By default, `config init` creates `.agents/console/config.yaml` in the current directory.
-`--directory PATH` selects an existing project directory and interprets relative settings there.
-`--global` creates `$MCP_CONSOLE_HOME/config.yaml`, or `~/.agents/console/config.yaml` when the variable is unset.
-The two options are mutually exclusive.
-These files are shared by clients that launch Console with the same configuration locations.
-Client registration remains a separate operation; see [Connect your client](getting-started.qmd#connect-your-client).
-
-The starter selects `sandbox.profile: workspace`: ordinary workspace writes are allowed, while the project's `.git`, `.agents`, `.codex`, and `.aws` paths stay read-only.
-Other readable host files remain readable.
-It includes commented examples for permissions, packages, interpreters, environment variables, and caches.
-Lines beginning with `##` are explanations; lines beginning with `#` are YAML examples to uncomment.
-
-Use repeated `-c` or `--config` assignments to override the starter settings, with the same ordering and merge rules as launch overrides.
-Assignments may appear before `config` or after `init`.
-Supplied sections show active YAML with their guidance; unconfigured sections retain commented examples.
-To start with read-only permissions instead, replace the starter profile:
+This creates `.agents/console/config.yaml`.
+To create a global configuration shared across projects, run:
 
 ```sh
-mcp-console config init -c sandbox.profile=read_only
+mcp-console config init --global
 ```
 
-Later profile overrides replace the starter profile without retaining explicit workspace write grants.
-Filesystem settings add exceptions to the selected profile; to restrict writes to selected directories, choose `read_only` and supply those directories in `sandbox.filesystem.read_write`.
+Both commands create a [starter file](#generated-configuration) with commented examples.
+The starter uses `sandbox.profile: workspace`, which allows ordinary project writes; see [Sandbox permissions](SANDBOX_CONFIGURATION.md#profiles-and-temporary-storage).
+See [Initialization options](CLI.md#initialize-configuration) to preview the file, choose another project directory, or customize the starter.
 
-Only the starter permissions and supplied settings are saved: initialization does not copy discovered global or project configuration or expand built-in defaults.
-Explicit values are retained even when they equal built-in defaults, so a new project layer can override different global values.
-Configuration-source flags such as `--config-file` and `--no-config` are not accepted.
-`--default-config` is a launch setting and is not accepted by initialization; use `-c` for settings to save in the new file.
+## Edit a configuration file
 
-The command validates settings without starting interpreters or preparing packages, creates the configuration directory if needed, and reports the file path and contents.
-An existing destination causes an error and is left untouched, including with `--dry-run` or `-c`.
-`--dry-run` prints the proposed path and contents without creating files or directories.
+Open the generated file and adjust the settings you need.
+Lines beginning with `##` explain settings; lines beginning with `#` show YAML examples you can uncomment.
+The [settings index](#settings-by-task) links to accepted values, defaults, and examples for each topic.
 
-### Generated configuration
+Console reads configuration when the server starts, so start a new server connection after editing a file.
 
-With no overrides, `config init` generates this `config.yaml`:
+## Inspect the combined settings {#inspect-and-edit-resolved-configuration}
 
-::: {.config-init-template}
-[View the generated configuration](../tests/snapshots/cli/interface/test_config_init/dry_run_previews_the_created_contents.yaml).
-:::
+From the directory where your client starts Console, inspect the combined settings:
+
+```sh
+mcp-console config resolve
+```
+
+This uses the same files and command-line overrides as starting a session, without starting interpreters or preparing packages.
+Built-in defaults are omitted; add `--full` to include them.
+You can also [save the resolved configuration](#export-a-configuration) and use it for a later session.
 
 ## Settings by task {#settings-by-task}
 
 <span id="top-level-settings"></span>
 
-Configuration must be a YAML or JSON mapping.
-Unknown fields are errors.
-Each reference below owns the complete settings and behavior for its topic; dotted paths such as `r.packages` show nesting.
+Use these references for accepted values, defaults, and examples.
+Dotted paths such as `r.packages` show nesting.
 
 | Setting                              | Value or form                                           | Reference                                                                                                                                                           |
 | ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -86,21 +88,20 @@ Each reference below owns the complete settings and behavior for its topic; dott
 For the underlying concepts, read [Packages and environments](REQUIREMENTS.md) and [Sandbox and trust](SANDBOX.md).
 For launch flags, see the [Command-line reference](CLI.md).
 
-## Files and precedence
+## Generated configuration
 
-`serve` and ordinary `sandbox` launches read, in order:
+With no overrides, `config init` generates this `config.yaml`:
 
-1. Each `--default-config KEY=VALUE` assignment, in argument order.
-2. Global `$MCP_CONSOLE_HOME/config.yaml`, or `~/.agents/console/config.yaml` when the variable is unset.
-3. Project `.agents/console/config.yaml` in the launch directory.
-   No ancestor search is performed.
-4. Each `-c KEY=VALUE` override, in argument order.
+::: {.config-init-template}
+[View the generated configuration](../tests/snapshots/cli/interface/test_config_init/dry_run_previews_the_created_contents.yaml).
+:::
 
-Missing automatic files are normal.
-Selected files must be readable YAML mappings; invalid files fail launch.
-`--config-file PATH` instead selects one required YAML or JSON mapping and skips both automatic locations.
-Launch defaults still apply beneath the selected file, and CLI overrides apply afterward.
-Discovery exclusions skip files, not `--default-config` or `-c` assignments.
+## Choose which files to load
+
+Use `--config-file PATH` to load one file instead of the automatic global and project files.
+Launch defaults still apply beneath the selected file, and command-line overrides apply afterward.
+
+To skip automatic files, use:
 
 | Option                | Automatic files read |
 | --------------------- | -------------------- |
@@ -109,53 +110,31 @@ Discovery exclusions skip files, not `--default-config` or `-c` assignments.
 | `--no-global-config`  | Project only         |
 | `--no-config`         | Neither              |
 
-Discovery exclusions cannot accompany `--config-file`.
+These options skip files, not `--default-config` or `-c` assignments.
+They cannot be combined with `--config-file`.
 Options may appear before or after the subcommand.
 They do not edit files or change recording-location selection.
 
-**Project configuration is trusted launcher input.** It can select executables, supply credentials, and widen sandbox permissions.
-Console loads this layer automatically without a separate approval step, whether or not the directory is in Git and including with global client registration.
-Review and authorize these settings before launching Console; `--no-project-config` skips the project layer for unfamiliar projects.
-Global settings and launch defaults, including inherited client permissions, are not an enforcement ceiling: project settings can replace the selected profile or add permissions.
+Console looks for the project file only in the directory where it starts; it does not search parent directories.
+Missing automatic files are skipped, but an explicitly selected file must exist.
+Configuration must be a readable YAML or JSON mapping; invalid files and unknown fields are errors.
+
+Configuration files can choose which programs Console runs, provide credentials, and change permissions.
+Console loads project files automatically, including when the client was registered globally.
+Review a project's settings before launching Console; use `--no-project-config` to skip them for an unfamiliar project.
+A project file can grant permissions beyond those set in a global file or inherited from the client.
 
 Settings are captured when the server starts.
-Editing YAML requires a new server connection; restarting a worker does not reload it.
-
-## Inspect and edit resolved configuration
-
-Inspect the settings Console would use before starting a session:
-
-```sh
-mcp-console config resolve
-mcp-console config resolve --full > session.yaml
-# Review session.yaml, then launch with that file alone.
-mcp-console serve --config-file session.yaml
-```
-
-`config resolve` uses the same file selection, ordered `-c` overrides, and validation as `serve`.
-It does not start interpreters, prepare packages, or create session/cache directories.
-Use `--no-config` to skip discovered files, `--config-file PATH` for one required file, and `--format json` for JSON instead of YAML.
-To inspect the built-in defaults without launch overrides, run `mcp-console config resolve --no-config --full`.
-
-The default `--prune` omits values equal to the binary's built-in defaults, independently of discovered files.
-The comparison uses defaults for the same sandbox choice as the export.
-An unchanged configuration produces `{}`.
-Mappings are pruned recursively.
-Changed arrays and scalar values stay complete, including empty arrays and strings; overrides needed to preserve conditional defaults remain explicit.
-`--full` includes defaults and generated tool descriptions; it cannot be combined with `--prune`.
-See [Tool configuration](TOOL_CONFIGURATION.md#inspect-and-edit-resolved-configuration) before editing that generated text or schema metadata.
-
-Use the same launch directory for export and execution so relative paths retain their meaning.
-For host execution, pass `--no-sandbox` to both commands; launch flags are not stored in YAML.
-Runtime-dependent interpreter selection, automatic package lists, inherited environment values, and runtime-created cache and temporary paths remain policies.
-Python `first_available` retains its candidates, including `active_venv`; the next launch evaluates them against its own environment and filesystem.
-Managed fallback entries include their effective resolution policy even when an existing candidate is selected.
-An export does not pin installed dependencies or copy the host environment.
-Exported interpreter paths must be representable as UTF-8.
-
-R exposes the same operations through its [configuration workflow](https://t-kalinowski.github.io/mcp-console/r/reference/config-workflow.html).
+Restarting a worker does not reload configuration.
 
 ## Command-line overrides
+
+For `serve` and ordinary `sandbox` launches, settings are applied in this order:
+
+1. Each `--default-config KEY=VALUE` assignment, in argument order.
+2. Global `$MCP_CONSOLE_HOME/config.yaml`, or `~/.agents/console/config.yaml` when the variable is unset.
+3. Project `.agents/console/config.yaml` in the launch directory.
+4. Each `-c KEY=VALUE` override, in argument order.
 
 ```sh
 mcp-console serve -c 'sandbox.filesystem.read_write=[.]'
@@ -217,6 +196,39 @@ Changing one selector does not implicitly remove incompatible siblings.
 Before merging each layer, Console expands an R path to `r.executable` and direct managed Python fields to `python.managed`.
 An empty `python: {}` also selects the managed form.
 Flat and nested runtime settings therefore merge at the same paths; [Interpreters and startup](RUNTIME_CONFIGURATION.md) describes the selection rules.
+
+## Export a configuration
+
+To save the combined settings, including built-in defaults, and launch with that file:
+
+```sh
+mcp-console config resolve --full > session.yaml
+# Review session.yaml, then launch with that file alone.
+mcp-console serve --config-file session.yaml
+```
+
+`config resolve` uses the same file selection, ordered `-c` overrides, and validation as `serve`.
+It does not start interpreters, prepare packages, or create session/cache directories.
+Use `--no-config` to skip discovered files, `--config-file PATH` for one required file, and `--format json` for JSON instead of YAML.
+To inspect the built-in defaults without launch overrides, run `mcp-console config resolve --no-config --full`.
+
+The default `--prune` omits values equal to the binary's built-in defaults, independently of discovered files.
+The comparison uses defaults for the same sandbox choice as the export.
+An unchanged configuration produces `{}`.
+Mappings are pruned recursively.
+Changed arrays and scalar values stay complete, including empty arrays and strings; overrides needed to preserve conditional defaults remain explicit.
+`--full` includes defaults and generated tool descriptions; it cannot be combined with `--prune`.
+See [Tool configuration](TOOL_CONFIGURATION.md#inspect-and-edit-resolved-configuration) before editing that generated text or schema metadata.
+
+Use the same launch directory for export and execution so relative paths retain their meaning.
+For host execution, pass `--no-sandbox` to both commands; launch flags are not stored in YAML.
+Runtime-dependent interpreter selection, automatic package lists, inherited environment values, and runtime-created cache and temporary paths remain policies.
+Python `first_available` retains its candidates, including `active_venv`; the next launch evaluates them against its own environment and filesystem.
+Managed fallback entries include their effective resolution policy even when an existing candidate is selected.
+An export does not pin installed dependencies or copy the host environment.
+Exported interpreter paths must be representable as UTF-8.
+
+R exposes the same operations through its [configuration workflow](https://t-kalinowski.github.io/mcp-console/r/reference/config-workflow.html).
 
 ## Paths
 
