@@ -97,20 +97,18 @@ With no overrides, `config init` generates this `config.yaml`:
 
 ## Choose which files to load
 
-Use `--config-file PATH` to load one file instead of the automatic global and project files.
-Launch defaults still apply beneath the selected file, and command-line overrides apply afterward.
+Use these options to select or skip configuration files:
 
-To skip automatic files, use:
-
-| Option                | Automatic files read |
+| Option                | Files read           |
 | --------------------- | -------------------- |
 | No option             | Global, then project |
+| `--config-file PATH`  | Only the named file  |
 | `--no-project-config` | Global only          |
 | `--no-global-config`  | Project only         |
-| `--no-config`         | Neither              |
+| `--no-config`         | None                 |
 
-These options skip files, not `--default-config` or `-c` assignments.
-They cannot be combined with `--config-file`.
+Launch defaults still apply before these files, and command-line overrides apply afterward.
+The options for skipping files cannot be combined with `--config-file`.
 Options may appear before or after the subcommand.
 They do not edit files or change recording-location selection.
 
