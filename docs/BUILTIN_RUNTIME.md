@@ -1,11 +1,12 @@
 # Sessions and languages
 
-Console keeps data, imports, models, and database state in memory while the agent works.
-A follow-up can inspect or modify what is already there instead of repeating the setup.
+Console gives your agent an interactive workspace for R, Python, and SQL.
+You can ask it to explore data, refine an analysis, or try another approach while keeping the work already in memory.
 
 ## Work iteratively {#build-on-earlier-work}
 
-After the agent fits a statistical model, you can ask it to inspect the residuals or plot predictions without loading the data and fitting the model again.
+Your agent can inspect or modify the results of earlier calls without repeating the setup.
+For example, after the agent fits a statistical model, you can ask it to inspect the residuals or plot predictions without loading the data and fitting the model again.
 An error does not undo changes made before the failure.
 
 The agent can respond to interactive prompts and step through code in a debugger.
