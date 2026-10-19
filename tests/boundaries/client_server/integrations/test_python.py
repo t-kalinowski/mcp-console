@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "python"))
 
 import mcp_console
 from mcp_console import AsyncMCPConsole, MCPConsole
+from support.previews import cell_output_path
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
 from support.normalization import code
@@ -246,7 +247,7 @@ def test_sync_and_async_clients_receive_bounded_previews(
                 (Path(temporary) / ".agents/console/sessions").iterdir(),
                 key=lambda path: path.name,
             )
-            assert (session / "outputs/call-000001.log").read_text() == emitted
+            assert (cell_output_path(session, 1)).read_text() == emitted
             results.append(
                 {"preview": compact_text(text.replace(session.name, "<run ID>"), "x")}
             )

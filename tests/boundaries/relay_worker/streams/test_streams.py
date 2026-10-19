@@ -146,7 +146,8 @@ thread log
         == "thread stderr\nthread log\n"
     )
     assert all(
-        event["worker"]["kind"] in {"ready", "r_initialization", "completed"}
+        event["worker"]["kind"]
+        in {"ready", "r_initialization", "cell_started", "completed"}
         for event in transcript
         if "worker" in event
     )

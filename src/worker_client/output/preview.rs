@@ -198,7 +198,7 @@ impl Preview {
         if !self.admits_image(data, mime_type) {
             self.recorded_omitted_images += u64::from(artifact.is_some());
             if let Some(artifact) = artifact {
-                self.omitted_artifacts.add(&artifact.public_path, false);
+                self.omitted_artifacts.add_artifact(artifact);
             }
             self.omit_image(data.len());
             return;
@@ -423,9 +423,13 @@ impl Preview {
     }
 
     /// Reserve notices first, then divide ordinary text between its head and tail.
-    pub(super) fn render(&mut self) -> Vec<Content> {
+    pub(super) fn render_recorded(&mut self) -> (Vec<Content>, Vec<crate::transcript::ResultPart>) {
         self.bound();
-        self.project(true).content.expect("rendered projection")
+        let projection = self.project(true);
+        (
+            projection.content.expect("rendered projection"),
+            projection.parts,
+        )
     }
 
     pub(super) fn bound(&mut self) {
@@ -454,6 +458,8 @@ impl Preview {
         let mut projection = Projection {
             content: account.then(Vec::new),
             text_bytes: 0,
+            owner: None,
+            parts: Vec::new(),
         };
         if self.omitted_controls != 0 {
             projection.text(&format!(
@@ -496,6 +502,13 @@ impl Preview {
                 &self.omitted_artifacts,
             )
         });
+        // A combined omission can span cells or workers. Preserve one owner only
+        // when the retained receipts establish it; never borrow a later source.
+        let marker_owner = if self.omitted_images == 0 {
+            summary.owner
+        } else {
+            None
+        };
         let mut image_marker = true;
         let mut start = 0;
         for end in 0..=self.parts.len() {
@@ -504,6 +517,7 @@ impl Preview {
                 None => Source::default(),
                 _ => continue,
             };
+            projection.owner = source.owner;
             let parts = &self.parts[start..end];
             let omitted: u64 = parts
                 .iter()
@@ -522,21 +536,40 @@ impl Preview {
                     Part::Notice(control) => projection.text(&control.render()),
                     Part::Gap(_) => {
                         if text_marker {
+                            projection.owner = marker_owner;
                             projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
+                            projection.owner = source.owner;
                             text_marker = false;
                         }
                     }
                     Part::Summary(_) => {
-                        projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()))
+                        projection.owner = marker_owner;
+                        projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
+                        projection.owner = source.owner;
                     }
                     Part::Image(image) => {
                         if let Some(content) = &mut projection.content {
+                            let owner = match image.as_ref() {
+                                Content::Image {
+                                    artifact: Some(artifact),
+                                    ..
+                                } => artifact.owner,
+                                _ => projection.owner,
+                            };
+                            projection.parts.push(crate::transcript::ResultPart {
+                                block: content.len(),
+                                start: 0,
+                                end: 0,
+                                owner,
+                            });
                             content.push(image.as_ref().clone());
                         }
                     }
                     Part::ImageGap => {
                         if image_marker {
+                            projection.owner = marker_owner;
                             projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
+                            projection.owner = source.owner;
                             image_marker = false;
                         }
                     }
@@ -567,6 +600,8 @@ impl Preview {
 struct Projection {
     content: Option<Vec<Content>>,
     text_bytes: usize,
+    owner: Option<crate::transcript::Owner>,
+    parts: Vec<crate::transcript::ResultPart>,
 }
 
 impl Projection {
@@ -576,10 +611,27 @@ impl Projection {
             if text.is_empty() {
                 return;
             }
-            if let Some(Content::Text(previous)) = content.last_mut() {
+            let (block, start) = if let Some(Content::Text(previous)) = content.last_mut() {
+                let start = previous.len();
                 previous.push_str(text);
+                (content.len() - 1, start)
             } else {
                 content.push(Content::Text(text.to_owned()));
+                (content.len() - 1, 0)
+            };
+            if let Some(previous) = self.parts.last_mut()
+                && previous.block == block
+                && previous.end == start
+                && previous.owner == self.owner
+            {
+                previous.end += text.len();
+            } else {
+                self.parts.push(crate::transcript::ResultPart {
+                    block,
+                    start,
+                    end: start + text.len(),
+                    owner: self.owner,
+                });
             }
         }
     }

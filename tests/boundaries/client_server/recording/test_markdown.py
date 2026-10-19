@@ -43,17 +43,17 @@ def test_records_existing_python_startup_declaration(
         client.finish()
 
         (session,) = (workspace / ".agents/console/sessions").iterdir()
-        quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
+        quarto = (session / "sessions/session-001.qmd").read_text(encoding="utf-8")
         assert "  python-packages: []\n" in quarto, quarto
         assert "    - jsonlite\n" in quarto, quarto
         events = [
             json.loads(line)
-            for line in (session / "internal/events.jsonl").read_text().splitlines()
+            for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
         (startup,) = [
             event["startup_requirements"]
             for event in events
-            if event["event"] in ("session_started", "environment_discovered")
+            if event["event"] in ("recording_started", "environment_discovered")
             and event["startup_requirements"] is not None
         ]
         assert startup["python"] == [], startup
@@ -139,7 +139,7 @@ def test_records_real_mixed_language_session(
         session = next((workspace / ".agents/console" / "sessions").iterdir())
         events = [
             json.loads(line)
-            for line in (session / "internal" / "events.jsonl")
+            for line in (session / "capture" / "events.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
         ]
@@ -149,7 +149,7 @@ def test_records_real_mixed_language_session(
         assert (session / artifact["path"]).read_bytes() == expected_plot[0]
 
         markdown = (session / "transcript.md").read_text(encoding="utf-8")
-        quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
+        quarto = (session / "sessions/session-001.qmd").read_text(encoding="utf-8")
         assert "[Artifact 1 from call 2]" in markdown
         assert "![Artifact 1]" in markdown
         assert artifact["path"] in markdown
@@ -158,10 +158,8 @@ def test_records_real_mixed_language_session(
         assert f"```{{sql}}\n{sql}```" in quarto
         assert "Artifact 1" not in quarto
         assert "execute:" not in quarto
-        assert (
-            "# Run `ir render transcript.qmd` in a prepared environment to execute these cells."
-            in quarto.split("---", 2)[1]
-        )
+        assert "original-working-directory:" in quarto
+        assert "root.dir:" not in quarto
         assert markdown.endswith("\n")
         assert quarto.endswith("\n")
 
@@ -177,6 +175,11 @@ def test_records_real_mixed_language_session(
             quarto = quarto.replace(representation, "<workspace>")
         for event in events:
             markdown = markdown.replace(event["at"], "<UTC timestamp>")
+            if event["event"] == "worker_started":
+                assert isinstance(event["pid"], int) and event["pid"] > 0
+                markdown = markdown.replace(
+                    f"Worker process {event['pid']}.", "Worker process <PID>."
+                )
 
         return TranscriptWithCompanions(
             transcript=transcript,
@@ -238,7 +241,7 @@ after"""
 
         session = next((workspace / ".agents/console" / "sessions").iterdir())
         markdown = (session / "transcript.md").read_text(encoding="utf-8")
-        quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
+        quarto = (session / "sessions/session-001.qmd").read_text(encoding="utf-8")
         assert f"`````python\n{source}\n`````" in markdown
         assert (
             """`````text
@@ -287,7 +290,7 @@ echo SELECT 42
                 "sentence",
                 "--skip-embedded-formatters",
                 "transcript.md",
-                "transcript.qmd",
+                "sessions/session-001.qmd",
             ],
             cwd=session,
             check=False,
@@ -298,13 +301,15 @@ echo SELECT 42
             "stdout": formatting.stdout,
             "stderr": formatting.stderr,
             "transcript.md": (session / "transcript.md").read_text(encoding="utf-8"),
-            "transcript.qmd": (session / "transcript.qmd").read_text(encoding="utf-8"),
+            "sessions/session-001.qmd": (
+                session / "sessions/session-001.qmd"
+            ).read_text(encoding="utf-8"),
         }
         transcript.append(
             {
                 "generated documents": {
                     "transcript.md": "Yamark formatted",
-                    "transcript.qmd": "Yamark formatted",
+                    "sessions/session-001.qmd": "Yamark formatted",
                 }
             }
         )

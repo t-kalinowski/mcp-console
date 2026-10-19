@@ -16,6 +16,7 @@ from boundaries.relay_worker._harness import RelayWorkerClient
 from support.assertions import tool_text as _tool_text
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
+from support.capture import assert_worker_started
 from support.records import Transcript
 from support.requirements import POSIX, WORKER, requires
 from support.suites import run_this_suite
@@ -81,6 +82,7 @@ def test_closes_pipes_with_unread_shutdown(
 
         passed = False
         try:
+            assert_worker_started(receive())
             events = [receive()]
             assert events == [{"kind": "ready"}], events
             send(
@@ -90,6 +92,8 @@ def test_closes_pipes_with_unread_shutdown(
                     "source": "close sideband with unread shutdown",
                 }
             )
+            events.append(receive())
+            assert events[-1] == {"kind": "cell_started"}, events
             events.append(receive())
             assert events[-1] == {
                 "kind": "console_output",

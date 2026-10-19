@@ -712,7 +712,7 @@ def early_requirements_with_pending_poll(
                 )
                 if expire:
                     journal = next(
-                        root.glob(".agents/console/sessions/*/internal/events.jsonl")
+                        root.glob(".agents/console/sessions/*/capture/events.jsonl")
                     )
 
                     def poll_result_recorded() -> Path | None:

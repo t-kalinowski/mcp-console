@@ -29,6 +29,7 @@ from support.native import SHARED_LIBRARY_FLAG
 from support.native import LOADER_VARIABLE
 from support.native import build_interposer
 from support.normalization import code
+from support.capture import read_relay_ready
 from support.records import Transcript
 from support.suites import run_this_suite
 
@@ -158,8 +159,7 @@ def test_retires_while_descendant_keeps_refilling_output(binary: Path) -> Transc
             descendant = None
             try:
                 assert process.stdin is not None and process.stdout is not None
-                ready = read_lines(process.stdout, 1, "relay ready")
-                assert [json.loads(line) for line in ready] == [{"kind": "ready"}]
+                assert read_relay_ready(process.stdout) == {"kind": "ready"}
                 process.stdin.write(
                     json.dumps({"kind": "stdin", "data": "start\n"}) + "\n"
                 )
@@ -248,16 +248,16 @@ def test_relay_protocol_is_independent_of_sandbox_launch(
             if execution == DIRECT:
                 assert os.getpgid(process.pid) == os.getpgrp()
             assert process.stdin is not None and process.stdout is not None
-            events = [
-                json.loads(line) for line in read_lines(process.stdout, 1, "ready")
-            ]
+            events = [read_relay_ready(process.stdout)]
             assert events == [{"kind": "ready"}], events
             evaluate = {"kind": "evaluate", "language": "r", "source": "echo hello"}
             process.stdin.write(json.dumps(evaluate) + "\n")
             process.stdin.flush()
             events.extend(
                 json.loads(line)
-                for line in read_lines(process.stdout, 3, "evaluation completion")
+                for line in read_lines(
+                    process.stdout, 4, "cell start and evaluation completion"
+                )
             )
             shutdown = {"kind": "shutdown", "grace_millis": 1000}
             stdout, stderr = process.communicate(
@@ -268,6 +268,7 @@ def test_relay_protocol_is_independent_of_sandbox_launch(
             assert stderr == "", stderr
             assert events == [
                 {"kind": "ready"},
+                {"kind": "cell_started"},
                 {"kind": "console_output", "data": "zod: "},
                 {"kind": "console_output", "data": "hello\n"},
                 {"kind": "completed"},

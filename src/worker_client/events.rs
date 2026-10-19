@@ -171,6 +171,20 @@ fn dispatch_worker_events(
                     continue;
                 }
                 let result = match event {
+                    RelayEvent::WorkerStarted { pid } => {
+                        output.worker_started(pid);
+                        if let Some(active) = callbacks
+                            .client
+                            .0
+                            .evaluation
+                            .lock()
+                            .map_err(|_| "evaluation lock poisoned")?
+                            .as_ref()
+                        {
+                            active.evaluation.associate_waiting_session();
+                        }
+                        Ok(())
+                    }
                     RelayEvent::Stdout { data } => {
                         if stdout_closed {
                             Err("worker relay sent stdout after closing the stream".to_string())
@@ -249,10 +263,12 @@ fn dispatch_worker_events(
                         shutdown_started.observe()
                     }
                     RelayEvent::WorkerExited { code } => {
+                        output.worker_ended(&format!("exited with code {code}"));
                         process_outcome = Some(WorkerProcessOutcome::Exited(code));
                         Ok(())
                     }
                     RelayEvent::WorkerSignaled { signal } => {
+                        output.worker_ended(&format!("terminated by signal {signal}"));
                         process_outcome = Some(WorkerProcessOutcome::Signaled(signal));
                         Ok(())
                     }
@@ -306,6 +322,16 @@ fn dispatch_worker_events(
                             // callback could mutate state for a worker not yet admitted.
                             match ready_commit.recv() {
                                 Ok(ReadyCommitOutcome::Committed) => {
+                                    if let Some(recording) = callbacks
+                                        .client
+                                        .0
+                                        .recording
+                                        .lock()
+                                        .expect("recording lock")
+                                        .as_ref()
+                                    {
+                                        recording.worker_ready();
+                                    }
                                     runtime_started = true;
                                     Ok(())
                                 }
@@ -421,7 +447,8 @@ fn bootstrap_callback(event: &RelayEvent) -> bool {
 fn sideband_semantic(event: &RelayEvent) -> bool {
     !matches!(
         event,
-        RelayEvent::Stdout { .. }
+        RelayEvent::WorkerStarted { .. }
+            | RelayEvent::Stdout { .. }
             | RelayEvent::RInitialization { .. }
             | RelayEvent::StdoutBytes { .. }
             | RelayEvent::Stderr { .. }
@@ -441,6 +468,8 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
     matches!(
         event,
         RelayEvent::Ready
+            | RelayEvent::CellStarted
+            | RelayEvent::ExportSession
             | RelayEvent::RuntimeInitialized { .. }
             | RelayEvent::RInitialization { .. }
             | RelayEvent::InputRequested { .. }
@@ -503,6 +532,25 @@ fn handle_semantic_event(
     use crate::worker_protocol::ConsoleChannel::{Diagnostic, Output};
 
     match event {
+        RelayEvent::CellStarted => operation.with_route(|route| match route {
+            Route::Cell(evaluation) => {
+                evaluation.start_cell_capture();
+                Ok(())
+            }
+            _ => Err("worker started a cell without an admitted source".into()),
+        }),
+        RelayEvent::ExportSession => {
+            let result = callbacks
+                .client
+                .0
+                .recording
+                .lock()
+                .map_err(|_| "recording lock poisoned")?
+                .as_ref()
+                .ok_or_else(|| "session capture unavailable".to_string())
+                .and_then(|recording| recording.export_session());
+            commands.send(RelayCommand::SessionExported { result })
+        }
         RelayEvent::ConsoleOutput { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Output, data),
             Route::Bootstrap | Route::Preparation | Route::Idle => {
@@ -718,9 +766,13 @@ fn handle_semantic_event(
         | RelayEvent::PythonPrepared
         | RelayEvent::PythonPreparationFailed { .. }
         | RelayEvent::PythonPreparationRejected { .. }) => {
+            if matches!(event, RelayEvent::Completed) {
+                output.finish_cell_output(true);
+            }
             operation.complete(event, &mut candidates.r, &mut candidates.python)
         }
         RelayEvent::Ready
+        | RelayEvent::WorkerStarted { .. }
         | RelayEvent::Stdout { .. }
         | RelayEvent::StdoutBytes { .. }
         | RelayEvent::Stderr { .. }

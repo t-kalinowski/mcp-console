@@ -311,32 +311,43 @@ impl Evaluation {
         capture_idle_prelude: bool,
         boundary: impl FnOnce(),
     ) -> Result<(), String> {
-        let (cell_output, failure) = match self.transcript.create_cell_output(self.call_id) {
-            Ok(cell_output) => (cell_output, None),
-            Err(error) => (
-                None,
-                Some(format!(
-                    "cell output file was not created: {error}; text omitted from inline responses will be permanently discarded"
-                )),
-            ),
-        };
         let mut state = self
             .state
             .lock()
             .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
-        let additional =
-            self.output
-                .begin_cell_output_before(cell_output, capture_idle_prelude, boundary);
+        let additional = self
+            .output
+            .adopt_prelude_before(capture_idle_prelude, boundary);
         if let Some(prelude) = state.idle_prelude.as_mut() {
             prelude.extend(additional);
         } else {
             state.idle_prelude = Some(additional);
         }
         drop(state);
-        if let Some(failure) = failure {
-            self.output.push_notice_line(failure);
-        }
         Ok(())
+    }
+
+    pub(super) fn associate_waiting_session(&self) {
+        self.transcript.associate_waiting_call(self.call_id);
+    }
+
+    pub(super) fn associate_session(&self) {
+        self.transcript.associate_current_call(self.call_id);
+    }
+
+    pub(super) fn record_attachment(&self) {
+        self.transcript.source_attached(self.call_id);
+    }
+
+    pub(super) fn start_cell_capture(&self) {
+        let prelude =
+            self.output
+                .begin_cell_output_before(&self.transcript, self.call_id, true, || {});
+        let mut state = self.state.lock().expect("evaluation lock");
+        state
+            .idle_prelude
+            .get_or_insert_with(Response::default)
+            .extend(prelude);
     }
 
     /// Queues text and briefly defers any outstanding input report for its receipt.
@@ -585,7 +596,7 @@ impl Evaluation {
     }
 
     fn finish_cell_output(&self) -> OutputCut {
-        self.output.finish_cell_output()
+        self.output.finish_cell_output(false)
     }
 
     pub(super) fn claim(self: &Arc<Self>) -> Result<WaitClaim, String> {
@@ -952,7 +963,7 @@ mod tests {
     }
 
     fn response_text(response: Response) -> String {
-        let (content, is_error, delivery) = response.into_parts();
+        let (content, is_error, delivery, _) = response.into_parts();
         assert!(!is_error);
         assert!(delivery.is_none());
         let [Content::Text(text)] = content.as_slice() else {
@@ -966,7 +977,7 @@ mod tests {
         let (evaluation, response) = completed_response().await;
         assert!(!evaluation.reap_delivered_completion().unwrap());
 
-        let (_, _, delivery) = response.into_parts();
+        let (_, _, delivery, _) = response.into_parts();
         delivery.unwrap().delivered();
 
         assert!(evaluation.reap_delivered_completion().unwrap());
@@ -975,7 +986,7 @@ mod tests {
     #[tokio::test]
     async fn unclaimed_completed_response_is_replayed_once() {
         let (evaluation, response) = completed_response().await;
-        let (_, _, delivery) = response.into_parts();
+        let (_, _, delivery, _) = response.into_parts();
         delivery.unwrap().unclaimed();
         assert!(!evaluation.reap_delivered_completion().unwrap());
 
@@ -986,7 +997,7 @@ mod tests {
             panic!("unclaimed response was not replayed")
         };
         let response = render_response(SendResponse::Restarted(response));
-        let (content, is_error, delivery) = response.into_parts();
+        let (content, is_error, delivery, _) = response.into_parts();
         assert!(!is_error);
         assert!(matches!(content.as_slice(), [Content::Text(text)] if text == "[done]"));
         delivery.unwrap().delivered();
@@ -999,7 +1010,7 @@ mod tests {
         let (evaluation, response) = completed_response().await;
         let mut restart = evaluation.reserve_for_restart().unwrap();
         let (_, post_completion) = restart.take_output(&evaluation.output);
-        let (post_completion, is_error, delivery) = post_completion.into_parts();
+        let (post_completion, is_error, delivery, _) = post_completion.into_parts();
         assert!(post_completion.is_empty());
         assert!(!is_error);
         assert!(delivery.is_none());
@@ -1009,7 +1020,7 @@ mod tests {
             Err(mpsc::TryRecvError::Empty)
         ));
 
-        let (_, _, delivery) = response.into_parts();
+        let (_, _, delivery, _) = response.into_parts();
         delivery.unwrap().unclaimed();
         let ResponseAcknowledgment::Unclaimed(response) = delivery_result.recv().unwrap() else {
             panic!("cancelled response was reported as delivered")

@@ -651,7 +651,10 @@ class WindowsSandbox(unittest.TestCase):
             # Keep the failed cold startup's journal before fixture cleanup.
             recordings = Path(session.directory.name) / ".agents/console/sessions"
             for recording in sorted(recordings.glob("*")):
-                for relative in ("internal/events.jsonl", "outputs/session.log"):
+                for relative in (
+                    "capture/events.jsonl",
+                    "capture/sessions/001/startup.txt",
+                ):
                     path = recording / relative
                     if path.is_file():
                         sys.stderr.write(

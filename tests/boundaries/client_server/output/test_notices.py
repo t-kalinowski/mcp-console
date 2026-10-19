@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.previews import cell_output_path
 from support.assertions import last_tool_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -45,7 +46,7 @@ def test_names_readable_logs_once_with_long_unicode_paths(
                 text = last_tool_text(client)
                 assert_preview(text, "a€🙂b" * 4000)
                 session = next((recording / "sessions").iterdir())
-                path = session / "outputs/call-000002.log"
+                path = cell_output_path(session, 2)
                 assert path.read_text() == "a€🙂b" * 4000
                 (marker,) = OMISSION.finditer(text)
                 _, advertised_path = marker[0].split("; raw log: ", 1)
@@ -86,7 +87,7 @@ def test_does_not_offer_logs_after_recording_failures(
             )
             session = next(sessions.iterdir())
             if failure == "cell file creation":
-                (session / "outputs/call-000002.log").mkdir()
+                (cell_output_path(session, 2)).mkdir()
             else:
                 artifacts = session / "artifacts"
                 artifacts.rmdir()
@@ -112,7 +113,7 @@ def test_does_not_offer_logs_after_recording_failures(
             )
             assert_preview(preview, emitted)
             call_id = 2 if failure == "cell file creation" else 3
-            assert not (session / f"outputs/call-{call_id:06}.log").is_file()
+            assert not (cell_output_path(session, call_id)).is_file()
             client.send()
             assert last_tool_text(client) == "\n[idle]"
             _, stderr = client.finish_with_standard_error()

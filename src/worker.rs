@@ -25,10 +25,10 @@ pub(crate) use coordinator::run;
 pub(crate) use core::mark_shutting_down;
 #[cfg(any(unix, windows))]
 pub(crate) use core::{
-    bootstrapping, emit_output, is_shutting_down, publish_plot, publish_python_activation,
-    publish_python_activation_failure, publish_r_activation, publish_r_activation_failure,
-    record_bootstrap_interrupt, record_worker_failure, resolve_python, resolve_python_version,
-    resolve_r,
+    bootstrapping, emit_output, export_session, is_shutting_down, publish_plot,
+    publish_python_activation, publish_python_activation_failure, publish_r_activation,
+    publish_r_activation_failure, record_bootstrap_interrupt, record_worker_failure,
+    resolve_python, resolve_python_version, resolve_r,
 };
 #[cfg(unix)]
 pub(crate) use input::python_interrupt_wakeup;
@@ -57,3 +57,22 @@ pub(crate) use r_integration::{
     available as r_available, ensure_bridge, ensure_initialized as ensure_r,
     initialized as r_initialized,
 };
+
+#[cfg(any(unix, windows))]
+use libr::SEXP;
+
+#[cfg(any(unix, windows))]
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_export_session(directory: SEXP) -> harp::Result<SEXP> {
+    let directory = String::try_from(harp::object::RObject::view(directory))?;
+    let paths =
+        export_session(std::path::Path::new(&directory)).map_err(|e| harp::anyhow!("{e}"))?;
+    Ok(harp::object::RObject::from(
+        paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+    )
+    .sexp)
+}

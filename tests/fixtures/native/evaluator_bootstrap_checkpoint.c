@@ -1,7 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
-#include <stdarg.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -44,21 +43,13 @@ static void hold_evaluator(pthread_mutex_t *mutex) {
     if (pthread_mutex_lock(mutex) != 0) _exit(125);
 }
 
-static int observed_open(const char *path, int flags, ...) {
-    mode_t mode = 0;
-    if (flags & O_CREAT) {
-        va_list arguments;
-        va_start(arguments, flags);
-        mode = va_arg(arguments, int);
-        va_end(arguments);
-    }
-    int result = open(path, flags, mode);
-    const char suffix[] = "/outputs/call-000001.log";
-    size_t length = strlen(path);
-    if (result >= 0 && length >= sizeof(suffix) - 1 &&
-        strcmp(path + length - (sizeof(suffix) - 1), suffix) == 0) {
-        // begin_cell creates the first cell's recorded output on the evaluator
-        // thread, before attaching stdin and entering its bootstrap wait.
+static ssize_t observed_write(int descriptor, const void *buffer, size_t length) {
+    ssize_t result = write(descriptor, buffer, length);
+    const char marker[] = "{\"event\":\"source_attached\",";
+    if (result == (ssize_t)length && length >= sizeof(marker) - 1 &&
+        memcmp(buffer, marker, sizeof(marker) - 1) == 0) {
+        // Admission is recorded on the evaluator before its bootstrap wait.
+        // A withheld source never creates an executed-cell output file.
         evaluator = true;
     }
     return result;
@@ -99,6 +90,6 @@ static int observed_broadcast(pthread_cond_t *condition) {
         (const void *)(uintptr_t)&replacement,                                \
         (const void *)(uintptr_t)&original,                                   \
     };
-INTERPOSE(observed_open, open)
+INTERPOSE(observed_write, write)
 INTERPOSE(observed_wait, pthread_cond_wait)
 INTERPOSE(observed_broadcast, pthread_cond_broadcast)

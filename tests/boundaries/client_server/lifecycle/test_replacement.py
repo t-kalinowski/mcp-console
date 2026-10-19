@@ -287,7 +287,9 @@ def test_orders_explicit_restart_output(
             build_interposer(temporary_path, "cell_output_close_interposer")
         )
         environment["MCP_CONSOLE_TEST_CELL_OUTPUT_CLOSED"] = str(output_closed.path)
-        environment["MCP_CONSOLE_TEST_CELL_OUTPUT_SUFFIX"] = "/outputs/call-000003.log"
+        environment["MCP_CONSOLE_TEST_CELL_OUTPUT_SUFFIX"] = (
+            "/capture/sessions/002/cell-001.txt"
+        )
         environment["ZOD_STDIN_CLOSE_RELEASE"] = str(output_closed.path)
         client = McpClient(
             binary,
@@ -325,9 +327,9 @@ def test_orders_explicit_restart_output(
         output = last_tool_text(client)
         assert output.endswith(suffix), output[-500:]
         assert_preview(output.removesuffix(suffix), large_output("zod stdin closed\n"))
-        assert "outputs/session.log" in output
+        assert "capture/sessions/002/cell-001-post.txt" in output
         assert (
-            session_directory(client) / "outputs/session.log"
+            session_directory(client) / "capture/sessions/002/cell-001-post.txt"
         ).read_text() == large_output("zod stdin closed\n")
         normalize_preview_paths(client)
 

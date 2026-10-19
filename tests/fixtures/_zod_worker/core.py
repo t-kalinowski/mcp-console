@@ -13,6 +13,7 @@ from .dispatch import dispatch
 from .preparation import prepare_r
 from .probes import configure_blocked_sideband, stall_sideband_reader
 from .protocol import open_sideband, send, send_output
+from .output import PNG_1X1
 from .startup import configure_startup
 from .state import LoopAction, WorkerContext
 
@@ -42,6 +43,11 @@ def main() -> None:
         context.reader,
         context.writer,
     )
+    if os.environ.get("ZOD_RECORDING_INTERVALS") == "1":
+        send_output(context.writer, "startup text\n")
+        send(
+            context.writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"}
+        )
     if not startup_ready_sent:
         send(context.writer, {"kind": "ready"})
     if startup_callback:
@@ -73,6 +79,12 @@ def main() -> None:
             context.queued_message = None
         message_kind = message["kind"]
         if message_kind == "shutdown":
+            if os.environ.get("ZOD_RECORDING_INTERVALS") == "1":
+                send_output(context.writer, "shutdown text\n")
+                send(
+                    context.writer,
+                    {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"},
+                )
             return
 
         if message_kind == "prepare_r":
@@ -81,6 +93,7 @@ def main() -> None:
 
         assert message_kind == "evaluate"
         assert set(message) == {"kind", "language", "source"}
+        send(context.writer, {"kind": "cell_started"})
         language = message["language"]
         source = message["source"]
         if record := os.environ.get("MCP_CONSOLE_TEST_ZOD_PYTHON_CELLS"):

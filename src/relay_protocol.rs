@@ -18,6 +18,9 @@ pub(crate) struct EncodedBytes(String);
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayCommand {
+    SessionExported {
+        result: Result<crate::transcript::export::SessionExport, String>,
+    },
     Evaluate {
         language: Language,
         source: String,
@@ -63,6 +66,13 @@ pub(crate) enum RelayCommand {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum RelayEvent {
+    #[serde(deserialize_with = "deserialize_payload_free")]
+    CellStarted,
+    #[serde(deserialize_with = "deserialize_payload_free")]
+    ExportSession,
+    WorkerStarted {
+        pid: u32,
+    },
     #[serde(deserialize_with = "deserialize_payload_free")]
     Ready,
     RuntimeInitialized {
@@ -165,6 +175,8 @@ pub(crate) enum RelayEvent {
 impl From<WorkerMessage> for RelayEvent {
     fn from(message: WorkerMessage) -> Self {
         match message {
+            WorkerMessage::CellStarted => Self::CellStarted,
+            WorkerMessage::ExportSession => Self::ExportSession,
             WorkerMessage::Ready => Self::Ready,
             WorkerMessage::RuntimeInitialized { interrupted } => {
                 Self::RuntimeInitialized { interrupted }

@@ -315,3 +315,17 @@ def echo(context: WorkerContext, source: str) -> None:
         wait_for_server_to_process_sideband(context.reader, context.writer)
         publish_marker(context.root / "zod-idle-input-received")
         context.idle_input_received = False
+
+
+def recording_intervals(context: WorkerContext, source: str) -> None:
+    for text in ("before image\n", "after image\n"):
+        send_output(context.writer, text)
+        send(
+            context.writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"}
+        )
+    send(context.writer, {"kind": "completed"})
+    wait_for_server_to_process_sideband(context.reader, context.writer)
+    send_output(context.writer, "between cells\n")
+    send(context.writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"})
+    wait_for_server_to_process_sideband(context.reader, context.writer)
+    publish_marker(context.root / "zod-recording-post-observed")

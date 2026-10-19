@@ -88,6 +88,7 @@ pub(super) fn install(api: &PythonApi, installed: bool) -> Result<(), String> {
             unsafe { load_symbol(&library, path, b"PyModule_AddFunctions\0")? };
         // CPython retains the method definitions for the process lifetime.
         let methods = Box::leak(Box::new([
+            method(c"export_session", export_session, 8),
             method(c"write", write, 8), // METH_O
             method(c"diagnostic", diagnostic, 8),
             method(c"readline", readline, 8),
@@ -382,4 +383,14 @@ fn loaded_library() -> Result<libloading::Library, String> {
             .map(Into::into)
             .map_err(|error| error.to_string())
     }
+}
+
+unsafe extern "C" fn export_session(_: *mut PyObject, directory: *mut PyObject) -> *mut PyObject {
+    callback(|services| {
+        let directory = services.text(directory)?;
+        let paths =
+            services.without_gil(|| worker::export_session(std::path::Path::new(&directory)))?;
+        let json = serde_json::to_string(&paths).map_err(|e| e.to_string())?;
+        Ok(services.string(&json))
+    })
 }

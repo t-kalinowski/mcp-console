@@ -764,6 +764,8 @@ pub(crate) struct ServerTransport<R: AsyncRead, W: AsyncWrite> {
     inner: AsyncRwTransport<RoleServer, R, W>,
     deliveries: ResponseDeliveries,
     send_observer: Option<Box<SendObserver>>,
+    recording: Option<crate::transcript::Transcript>,
+    recorded_calls: HashMap<RequestId, u64>,
 }
 
 impl<R, W> ServerTransport<R, W>
@@ -776,7 +778,14 @@ where
             inner: AsyncRwTransport::new_server(read, write),
             deliveries,
             send_observer: None,
+            recording: None,
+            recorded_calls: HashMap::new(),
         }
+    }
+
+    pub(crate) fn with_recording(mut self, recording: crate::transcript::Transcript) -> Self {
+        self.recording = Some(recording);
+        self
     }
 
     /// Observe accepted sends in wire order, before asynchronous handler dispatch.
@@ -817,10 +826,35 @@ where
         let cancelled_tool_result = delivery.is_none()
             && matches!(&item, JsonRpcMessage::Response(response)
                 if matches!(response.result, ServerResult::CallToolResult(_)));
+        let recording = self.recording.clone();
+        let request_id = match &item {
+            JsonRpcMessage::Response(response) => Some(response.id.clone()),
+            JsonRpcMessage::Error(error) => error.id.clone(),
+            _ => None,
+        };
+        let call_id = request_id
+            .as_ref()
+            .and_then(|id| self.recorded_calls.remove(id));
+        if let Some(recording) = &recording {
+            match serde_json::to_value(&item) {
+                Ok(mut message) => {
+                    if let Some(id) = call_id
+                        && message.get("result").is_some()
+                    {
+                        message["result"] = serde_json::json!({"tool_result_call_id": id});
+                    }
+                    recording.protocol("assembled", &message);
+                }
+                Err(error) => recording.disable(format!("protocol capture failed: {error}")),
+            }
+        }
         let send = (!cancelled_tool_result).then(|| self.inner.send(item));
         let deliveries = self.deliveries.clone();
         async move {
             let Some(send) = send else {
+                if let (Some(recording), Some(id)) = (&recording, &request_id) {
+                    recording.delivery(&serde_json::json!(id), call_id, false);
+                }
                 return Ok(());
             };
             // Preserve a ready final response after input EOF, but abandon a
@@ -832,6 +866,9 @@ where
                     Err(std::io::ErrorKind::BrokenPipe.into())
                 },
             };
+            if let (Some(recording), Some(id)) = (&recording, &request_id) {
+                recording.delivery(&serde_json::json!(id), call_id, result.is_ok());
+            }
             if response && result.is_ok() {
                 deliveries.lock().bootstrap_response_delivered = true;
             }
@@ -848,6 +885,40 @@ where
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
         let mut message = self.inner.receive().await;
+        if let (Some(recording), Some(message)) = (&self.recording, &mut message) {
+            let mut captured = serde_json::to_value(&*message);
+            if let JsonRpcMessage::Request(request) = message
+                && let ClientRequest::CallToolRequest(call) = &mut request.request
+                && call.params.name.as_ref() == "send"
+            {
+                // Activation occurs at receipt, including rejected or cancelled sends.
+                let recorder = recording.clone();
+                let request_id = request.id.clone();
+                let params = call.params.clone();
+                let recorded = match tokio::task::spawn_blocking(move || {
+                    recorder.begin(&request_id, &Default::default(), &params)
+                })
+                .await
+                {
+                    Ok(recorded) => recorded,
+                    Err(error) => {
+                        recording.disable(format!("recording activation task failed: {error}"));
+                        crate::transcript::Call::unrecorded()
+                    }
+                };
+                if let Some(id) = recorded.id() {
+                    self.recorded_calls.insert(request.id.clone(), id);
+                    if let Ok(message) = &mut captured {
+                        message["params"] = serde_json::json!({"tool_call_id": id});
+                    }
+                }
+                call.extensions.insert(recorded);
+            }
+            match captured {
+                Ok(message) => recording.protocol("received", &message),
+                Err(error) => recording.disable(format!("protocol capture failed: {error}")),
+            }
+        }
         if message.is_some() {
             self.deliveries.lock().bootstrap_response_delivered = false;
         }

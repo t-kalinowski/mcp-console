@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from support.previews import cell_output_path
 from support.requirements import NATIVE_FIXTURES, POSIX, SQL, requires
 from support.assertions import (
     assert_exact_interleaving,
@@ -770,9 +771,9 @@ def test_prepares_managed_python_at_startup_and_restart(
             )
             records = client.finish()[3:]
         (session,) = (workspace / ".agents/console/sessions").iterdir()
-        quarto = (session / "transcript.qmd").read_text()
+        quarto = sorted((session / "sessions").glob("session-*.qmd"))[-1].read_text()
         assert "execute:\n  eval: false" not in quarto
-        assert "\nknitr:" in quarto and "\nir:" in quarto
+        assert "original-working-directory:" in quarto and "\nir:" in quarto
         assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
         packages = [
             "numpy",
@@ -921,7 +922,7 @@ def test_adds_python_packages_to_idle_managed_worker(
         (session,) = (Path(workspace) / ".agents/console/sessions").iterdir()
         events = [
             json.loads(line)
-            for line in (session / "internal/events.jsonl").read_text().splitlines()
+            for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
         accepted = [
             event["packages"]
@@ -930,9 +931,9 @@ def test_adds_python_packages_to_idle_managed_worker(
         ]
         assert len(accepted) >= 3, accepted
         assert {"py-yaml12", "six", "more-itertools"}.issubset(accepted[-1])
-        quarto = (session / "transcript.qmd").read_text()
+        quarto = sorted((session / "sessions").glob("session-*.qmd"))[-1].read_text()
         assert "execute:\n  eval: false" not in quarto
-        assert "\nknitr:" in quarto and "\nir:" in quarto
+        assert "original-working-directory:" in quarto and "\nir:" in quarto
         assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
         assert "    - more-itertools\n" in quarto
         return records
@@ -1045,16 +1046,16 @@ def test_resolves_reached_import_in_managed_worker(
         (session,) = (root / ".agents/console/sessions").iterdir()
         events = [
             json.loads(line)
-            for line in (session / "internal/events.jsonl").read_text().splitlines()
+            for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
         assert any(
             event["event"] == "python_environment_accepted"
             and {"py-yaml12", "pydash"}.issubset(event["packages"])
             for event in events
         )
-        quarto = (session / "transcript.qmd").read_text()
+        quarto = sorted((session / "sessions").glob("session-*.qmd"))[-1].read_text()
         assert "execute:\n  eval: false" not in quarto
-        assert "\nknitr:" in quarto and "\nir:" in quarto
+        assert "original-working-directory:" in quarto and "\nir:" in quarto
         assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
         assert "    - py-yaml12\n" in quarto and "    - pydash\n" in quarto
         return records
@@ -1903,7 +1904,7 @@ def test_failed_managed_preparation_preserves_worker_and_input(
             (session,) = (workspace / ".agents/console/sessions").iterdir()
             events = [
                 json.loads(line)
-                for line in (session / "internal/events.jsonl").read_text().splitlines()
+                for line in (session / "capture/events.jsonl").read_text().splitlines()
             ]
             accepted = [
                 event
@@ -2089,7 +2090,7 @@ def test_shutdown_cancels_sans_r_python_preparation(
                 (session,) = (workspace / ".agents/console/sessions").iterdir()
                 events = [
                     json.loads(line)
-                    for line in (session / "internal/events.jsonl")
+                    for line in (session / "capture/events.jsonl")
                     .read_text()
                     .splitlines()
                 ]
@@ -2586,21 +2587,21 @@ False
             records = client.finish()
             (session,) = (workspace / ".agents/console/sessions").iterdir()
             markdown = (session / "transcript.md").read_text()
-            quarto = (session / "transcript.qmd").read_text()
+            quarto = (session / "sessions/session-001.qmd").read_text()
             assert "recorded_value = 41" in markdown and "recorded_value = 41" in quarto
             assert "execute:\n  eval: false" not in quarto
-            assert "\nknitr:" in quarto and "\nir:" in quarto
+            assert "original-working-directory:" in quarto and "\nir:" in quarto
             assert (
                 "ir:\n  isolated: true\n  packages: []\n  python-packages: []\n"
                 in quarto
             )
             assert "ValueError: recorded failure" in markdown
-            assert (session / "outputs/call-000001.log").read_text() == "42\n"
+            assert (cell_output_path(session, 1)).read_text() == "42\n"
             events = [
                 json.loads(line)
-                for line in (session / "internal/events.jsonl").read_text().splitlines()
+                for line in (session / "capture/events.jsonl").read_text().splitlines()
             ]
-            assert events[0]["event"] == "session_started"
+            assert events[0]["event"] == "recording_started"
             assert sum(event["event"] == "tool_call" for event in events) == 3
             records.append(
                 {
@@ -3200,7 +3201,7 @@ def test_records_managed_python_defaults(
             client.expect("42\n", python="retained")
             records = client.finish()
         (session,) = (workspace / ".agents/console/sessions").iterdir()
-        quarto = (session / "transcript.qmd").read_text()
+        quarto = (session / "sessions/session-001.qmd").read_text()
         defaults = ["numpy", "pandas", "matplotlib", "plotnine"]
         if SQL.available:
             defaults.append("duckdb")
@@ -3209,15 +3210,25 @@ def test_records_managed_python_defaults(
             + "".join(f"    - {package}\n" for package in defaults)
             in quarto
         ), quarto
-        assert "\nknitr:" in quarto and "\nir:" in quarto, quarto
+        assert "original-working-directory:" in quarto and "\nir:" in quarto, quarto
         assert "eval: false" not in quarto, quarto
         assert "six" not in quarto, quarto
         events = [
             json.loads(line)
-            for line in (session / "internal/events.jsonl").read_text().splitlines()
+            for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
-        assert events[0]["dynamic_resolution"] is False
-        assert events[0]["python_preparation"] is True
+        assert (
+            next(
+                event for event in events if event["event"] == "environment_discovered"
+            )["dynamic_resolution"]
+            is False
+        )
+        assert (
+            next(
+                event for event in events if event["event"] == "environment_discovered"
+            )["python_preparation"]
+            is True
+        )
         return TranscriptWithCompanions(
             records,
             {

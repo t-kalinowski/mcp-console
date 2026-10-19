@@ -162,7 +162,7 @@ class Session:
                 recorded = []
                 try:
                     journals = Path(self.directory.name).glob(
-                        ".agents/console/sessions/*/internal/events.jsonl"
+                        ".agents/console/sessions/*/capture/events.jsonl"
                     )
                     for journal in journals:
                         for line in journal.read_text(encoding="utf-8").splitlines():
@@ -2242,7 +2242,7 @@ class WindowsConsole(unittest.TestCase):
                 deadline = time.monotonic() + session.timeout
                 while True:
                     session.send(requirements={"action": "get"})
-                    logs = list(sessions.glob("*/outputs/session.log"))
+                    logs = list(sessions.glob("*/capture/sessions/001/startup.txt"))
                     if logs and logs[0].read_text() == raw:
                         break
                     self.assertLess(
@@ -2258,10 +2258,10 @@ class WindowsConsole(unittest.TestCase):
                     Path(session.directory.name) / ".agents/console/sessions"
                 ).iterdir()
                 self.assertEqual(
-                    (recording / "outputs/session.log").read_text(),
+                    (recording / "capture/sessions/001/startup.txt").read_text(),
                     raw,
                 )
-                (cell_log,) = (recording / "outputs").glob("call-*.log")
+                (cell_log,) = (recording / "capture/sessions/001").glob("cell-*.txt")
                 self.assertEqual(cell_log.read_bytes(), b"")
                 self.assertIn("42", json.dumps(session.send(python="42")))
             finally:

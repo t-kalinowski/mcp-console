@@ -188,7 +188,7 @@ def recovered_recorded_cells(
             assert text.endswith("[done]"), repr(text[-200:])
             events = [
                 json.loads(line)
-                for line in (session_directory(client) / "internal/events.jsonl")
+                for line in (session_directory(client) / "capture/events.jsonl")
                 .read_text()
                 .splitlines()
             ]
@@ -206,7 +206,7 @@ def recovered_recorded_cells(
                 assert text.count("[output omitted:") == 1, text
                 assert (
                     text.count(
-                        f".agents/console/sessions/{session_directory(client).name}/outputs/"
+                        f".agents/console/sessions/{session_directory(client).name}/capture/sessions/001/"
                     )
                     == 1
                 )
@@ -388,7 +388,7 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
                 assert not result["isError"], result
                 recorded = next(
                     event["result"]
-                    for line in (session_directory(client) / "internal/events.jsonl")
+                    for line in (session_directory(client) / "capture/events.jsonl")
                     .read_text()
                     .splitlines()
                     if (event := json.loads(line))["event"] == "tool_result"
@@ -401,8 +401,8 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
                 state = "\n[running; poll with an empty send]"
                 assert text.endswith(state)
                 assert_preview(without_elapsed(text).removesuffix(state), emitted[0])
-                assert "internal/events.jsonl" not in text
-                assert "outputs/call-000002.log" in text
+                assert "capture/events.jsonl" not in text
+                assert "capture/sessions/001/cell-002.txt" in text
                 assert cell_text(client, 2) == "".join(emitted)
                 client.send(timeout_ms=0)
                 later = last_tool_text(client)
@@ -411,7 +411,7 @@ def test_cancelled_active_polls_replay_before_later_output(binary: Path) -> Tran
                 assert_preview(
                     without_elapsed(later).removesuffix(state), "".join(emitted[1:])
                 )
-                assert "outputs/call-000002.log" in later
+                assert "capture/sessions/001/cell-002.txt" in later
                 worker_release.release()
                 client.send()
                 assert last_tool_text(client) == "[done]"
@@ -460,7 +460,7 @@ def test_image_recovery_moves_the_retained_preview(binary: Path) -> Transcript:
         session = session_directory(client)
         events = [
             json.loads(line)
-            for line in (session / "internal/events.jsonl").read_text().splitlines()
+            for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
         artifacts = [event for event in events if event["event"] == "artifact_created"]
         assert len(artifacts) == 1, artifacts
@@ -564,15 +564,15 @@ def test_composed_image_omission_names_existing_artifact(binary: Path) -> Transc
         assert "1 image" in text and "retained output:" in text
         session = session_directory(client)
         assert text.count(f".agents/console/sessions/{session.name}") == 1
-        assert "logs: outputs/" in text
+        assert "logs: capture/sessions/001/" in text
         artifacts = sorted((session / "artifacts").iterdir())
         assert len(artifacts) == 2, artifacts
         omitted = artifacts[1]
         assert omitted.read_bytes() == bytes(6 * 1024 * 1024)
-        assert f"images: artifacts/{omitted.name}" in text
+        assert f"images: capture/sessions/001/{omitted.name}" in text
         events = [
             json.loads(line)
-            for line in (session / "internal/events.jsonl").read_text().splitlines()
+            for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
         summaries = {
             event["call_id"]: event
@@ -645,8 +645,8 @@ def test_long_recording_paths_keep_image_omissions_readable(binary: Path) -> Tra
                         " (relative to Console recording directory)"
                     )
                     assert location in text
-                    assert "logs: outputs/" in text
-                    assert f"images: artifacts/{omitted.name}" in text
+                    assert "logs: capture/sessions/001/" in text
+                    assert f"images: capture/sessions/001/{omitted.name}" in text
                 else:
                     marker = re.search(r"\n\[output omitted: [^\n]*\]\n", text)
                     assert marker is not None, text

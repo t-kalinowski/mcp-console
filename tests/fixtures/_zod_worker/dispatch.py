@@ -33,6 +33,7 @@ EXACT_HANDLERS: dict[str, Callable[[WorkerContext, str], LoopAction | None]] = {
     "complete silently": output.complete_silently,
     "emit console kinds": output.emit_console_kinds,
     "emit image": output.emit_image,
+    "record intervals": output.recording_intervals,
     "emit image before completion": output.emit_image_before_completion,
     "emit output and image before completion": output.emit_image_before_completion,
     # Input

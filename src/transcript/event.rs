@@ -17,12 +17,66 @@ pub(super) struct Envelope<'a> {
 #[derive(Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub(super) enum Event<'a> {
-    SessionStarted {
-        session: &'a str,
+    RecordingStarted {
         working_directory: &'a str,
         dynamic_resolution: Option<bool>,
         python_preparation: Option<bool>,
         startup_requirements: Option<&'a crate::worker_client::Declaration>,
+    },
+    RecordingActivated,
+    RecordingEnded,
+    Protocol {
+        direction: &'a str,
+        message: &'a Value,
+    },
+    Delivery {
+        request_id: &'a Value,
+        call_id: Option<u64>,
+        delivered: bool,
+    },
+    WorkerStarted {
+        session_id: u64,
+        pid: u32,
+    },
+    WorkerReady {
+        session_id: u64,
+    },
+    WorkerEnded {
+        session_id: u64,
+        outcome: &'a str,
+    },
+    SourceAssociated {
+        call_id: u64,
+        session_id: u64,
+    },
+    SourceAttached {
+        call_id: u64,
+        session_id: u64,
+    },
+    CellStarted {
+        call_id: u64,
+        owner: super::Owner,
+    },
+    CellEnded {
+        call_id: u64,
+        owner: super::Owner,
+        completion_confirmed: bool,
+    },
+    OutputText {
+        owner: super::Owner,
+        path: &'a str,
+        offset: u64,
+        bytes: usize,
+        discarded_bytes: usize,
+    },
+    ImageOmitted {
+        owner: Option<super::Owner>,
+        encoded_bytes: usize,
+        mime_type: &'a str,
+    },
+    ProcessOutput {
+        data: &'a str,
+        discarded_bytes: usize,
     },
     EnvironmentDiscovered {
         dynamic_resolution: bool,
@@ -31,6 +85,7 @@ pub(super) enum Event<'a> {
         startup_requirements: &'a crate::worker_client::Declaration,
     },
     StartupFailed {
+        session_id: Option<u64>,
         message: &'a str,
     },
     PythonEnvironmentAccepted {
@@ -47,6 +102,7 @@ pub(super) enum Event<'a> {
         request: &'a CallToolRequestParams,
     },
     ArtifactCreated {
+        owner: super::Owner,
         artifact_id: u64,
         call_id: Option<u64>,
         path: &'a str,
@@ -54,6 +110,7 @@ pub(super) enum Event<'a> {
         bytes: usize,
     },
     CellOutput {
+        owner: super::Owner,
         call_id: u64,
         path: &'a str,
         retained_bytes: u64,
@@ -62,6 +119,7 @@ pub(super) enum Event<'a> {
         retention_limit_bytes: u64,
     },
     SessionOutput {
+        owner: super::Owner,
         path: &'a str,
         retained_bytes: u64,
         inline_omitted_bytes: u64,
@@ -70,6 +128,7 @@ pub(super) enum Event<'a> {
     },
     ToolResult {
         call_id: u64,
+        parts: &'a [super::ResultPart],
         #[serde(flatten)]
         outcome: Outcome<'a>,
     },

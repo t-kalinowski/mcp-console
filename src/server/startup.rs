@@ -119,7 +119,7 @@ impl Startup {
                     // Completed discovery no longer owns interrupt delivery.
                     initialize_worker.clear_resolver_stop_handle(&generation)?;
                     // Early control calls can launch once worker configuration
-                    // is published. Replay their pending records before that.
+                    // is published. Record its metadata before that boundary.
                     task_recording.configure(prepared.transcript);
                     initialize_worker.configure(prepared.configuration);
                     if prelaunch {
@@ -132,7 +132,7 @@ impl Startup {
             .await
             .map_err(|error| format!("runtime preparation task failed: {error}"))
             .and_then(|result| result);
-            // Recording belongs to the connection, including later setup retries.
+            // Recording belongs to the Console process, including setup retries.
             if let Err(error) = &result {
                 recording.startup_failed(error);
             }

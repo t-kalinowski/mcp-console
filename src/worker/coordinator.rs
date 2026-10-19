@@ -194,6 +194,7 @@ impl Coordinator {
         match message {
             ServerMessage::Evaluate { language, source } => {
                 self.r.check_interrupts();
+                self.writer.send(&WorkerMessage::CellStarted)?;
                 let result = evaluate_cell(
                     Cell { language, source },
                     &self.r,
@@ -254,7 +255,8 @@ impl Coordinator {
                 }
             }
             ServerMessage::Shutdown => return Ok(false),
-            ServerMessage::RResolved { .. }
+            ServerMessage::SessionExported { .. }
+            | ServerMessage::RResolved { .. }
             | ServerMessage::RResolutionFailed { .. }
             | ServerMessage::PythonResolved { .. }
             | ServerMessage::PythonResolutionFailed { .. }

@@ -82,14 +82,19 @@ def test_runs_without_a_resolver_bootstrap(
         session = next((workspace / ".agents/console" / "sessions").iterdir())
         events = [
             json.loads(line)
-            for line in (session / "internal" / "events.jsonl")
+            for line in (session / "capture" / "events.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
         ]
-        assert events[0]["event"] == "session_started", events[0]
-        assert events[0]["dynamic_resolution"] is False, events[0]
+        assert events[0]["event"] == "recording_started", events[0]
+        assert (
+            next(
+                event for event in events if event["event"] == "environment_discovered"
+            )["dynamic_resolution"]
+            is False
+        ), events[0]
 
-        quarto = (session / "transcript.qmd").read_text(encoding="utf-8")
+        quarto = (session / "sessions/session-001.qmd").read_text(encoding="utf-8")
         assert "tidyverse" not in quarto, quarto
         assert "numpy" not in quarto, quarto
         assert "praise" not in quarto, quarto
@@ -101,7 +106,7 @@ def test_runs_without_a_resolver_bootstrap(
             companions={
                 "events.yaml": [
                     {
-                        "session_started": {
+                        "recording_started": {
                             "dynamic_resolution": events[0]["dynamic_resolution"]
                         }
                     }
