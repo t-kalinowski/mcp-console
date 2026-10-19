@@ -5,7 +5,7 @@ filters:
 
 # Configuration files
 
-Use configuration files to keep settings for one project or share them across projects.
+Use configuration files to customize Console's default settings for a project or across projects.
 
 ## Files and precedence
 
