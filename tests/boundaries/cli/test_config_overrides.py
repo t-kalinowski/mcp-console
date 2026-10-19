@@ -481,6 +481,9 @@ def test_validates_effective_configuration(binary: Path) -> Transcript:
         ("inherit_environment=1.5", "floating point"),
         ("target.command=[far, faz]", "unknown field"),
         ("unknown={baz: [far, faz]}", "unknown field"),
+        ("cache=relative-cache", "cache must be console, host, or an absolute path"),
+        ("cache=42", "string"),
+        ("cache={directory: /tmp/cache}", "string"),
     )
     records = []
     with TemporaryDirectory() as temporary:

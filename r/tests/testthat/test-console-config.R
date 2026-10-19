@@ -74,6 +74,11 @@ test_that("ConsoleConfig preserves schema shapes and separates launch choices", 
   )
 })
 
+test_that("ConsoleConfig preserves a custom cache directory", {
+  cache <- file.path(tempdir(), "console cache")
+  expect_identical(as.list(ConsoleConfig(cache = cache)), list(cache = cache))
+})
+
 test_that("resolution policies accept implicit and reject automatic", {
   expect_identical(RConfig(resolution = "implicit")@resolution, "implicit")
   expect_identical(

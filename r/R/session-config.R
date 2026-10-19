@@ -388,7 +388,9 @@ ToolConfig <- S7::new_class(
 #' @param sandbox `NULL`, a [SandboxPolicy()], or `FALSE` for host execution.
 #' @param languages `NULL` or a character vector selecting `"r"`, `"python"`,
 #'   and/or `"sql"` tool inputs. This does not select the installed runtimes.
-#' @param cache `NULL`, `"console"`, or `"host"` for dependency caches.
+#' @param cache `NULL`, `"console"`, `"host"`, or an absolute cache directory.
+#'   A directory uses Console-managed caches under `<directory>/dependencies`
+#'   for preparation and workers. It requires sandboxing.
 #' @param environment `NULL` or a named character vector of child environment
 #'   assignments. Empty string values are allowed; `character()` is an empty
 #'   mapping. Resolver assignments override worker assignments for preparation.
@@ -426,7 +428,7 @@ ConsoleConfig <- S7::new_class(
       }
     ),
     languages = config_string_list(),
-    cache = config_choice(c("console", "host")),
+    cache = config_scalar(),
     environment = config_environment(),
     inherit_environment = config_flag(),
     tool = NULL | ToolConfig,

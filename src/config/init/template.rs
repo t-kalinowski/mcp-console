@@ -252,24 +252,13 @@ pub(super) fn render(value: Value, profile: Option<&ProfileSelection>) -> Result
         Field::new(
             "cache",
             "\
-## Cache options: console (default when sandboxed), host.
+## Cache options: console (default when sandboxed), host, or an absolute path.
 ## Use host to reuse ordinary host package caches.
-",
-            "# cache: host\n",
-        ),
-        Field::new(
-            "resolver",
-            "\
-## Relocate Console-managed caches; ignored when cache: host.
-## Dependency caches go under <MCP_CONSOLE_CACHE_DIR>/dependencies.
-## Use an absolute path appropriate for your OS.
+## A path places dependency caches under <path>/dependencies.
+## It applies to package preparation and workers.
 ## Configuration and recordings stay in their existing locations.
 ",
-            "\
-# resolver:
-#   environment:
-#     MCP_CONSOLE_CACHE_DIR: /absolute/path/to/console-cache
-",
+            "# cache: /absolute/path/to/console-cache\n",
         ),
     ];
     let mut output = HEADER.to_owned();

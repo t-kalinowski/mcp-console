@@ -39,7 +39,9 @@ Both default to \code{TRUE} when \code{ConfigDiscovery()} is explicitly construc
 \item{languages}{\code{NULL} or a character vector selecting \code{"r"}, \code{"python"},
 and/or \code{"sql"} tool inputs. This does not select the installed runtimes.}
 
-\item{cache}{\code{NULL}, \code{"console"}, or \code{"host"} for dependency caches.}
+\item{cache}{\code{NULL}, \code{"console"}, \code{"host"}, or an absolute cache directory.
+A directory uses Console-managed caches under \verb{<directory>/dependencies}
+for preparation and workers. It requires sandboxing.}
 
 \item{environment}{\code{NULL} or a named character vector of child environment
 assignments. Empty string values are allowed; \code{character()} is an empty

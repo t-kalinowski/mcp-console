@@ -38,6 +38,60 @@ def resolve(
     )
 
 
+def test_cache_directory_round_trips_without_creating_storage(
+    binary: Path,
+) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        cache = root / "custom cache"
+        config = root / ".agents/console/config.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"cache": str(cache)}))
+        for arguments in ((), ("--full",)):
+            result = resolve(binary, root, *arguments, "--format", "json")
+            assert result.returncode == 0 and result.stderr == "", result
+            settings = json.loads(result.stdout)
+            assert settings["cache"] == str(cache), settings
+            config.write_text(json.dumps(settings))
+        assert not cache.exists()
+    return [
+        {
+            "cache_directory": "preserved in pruned and full configuration",
+            "created": False,
+        }
+    ]
+
+
+def test_cache_directory_requires_sandboxing(binary: Path) -> Transcript:
+    with TemporaryDirectory() as temporary:
+        root = Path(temporary).resolve()
+        cache = root / "cache"
+        for command in (("config", "resolve"), ("serve",)):
+            result = subprocess.run(
+                [
+                    binary,
+                    *command,
+                    "--no-config",
+                    "--no-sandbox",
+                    "-c",
+                    f"cache={json.dumps(str(cache))}",
+                ],
+                cwd=root,
+                env=os.environ | {"MCP_CONSOLE_HOME": str(root / "console-home")},
+                input="",
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            assert result.returncode == 1 and result.stdout == "", result
+            assert (
+                result.stderr
+                == "Console caches require sandboxing; use cache: host with --no-sandbox\n"
+            ), result
+        assert not cache.exists()
+    return [{"cache_directory_without_sandbox": "rejected before creating storage"}]
+
+
 def test_managed_python_resolution_defaults_to_explicit(binary: Path) -> Transcript:
     configurations = []
     with TemporaryDirectory() as temporary:

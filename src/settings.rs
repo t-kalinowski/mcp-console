@@ -70,11 +70,30 @@ pub(crate) fn environment_path(settings: &SandboxSettings, name: &str) -> Option
         .filter(|path| !path.as_os_str().is_empty())
 }
 
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone)]
 pub(crate) enum Cache {
     Console,
     Host,
+    Directory(PathBuf),
+}
+
+impl<'de> Deserialize<'de> for Cache {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "console" => Ok(Self::Console),
+            "host" => Ok(Self::Host),
+            _ => {
+                let path = PathBuf::from(value);
+                if !path.is_absolute() {
+                    return Err(serde::de::Error::custom(
+                        "cache must be console, host, or an absolute path",
+                    ));
+                }
+                Ok(Self::Directory(path))
+            }
+        }
+    }
 }
 
 /// Preserve Console's assignments and removals after project environment controls.

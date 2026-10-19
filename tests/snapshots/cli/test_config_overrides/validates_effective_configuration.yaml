@@ -30,3 +30,18 @@ stderr: >
   expected one of `tool`, `startup`, `cache`, `python`, `r`, `languages`,
   `inherit_environment`, `environment`, `sandbox`, `resolver`; see
   docs/CONFIGURATION.md for the public format
+---
+override: cache=relative-cache
+stderr: >
+  configuration with CLI overrides: cache: cache must be console, host, or
+  an absolute path; see docs/CONFIGURATION.md for the public format
+---
+override: cache=42
+stderr: >
+  configuration with CLI overrides: cache: invalid type: integer `42`,
+  expected a string; see docs/CONFIGURATION.md for the public format
+---
+override: "cache={directory: /tmp/cache}"
+stderr: >
+  configuration with CLI overrides: cache: invalid type: map, expected a
+  string; see docs/CONFIGURATION.md for the public format

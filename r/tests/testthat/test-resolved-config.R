@@ -24,6 +24,24 @@ test_that("resolving configuration retains the complete editable defaults", {
   )
 })
 
+test_that("materialization and pruning retain a custom cache directory", {
+  binary <- Sys.getenv("MCP_CONSOLE_TEST_BINARY")
+  skip_if(!nzchar(binary), "Set MCP_CONSOLE_TEST_BINARY to the checkout binary")
+  project <- tempfile("console-config-")
+  dir.create(project)
+  on.exit(unlink(project, recursive = TRUE), add = TRUE)
+  cache <- file.path(project, "cache")
+  config <- materialize_console_config(
+    ConsoleConfig(cache = cache),
+    path = binary,
+    project = project
+  )
+  expect_identical(config@cache, cache)
+  pruned <- prune_console_config(config, path = binary, project = project)
+  expect_identical(as.list(pruned), list(cache = cache))
+  expect_false(dir.exists(cache))
+})
+
 test_that("materialization and pruning retain client sandbox inheritance", {
   binary <- Sys.getenv("MCP_CONSOLE_TEST_BINARY")
   skip_if(!nzchar(binary), "Set MCP_CONSOLE_TEST_BINARY to the checkout binary")
