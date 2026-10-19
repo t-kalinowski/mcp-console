@@ -565,7 +565,7 @@ def test_composed_image_omission_names_existing_artifact(binary: Path) -> Transc
         session = session_directory(client)
         assert text.count(f".agents/console/sessions/{session.name}") == 1
         assert "logs: capture/sessions/001/" in text
-        artifacts = sorted((session / "artifacts").iterdir())
+        artifacts = sorted((session / "capture/sessions/001").glob("*.png"))
         assert len(artifacts) == 2, artifacts
         omitted = artifacts[1]
         assert omitted.read_bytes() == bytes(6 * 1024 * 1024)
@@ -635,7 +635,7 @@ def test_long_recording_paths_keep_image_omissions_readable(binary: Path) -> Tra
                 assert len(text.encode()) <= TEXT_BUDGET
                 assert text.count("[output omitted:") == 1, text
                 session = next((recording / "sessions").iterdir())
-                artifacts = sorted((session / "artifacts").iterdir())
+                artifacts = sorted((session / "capture/sessions/001").glob("*.png"))
                 assert len(artifacts) == 2, artifacts
                 omitted = artifacts[1]
                 assert omitted.read_bytes() == bytes(6 * 1024 * 1024)

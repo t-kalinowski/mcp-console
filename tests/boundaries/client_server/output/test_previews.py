@@ -497,7 +497,7 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
                 Path(client.temporary_directory.name) / ".agents/console/sessions"
             ).iterdir()
         )
-        assert len(list((session / "artifacts").iterdir())) == 1
+        assert len(list((session / "capture/sessions").glob("*/*.png"))) == 1
         return client.finish()
 
 
@@ -521,7 +521,9 @@ def test_validates_images_before_omitting_them(
                 "[starting new worker]\n[idle]",
             }
         ], result
-        assert list((session_directory(client) / "artifacts").iterdir()) == []
+        assert (
+            list((session_directory(client) / "capture/sessions").glob("*/*.png")) == []
+        )
         return client.finish()
 
 
