@@ -32,7 +32,7 @@ Use an MCP client or integrate Console into your own R or Python application.
 
 ### Codex and Claude Code
 
-Register Console with the client you use:
+Connect Console to your clients:
 
 ```sh
 uvx mcp-console configure-client codex
