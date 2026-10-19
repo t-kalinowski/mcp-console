@@ -11,7 +11,7 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
 The examples below use `uvx` to run Console without a separate installation.
 
 Prebuilt packages are available for macOS and Linux on ARM64 and x86-64, and for Windows x64.
-Sandboxed Windows sessions require a host that supports [MXC](SANDBOX_CONFIGURATION.md#windows-mxc-requirement).
+Sandboxed Windows sessions require Windows 11 with [Microsoft Execution Containers (MXC)](https://support.microsoft.com/en-us/servicing/os/windows-11/2026/08/kb5120998-windows-11-24h2-25h2-update#microsoft-execution-containers).
 
 If Console fails to start on Linux, see [Linux host compatibility](LINUX_COMPATIBILITY.md) for missing libraries or sandbox restrictions.
 
