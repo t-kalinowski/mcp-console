@@ -3,8 +3,9 @@ scenario: >-
   The first received send selects permissions even if its handler is
   cancelled.
 fixture: >-
-  Write two conflicting sends and cancellation together so all three
-  frames are ready before handler dispatch.
+  Batch the first send, its cancellation, and a conflicting send in wire
+  order. Cancellation is the next ready frame, before another send's
+  asynchronous recording activation.
 ---
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.client-sandbox-python-only.yaml
 ---
@@ -23,6 +24,11 @@ input:
             entries: []
           network: restricted
 id: <cancelled request 1>
+---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: <cancelled request 1>
 ---
 input:
   method: tools/call
@@ -45,11 +51,6 @@ result:
         client sandbox permissions changed; reconnect to apply them before
         sending more code
   isError: true
----
-input:
-  method: notifications/cancelled
-  params:
-    requestId: <cancelled request 1>
 ---
 send:
   python: |

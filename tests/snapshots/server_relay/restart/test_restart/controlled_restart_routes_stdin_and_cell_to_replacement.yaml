@@ -1,5 +1,9 @@
 ---
 relay:
+  kind: worker_started
+  pid: 42
+---
+relay:
   kind: ready
 ---
 server:
@@ -28,6 +32,10 @@ relay:
   code: 0
 ---
 relay:
+  kind: worker_started
+  pid: 42
+---
+relay:
   kind: ready
 ---
 server:
@@ -39,6 +47,9 @@ server:
   kind: evaluate
   language: r
   source: replacement cell
+---
+relay:
+  kind: cell_started
 ---
 relay:
   kind: console_output

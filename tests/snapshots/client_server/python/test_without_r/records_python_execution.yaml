@@ -36,16 +36,23 @@ result:
 ---
 recording:
   events:
-    - session_started
-    - tool_call
+    - cell_ended
     - cell_output
-    - tool_result
+    - cell_started
+    - delivery
+    - environment_discovered
+    - output_text
+    - protocol
+    - recording_activated
+    - recording_ended
+    - recording_started
+    - source_associated
+    - source_attached
     - tool_call
-    - cell_output
     - tool_result
-    - tool_call
-    - cell_output
-    - tool_result
+    - worker_ended
+    - worker_ready
+    - worker_started
   markdown and quarto: Python source retained
   output log: |
     42

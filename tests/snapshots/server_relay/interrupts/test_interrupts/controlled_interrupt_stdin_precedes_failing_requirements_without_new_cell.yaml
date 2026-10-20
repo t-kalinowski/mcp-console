@@ -1,11 +1,18 @@
 ---
 relay:
+  kind: worker_started
+  pid: 42
+---
+relay:
   kind: ready
 ---
 server:
   kind: evaluate
   language: r
   source: old evaluation before failing requirements
+---
+relay:
+  kind: cell_started
 ---
 server:
   kind: interrupt
