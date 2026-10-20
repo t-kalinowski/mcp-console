@@ -2605,7 +2605,18 @@ False
             records.append(
                 {
                     "recording": {
-                        "events": [event["event"] for event in events],
+                        # Protocol and lifecycle order have their own recording cases.
+                        "events": [
+                            event["event"]
+                            for event in events
+                            if event["event"]
+                            in {
+                                "recording_started",
+                                "tool_call",
+                                "tool_result",
+                                "cell_output",
+                            }
+                        ],
                         "markdown and quarto": "Python source retained",
                         "output log": "42\n",
                     }
