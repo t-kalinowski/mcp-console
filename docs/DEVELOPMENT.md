@@ -93,8 +93,8 @@ The [concurrency comparison](benchmarks/transcript-concurrency.md) is dated evid
 
 ## Documentation website
 
-Quarto renders top-level Markdown guides and benchmark pages directly.
-R pkgdown and Python Great Docs add generated package sites.
+Quarto renders the Markdown guides, benchmark pages, and Python API reference.
+R pkgdown adds its package site after the main render.
 Historical design sketches, task templates, and root/test documentation are not all published as website guides.
 
 Keep Markdown usable in the repository.
@@ -111,14 +111,16 @@ pak::pak(c("pkgdown", "local::r"))
 uv venv .venv
 uv pip install --python .venv/bin/python -r docs/requirements.txt
 source .venv/bin/activate
-quarto preview docs
+quarto preview docs --render html
 ```
 
 On Windows use `.venv/Scripts/python.exe` and activate `.venv/Scripts/Activate.ps1`.
 
-After the initial build, page edits in preview only rerender the changed page.
-The R and Python package sites, including their LLM exports, are rebuilt only during a full website render.
-Run a full render when you need to refresh those reference pages:
+The pre-render script `docs/_python.py` uses the pinned Great Docs generator to write Python reference sources before Quarto discovers pages.
+Start preview with `--render html` so its initial render discovers generated pages on a clean checkout; plain preview selects its initial page list before the hook runs.
+It preserves explicit members, inline methods, static introspection, symbol anchors, and source links.
+Generated pages use the main site's Reference sidebar, theme, and search.
+After the initial build, preview rerenders changed pages; run a full render after editing Python docstrings or `great-docs.yml`, or to refresh the R package site:
 
 ```sh
 quarto render docs
@@ -134,12 +136,14 @@ When CLI help changes, regenerate snapshots with `scripts/test --update cli/inte
 Never hand-edit snapshots; website rendering does not build or run Console.
 The configuration page also embeds the complete starter file from the `config init` acceptance snapshot through `docs/_filters/config-init.py`.
 Changes to the generated starter appear on the website when that snapshot is regenerated.
-Quarto's post-render scripts build `docs/_site/r/` and `docs/_site/python/`.
+Quarto renders Python pages into `docs/_site/python/`; the post-render script builds `docs/_site/r/`.
 Python reference uses static source analysis, and the R workflow vignette displays its examples without execution, so API credentials and a Console executable are not required for those builds.
 
 Edit Python API docstrings and R roxygen sources for generated reference changes, not generated HTML.
 The site configurations are `docs/_quarto.yml`, `great-docs.yml`, and `r/_pkgdown.yml`.
-Generated build directories remain ignored.
+Generated Python sources, inventories, Markdown/LLM downloads, and build directories remain ignored.
+Keep Great Docs internal API calls in `docs/_python.py` and update its exact dependency pin when changing the integration.
+The Python reference filter resolves symbol links against the generated inventory; the main stylesheet owns reference presentation.
 
 On page load, the guides and package references follow the browser's light or dark preference by default.
 A saved choice from a page's theme control takes precedence over the browser preference.

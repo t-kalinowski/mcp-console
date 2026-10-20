@@ -1,12 +1,13 @@
 ---
 title: MCP Console Python
 description: Python clients and adapters for persistent R, Python, and SQL sessions.
+sidebar: reference
 ---
 
 `mcp_console` connects Python applications and model frameworks to Console's persistent workbench.
 This package connects your application to Console; it is separate from the Python environment used by the agent's analysis.
 Use this site for exact signatures and complete integration examples.
-The [guides](https://t-kalinowski.github.io/mcp-console/README.html) explain the shared workbench; [Reference](https://t-kalinowski.github.io/mcp-console/REFERENCE.html) covers runtime behavior and configuration.
+The [guides](../README.md) explain the shared workbench; [Reference](../REFERENCE.md) covers runtime behavior and configuration.
 
 ## Start without a model
 
@@ -53,5 +54,5 @@ Create adapters from the connected server so they retain its actual schema, rath
 
 A call can stop waiting while code continues.
 Poll without code to collect output; do not resubmit the cell.
-The [Python guide](https://t-kalinowski.github.io/mcp-console/PYTHON.html) explains connection ownership and requirements inspection.
+The [Python guide](../PYTHON.md) explains connection ownership and requirements inspection.
 [Requirements](reference/Requirements.qmd) documents the client declaration type.

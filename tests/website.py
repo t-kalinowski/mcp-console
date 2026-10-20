@@ -67,7 +67,11 @@ class WebsiteTests(unittest.TestCase):
         cls.addClassCleanup(cls.workspace.cleanup)
         docs = Path(cls.workspace.name) / "docs"
         shutil.copytree(
-            ROOT / "docs", docs, ignore=shutil.ignore_patterns(".quarto", "_site")
+            ROOT / "docs",
+            docs,
+            ignore=shutil.ignore_patterns(
+                ".quarto", "_site", "reference", "objects.json", "index.md", "llms*.txt"
+            ),
         )
         shutil.copytree(
             ROOT / "r",
@@ -95,6 +99,8 @@ class WebsiteTests(unittest.TestCase):
                 f"[Source]({prefix}../src/main.rs?plain=1#L1)\n\n"
                 f"[Template]({prefix}templates/task-checkpoint.md)\n\n"
                 f"[Guide]({prefix}SEND_OPERATIONS.md#standard-input-and-managed-reads)\n"
+                "\n[Send API](`mcp_console.MCPConsole.send`)\n"
+                "\n[](`~mcp_console.AsyncMCPConsole`)\n"
             )
         result = subprocess.run(
             ["quarto", "render", str(docs), "--to", "html"],
@@ -298,15 +304,19 @@ class WebsiteTests(unittest.TestCase):
                 for path in site.rglob("*")
                 if path.is_file()
                 and path != site / "index.html"
-                and (
-                    path.suffix == ".html"
-                    or path.relative_to(site).parts[0] in {"r", "python"}
-                )
+                and (path.suffix == ".html" or path.relative_to(site).parts[0] == "r")
             ]
             # Make rewrites visible even when their content and clock tick match.
             for path in unchanged:
                 os.utime(path, (1, 1))
             timestamps = {path: path.stat().st_mtime_ns for path in unchanged}
+            # Quarto recopies declared resources on partial renders. Their
+            # contents must stay intact even when the copy updates timestamps.
+            python_resources = {
+                path: path.read_bytes()
+                for path in (site / "python").rglob("*")
+                if path.is_file() and path.suffix != ".html"
+            }
             source = docs / "index.qmd"
             marker = "Single-page rendering preserves the rest of the website."
             source.write_text(source.read_text() + f"\n{marker}\n")
@@ -328,6 +338,8 @@ class WebsiteTests(unittest.TestCase):
                 0,
                 f"Single-page render changed unrelated output: {changed[:5]}",
             )
+            for path, content in python_resources.items():
+                self.assertEqual(path.read_bytes(), content, str(path))
 
     def test_get_started_has_connection_navigation(self) -> None:
         soup = BeautifulSoup(
@@ -579,9 +591,9 @@ class WebsiteTests(unittest.TestCase):
                     self.pages[page].links,
                 )
 
-    def test_python_package_subsite(self) -> None:
+    def test_python_package_reference(self) -> None:
         home = (self.site / "python/index.html").resolve()
-        self.assertIn(home, self.pages, "Great Docs home page is missing")
+        self.assertIn(home, self.pages, "Python package guide is missing")
         reference = (self.site / "python/reference/index.html").resolve()
         self.assertIn(reference, self.pages, "Python API index is missing")
         for name in (
@@ -591,6 +603,8 @@ class WebsiteTests(unittest.TestCase):
             "chatlas.tool",
             "chatlas.register",
             "openai.responses_tool",
+            "openai.ResponsesTool",
+            "openai.AsyncResponsesTool",
             "openai.agents_tool",
             "openai.agents_server",
             "anthropic.tool",
@@ -601,9 +615,7 @@ class WebsiteTests(unittest.TestCase):
                 page = (self.site / f"python/reference/{name}.html").resolve()
                 self.assertIn(page, self.pages, "Python API page is missing")
                 self.assertIn(name, self.pages[page].title)
-        search = json.loads((self.site / "python/search.json").read_text())
-        self.assertIn("reference/MCPConsole.html", {entry["href"] for entry in search})
-        sitemap = ElementTree.parse(self.site / "python/sitemap.xml")
+        sitemap = ElementTree.parse(self.site / "sitemap.xml")
         urls = {
             element.text
             for element in sitemap.findall(
@@ -614,7 +626,22 @@ class WebsiteTests(unittest.TestCase):
             "https://t-kalinowski.github.io/mcp-console/python/reference/MCPConsole.html",
             urls,
         )
-        self.assertTrue((self.site / "python/llms-full.txt").is_file())
+        self.assertIn(
+            "MCPConsole",
+            (self.site / "python/llms-full.txt").read_text(),
+        )
+        self.assertIn(
+            "reference/MCPConsole.html",
+            (self.site / "python/llms.txt").read_text(),
+        )
+        self.assertTrue((self.site / "python/reference/MCPConsole.md").is_file())
+        inventory = json.loads((self.site / "python/objects.json").read_text())
+        for item in inventory["items"]:
+            url = urlsplit(item["uri"])
+            target = self.site / url.path
+            with self.subTest(symbol=item["name"]):
+                self.assertIn(target, self.pages)
+                self.assertIn(url.fragment, self.pages[target].ids)
         for name in ("index.html", "reference/MCPConsole.html"):
             with self.subTest(package_page=name):
                 page = self.site / "python" / name
@@ -648,6 +675,49 @@ class WebsiteTests(unittest.TestCase):
                     if not urlsplit(link).scheme and not urlsplit(link).netloc
                 }
                 self.assertIn(target, destinations)
+
+    def test_python_reference_uses_main_website(self) -> None:
+        guide = BeautifulSoup((self.site / "PYTHON.html").read_text(), "html.parser")
+        for name in (
+            "python/index.html",
+            "python/reference/index.html",
+            "python/reference/MCPConsole.html",
+            "python/reference/openai.AsyncResponsesTool.html",
+        ):
+            with self.subTest(page=name):
+                path = self.site / name
+                page = BeautifulSoup(path.read_text(), "html.parser")
+                navbar = page.select_one("#quarto-header .navbar")
+                self.assertIsNotNone(navbar)
+                self.assertEqual(
+                    navbar.get_text(" ", strip=True),
+                    guide.select_one("#quarto-header .navbar").get_text(
+                        " ", strip=True
+                    ),
+                )
+                sidebar = page.select_one("#quarto-sidebar")
+                self.assertIsNotNone(sidebar)
+                self.assertIn("Configuration", sidebar.get_text())
+                self.assertIn("Python API", sidebar.get_text())
+                self.assertIsNotNone(page.select_one("#quarto-search"))
+                self.assertIsNotNone(page.select_one(".quarto-color-scheme-toggle"))
+                self.assertIsNone(
+                    page.select_one('nav[aria-label="Console documentation"]')
+                )
+                self.assertNotIn("great-docs", str(page.select("link[rel=stylesheet]")))
+        search = json.loads((self.site / "search.json").read_text())
+        self.assertIn(
+            "python/reference/MCPConsole.html",
+            {urlsplit(entry["href"]).path for entry in search},
+        )
+        self.assertTrue(
+            any(
+                "send_tool" in entry["text"]
+                and urlsplit(entry["href"]).path == "python/reference/MCPConsole.html"
+                for entry in search
+            ),
+            "The shared search must include inline method documentation",
+        )
 
     def test_python_integrations_are_grouped_by_package(self) -> None:
         groups = {

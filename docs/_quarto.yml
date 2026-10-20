@@ -1,8 +1,9 @@
 project:
   type: website
+  pre-render:
+    - _python.py
   post-render:
     - _pkgdown.R
-    - _python.py
   render:
     - index.qmd
     - getting-started.qmd
@@ -10,7 +11,15 @@ project:
     - README.md
     - "*.md"
     - benchmarks/*.md
+    - python/index.qmd
+    - python/reference/*.qmd
+    - "!python/**/*.md"
     - "!templates/"
+  resources:
+    - python/objects.json
+    - python/index.md
+    - python/reference/*.md
+    - python/llms*.txt
 
 website:
   title: MCP Console
@@ -92,7 +101,7 @@ website:
         - REQUIREMENTS_API.md
       - href: r/reference/index.html
         text: R API
-      - href: python/reference/index.html
+      - href: python/reference/index.qmd
         text: Python API
     - id: development
       title: Development
@@ -121,6 +130,7 @@ website:
         href: https://github.com/t-kalinowski/mcp-console
 
 filters:
+  - _filters/python-reference.lua
   - _filters/website.lua
 
 execute:
