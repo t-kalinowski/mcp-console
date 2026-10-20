@@ -53,6 +53,8 @@ By default, R can prepare a missing package when the agent calls `library(palmer
 Console resolves the package and continues the load without rerunning the cell.
 The agent can also request R packages through `requirements`.
 Managed Python instead waits for an explicit package request, such as the seaborn example above; an ordinary import does not trigger preparation.
+Evaluated `reticulate::py_require()` calls also count as explicit requests for managed Python, including declarations made when an R package loads.
+They retain declared versions and extras and use the same preparation lifecycle as MCP requests.
 
 You can let missing Python imports trigger preparation too, require explicit requests in R, or keep either language's startup declaration fixed for the session.
 A fixed declaration lets the agent use the packages prepared at startup while rejecting later additions through Console.
@@ -60,6 +62,7 @@ Each language can have its own policy.
 These policies control Console's package preparation; they do not grant network access or restrict arbitrary installation commands in submitted code.
 
 Exact settings: [Resolution policies](PACKAGE_CONFIGURATION.md#dependency-resolution-policies).
+See [Python declarations from R](API.md#python-declarations-from-r) for initialization and live-addition rules.
 
 ## Use an existing Python environment
 
