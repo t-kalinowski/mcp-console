@@ -104,6 +104,7 @@ After Quarto and pkgdown render, `docs/_urls.py` publishes lowercase directory U
 The generated `index.html` files belong only to the build output; source files do not move.
 The R and Python guides use `r-guide/` and `python-guide/`, leaving `r/` and `python/` for the package overviews.
 The hook updates page links, asset paths, search, sitemaps, and the Python inventory while preserving symbol fragments.
+Links from independently rendered package documentation must already use the published URLs; the hook only rewrites output built as part of the website.
 It also highlights the current navbar page or its sidebar index, so Get started and Guides can share a sidebar without both appearing under Get started.
 Partial renders update only the affected pages and their search entries.
 

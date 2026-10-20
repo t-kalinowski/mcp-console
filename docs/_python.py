@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from urllib.parse import urljoin
 
 from great_docs._apiref import APIReference
 from yaml12 import read_yaml
@@ -107,8 +108,16 @@ with tempfile.TemporaryDirectory(prefix="console-python-reference-") as workspac
             f"# {title}\n\n{body}",
         )
         (generated / relative).write_text(markdown)
-        full_text.append(markdown)
         url = website["site-url"] + "python/" + relative.with_suffix(".html").as_posix()
+        # The combined download lives above reference/. Resolve each page's
+        # links against its own URL before moving its text into that download.
+        full_text.append(
+            re.sub(
+                r"(?<=\]\()([^)\s]+)(?=\))",
+                lambda match: urljoin(url, match[0]),
+                markdown,
+            )
+        )
         links.append(f"- [{title}]({url})")
     (generated / "llms.txt").write_text("\n".join(links) + "\n")
     (generated / "llms-full.txt").write_text("\n\n".join(full_text))

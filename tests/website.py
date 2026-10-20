@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import shutil
 import signal
 import subprocess
@@ -15,7 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 from urllib.request import urlopen
 from xml.etree import ElementTree
 
@@ -143,6 +144,21 @@ class WebsiteTests(unittest.TestCase):
             raise AssertionError(result.stdout + result.stderr)
         cls.site = (docs / "_site").resolve()
         cls.pages = {path.resolve(): Page(path) for path in cls.site.rglob("*.html")}
+
+    def assert_published_links(self, links: list[str]) -> None:
+        base = read_yaml(ROOT / "docs/_quarto.yml")["website"]["site-url"]
+        for link in links:
+            url = urlsplit(link)
+            if url.netloc != urlsplit(base).netloc:
+                continue
+            with self.subTest(link=link):
+                self.assertTrue(link.startswith(base), "link escapes the site")
+                target = self.site / unquote(url.path.removeprefix(urlsplit(base).path))
+                if target.is_dir():
+                    target /= "index.html"
+                self.assertTrue(target.is_file(), "published target is missing")
+                if url.fragment:
+                    self.assertIn(unquote(url.fragment), self.pages[target].ids)
 
     def test_pages_use_lowercase_directory_urls(self) -> None:
         for route in (
@@ -801,6 +817,7 @@ class WebsiteTests(unittest.TestCase):
                     "--no-browser",
                 ],
                 cwd=workspace,
+                env={**os.environ, "NO_COLOR": "1"},
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -843,9 +860,15 @@ class WebsiteTests(unittest.TestCase):
                         with urlopen(base + route, timeout=15) as response:
                             html = response.read().decode()
                         self.assertIn("<h1", html)
-                        self.assertIn("quarto-preview.js", html)
-                with urlopen(base + "/quarto-preview.js", timeout=15) as response:
-                    self.assertEqual(response.status, 200)
+                        script = BeautifulSoup(html, "html.parser").select_one(
+                            'script[src$="quarto-preview.js"]'
+                        )
+                        self.assertIsNotNone(script)
+                        with urlopen(
+                            urljoin(base + route, script["src"]), timeout=15
+                        ) as response:
+                            self.assertEqual(response.status, 200)
+                            self.assertIn("QuartoPreview", response.read().decode())
 
                 source = workspace / "docs/BUILTIN_RUNTIME.md"
                 marker = "Preview updates this guide without restarting the server."
@@ -1208,6 +1231,57 @@ class WebsiteTests(unittest.TestCase):
                     "https://github.com/t-kalinowski/mcp-console/blob/main/r/README.md",
                     self.pages[page].links,
                 )
+
+    def test_standalone_r_vignettes_link_to_published_pages(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="console-vignettes-") as directory:
+            output = Path(directory)
+            script = output / "render.R"
+            script.write_text(
+                "args <- commandArgs(trailingOnly = TRUE)\n"
+                'for (input in list.files(args[[1]], pattern = "[.]Rmd$", full.names = TRUE)) {\n'
+                "  rmarkdown::render(input, output_dir = args[[2]], quiet = TRUE)\n"
+                "}\n"
+            )
+            result = subprocess.run(
+                [
+                    "Rscript",
+                    "--vanilla",
+                    str(script),
+                    str(Path(self.workspace.name) / "r/vignettes"),
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            rendered = list(output.glob("*.html"))
+            self.assertEqual(
+                {path.stem for path in rendered},
+                {path.stem for path in (ROOT / "r/vignettes").glob("*.Rmd")},
+            )
+            self.assert_published_links(
+                [link for path in rendered for link in Page(path).links]
+            )
+
+    def test_python_downloads_link_to_published_pages(self) -> None:
+        base = read_yaml(ROOT / "docs/_quarto.yml")["website"]["site-url"]
+        for name in ("llms.txt", "llms-full.txt"):
+            with self.subTest(download=name):
+                text = (self.site / "python" / name).read_text()
+                links = [
+                    urljoin(base + "python/" + name, link)
+                    for link in re.findall(r"(?<=\]\()([^)\s]+)(?=\))", text)
+                ]
+                self.assertTrue(links)
+                self.assert_published_links(links)
+                if name == "llms-full.txt":
+                    for target in (
+                        "python/reference/chatlas.tool/",
+                        "python/reference/asyncmcpconsole/#send",
+                        "api/#requirements",
+                    ):
+                        self.assertIn(base + target, links)
 
     def test_python_package_reference(self) -> None:
         home = (self.site / "python/index.html").resolve()
