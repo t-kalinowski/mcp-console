@@ -249,19 +249,15 @@ class WebsiteTests(unittest.TestCase):
         article = self.site / "r/articles/autonomous-report/index.html"
         self.assertIn(article, self.pages, "autonomous report vignette is missing")
         self.assertIn("Giving an agent an R session", self.pages[article].title)
-        for source in (
-            "index.html",
-            "reference/console_tool/index.html",
-            "reference/config-workflow/index.html",
-        ):
-            page = self.site / "r" / source
-            with self.subTest(source=source):
-                destinations = {
-                    linked_file(page, link)
-                    for link in self.pages[page].links
-                    if not urlsplit(link).scheme and not urlsplit(link).netloc
-                }
-                self.assertIn(article, destinations)
+        page = self.site / "r-guide/index.html"
+        guide = BeautifulSoup(page.read_text(), "html.parser")
+        destinations = {
+            linked_file(page, link["href"])
+            for link in guide.select("main a[href]")
+            if not urlsplit(link["href"]).scheme
+        }
+        self.assertIn(article, destinations)
+        self.assertIn(self.site / "r/articles/configuration/index.html", destinations)
         search = json.loads((self.site / "r/search.json").read_text())
         self.assertIn(
             "https://t-kalinowski.github.io/mcp-console/r/articles/autonomous-report/",
@@ -328,7 +324,7 @@ class WebsiteTests(unittest.TestCase):
         }
         self.assertIn(path, destinations)
 
-    def test_documentation_keeps_shared_navigation(self) -> None:
+    def test_guides_keep_shared_navigation(self) -> None:
         pages = (
             "readme/index.html",
             "getting-started/index.html",
@@ -340,14 +336,10 @@ class WebsiteTests(unittest.TestCase):
             "linux_compatibility/index.html",
             "windows/index.html",
             "builtin_runtime/index.html",
+            "requirements/index.html",
+            "sandbox/index.html",
+            "recording/index.html",
             "build_on_console/index.html",
-            "configuration/index.html",
-            "runtime_configuration/index.html",
-            "runtime_reference/index.html",
-            "configuration_reference/index.html",
-            "sandbox_configuration/index.html",
-            "cli/index.html",
-            "cli-help/index.html",
             "sandbox_command/index.html",
         )
         navigation = []
@@ -366,10 +358,18 @@ class WebsiteTests(unittest.TestCase):
                 navigation.append(links)
                 self.assertEqual(links, navigation[0])
                 self.assertIn("clients/index.html", links)
-                self.assertIn("sandbox_configuration/index.html", links)
-                self.assertIn("runtime_reference/index.html", links)
+                self.assertIn("sandbox_command/index.html", links)
+                self.assertNotIn("sandbox_configuration/index.html", links)
+                self.assertNotIn("runtime_reference/index.html", links)
                 self.assertNotIn("api/index.html", links)
                 sections = sidebar.select(".sidebar-item-section")
+                self.assertEqual(
+                    [
+                        section.select_one(".sidebar-item-text").get_text(strip=True)
+                        for section in sections
+                    ],
+                    ["Learn Console", "Set up", "Tasks"],
+                )
                 learning = sections[0]
                 heading = learning.select_one(".sidebar-item-text")
                 self.assertEqual(heading.get_text(strip=True), "Learn Console")
@@ -384,42 +384,92 @@ class WebsiteTests(unittest.TestCase):
                 self.assertEqual(
                     chapters,
                     [
-                        "builtin_runtime/index.html",
                         "getting-started/index.html",
+                        "builtin_runtime/index.html",
                         "requirements/index.html",
                         "sandbox/index.html",
                         "recording/index.html",
                     ],
-                )
-                language_reference = next(
-                    link
-                    for link in sidebar.select("a[href]")
-                    if linked_file(self.site / name, link["href"])
-                    == self.site / "runtime_reference/index.html"
-                ).find_parent("li", class_="sidebar-item-section")
-                self.assertEqual(
-                    language_reference.select_one(".sidebar-item-text").get_text(
-                        strip=True
-                    ),
-                    "Reference",
                 )
                 labels = [
                     link.get_text(" ", strip=True)
                     for link in soup.select(".navbar-nav .nav-link")
                     if link.get_text(strip=True)
                 ]
-                self.assertEqual(
-                    labels, ["Get started", "Documentation", "API reference"]
-                )
+                self.assertEqual(labels, ["Get started", "Guides", "Reference"])
 
-    def test_api_and_development_have_focused_navigation(self) -> None:
+    def test_learning_chapters_have_previous_and_next_links(self) -> None:
+        chapters = [
+            "getting-started",
+            "builtin_runtime",
+            "requirements",
+            "sandbox",
+            "recording",
+        ]
+        for previous, following in zip(chapters, chapters[1:]):
+            for current, direction, target in (
+                (previous, "next", following),
+                (following, "previous", previous),
+            ):
+                with self.subTest(chapter=current, direction=direction):
+                    path = self.site / current / "index.html"
+                    page = BeautifulSoup(path.read_text(), "html.parser")
+                    link = page.select_one(f".nav-page-{direction} a[href]")
+                    self.assertIsNotNone(link)
+                    self.assertEqual(
+                        linked_file(path, link["href"]),
+                        self.site / target / "index.html",
+                    )
+
+    def test_reference_has_one_shared_navigation(self) -> None:
+        navigation = []
+        for name in (
+            "reference",
+            "configuration",
+            "runtime_configuration",
+            "tool_configuration",
+            "sandbox_configuration",
+            "resolver",
+            "environment",
+            "runtime_reference",
+            "cli",
+            "cli-help",
+            "api",
+            "send_operations",
+            "requirements_api",
+            "glossary",
+            "python/reference/mcpconsole",
+        ):
+            with self.subTest(page=name):
+                path = self.site / name / "index.html"
+                page = BeautifulSoup(path.read_text(), "html.parser")
+                links = [
+                    linked_file(path, link["href"]).relative_to(self.site).as_posix()
+                    for link in page.select("#quarto-sidebar a[href]")
+                    if urlsplit(link["href"]).path
+                ]
+                navigation.append(links)
+                self.assertEqual(links, navigation[0])
+                for target in (
+                    "configuration",
+                    "runtime_reference",
+                    "cli",
+                    "api",
+                    "python/reference",
+                    "r/reference",
+                    "glossary",
+                ):
+                    self.assertIn(f"{target}/index.html", links)
+                for target in (
+                    "getting-started",
+                    "installation",
+                    "build_on_console",
+                    "sandbox_command",
+                ):
+                    self.assertNotIn(f"{target}/index.html", links)
+
+    def test_development_has_focused_navigation(self) -> None:
         paths = (
-            ("reference/index.html", "api/index.html", "configuration/index.html"),
-            (
-                "api/index.html",
-                "requirements_api/index.html",
-                "sandbox_configuration/index.html",
-            ),
             (
                 "architecture/index.html",
                 "windows_development/index.html",
@@ -442,7 +492,7 @@ class WebsiteTests(unittest.TestCase):
                 self.assertIn(included, links)
                 self.assertNotIn(excluded, links)
                 navbar = soup.select_one(".navbar")
-                for label in ("Documentation", "Get started", "API reference"):
+                for label in ("Guides", "Get started", "Reference"):
                     self.assertIn(label, navbar.get_text(" ", strip=True))
                 self.assertNotIn("Packages", navbar.get_text(" ", strip=True))
 
@@ -450,7 +500,24 @@ class WebsiteTests(unittest.TestCase):
         page = BeautifulSoup(
             (self.site / "readme/index.html").read_text(), "html.parser"
         )
-        self.assertEqual(page.select_one("h1").get_text(strip=True), "Documentation")
+        self.assertEqual(page.select_one("h1").get_text(strip=True), "Guides")
+        self.assertEqual(
+            [heading.get_text(strip=True) for heading in page.select("main h2")],
+            ["Learn Console", "I want to…"],
+        )
+        self.assertEqual(
+            [
+                linked_file(self.site / "readme/index.html", link["href"]).parent.name
+                for link in page.select("#learn-console ol a[href]")
+            ],
+            [
+                "getting-started",
+                "builtin_runtime",
+                "requirements",
+                "sandbox",
+                "recording",
+            ],
+        )
         table = page.select_one("main table")
         self.assertIsNotNone(table)
         self.assertIn("I want to", table.get_text())
@@ -695,7 +762,7 @@ class WebsiteTests(unittest.TestCase):
         sidebar = soup.find(id="quarto-sidebar")
         for element, included, excluded in (
             (navbar, "getting-started/index.html", "windows/index.html"),
-            (sidebar, "configuration/index.html", "api/index.html"),
+            (sidebar, "clients/index.html", "configuration/index.html"),
         ):
             links = {
                 linked_file(self.site / "getting-started/index.html", link["href"])
@@ -937,6 +1004,17 @@ class WebsiteTests(unittest.TestCase):
         search = json.loads((self.site / "r/search.json").read_text())
         self.assertIn(reference_url, {entry["path"] for entry in search})
         self.assertIn("arguments", self.pages[reference].ids)
+        navbar = BeautifulSoup(reference.read_text(), "html.parser").select_one(
+            ".navbar"
+        )
+        self.assertEqual(
+            [
+                link.get_text(strip=True)
+                for link in navbar.select(".nav-link")
+                if link.get_text(strip=True)
+            ],
+            ["MCP Console", "Get started", "Guides", "Reference"],
+        )
         self.assertIn("../../../", self.pages[reference].links)
         for target in ("getting-started/", "readme/", "reference/"):
             self.assertIn(f"../../../{target}", self.pages[reference].links)
@@ -1076,7 +1154,7 @@ class WebsiteTests(unittest.TestCase):
                 )
                 sidebar = page.select_one("#quarto-sidebar")
                 self.assertIsNotNone(sidebar)
-                self.assertNotIn("Configuration", sidebar.get_text())
+                self.assertIn("Configuration", sidebar.get_text())
                 self.assertIn("MCP send", sidebar.get_text())
                 self.assertIn("Python API", sidebar.get_text())
                 self.assertIsNotNone(page.select_one("#quarto-search"))

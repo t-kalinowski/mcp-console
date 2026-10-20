@@ -1,4 +1,4 @@
-# Documentation
+# Guides
 
 These pages apply whether you connect with an MCP client, from R, or from Python.
 
@@ -10,8 +10,8 @@ These pages apply whether you connect with an MCP client, from R, or from Python
 
 These guides introduce Console through a session with your agent:
 
-1. [Sessions and languages](BUILTIN_RUNTIME.md): run code and build on earlier results.
-2. [Get started](getting-started.qmd): connect an agent and try a first analysis.
+1. [Get started](getting-started.qmd): connect an agent and try a first analysis.
+2. [Sessions and languages](BUILTIN_RUNTIME.md): run code and build on earlier results.
 3. [Packages and environments](REQUIREMENTS.md): use packages without preparing an environment yourself.
 4. [Sandbox and trust](SANDBOX.md): understand what the agent can access.
 5. [Recordings and reports](RECORDING.md): inspect and reuse the work.
@@ -47,17 +47,4 @@ For a particular configuration key, use the [settings index](CONFIGURATION.md#se
 
 The [glossary](GLOSSARY.md) defines terms used in these pages.
 
-## Customize Console
-
-[Customize Console](BUILD_ON_CONSOLE.md) shows how to choose the languages and parameters your agent sees, describe available data, and prepare a session with packages, connections, and helper functions.
-These settings apply to all connection methods.
-
-## Other documentation
-
-<span id="reference"></span> <span id="configure-a-project"></span> <span id="public-reference"></span>
-
-[API reference](REFERENCE.md) documents the MCP interface and the R and Python packages.
-
-<span id="develop-console"></span>
-
-[Development](DEVELOPMENT.md) is for changing Console itself, including architecture, internal protocols, testing, and release procedures.
+<span id="reference"></span> <span id="configure-a-project"></span> <span id="public-reference"></span> <span id="develop-console"></span>

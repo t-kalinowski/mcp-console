@@ -1,5 +1,5 @@
 ---
-sidebar: documentation
+sidebar: guides
 ---
 
 # Build from source

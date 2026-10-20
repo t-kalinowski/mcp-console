@@ -126,7 +126,7 @@ On Windows, invoke either script explicitly with `uv run --no-project --isolated
 The pre-render script `docs/_python.py` uses the pinned Great Docs generator to write Python reference sources before Quarto discovers pages.
 The hook runs through uv, which prepares a separate environment from `docs/requirements.txt`; Great Docs does not need to be installed in the Python environment Quarto selects.
 It preserves explicit members, inline methods, static introspection, symbol anchors, and source links.
-Generated pages use the main site's API reference sidebar, theme, and search.
+Generated pages use the main site's Reference sidebar, theme, and search.
 Preview starts with a full HTML render so Quarto discovers generated pages on a clean checkout, then rerenders changed pages.
 Use `scripts/preview-site` so the URL hook retains the original outputs Quarto needs to track those renders.
 The clean URLs use Quarto's reload client, and preview stays on the current page when a source changes.
@@ -163,16 +163,15 @@ A saved choice from a page's theme control takes precedence over the browser pre
 
 ### Documentation ownership
 
-The top navigation links to [Get started](getting-started.qmd), [Documentation](README.md), and [API reference](REFERENCE.md).
-Documentation opens a compact reading list followed by the "I want to…" table.
+The top navigation links to [Get started](getting-started.qmd), [Guides](README.md), and [Reference](REFERENCE.md).
+Guides opens a compact reading list followed by the "I want to…" table.
 Get started is a walkthrough of connecting an agent, running a first analysis, following up, and reviewing the work.
-Both use one shared sidebar, beginning with an expanded Learn Console category: Sessions and languages, Get started, Packages and environments, Sandbox and trust, and Recordings and reports.
-The remaining groups cover connections, configuration, and reference material.
-Language behavior belongs in Reference, outside the learning sequence.
-API reference has a smaller sidebar for the MCP interface and Python and R package references.
+Both use one shared sidebar, beginning with an expanded Learn Console category: Get started, Sessions and languages, Packages and environments, Sandbox and trust, and Recordings and reports.
+The Set up group covers installation and connection methods; Tasks contains Customize Console and Run commands in a sandbox.
+Reference has one sidebar for configuration, language behavior, the command line, MCP, package APIs, and the glossary.
 Development has its own sidebar and a footer link.
-Keep the learning chapters readable in order, with a continuation at the end of each.
-Use examples to explain the concepts, then link to the owning topic for complete settings and edge cases.
+Quarto's previous/next links follow sidebar order so readers can walk through the learning chapters.
+Keep the chapter continuations in the same order.
 
 All settings accepted in `config.yaml` belong in the user reference.
 Each reference topic has one owner: [Configuration files](CONFIGURATION.md) for discovery, merging, paths, and export; [Interpreters and startup](RUNTIME_CONFIGURATION.md) for R/Python selection, startup packages, resolution policies, and database startup; [Tool configuration](TOOL_CONFIGURATION.md) for language visibility, descriptions, and accepted parameters; [Sandbox permissions](SANDBOX_CONFIGURATION.md) for permission fields and enforcement limits; [Package sources and caches](RESOLVER.md) for preparation and cache settings; and [Environment variables](ENVIRONMENT.md) for environment settings and recognized variables.
@@ -180,7 +179,7 @@ The configuration settings index links to these owners instead of repeating thei
 [Language behavior](RUNTIME_REFERENCE.md) owns code execution, language helpers, SQL results, and output; [Recordings and reports](RECORDING.md) owns recording behavior and report workflows.
 
 [Customize Console](BUILD_ON_CONSOLE.md) introduces tool descriptions, language and parameter visibility, and prepared sessions for any connection method.
-[MCP client setup](CLIENTS.md), [R](R.md), and [Python](PYTHON.md) belong in the shared documentation sidebar under Connect to Console.
+[MCP client setup](CLIENTS.md), [R](R.md), and [Python](PYTHON.md) belong in the shared Guides sidebar under Set up.
 Generated package manuals provide exact signatures and package-specific examples, with links back to the main documentation.
 Exact MCP calls and requirement operations belong in [MCP send reference](API.md) and [Requirements API](REQUIREMENTS_API.md).
 Keep compatibility anchors when moving public sections and include every new page in the appropriate sidebar and search index.

@@ -35,21 +35,22 @@ website:
   repo-url: https://github.com/t-kalinowski/mcp-console
   repo-subdir: docs
   repo-actions: [edit, issue]
+  page-navigation: true
   navbar:
     left:
       - href: getting-started.qmd
         text: Get started
       - href: README.md
-        text: Documentation
+        text: Guides
       - href: REFERENCE.md
-        text: API reference
+        text: Reference
     right:
       - icon: github
         href: https://github.com/t-kalinowski/mcp-console
         aria-label: GitHub repository
   sidebar:
-    - id: documentation
-      title: Documentation
+    - id: guides
+      title: Guides
       style: docked
       collapse-level: 2
       contents:
@@ -57,50 +58,56 @@ website:
         text: Overview
       - section: Learn Console
         contents:
-        - BUILTIN_RUNTIME.md
         - getting-started.qmd
+        - BUILTIN_RUNTIME.md
         - REQUIREMENTS.md
         - SANDBOX.md
         - RECORDING.md
-      - section: Connect to Console
+      - section: Set up
         contents:
+        - INSTALLATION.md
         - href: CLIENTS.md
           text: MCP clients
         - R.md
         - PYTHON.md
-      - section: Configuration
+      - section: Tasks
         contents:
         - BUILD_ON_CONSOLE.md
+        - SANDBOX_COMMAND.md
+    - id: reference
+      title: Reference
+      style: docked
+      collapse-level: 2
+      contents:
+      - href: REFERENCE.md
+        text: Reference index
+      - section: Configuration
+        contents:
         - CONFIGURATION.md
         - RUNTIME_CONFIGURATION.md
         - TOOL_CONFIGURATION.md
         - SANDBOX_CONFIGURATION.md
         - RESOLVER.md
         - ENVIRONMENT.md
-      - section: Reference
+      - RUNTIME_REFERENCE.md
+      - section: Command line
         contents:
-        - RUNTIME_REFERENCE.md
-        - INSTALLATION.md
-        - CLI.md
+        - href: CLI.md
+          text: CLI reference
         - cli-help.qmd
-        - href: SANDBOX_COMMAND.md
-          text: Sandbox command
-        - GLOSSARY.md
-    - id: reference
-      title: API reference
-      style: docked
-      collapse-level: 1
-      contents:
-      - href: REFERENCE.md
-        text: API overview
-      - href: API.md
-        text: MCP send
-      - SEND_OPERATIONS.md
-      - REQUIREMENTS_API.md
-      - href: python/reference/index.qmd
-        text: Python API
-      - href: r/reference/index.html
-        text: R API
+      - section: MCP
+        contents:
+        - href: API.md
+          text: MCP send
+        - SEND_OPERATIONS.md
+        - REQUIREMENTS_API.md
+      - section: Packages
+        contents:
+        - href: r/reference/index.html
+          text: R API
+        - href: python/reference/index.qmd
+          text: Python API
+      - GLOSSARY.md
     - id: development
       title: Development
       style: docked
