@@ -461,7 +461,7 @@ def test_fixed_rejects_py_require_preparation(
             baseline = uv_tool_run_requirements(uv_record)
             client.expect(
                 "native import errors\n",
-                r=f"reticulate::py_run_string({json.dumps(NATIVE_IMPORT_ERRORS)})",
+                r=f'reticulate::py_run_string(r"(\n{NATIVE_IMPORT_ERRORS})")',
             )
             client.expect(
                 # fmt: r

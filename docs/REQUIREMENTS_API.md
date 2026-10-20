@@ -129,6 +129,9 @@ The `fixed` policy continues to reject changes; existing Python environments ret
 
 Managed Python defaults to `explicit`: declare dependencies through `requirements.python` or `reticulate::py_require()` before importing them.
 Set `python.resolution: implicit` in `config.yaml` to let a last-chance import finder prepare a missing distribution.
+Console registers this dependency-resolution finder only under `implicit`.
+Under `explicit` and `fixed`, missing imports retain native Python errors without distribution inference or a preparation request.
+Display, plotting, and reticulate interoperability hooks remain active independently of this policy.
 Existing standard-library, installed, local, and loaded modules retain normal lookup.
 Availability checks such as `find_spec()` do not install packages.
 

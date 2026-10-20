@@ -67,6 +67,8 @@ Interrupt delivery belongs to the outer relay; MCP response assembly belongs to 
 Python environment replies contain inspected runtime identity and manifests, not rediscovery hints.
 Runtime callbacks cannot supply arbitrary resolver programs or environment maps.
 Public package declarations and private activation objects are different schemas.
+The captured worker selection carries `automatic_python_resolution` separately from managed-interpreter capability, including when R-side interpreter selection is still lazy.
+Only a managed interpreter with this capability registers the dependency-resolution finder; the host also checks policy admission for every inferred request.
 
 ## Readiness and operations
 
