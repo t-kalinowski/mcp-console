@@ -441,8 +441,8 @@ def test_fixed_rejects_py_require_preparation(
                     )
                     stopifnot(grepl("python.managed.resolution=fixed", failure, fixed = TRUE))
                     reticulate::py_require(
-                      before$packages,
-                      python_version = before$python_version,
+                      as.character(before$packages),
+                      python_version = as.character(before$python_version),
                       action = "set"
                     )
                     """),
