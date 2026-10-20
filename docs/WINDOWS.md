@@ -1,5 +1,5 @@
 ---
-sidebar: get-started
+sidebar: documentation
 ---
 
 # Windows

@@ -89,8 +89,8 @@ Garbage collection requests shutdown by closing server input, waits up to 15 sec
 That fallback does not prove descendant cleanup.
 Keep the tool reachable while the chat is using it.
 
-[Console guides](https://t-kalinowski.github.io/mcp-console/README.html) explain the shared workbench.
-[Reference](https://t-kalinowski.github.io/mcp-console/REFERENCE.html) covers runtime behavior, configuration, and MCP calls.
+[Console documentation](https://t-kalinowski.github.io/mcp-console/README.html) covers the shared workbench, language behavior, and configuration.
+[API reference](https://t-kalinowski.github.io/mcp-console/REFERENCE.html) links the MCP interface and client package references.
 The package reference documents the exact R signature.
 
 ## Give an agent an R session

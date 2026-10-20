@@ -1,5 +1,5 @@
 ---
-sidebar: reference
+sidebar: documentation
 ---
 
 # Configuration reference

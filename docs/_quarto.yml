@@ -34,53 +34,41 @@ website:
   repo-actions: [edit, issue]
   navbar:
     left:
+      - href: README.md
+        text: Documentation
       - href: getting-started.qmd
         text: Get started
-      - href: README.md
-        text: Guides
       - href: REFERENCE.md
-        text: Reference
+        text: API reference
     right:
       - icon: github
         href: https://github.com/t-kalinowski/mcp-console
         aria-label: GitHub repository
   sidebar:
-    - id: get-started
-      title: Get started
-      style: docked
-      collapse-level: 1
-      contents:
-      - href: getting-started.qmd
-        text: Overview
-      - href: CLIENTS.md
-        text: MCP clients
-      - R.md
-      - PYTHON.md
-      - INSTALLATION.md
-      - section: Platform setup
-        contents:
-        - LINUX_COMPATIBILITY.md
-        - BUILD_FROM_SOURCE.md
-    - id: guides
-      title: Guides
+    - id: documentation
+      title: Documentation
       style: docked
       collapse-level: 1
       contents:
       - href: README.md
-        text: Overview
-      - BUILTIN_RUNTIME.md
-      - REQUIREMENTS.md
-      - SANDBOX.md
-      - RECORDING.md
-      - BUILD_ON_CONSOLE.md
-      - GLOSSARY.md
-    - id: reference
-      title: Reference
-      style: docked
-      collapse-level: 1
-      contents:
-      - href: REFERENCE.md
-        text: Overview
+        text: Find a task
+      - href: getting-started.qmd
+        text: Get started
+      - section: Connect to Console
+        contents:
+        - INSTALLATION.md
+        - href: CLIENTS.md
+          text: MCP clients
+        - R.md
+        - PYTHON.md
+      - section: Use Console
+        contents:
+        - BUILTIN_RUNTIME.md
+        - RUNTIME_REFERENCE.md
+        - REQUIREMENTS.md
+        - SANDBOX.md
+        - RECORDING.md
+        - BUILD_ON_CONSOLE.md
       - section: Configuration
         contents:
         - CONFIGURATION.md
@@ -89,22 +77,28 @@ website:
         - SANDBOX_CONFIGURATION.md
         - RESOLVER.md
         - ENVIRONMENT.md
-      - RUNTIME_REFERENCE.md
       - section: Command line
         contents:
         - CLI.md
         - cli-help.qmd
         - href: SANDBOX_COMMAND.md
           text: Sandbox command
-      - section: MCP API
-        contents:
-        - API.md
-        - SEND_OPERATIONS.md
-        - REQUIREMENTS_API.md
-      - href: r/reference/index.html
-        text: R API
+      - GLOSSARY.md
+    - id: reference
+      title: API reference
+      style: docked
+      collapse-level: 1
+      contents:
+      - href: REFERENCE.md
+        text: API overview
+      - href: API.md
+        text: MCP send
+      - SEND_OPERATIONS.md
+      - REQUIREMENTS_API.md
       - href: python/reference/index.qmd
         text: Python API
+      - href: r/reference/index.html
+        text: R API
     - id: development
       title: Development
       style: docked

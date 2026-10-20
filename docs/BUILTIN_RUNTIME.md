@@ -49,7 +49,7 @@ r.penguins.plot.scatter(x="flipper_length_mm", y="body_mass_g")
 
 Here, SQL queries the R data frame through the default R-owned DuckDB connection, and Python accesses it through reticulate as `r.penguins`.
 Conversions follow reticulate's rules; some conversions need additional Python packages, such as pandas for data frames.
-The [runtime reference](RUNTIME_REFERENCE.md#r-and-python-interoperability) describes the language bridge and its helpers.
+[Language behavior](RUNTIME_REFERENCE.md#r-and-python-interoperability) describes the language bridge and its helpers.
 
 ## Tailor the runtime {#runtime-selection}
 
@@ -118,7 +118,7 @@ It can retrieve all rows at once or work through the result in chunks.
 Ask the agent for the recording's location.
 The recorded Quarto document provides a starting point for a report; review its code, inputs, and package requirements before rendering it.
 
-For precise language behavior, see the [runtime reference](RUNTIME_REFERENCE.md).
+For details on code execution, SQL results, and output, see [Language behavior](RUNTIME_REFERENCE.md).
 [Get started](getting-started.qmd) covers using Console with an MCP client, from R, or from Python.
 
 Continue with [Packages and environments](REQUIREMENTS.md) to learn how Console prepares the libraries your agent uses.

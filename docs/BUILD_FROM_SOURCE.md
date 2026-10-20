@@ -1,3 +1,7 @@
+---
+sidebar: documentation
+---
+
 # Build from source
 
 Use a source build to install the development version.

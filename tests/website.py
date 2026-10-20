@@ -268,21 +268,58 @@ class WebsiteTests(unittest.TestCase):
         }
         self.assertIn(path, destinations)
 
-    def test_documentation_sections_have_distinct_navigation(self) -> None:
+    def test_documentation_keeps_shared_navigation(self) -> None:
+        pages = (
+            "README.html",
+            "getting-started.html",
+            "CLIENTS.html",
+            "R.html",
+            "PYTHON.html",
+            "INSTALLATION.html",
+            "BUILD_FROM_SOURCE.html",
+            "LINUX_COMPATIBILITY.html",
+            "WINDOWS.html",
+            "BUILTIN_RUNTIME.html",
+            "BUILD_ON_CONSOLE.html",
+            "CONFIGURATION.html",
+            "RUNTIME_CONFIGURATION.html",
+            "RUNTIME_REFERENCE.html",
+            "CONFIGURATION_REFERENCE.html",
+            "SANDBOX_CONFIGURATION.html",
+            "CLI.html",
+            "cli-help.html",
+            "SANDBOX_COMMAND.html",
+        )
+        navigation = []
+        for name in pages:
+            with self.subTest(page=name):
+                soup = BeautifulSoup((self.site / name).read_text(), "html.parser")
+                sidebar = soup.find(id="quarto-sidebar")
+                self.assertIsNotNone(sidebar)
+                links = [
+                    urlsplit(link["href"]).path.removeprefix("./")
+                    for link in sidebar.select("a[href]")
+                    if urlsplit(link["href"]).path
+                ]
+                navigation.append(links)
+                self.assertEqual(links, navigation[0])
+                self.assertIn("CLIENTS.html", links)
+                self.assertIn("SANDBOX_CONFIGURATION.html", links)
+                self.assertIn("RUNTIME_REFERENCE.html", links)
+                self.assertNotIn("API.html", links)
+                labels = [
+                    link.get_text(" ", strip=True)
+                    for link in soup.select(".navbar-nav .nav-link")
+                    if link.get_text(strip=True)
+                ]
+                self.assertEqual(
+                    labels, ["Documentation", "Get started", "API reference"]
+                )
+
+    def test_api_and_development_have_focused_navigation(self) -> None:
         paths = (
-            ("getting-started.html", "CLIENTS.html", "REQUIREMENTS.html"),
-            ("CLIENTS.html", "R.html", "CONFIGURATION.html"),
-            ("R.html", "PYTHON.html", "SANDBOX.html"),
-            ("PYTHON.html", "R.html", "ARCHITECTURE.html"),
-            ("INSTALLATION.html", "CLIENTS.html", "CLI.html"),
-            ("README.html", "BUILTIN_RUNTIME.html", "CLIENTS.html"),
-            ("BUILD_ON_CONSOLE.html", "REQUIREMENTS.html", "CLIENTS.html"),
-            ("REFERENCE.html", "CONFIGURATION.html", "REQUIREMENTS.html"),
-            ("CONFIGURATION.html", "SEND_OPERATIONS.html", "WORKER_PROTOCOL.html"),
-            ("RUNTIME_CONFIGURATION.html", "API.html", "ARCHITECTURE.html"),
-            ("RUNTIME_REFERENCE.html", "API.html", "ARCHITECTURE.html"),
-            ("CONFIGURATION_REFERENCE.html", "API.html", "ARCHITECTURE.html"),
-            ("API.html", "SANDBOX_CONFIGURATION.html", "WORKER_PROTOCOL.html"),
+            ("REFERENCE.html", "API.html", "CONFIGURATION.html"),
+            ("API.html", "REQUIREMENTS_API.html", "SANDBOX_CONFIGURATION.html"),
             ("ARCHITECTURE.html", "WINDOWS_DEVELOPMENT.html", "REQUIREMENTS.html"),
         )
         for name, included, excluded in paths:
@@ -297,9 +334,29 @@ class WebsiteTests(unittest.TestCase):
                 self.assertIn(included, links)
                 self.assertNotIn(excluded, links)
                 navbar = soup.select_one(".navbar")
-                for label in ("Get started", "Guides", "Reference"):
+                for label in ("Documentation", "Get started", "API reference"):
                     self.assertIn(label, navbar.get_text(" ", strip=True))
                 self.assertNotIn("Packages", navbar.get_text(" ", strip=True))
+
+    def test_documentation_starts_with_task_index(self) -> None:
+        page = BeautifulSoup((self.site / "README.html").read_text(), "html.parser")
+        self.assertEqual(page.select_one("h1").get_text(strip=True), "Documentation")
+        table = page.select_one("main table")
+        self.assertIsNotNone(table)
+        self.assertIn("I want to", table.get_text())
+        links = {link["href"].removeprefix("./") for link in table.select("a[href]")}
+        for target in (
+            "CLIENTS.html",
+            "R.html",
+            "PYTHON.html",
+            "REQUIREMENTS.html",
+            "SANDBOX_CONFIGURATION.html",
+            "RUNTIME_REFERENCE.html#retrieve-the-last-sql-result",
+            "RECORDING.html",
+        ):
+            self.assertIn(target, links)
+        runtime = self.pages[self.site / "RUNTIME_REFERENCE.html"]
+        self.assertIn("Language behavior", runtime.title)
 
     def test_home_title_has_one_introduction_and_description_metadata(self) -> None:
         soup = BeautifulSoup((self.site / "index.html").read_text(), "html.parser")
@@ -366,7 +423,7 @@ class WebsiteTests(unittest.TestCase):
         sidebar = soup.find(id="quarto-sidebar")
         for element, included, excluded in (
             (navbar, "getting-started.html", "WINDOWS.html"),
-            (sidebar, "CLIENTS.html", "CONFIGURATION.html"),
+            (sidebar, "CONFIGURATION.html", "API.html"),
         ):
             links = {
                 urlsplit(link["href"]).path.removeprefix("./")
@@ -376,14 +433,18 @@ class WebsiteTests(unittest.TestCase):
             self.assertNotIn(excluded, links)
 
     def test_mcp_client_setup_uses_uvx_and_global_scope(self) -> None:
-        commands = [
-            line.strip()
-            for code in self.pages[self.site / "CLIENTS.html"].code_blocks
-            for line in code.splitlines()
-            if "configure-client" in line
-        ]
-        for client in ("codex", "claude"):
-            self.assertIn(f"uvx mcp-console configure-client {client}", commands)
+        for name in ("getting-started.html", "CLIENTS.html"):
+            with self.subTest(page=name):
+                commands = [
+                    line.strip()
+                    for code in self.pages[self.site / name].code_blocks
+                    for line in code.splitlines()
+                    if "configure-client" in line
+                ]
+                for client in ("codex", "claude"):
+                    self.assertIn(
+                        f"uvx mcp-console configure-client {client}", commands
+                    )
 
     def test_other_client_configuration_uses_uvx(self) -> None:
         configuration = next(
@@ -397,6 +458,7 @@ class WebsiteTests(unittest.TestCase):
 
     def test_moved_reference_pages_and_historical_fragments(self) -> None:
         fragments = {
+            "REFERENCE": ("find-a-task", "apis-and-package-manuals"),
             "README": (
                 "get-connected",
                 "learn-console",
@@ -714,7 +776,8 @@ class WebsiteTests(unittest.TestCase):
                 )
                 sidebar = page.select_one("#quarto-sidebar")
                 self.assertIsNotNone(sidebar)
-                self.assertIn("Configuration", sidebar.get_text())
+                self.assertNotIn("Configuration", sidebar.get_text())
+                self.assertIn("MCP send", sidebar.get_text())
                 self.assertIn("Python API", sidebar.get_text())
                 self.assertIsNotNone(page.select_one("#quarto-search"))
                 self.assertIsNotNone(page.select_one(".quarto-color-scheme-toggle"))

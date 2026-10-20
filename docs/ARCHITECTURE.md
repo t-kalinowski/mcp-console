@@ -114,7 +114,7 @@ Each provider initially fetches at most 21 preview/lookahead rows and requests o
 Console does not eagerly fetch, copy, count, or spool the complete result; engines and drivers still own their internal buffering.
 An empty fetch or `fetchall()` establishes DB-API exhaustion; a short nonempty batch does not.
 The router and selection callbacks invalidate results across language boundaries without initializing another runtime.
-Observable consumption, conversion, and lifetime rules belong in the [runtime reference](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result).
+Observable consumption, conversion, and lifetime rules belong in [Language behavior](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result).
 
 Configured SQL startup code runs once per worker after its helpers are installed.
 A failed startup cannot be silently replayed or replaced with a fallback connection.
@@ -312,7 +312,7 @@ R startup can mutate the native process environment; neither that thread nor the
 
 R opens installed vignette files using native filename handling and passes their bytes to a callback using Rust's `html2text` crate, without Pandoc, knitr, rmarkdown, or a browser.
 Console removes the temporary converted file if a function pager raises an error.
-Observable text and encoding behavior belongs in [Runtime reference](RUNTIME_REFERENCE.md#installed-documentation).
+Observable text and encoding behavior belongs in [Language behavior](RUNTIME_REFERENCE.md#installed-documentation).
 
 ## Internal variables: leave unset
 

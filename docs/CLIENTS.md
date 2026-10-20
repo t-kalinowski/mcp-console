@@ -32,7 +32,7 @@ See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
 ## Try an analysis
 
 Return to [Get started](getting-started.qmd#try-an-analysis) for a first analysis and permission settings.
-The [guides](README.md) explain sessions, packages, sandbox permissions, and recordings.
+The [documentation](README.md) covers sessions, packages, sandbox permissions, and recordings.
 
 ## R and Python clients {#connect-from-application-code}
 
@@ -54,7 +54,7 @@ These clients use the same workbench and settings.
 [Calls, input, and control](SEND_OPERATIONS.md) covers sequencing, polling, interactive input, interruption, and restart.
 
 [Requirements API](REQUIREMENTS_API.md) documents dependency actions and their effects on a running session.
-[Runtime reference](RUNTIME_REFERENCE.md) provides detailed language behavior and helper contracts.
+[Language behavior](RUNTIME_REFERENCE.md) documents language helpers, SQL results, plots, and output.
 
 ## Developing Console itself
 

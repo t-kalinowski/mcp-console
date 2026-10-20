@@ -7,7 +7,8 @@ sidebar: reference
 `mcp_console` connects Python applications and model frameworks to Console's persistent workbench.
 This package connects your application to Console; it is separate from the Python environment used by the agent's analysis.
 Use this site for exact signatures and complete integration examples.
-The [guides](../README.md) explain the shared workbench; [Reference](../REFERENCE.md) covers runtime behavior and configuration.
+The [documentation](../README.md) covers the shared workbench, language behavior, and configuration.
+[API reference](../REFERENCE.md) links the MCP interface and client package references.
 
 ## Start without a model
 

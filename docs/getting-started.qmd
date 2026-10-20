@@ -2,30 +2,49 @@
 title: Get started
 ---
 
-Choose how to connect to Console, then try an analysis.
+Install the tools you need, connect a client, then try an analysis.
 No Console configuration file is required.
-
-## Choose how to connect {#connect-your-client}
-
-<span id="codex-and-claude-code"></span> <span id="other-mcp-clients"></span> <span id="r-and-python-packages"></span>
-
-| Use Console with…                    | Start here                                                                                 |
-| ------------------------------------ | ------------------------------------------------------------------------------------------ |
-| A coding agent or another MCP client | [MCP client setup](CLIENTS.md) covers Codex, Claude Code, and manual MCP settings.         |
-| R                                    | [Use Console from R](R.md) adds a Console tool to an ellmer chat.                          |
-| Python                               | [Use Console from Python](PYTHON.md) covers direct calls and model framework integrations. |
-
-All three use the same persistent workbench for R, Python, and SQL.
-Once connected, continue with the analysis below or explore the [guides](README.md).
 
 ## Install
 
-[Installation](INSTALLATION.md) covers uv, supported platforms, and the runtimes your agent can use.
-The R and Python guides above also cover installing their client packages.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) to run Console with `uvx`, without a separate Console installation.
+To let your agent use R, install it separately, for example with [rig](https://github.com/r-lib/rig#id-installation) and `rig add release`.
+Python and SQL work without R.
+The first session may download Python and packages.
+
+[Installation](INSTALLATION.md) covers supported platforms and runtime requirements.
 
 <span id="build-from-source"></span>
 
 To install the development version, follow [Build from source](BUILD_FROM_SOURCE.md).
+
+## Connect a client {#connect-your-client}
+
+### Codex and Claude Code
+
+Run the command for your client:
+
+```sh
+uvx mcp-console configure-client codex
+uvx mcp-console configure-client claude
+```
+
+This registers Console globally and allows calls to its `send` tool, subject to explicit client restrictions.
+Setup also checks runtimes and warms caches in the background.
+Restart the client after setup.
+See [MCP clients](CLIENTS.md) for project registration and other setup options.
+
+### Other MCP clients
+
+In your client's MCP settings, use command `uvx` and arguments `["mcp-console", "serve"]`.
+See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
+
+### R and Python packages
+
+Follow [Use Console from R](R.md) to add a Console tool to an ellmer chat, or [Use Console from Python](PYTHON.md) for direct calls and model framework integrations.
+Both guides include client package installation.
+
+All connection methods use the same persistent workbench for R, Python, and SQL.
 
 ## Try an analysis
 

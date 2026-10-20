@@ -121,7 +121,7 @@ On Windows, invoke either script explicitly with `uv run --no-project --isolated
 The pre-render script `docs/_python.py` uses the pinned Great Docs generator to write Python reference sources before Quarto discovers pages.
 The hook runs through uv, which prepares a separate environment from `docs/requirements.txt`; Great Docs does not need to be installed in the Python environment Quarto selects.
 It preserves explicit members, inline methods, static introspection, symbol anchors, and source links.
-Generated pages use the main site's Reference sidebar, theme, and search.
+Generated pages use the main site's API reference sidebar, theme, and search.
 Preview starts with a full HTML render so Quarto discovers generated pages on a clean checkout, then rerenders changed pages.
 Run `scripts/render-site` after editing Python docstrings or `great-docs.yml`, or to refresh the R package site.
 Both commands write to `docs/_site`.
@@ -155,21 +155,23 @@ A saved choice from a page's theme control takes precedence over the browser pre
 
 ### Documentation ownership
 
-The top navigation has three documentation sections, each with its own landing page and sidebar.
-[Get started](getting-started.qmd) covers installation and MCP, R, and Python connections.
-[Guides](README.md) explains the shared workbench and workflows; [Reference](REFERENCE.md) provides a task index and exact settings, commands, and APIs.
-Give each page one primary sidebar and use contextual links between sections.
+The top navigation links to [Documentation](README.md), [Get started](getting-started.qmd), and [API reference](REFERENCE.md).
+Documentation opens the "I want to…" task index.
+Get started is a shortcut to installation, client setup, and a first analysis.
+Both use one shared sidebar for connections, language behavior, workflows, configuration, and commands.
+API reference has a smaller sidebar for the MCP interface and Python and R package references.
+Development has its own sidebar and a footer link.
 Keep Sessions and languages, Packages and environments, Sandbox and trust, and Recordings and reports readable as a sequence.
-Use examples to explain the concepts, then link to the reference for complete settings and edge cases.
+Use examples to explain the concepts, then link to the owning topic for complete settings and edge cases.
 
 All settings accepted in `config.yaml` belong in the user reference.
 Each reference topic has one owner: [Configuration files](CONFIGURATION.md) for discovery, merging, paths, and export; [Interpreters and startup](RUNTIME_CONFIGURATION.md) for R/Python selection, startup packages, resolution policies, and database startup; [Tool configuration](TOOL_CONFIGURATION.md) for language visibility, descriptions, and accepted parameters; [Sandbox permissions](SANDBOX_CONFIGURATION.md) for permission fields and enforcement limits; [Package sources and caches](RESOLVER.md) for preparation and cache settings; and [Environment variables](ENVIRONMENT.md) for environment settings and recognized variables.
 The configuration settings index links to these owners instead of repeating their field tables.
-[Runtime behavior](RUNTIME_REFERENCE.md) owns language behavior; [Recordings and reports](RECORDING.md) owns recording behavior and report workflows.
+[Language behavior](RUNTIME_REFERENCE.md) owns code execution, language helpers, SQL results, and output; [Recordings and reports](RECORDING.md) owns recording behavior and report workflows.
 
 [Customize Console](BUILD_ON_CONSOLE.md) introduces tool descriptions, language and parameter visibility, and prepared sessions for any connection method.
-[MCP client setup](CLIENTS.md), [R](R.md), and [Python](PYTHON.md) belong under Get started.
-Generated package manuals provide exact signatures and package-specific examples, with links back to the three main sections.
+[MCP client setup](CLIENTS.md), [R](R.md), and [Python](PYTHON.md) belong in the shared documentation sidebar under Connect to Console.
+Generated package manuals provide exact signatures and package-specific examples, with links back to the main documentation.
 Exact MCP calls and requirement operations belong in [MCP send reference](API.md) and [Requirements API](REQUIREMENTS_API.md).
 Keep compatibility anchors when moving public sections and include every new page in the appropriate sidebar and search index.
 Architecture belongs in [Architecture](ARCHITECTURE.md); exact private message schemas belong with their source definitions.

@@ -1,7 +1,8 @@
-# Runtime behavior reference
+# Language behavior
 
-Detailed language behavior for client authors and integrations.
-Start with [Sessions and languages](BUILTIN_RUNTIME.md) for the user guide.
+This page documents how R, Python, and SQL code behaves inside Console, including language helpers, SQL results, plots, and output.
+The behavior applies whether you connect through an MCP client, R, or Python.
+Start with [Sessions and languages](BUILTIN_RUNTIME.md) for a guided introduction.
 
 One connection owns one persistent session.
 Globals, imports, options, database state, and unread input survive between cells.
