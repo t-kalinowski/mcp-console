@@ -107,6 +107,21 @@ for path in pages:
                 element["content"] = rewrite_url(
                     element["content"], source, destination
                 )
+    # Quarto highlights the first navbar link found anywhere in the sidebar.
+    # Prefer the current page (a clean self-link is ./), then the sidebar index.
+    # This lets Get started and Guides share a sidebar without sharing a highlight.
+    navbar_links = soup.select("#quarto-header .navbar .nav-link[href]")
+    sidebar_index = soup.select_one("#quarto-sidebar .sidebar-item a[href]")
+    if any(link["href"] == "./" for link in navbar_links):
+        active_href = "./"
+    else:
+        active_href = sidebar_index["href"] if sidebar_index else None
+    for link in navbar_links:
+        link["class"] = [name for name in link.get("class", []) if name != "active"]
+        link.attrs.pop("aria-current", None)
+        if link["href"] == active_href:
+            link["class"].append("active")
+            link["aria-current"] = "page" if active_href == "./" else "true"
     html = str(soup)
     # Quarto hashes its original outputs after post-render, including during
     # live updates. Keep them in preview and attach its reload client to the

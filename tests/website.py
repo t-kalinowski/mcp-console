@@ -421,6 +421,26 @@ class WebsiteTests(unittest.TestCase):
                         self.site / target / "index.html",
                     )
 
+    def test_navbar_tracks_the_current_page_or_section(self) -> None:
+        for route, label, current in (
+            ("getting-started", "Get started", "page"),
+            ("readme", "Guides", "page"),
+            ("builtin_runtime", "Guides", "true"),
+            ("clients", "Guides", "true"),
+            ("reference", "Reference", "page"),
+            ("configuration", "Reference", "true"),
+            ("python/reference/mcpconsole", "Reference", "true"),
+        ):
+            with self.subTest(page=route):
+                page = BeautifulSoup(
+                    (self.site / route / "index.html").read_text(), "html.parser"
+                )
+                active = page.select("#quarto-header .navbar .nav-link.active")
+                self.assertEqual(
+                    [link.get_text(strip=True) for link in active], [label]
+                )
+                self.assertEqual(active[0].get("aria-current"), current)
+
     def test_reference_has_one_shared_navigation(self) -> None:
         navigation = []
         for name in (
