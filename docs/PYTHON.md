@@ -25,7 +25,7 @@ with MCPConsole() as console:
 Keep the connection open to retain state.
 Closing it ends the session; reconnecting starts a new one.
 
-Use `AsyncMCPConsole` with `async with` and `await` for asynchronous code.
+Use [AsyncMCPConsole](https://t-kalinowski.github.io/mcp-console/python/reference/AsyncMCPConsole.html) with `async with` and `await` for asynchronous code.
 Enter and close an async connection in the same task.
 The [API reference](https://t-kalinowski.github.io/mcp-console/python/reference/index.html) documents launch commands, working directories, environment options, and exact signatures.
 
@@ -37,13 +37,13 @@ Use `command` and `args` to select another executable.
 Install the extra for your framework.
 Each reference page provides a complete example, including setup and cleanup.
 
-| Framework                    | Extra           | Integration                                                                                                                                                                                                                             |
-| ---------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| chatlas                      | `chatlas`       | [tool](https://t-kalinowski.github.io/mcp-console/python/reference/chatlas.tool.html) for an open connection, or [register](https://t-kalinowski.github.io/mcp-console/python/reference/chatlas.register.html) for native registration. |
-| `openai` — Responses API     | `openai`        | [responses_tool](https://t-kalinowski.github.io/mcp-console/python/reference/openai.responses_tool.html); the application owns the tool loop.                                                                                           |
-| `openai-agents` — Agents SDK | `openai-agents` | [agents_tool](https://t-kalinowski.github.io/mcp-console/python/reference/openai.agents_tool.html) or [agents_server](https://t-kalinowski.github.io/mcp-console/python/reference/openai.agents_server.html).                           |
-| `openai-codex` — Codex SDK   | `codex`         | [server](https://t-kalinowski.github.io/mcp-console/python/reference/codex.server.html) supplies configuration; it does not open a connection.                                                                                          |
-| Anthropic                    | `anthropic`     | [tool](https://t-kalinowski.github.io/mcp-console/python/reference/anthropic.tool.html) or [tools](https://t-kalinowski.github.io/mcp-console/python/reference/anthropic.tools.html).                                                   |
+| Framework                    | Extra           | Existing Console connection                                                                              | Framework-managed connection                                                                                                                   |
+| ---------------------------- | --------------- | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| chatlas                      | `chatlas`       | [tool](https://t-kalinowski.github.io/mcp-console/python/reference/chatlas.tool.html)                    | [register](https://t-kalinowski.github.io/mcp-console/python/reference/chatlas.register.html)                                                  |
+| `openai` — Responses API     | `openai`        | [responses_tool](https://t-kalinowski.github.io/mcp-console/python/reference/openai.responses_tool.html) | Application-owned loop.                                                                                                                        |
+| `openai-agents` — Agents SDK | `openai-agents` | [agents_tool](https://t-kalinowski.github.io/mcp-console/python/reference/openai.agents_tool.html)       | [agents_server](https://t-kalinowski.github.io/mcp-console/python/reference/openai.agents_server.html)                                         |
+| `openai-codex` — Codex SDK   | `codex`         | —                                                                                                        | [server](https://t-kalinowski.github.io/mcp-console/python/reference/codex.server.html) supplies configuration; it does not open a connection. |
+| Anthropic                    | `anthropic`     | [tool](https://t-kalinowski.github.io/mcp-console/python/reference/anthropic.tool.html)                  | [tools](https://t-kalinowski.github.io/mcp-console/python/reference/anthropic.tools.html)                                                      |
 
 Your application still owns its model client, chat or agent, and any function-calling loop.
 Creating a Console tool does not choose a model.
@@ -96,4 +96,4 @@ Inspection normally returns JSON text but can return a startup notice before the
 
 Replacing a live declaration normally requires restart.
 A replacement empties omitted fields rather than preserving them.
-See [Requirements API](REQUIREMENTS_API.md) for complete examples and constraints.
+See [Requirements](https://t-kalinowski.github.io/mcp-console/python/reference/Requirements.html) for the client declaration type and [Requirements API](REQUIREMENTS_API.md) for complete examples and constraints.

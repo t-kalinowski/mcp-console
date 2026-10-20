@@ -1,13 +1,14 @@
 # Use Console with an MCP client
 
 Connect Console to your coding agent or another client that supports MCP over standard input and output.
-Follow [Installation](INSTALLATION.md) to install uv and the runtimes you need.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) to run the commands below.
+See [Installation](INSTALLATION.md) for platform requirements and optional R setup.
 
 <span id="mcp-clients"></span>
 
 ## Codex and Claude Code
 
-Connect Console to your clients:
+Run the command for your client:
 
 ```sh
 uvx mcp-console configure-client codex
@@ -31,7 +32,12 @@ See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
 
 ## Try an analysis
 
-Return to [Get started](getting-started.qmd#try-an-analysis) for a first analysis and permission settings.
+Ask your agent:
+
+> Use MCP Console to simulate rolling two dice 1,000 times in Python.
+> Plot the distribution of their sums and keep the results for follow-up.
+
+See [Get started](getting-started.qmd#try-an-analysis) for an analysis across R, Python, and SQL, and [permission settings](getting-started.qmd#choose-permissions) for project writes.
 The [documentation](README.md) covers sessions, packages, sandbox permissions, and recordings.
 
 ## R and Python clients {#connect-from-application-code}

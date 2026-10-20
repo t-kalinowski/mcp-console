@@ -529,6 +529,11 @@ class WebsiteTests(unittest.TestCase):
             ),
             "LINUX_COMPATIBILITY": ("reproducing-the-comparisons",),
             "SEND_OPERATIONS": ("python-client-cancellation",),
+            "python/index": (
+                "start-without-a-model",
+                "add-a-model-framework",
+                "calls-and-dependencies",
+            ),
         }
         for name, identifiers in fragments.items():
             with self.subTest(page=name):
@@ -611,7 +616,7 @@ class WebsiteTests(unittest.TestCase):
                     self.assertIn("sandbox.profile=workspace", arguments)
 
     def test_reference_tables_have_keyboard_accessible_scroll_regions(self) -> None:
-        for name in ("CONFIGURATION.html", "REQUIREMENTS.html", "python/index.html"):
+        for name in ("CONFIGURATION.html", "REQUIREMENTS.html", "PYTHON.html"):
             with self.subTest(page=name):
                 soup = BeautifulSoup((self.site / name).read_text(), "html.parser")
                 tables = soup.select("main table")
@@ -830,14 +835,12 @@ class WebsiteTests(unittest.TestCase):
                     links,
                     {reference.parent / f"{symbol}.html" for symbol in symbols},
                 )
-        for name in ("python/index.html", "PYTHON.html"):
-            with self.subTest(guide=name):
-                page = BeautifulSoup((self.site / name).read_text(), "html.parser")
-                labels = {
-                    row.find("td").get_text(" ", strip=True)
-                    for row in page.select("table tbody tr")
-                }
-                self.assertEqual(groups.keys() & labels, groups.keys())
+        page = BeautifulSoup((self.site / "PYTHON.html").read_text(), "html.parser")
+        labels = {
+            row.find("td").get_text(" ", strip=True)
+            for row in page.select("table tbody tr")
+        }
+        self.assertEqual(groups.keys() & labels, groups.keys())
         adapter = (
             BeautifulSoup(
                 (self.site / "python/reference/codex.server.html").read_text(),

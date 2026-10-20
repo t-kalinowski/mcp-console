@@ -73,4 +73,4 @@ Recordings and reports can contain code, data, and output from the session; the 
 Console reports sandbox setup failures without automatically retrying with weaker permissions.
 The reference covers [platform support](SANDBOX_CONFIGURATION.md#native-capabilities) and [process cleanup](SANDBOX_CONFIGURATION.md#supported-hosts-and-lifetime-limits); [Architecture](ARCHITECTURE.md#application-policy-and-launch) covers implementation ownership and [policy extensions](ARCHITECTURE.md#policy-extensions-and-compatibility).
 
-Continue to [Get started](getting-started.qmd) to connect your client, or use [Sandbox permissions](SANDBOX_CONFIGURATION.md) to configure access.
+Continue with [Recordings and reports](RECORDING.md) to learn how to inspect and reuse the agent's code, output, and plots.
