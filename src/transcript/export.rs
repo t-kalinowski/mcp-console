@@ -43,62 +43,49 @@ impl Transcript {
         if active.temporary.is_some() {
             return Err("session recording has not been activated".into());
         }
-        let journal = std::fs::File::open(active.directory.join("capture/events.jsonl"))
-            .map_err(|e| format!("session capture unavailable: {e}"))?;
-        let mut events = Vec::new();
-        for line in BufReader::new(journal).lines() {
-            let mut event: Value = serde_json::from_str(&line.map_err(|e| e.to_string())?)
-                .map_err(|e| format!("invalid session capture: {e}"))?;
-            if event["sequence"]
-                .as_u64()
-                .ok_or("capture sequence missing")?
-                > active.snapshot_sequence
-            {
-                break;
-            }
-            if event["call_id"].as_u64() != Some(call)
-                && matches!(
-                    event["event"].as_str(),
-                    Some(
-                        "recording_started"
-                            | "environment_discovered"
-                            | "worker_started"
-                            | "worker_ended"
-                            | "python_environment_accepted"
-                            | "requirements_selected"
-                            | "requirements_accepted"
-                            | "tool_call"
-                            | "source_admitted"
-                            | "source_finished"
-                            | "source_associated"
-                            | "cell_started"
-                            | "tool_result"
-                            | "delivery"
-                            | "output_text"
-                            | "artifact_created"
-                    )
-                )
-            {
-                // Reports need submitted source and dependency declarations,
-                // not cumulative stdin or unrelated request metadata.
-                if event["event"] == "tool_call" {
-                    if let Some(request) = event["request"].as_object_mut() {
-                        request.retain(|key, _| matches!(key.as_str(), "name" | "arguments"));
-                    }
-                    if let Some(arguments) = event["request"]["arguments"].as_object_mut() {
-                        arguments.retain(|key, _| {
-                            matches!(key.as_str(), "r" | "python" | "sql" | "requirements")
-                        });
-                    }
-                }
-                events.push(event);
-            }
-        }
-        reconstruct(&active.directory, owner.session_id, &events)
+        reconstruct(
+            &active.directory,
+            owner.session_id,
+            active.snapshot_sequence,
+            call,
+        )
     }
 }
 
-fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<SessionExport, String> {
+/// Both reconstruction passes use the same boundary under the recorder lock.
+/// Drop each event after visiting it: output chunk counts must not determine
+/// export memory, and historical stdin belongs only to the journal.
+fn scan_capture(
+    directory: &Path,
+    sequence: u64,
+    exporting_call: u64,
+    mut visit: impl FnMut(Value) -> Result<(), String>,
+) -> Result<(), String> {
+    let journal = std::fs::File::open(directory.join("capture/events.jsonl"))
+        .map_err(|e| format!("session capture unavailable: {e}"))?;
+    for line in BufReader::new(journal).lines() {
+        let event: Value = serde_json::from_str(&line.map_err(|e| e.to_string())?)
+            .map_err(|e| format!("invalid session capture: {e}"))?;
+        if event["sequence"]
+            .as_u64()
+            .ok_or("capture sequence missing")?
+            > sequence
+        {
+            break;
+        }
+        if event["call_id"].as_u64() != Some(exporting_call) {
+            visit(event)?;
+        }
+    }
+    Ok(())
+}
+
+fn reconstruct(
+    directory: &Path,
+    session: u64,
+    snapshot_sequence: u64,
+    exporting_call: u64,
+) -> Result<SessionExport, String> {
     let mut documents = super::markdown::Documents::default();
     let mut calls = BTreeMap::new();
     let mut associations = BTreeMap::new();
@@ -108,8 +95,8 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
     let mut order = Vec::<String>::new();
     let mut positions = BTreeMap::<String, u64>::new();
     let mut images = BTreeMap::<String, ExportImage>::new();
-    for event in events {
-        documents.observe(event)?;
+    scan_capture(directory, snapshot_sequence, exporting_call, |event| {
+        documents.observe(&event)?;
         let sequence = event["sequence"]
             .as_u64()
             .ok_or("capture sequence missing")?;
@@ -118,7 +105,15 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
                 positions.insert("Startup output".into(), sequence);
             }
             "tool_call" => {
-                calls.insert(event["call_id"].as_u64().ok_or("call ID missing")?, event);
+                let sources = ["r", "python", "sql"]
+                    .into_iter()
+                    .filter_map(|language| {
+                        event["request"]["arguments"][language]
+                            .as_str()
+                            .map(|source| (language, source.to_owned()))
+                    })
+                    .collect::<Vec<_>>();
+                calls.insert(event["call_id"].as_u64().ok_or("call ID missing")?, sources);
             }
             "source_associated" => {
                 associations.insert(
@@ -141,10 +136,11 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
             }
             _ => {}
         }
-    }
+        Ok(())
+    })?;
     // Source may be associated before startup finishes. Actual lifecycle events
     // establish section order; later poll results join their recorded interval.
-    for event in events {
+    scan_capture(directory, snapshot_sequence, exporting_call, |event| {
         let sequence = event["sequence"]
             .as_u64()
             .ok_or("capture sequence missing")?;
@@ -171,14 +167,12 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
                 .unwrap_or_else(|| format!("Submission {}", call_id.unwrap()));
             positions.entry(key.clone()).or_insert(sequence);
             let document = section(&mut results, &mut order, key);
-            for language in ["r", "python", "sql"] {
-                if let Some(source) = call["request"]["arguments"][language].as_str() {
-                    super::markdown::push_fence(document, language, source);
-                }
+            for (language, source) in call {
+                super::markdown::push_fence(document, language, source);
             }
         }
         if event["event"] != "tool_result" {
-            continue;
+            return Ok(());
         }
         let call_id = call_id.ok_or("result call ID missing")?;
         let call_session = associations.get(&call_id).copied();
@@ -189,16 +183,15 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
                 .iter()
                 .any(|p| p.owner.is_some_and(|o| o.session_id == session));
         if !owns_response {
-            continue;
+            return Ok(());
         }
         let delivered = deliveries.get(&call_id).copied().unwrap_or(false);
         let notice_key = format!("Response notices {call_id}");
         positions.insert(notice_key.clone(), sequence);
-        let response_key = if calls.get(&call_id).is_some_and(|call| {
-            ["r", "python", "sql"]
-                .iter()
-                .any(|language| call["request"]["arguments"][language].is_string())
-        }) {
+        let response_key = if calls
+            .get(&call_id)
+            .is_some_and(|sources| !sources.is_empty())
+        {
             cells
                 .get(&call_id)
                 .copied()
@@ -220,7 +213,7 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
             );
         }
         let Some(content) = event["result"]["content"].as_array() else {
-            continue;
+            return Ok(());
         };
         if parts.is_empty() {
             // Requirement-only and protocol error responses have no output tape.
@@ -293,7 +286,8 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
                 writeln!(document, "![Recorded image](<images/{name}>)\n").unwrap();
             }
         }
-    }
+        Ok(())
+    })?;
     let qmd = documents
         .sessions
         .get(&session)
