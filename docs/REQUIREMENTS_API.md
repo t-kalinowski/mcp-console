@@ -1,7 +1,8 @@
 # Requirements API
 
 MCP argument objects, admission rules, and live package changes.
-For startup packages and policies, see [Packages and environments](REQUIREMENTS.md).
+For an introduction to package preparation, read [Packages and environments](REQUIREMENTS.md).
+For startup declarations and policy settings, see [Interpreters and startup](RUNTIME_CONFIGURATION.md#startup-package-declarations).
 Accepted declarations are not installed-package inventories or lockfiles.
 
 ## Inspecting and replacing requirements
