@@ -231,7 +231,10 @@ An admitted poll waits within its existing deadline for pending response deliver
 If another call delivered the terminal result, the poll rechecks the active slot and follows the ordinary idle path, including any submitted input.
 This does not guarantee exactly-once observation: cancellation can race with bytes already visible to a client.
 
-The journal records calls and assembled results.
+The journal records protocol traffic, canonical calls and assembled results, and actual worker lifetimes.
+Transport receipt reserves send capture in wire order without waiting for the recorder mutex or journal I/O.
+The bounded capture queue retains its ownership across handler and delivery cancellation and releases request payloads after capture.
+EOF shutdown settles response delivery and every queued capture before recording finalization.
 Markdown and QMD are projections, not interpreter checkpoints; a journaled result does not prove client receipt.
 See [Recordings](RECORDING.md).
 
@@ -333,6 +336,14 @@ Keep detailed compatibility handling there rather than reproducing it across gui
 
 ## Recording ownership and failures
 
+One recording belongs to one Console process; numbered sessions identify actual worker lifetimes, including automatic replacements.
+The relay publishes `worker_started` only after acquiring its direct child.
+The server records readiness and exit/signal evidence without changing generation ownership or retirement barriers.
+Startup failure records carry a session number only when that startup acquired a worker.
+
+Before send, the recorder uses private temporary storage for the same journal, output logs, images, and projections.
+First-send publication relocates shared output writers while preserving producer ownership, sequence numbers, and observation timestamps.
+It preserves the existing storage-root selection, identifier generation, permissions, and retention limits.
 `internal/events.jsonl` is the append-only journal underlying the Markdown and QMD projections.
 
 A journal or artifact failure disables further recording without stopping computation.
@@ -341,7 +352,8 @@ Failure of a derived projection disables the projections but can leave the journ
 Diagnostics and notices report unavailable or partial retention.
 
 Journal events and generated projections are internal formats, not independently versioned public APIs.
-A journaled result records response assembly, not confirmed client receipt.
+A journaled result records response assembly.
+Separate delivery events record whether a local transport write completed successfully, without claiming client acknowledgment or model observation.
 See [Output and delivery](#output-and-delivery) for ownership and [Open work](TODO.md) for retention and export gaps.
 
 ## Developer terms
@@ -352,8 +364,10 @@ It owns admission, retained declarations, bounded responses, and recording.
 **Worker:** The process holding interpreter and database state.
 The built-in worker coordinates R, Python, and SQL on one execution thread.
 
-**Generation:** One worker lifetime and all work tied to it.
+**Generation:** The admission and callback identity retained by lifecycle operations.
 Old input, callbacks, evaluations, and candidate commits must not reach its replacement.
+Automatic recovery can replace a worker within a generation; recording session numbers identify those distinct worker lifetimes.
+Connection checks continue to fence work when the generation is reused.
 
 **Relay:** The process translating worker sideband and standard streams, delivering interruption, and reaping the direct worker.
 It is not the native sandbox supervisor.
