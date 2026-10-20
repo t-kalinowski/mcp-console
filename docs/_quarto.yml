@@ -29,8 +29,8 @@ website:
         text: Reference
       - href: SANDBOX_COMMAND.md
         text: Sandbox
-      - href: CLIENTS.md
-        text: Client integration
+      - href: BUILD_ON_CONSOLE.md
+        text: Build on Console
       - href: DEVELOPMENT.md
         text: Development
     right:
@@ -76,10 +76,11 @@ website:
         - BUILD_FROM_SOURCE.md
       - GLOSSARY.md
     - id: clients
-      title: Client integration
+      title: Build on Console
       style: docked
       collapse-level: 1
       contents:
+      - BUILD_ON_CONSOLE.md
       - CLIENTS.md
       - PYTHON.md
       - href: r/index.html

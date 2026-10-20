@@ -49,6 +49,7 @@ The [glossary](GLOSSARY.md) defines terms used in these pages.
 
 <span id="public-reference"></span>
 
+[Build on Console](BUILD_ON_CONSOLE.md) shows how to create a tool or data assistant with a customized interface and a prepared session.
 [Client integration](CLIENTS.md) is for applications that call Console.
 It includes MCP arguments, result handling, polling, interactive input, and the R and Python client APIs.
 

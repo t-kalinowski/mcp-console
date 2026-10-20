@@ -155,7 +155,8 @@ Each reference topic has one owner: [Configuration files](CONFIGURATION.md) for 
 The configuration settings index links to these owners instead of repeating their field tables.
 [Runtime behavior](RUNTIME_REFERENCE.md) and [Recordings and reports](RECORDING.md) also belong in the user reference.
 
-[Client integration](CLIENTS.md) is a separate path for applications that call Console.
+[Build on Console](BUILD_ON_CONSOLE.md) introduces application building with examples of tool customization, prepared sessions, and integration.
+[Client integration](CLIENTS.md) collects the interfaces for applications that call Console.
 Exact MCP calls and requirement operations belong in [MCP send reference](API.md) and [Requirements API](REQUIREMENTS_API.md).
 Keep compatibility anchors when moving public sections and include every new page in the appropriate sidebar and search index.
 Architecture belongs in [Architecture](ARCHITECTURE.md); exact private message schemas belong with their source definitions.

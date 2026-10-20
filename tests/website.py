@@ -269,7 +269,8 @@ class WebsiteTests(unittest.TestCase):
                 for label in (
                     "User guides",
                     "Reference",
-                    "Client integration",
+                    "Sandbox",
+                    "Build on Console",
                     "Development",
                     "Packages",
                 ):

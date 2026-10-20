@@ -66,6 +66,8 @@ Set [sandbox permissions](SANDBOX_CONFIGURATION.md) to control access to files a
 
 For example, build a data chat with only SQL and a selected database connection, or a reporting assistant with a prepared R or Python environment.
 
+[Build on Console](BUILD_ON_CONSOLE.md) shows how to customize the tool interface, describe available data, prepare the session, and connect your application.
+
 Console works with MCP-compatible clients such as Codex and Claude Code and does not depend on a particular model provider.
 To connect from your own application, see [Client integration](CLIENTS.md).
 
