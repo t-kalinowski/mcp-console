@@ -43,13 +43,13 @@ def main() -> None:
         context.reader,
         context.writer,
     )
+    if not startup_ready_sent:
+        send(context.writer, {"kind": "ready"})
     if os.environ.get("ZOD_RECORDING_INTERVALS") == "1":
         send_output(context.writer, "startup text\n")
         send(
             context.writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"}
         )
-    if not startup_ready_sent:
-        send(context.writer, {"kind": "ready"})
     if startup_callback:
         send(
             context.writer,

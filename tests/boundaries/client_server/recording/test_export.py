@@ -18,6 +18,7 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.assertions import last_result_text
 from support.requirements import POSIX, R, SQL, requires
 from support.records import Transcript
+from support.snapshots import platform_snapshots
 from support.suites import run_this_suite
 from boundaries.client_server.python.test_without_r import selected_environment
 
@@ -40,11 +41,17 @@ def normalized(transcript: Transcript, workspace: Path) -> Transcript:
     if recordings.is_dir():
         for recording in recordings.iterdir():
             data = data.replace(recording.name, "<recording ID>")
-    for path in [workspace, workspace.resolve()]:
+    for path in sorted(
+        {workspace, workspace.resolve()}, key=lambda p: len(str(p)), reverse=True
+    ):
         data = data.replace(json.dumps(str(path))[1:-1], "<workspace>")
     return json.loads(data)
 
 
+@platform_snapshots(
+    "win32",
+    reason="Windows preserves native destination-collision diagnostics and error codes",
+)
 @executions(DIRECT, SANDBOXED)
 def test_python_export_without_r(binary: Path, execution: Execution) -> Transcript:
     with tempfile.TemporaryDirectory() as directory:
@@ -61,7 +68,12 @@ def test_python_export_without_r(binary: Path, execution: Execution) -> Transcri
             )
         )
         with McpClient(
-            binary, execution.serve(), env, current_directory=workspace
+            binary,
+            execution.serve(
+                *(("--writable-root", str(workspace)) if execution == SANDBOXED else ())
+            ),
+            env,
+            current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
             client.request("ping")
@@ -111,17 +123,9 @@ def test_python_export_without_r(binary: Path, execution: Execution) -> Transcri
                 "replacement result" in replacement
                 and "original result" not in replacement
             )
-            client.send(python="import os; os._exit(17)", timeout_ms=60000)
-            client.send(python="print('automatic replacement')")
-            client.send(python="paths = _console.export_session('automatic')")
-            automatic = (workspace / "automatic/session.md").read_text()
-            assert (
-                "automatic replacement" in automatic
-                and "replacement result" not in automatic
-            )
             transcript = client.finish()
         assert (
-            len([e for e in events(recording) if e["event"] == "worker_started"]) == 3
+            len([e for e in events(recording) if e["event"] == "worker_started"]) == 2
         )
         for path in recording.rglob("*"):
             if path.is_file():
@@ -129,6 +133,41 @@ def test_python_export_without_r(binary: Path, execution: Execution) -> Transcri
         for path in report.rglob("*"):
             if path.is_file():
                 assert path.stat().st_mode & 0o200, path
+        return normalized(transcript, workspace)
+
+
+@executions(DIRECT, SANDBOXED)
+def test_export_after_automatic_replacement(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        with McpClient(
+            binary,
+            execution.serve(
+                *(("--writable-root", str(workspace)) if execution == SANDBOXED else ())
+            ),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(python="print('original session')")
+            client.send(python="import os; os._exit(17)")
+            client.send(python="print('automatic replacement')")
+            assert last_result_text(client) == "automatic replacement\n", (
+                client.transcript[-1]
+            )
+            client.send(python="paths = _console.export_session('automatic')")
+            automatic = (workspace / "automatic/session.md").read_text()
+            assert (
+                "automatic replacement" in automatic
+                and "original session" not in automatic
+            )
+            assert "export_session" not in automatic
+            transcript = client.finish()
+        (recording,) = (workspace / ".agents/console/sessions").iterdir()
+        assert (
+            len([e for e in events(recording) if e["event"] == "worker_started"]) == 2
+        )
         return normalized(transcript, workspace)
 
 
@@ -140,7 +179,11 @@ def test_r_export_without_python_initialization(
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
         with McpClient(
-            binary, execution.serve(), current_directory=workspace
+            binary,
+            execution.serve(
+                *(("--writable-root", str(workspace)) if execution == SANDBOXED else ())
+            ),
+            current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
             client.send(r='counter <- 1L; cat("original R result\\n")')
@@ -242,7 +285,11 @@ def test_export_preserves_images_polled_results_and_sql_state(
     with tempfile.TemporaryDirectory() as directory:
         workspace = Path(directory)
         with McpClient(
-            binary, execution.serve(), current_directory=workspace
+            binary,
+            execution.serve(
+                *(("--writable-root", str(workspace)) if execution == SANDBOXED else ())
+            ),
+            current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()
             client.send(sql="CREATE TABLE export_once AS SELECT 7 AS value")
@@ -258,7 +305,7 @@ def test_export_preserves_images_polled_results_and_sql_state(
                     """),
             )
             images = [
-                block["data"]
+                block
                 for block in client.transcript[-1]["result"]["content"]
                 if block["type"] == "image"
             ]
@@ -281,7 +328,7 @@ def test_export_preserves_images_polled_results_and_sql_state(
             assert "## Cell 004" in markdown
             assert "Tool call" not in markdown and "Input:" not in markdown
             (image,) = (workspace / "report/images").iterdir()
-            assert image.read_bytes() == base64.b64decode(images[0])
+            assert image.read_bytes() == base64.b64decode(images[0]["data"])
             assert f"images/{image.name}" in markdown
             client.send(
                 r='stopifnot(identical(DBI::dbGetQuery(.console$sql_connection(), "SELECT value FROM export_once ORDER BY value")$value, c(7L, 11L)))'
@@ -291,10 +338,17 @@ def test_export_preserves_images_polled_results_and_sql_state(
             shutil.copytree(workspace / "report", copy)
             assert (copy / "session.md").read_text() == markdown
             assert (copy / "images" / image.name).read_bytes() == image.read_bytes()
+            # Native R devices encode PNGs differently across platforms. Keep
+            # the byte comparisons above, then normalize only their display.
+            images[0]["data"] = "<PNG byte-identical to exported and copied image>"
             return normalized(client.finish(), workspace)
 
 
 @requires(POSIX)
+@platform_snapshots(
+    "linux",
+    reason="Linux read-only mounts report EROFS; Seatbelt reports EPERM for denied export writes",
+)
 @executions(SANDBOXED)
 def test_export_obeys_worker_write_permissions(
     binary: Path, execution: Execution
@@ -312,7 +366,7 @@ def test_export_obeys_worker_write_permissions(
             client.initialize_and_list_tools()
             client.send(python="print('permission probe')")
             client.send(python="_console.export_session('denied')")
-            assert client.transcript[-1]["result"].get("isError")
+            assert "RuntimeError:" in last_result_text(client), client.transcript[-1]
             assert "cannot create export destination" in last_result_text(client)
             assert not (workspace / "denied").exists()
             client.send(python="paths = _console.export_session('allowed/report')")
@@ -326,6 +380,10 @@ def test_export_obeys_worker_write_permissions(
             return normalized(client.finish(), workspace)
 
 
+@platform_snapshots(
+    "win32",
+    reason="Windows preserves its native recording-directory creation error",
+)
 @executions(DIRECT, SANDBOXED)
 def test_export_reports_unavailable_capture(
     binary: Path, execution: Execution
@@ -341,7 +399,9 @@ def test_export_reports_unavailable_capture(
             client.initialize_and_list_tools()
             client.send(python="counter = 1")
             client.send(python="_console.export_session('report')")
-            assert client.transcript[-1]["result"].get("isError")
+            assert "RuntimeError: session capture unavailable:" in last_result_text(
+                client
+            ), client.transcript[-1]
             assert "session capture unavailable" in last_result_text(client)
             assert not (workspace / "report").exists()
             client.send(python="assert counter == 1")

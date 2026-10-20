@@ -59,8 +59,9 @@ def test_rejects_truncated_output(binary: Path, execution: Execution) -> Transcr
         failed,
         "relay stream closed midway through a frame",
     )
-    assert len(transcript) == 1, transcript
-    raw = base64.b64decode(transcript[0]["relay_raw"], validate=True)
+    assert len(transcript) == 2, transcript
+    assert transcript[0] == {"relay": {"kind": "worker_started", "pid": 42}}
+    raw = base64.b64decode(transcript[1]["relay_raw"], validate=True)
     assert raw == b'{"kind":"console_output"', raw
     return transcript
 

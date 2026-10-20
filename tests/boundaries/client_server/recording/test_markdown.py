@@ -43,13 +43,21 @@ def test_records_existing_python_startup_declaration(
         client.finish()
 
         (session,) = (workspace / ".agents/console/sessions").iterdir()
-        quarto = (session / "sessions/session-001.qmd").read_text(encoding="utf-8")
-        assert "  python-packages: []\n" in quarto, quarto
-        assert "    - jsonlite\n" in quarto, quarto
         events = [
             json.loads(line)
             for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
+        (cell,) = [
+            event
+            for event in events
+            if event["event"] == "cell_started" and event["call_id"] == 2
+        ]
+        session_id = cell["owner"]["session_id"]
+        quarto = (session / f"sessions/session-{session_id:03}.qmd").read_text(
+            encoding="utf-8"
+        )
+        assert "  python-packages: []\n" in quarto, quarto
+        assert "    - jsonlite\n" in quarto, quarto
         (startup,) = [
             event["startup_requirements"]
             for event in events
@@ -80,6 +88,12 @@ def test_records_real_mixed_language_session(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
+        # Finish initial worker startup before dependency preparation retires
+        # that unused worker, so its recorded shutdown has a fixed boundary.
+        assert (
+            "requirements"
+            in client.send(requirements={"action": "get"})["structuredContent"]
+        )
         # Standalone preparation finishes before recording the cells, even
         # when cold dependencies outlive an evaluation's observation budget.
         client.expect(
@@ -134,8 +148,6 @@ def test_records_real_mixed_language_session(
         sql_output = client.transcript[-1]["result"]["content"][0]["text"]
         assert '"a"' in sql_output and "20" in sql_output, sql_output
         assert '"b"' in sql_output and "50" in sql_output, sql_output
-        transcript = client.finish()
-
         session = next((workspace / ".agents/console" / "sessions").iterdir())
         events = [
             json.loads(line)
@@ -149,8 +161,40 @@ def test_records_real_mixed_language_session(
         assert (session / artifact["path"]).read_bytes() == expected_plot[0]
 
         markdown = (session / "transcript.md").read_text(encoding="utf-8")
-        quarto = (session / "sessions/session-001.qmd").read_text(encoding="utf-8")
-        assert "[Artifact 1 from call 2]" in markdown
+        (cell,) = [
+            event
+            for event in events
+            if event["event"] == "cell_started" and event["call_id"] == 3
+        ]
+        session_id = cell["owner"]["session_id"]
+        quarto = (session / f"sessions/session-{session_id:03}.qmd").read_text(
+            encoding="utf-8"
+        )
+        # Snapshot at the completed SQL response. Bounded EOF retirement can
+        # legitimately exit or require a forced stop; verify its exact capture
+        # below without imposing that scheduling outcome on the source snapshot.
+        transcript = client.finish()
+        completed = (session / "transcript.md").read_text(encoding="utf-8")
+        assert completed.startswith(markdown)
+        assert completed.endswith("## Recording finished\n\n")
+        assert (session / f"sessions/session-{session_id:03}.qmd").read_text(
+            encoding="utf-8"
+        ) == quarto
+        completed_events = [
+            json.loads(line)
+            for line in (session / "capture/events.jsonl").read_text().splitlines()
+        ]
+        (ended,) = [
+            event
+            for event in completed_events
+            if event["event"] == "worker_ended" and event["session_id"] == session_id
+        ]
+        assert (
+            f"## Session {session_id:03} ended\n\n```text\n{ended['outcome']}\n```"
+            in completed
+        )
+        assert completed_events[-1]["event"] == "recording_ended"
+        assert "[Artifact 1 from call 3]" in markdown
         assert "![Artifact 1]" in markdown
         assert artifact["path"] in markdown
         assert f"```{{r}}\n{r}```" in quarto

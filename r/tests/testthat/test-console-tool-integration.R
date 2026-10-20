@@ -324,8 +324,10 @@ test_that("console_tool works when registered with an ellmer chat", {
             raw_log <- file.path(
               getwd(),
               sessions,
-              "outputs",
-              "call-000001.log"
+              "capture",
+              "sessions",
+              "001",
+              "cell-001.txt"
             )
             expect_true(file.exists(raw_log))
             notice <- regmatches(

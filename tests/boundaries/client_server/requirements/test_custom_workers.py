@@ -23,7 +23,7 @@ from support.normalization import code
 from support.processes import capture_process_identity, host_process_id, kill_processes
 from support.r import r_test_environment
 from support.records import Transcript
-from support.resolvers import record_resolved_r_library
+from support.resolvers import fake_ir_environment, record_resolved_r_library
 from support.suites import run_this_suite
 
 PNG_1X1 = (
@@ -602,15 +602,20 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(
             .read_text(encoding="utf-8")
             .splitlines()
         ]
-        artifact = events[-2]
-        recorded_result = events[-1]
+        artifact = next(
+            event for event in reversed(events) if event["event"] == "artifact_created"
+        )
+        recorded_result = next(
+            event for event in reversed(events) if event["event"] == "tool_result"
+        )
         assert artifact["event"] == "artifact_created", artifact
         assert recorded_result["event"] == "tool_result", recorded_result
         assert artifact["call_id"] is None, artifact
         call = next(
-            event for event in reversed(events[:-2]) if event["event"] == "tool_call"
+            event for event in reversed(events) if event["event"] == "tool_call"
         )
         assert recorded_result["call_id"] == call["call_id"], events[-2:]
+        assert artifact["sequence"] < recorded_result["sequence"], events[-2:]
         assert recorded_result["result"]["content"][1] == {
             "type": "image",
             "artifactId": artifact["artifact_id"],
@@ -773,14 +778,17 @@ def test_combined_requirements_keep_idle_output_as_one_prelude(
     execution: Execution,
 ) -> Transcript:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    environment, _ = r_test_environment()
-    environment["RETICULATE_PYTHON"] = ""
     with tempfile.TemporaryDirectory() as temporary:
         temporary_path = Path(temporary)
+        # The custom worker acknowledges activation. Control its resolver so
+        # package downloads cannot consume this response-ownership scenario.
+        library = temporary_path / "library"
+        library.mkdir()
+        environment = fake_ir_environment(temporary_path, [library])
+        environment["RETICULATE_PYTHON"] = ""
         failure = temporary_path / "fail-r-resolution"
         environment["TMPDIR"] = temporary
         environment["MCP_CONSOLE_TEST_R_RESOLUTION_FAILURE"] = str(failure)
-        record_resolved_r_library(environment, temporary_path)
         client = McpClient(
             binary,
             resolver_fixture_arguments(execution, "--worker", str(zod)),

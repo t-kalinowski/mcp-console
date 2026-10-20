@@ -2603,10 +2603,44 @@ False
             ]
             assert events[0]["event"] == "recording_started"
             assert sum(event["event"] == "tool_call" for event in events) == 3
+            assert [event["sequence"] for event in events] == list(
+                range(1, len(events) + 1)
+            )
+            cells = [event for event in events if event["event"] == "cell_started"]
+            assert [
+                (
+                    event["call_id"],
+                    event["owner"]["session_id"],
+                    event["owner"]["cell_id"],
+                )
+                for event in cells
+            ] == [(1, 1, 1), (2, 1, 2), (3, 2, 1)]
+            for cell in cells:
+                ready = next(
+                    event
+                    for event in events
+                    if event["event"] == "worker_ready"
+                    and event["session_id"] == cell["owner"]["session_id"]
+                )
+                associated = next(
+                    event
+                    for event in events
+                    if event["event"] == "source_associated"
+                    and event["call_id"] == cell["call_id"]
+                )
+                assert ready["sequence"] < cell["sequence"]
+                assert associated["sequence"] < cell["sequence"]
+                assert associated["session_id"] == cell["owner"]["session_id"]
+            replacement = (session / "sessions/session-002.qmd").read_text()
+            assert "'recorded_value' in globals()" in replacement
+            assert "recorded_value = 41" not in replacement
             records.append(
                 {
                     "recording": {
-                        "events": [event["event"] for event in events],
+                        # Readiness and source attachment can race during startup.
+                        # Assert their causal boundaries above, then retain the
+                        # event inventory without inventing a total order.
+                        "events": sorted({event["event"] for event in events}),
                         "markdown and quarto": "Python source retained",
                         "output log": "42\n",
                     }

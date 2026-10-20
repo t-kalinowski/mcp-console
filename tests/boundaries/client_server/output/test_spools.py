@@ -148,8 +148,8 @@ def test_reports_partial_retention_and_later_unretained_output(
                 second_text = last_tool_text(client)
 
             session = next((workspace / ".agents/console" / "sessions").iterdir())
-            path = f".agents/console/sessions/{session.name}/capture/sessions/002/cell-001.txt"
-            assert (workspace / path).read_bytes() == b"x" * file_limit
+            path = cell_output_path(session, 3)
+            assert path.read_bytes() == b"x" * file_limit
             assert f"stopped after {file_limit} retained bytes" in first_text
             assert "later text is not retained in this file" in first_text
             assert "logs contain prefixes" in first_text

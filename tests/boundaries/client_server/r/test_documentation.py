@@ -90,7 +90,7 @@ def documentation_client(
 def normalize_documentation_preview(client: McpClient) -> None:
     output = normalize_trailing_spaces(client)
     path = re.search(
-        r"raw log: (\.agents[/\\]console[/\\]sessions[/\\][^/\\]+[/\\]outputs[/\\]call-\d+\.log)",
+        r"raw log: (\.agents[/\\]console[/\\]sessions[/\\][^/\\]+[/\\]capture[/\\]sessions[/\\]\d{3}[/\\]cell-\d{3}\.txt)",
         output,
     )
     assert path is not None, output

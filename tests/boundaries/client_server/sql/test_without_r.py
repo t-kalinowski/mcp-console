@@ -1530,7 +1530,9 @@ def test_records_managed_sql_cells(
         assert "[prepared]" in markdown
         assert "Requirements selected" not in markdown
         assert "execute:\n  eval: false" not in quarto
-        assert "\nknitr:" in quarto and "\nir:" in quarto
+        assert "\nir:" in quarto
+        assert "root.dir:" not in quarto
+        assert f"  original-working-directory: {workspace.resolve()}" in quarto
         assert "```sql\nSELECT 42 AS recorded\n```" in markdown
         assert "```{sql}\nSELECT 42 AS recorded\n```" in quarto
         assert (

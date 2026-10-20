@@ -20,7 +20,7 @@ from support.processes import (
     live_processes,
     stop_process_group,
 )
-from support.capture import read_relay_ready
+from support.capture import read_relay_ready, assert_worker_started
 from support.records import Transcript
 from support.relay_lifecycle import (
     LIFECYCLE_COMMANDS,
@@ -190,6 +190,7 @@ def test_setup_failure_reaps_child_before_terminal_publication(
             )
             assert live_processes([worker]) == [], "setup failure did not reap worker"
             events = [json.loads(line) for line in output.splitlines()]
+            assert_worker_started(events.pop(0))
             # Unstarted raw readers still drain; the unstarted sideband reader
             # contributes no Ready or other semantic frames.
             assert events[:2] == [

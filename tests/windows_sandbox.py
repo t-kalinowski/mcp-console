@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -39,12 +40,26 @@ def workspace(parent: Path | None = None):
     try:
         yield root
     finally:
+
+        def remove_readonly_file(function, path, error):
+            failure = error[1]
+            if (
+                function is not os.unlink
+                or failure.winerror != 5
+                or not os.stat(path).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
+            ):
+                raise failure
+            # Completed recordings are read-only. The fixture owns their
+            # removal after its Console processes have exited.
+            os.chmod(path, stat.S_IWRITE)
+            function(path)
+
         # Windows can retain an executable's image mapping briefly after its
         # waited-for process exits. Retry only that sharing violation.
         deadline = time.monotonic() + 5
         while True:
             try:
-                shutil.rmtree(root)
+                shutil.rmtree(root, onerror=remove_readonly_file)
                 break
             except OSError as error:
                 if error.winerror != 32 or time.monotonic() >= deadline:

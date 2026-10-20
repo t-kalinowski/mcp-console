@@ -15,6 +15,7 @@ from support.progress import without_elapsed, without_elapsed_result
 from support.assertions import large_output, last_tool_text
 from support.checkpoints import (
     FifoCheckpoint,
+    wait_for_path,
 )
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -288,7 +289,7 @@ def test_orders_explicit_restart_output(
         )
         environment["MCP_CONSOLE_TEST_CELL_OUTPUT_CLOSED"] = str(output_closed.path)
         environment["MCP_CONSOLE_TEST_CELL_OUTPUT_SUFFIX"] = (
-            "/capture/sessions/002/cell-001.txt"
+            "/capture/sessions/001/cell-001.txt"
         )
         environment["ZOD_STDIN_CLOSE_RELEASE"] = str(output_closed.path)
         client = McpClient(
@@ -313,6 +314,11 @@ def test_orders_explicit_restart_output(
             "zod-waiting-for-stdin-close",
             client,
         )
+        wait_for_path(
+            session_directory(client) / "capture/sessions/001/cell-001.txt",
+            "server observed the executing cell before restart",
+            client=client,
+        )
 
         startup_control.write_text("ready", encoding="utf-8")
         client.send(control="restart")
@@ -327,9 +333,9 @@ def test_orders_explicit_restart_output(
         output = last_tool_text(client)
         assert output.endswith(suffix), output[-500:]
         assert_preview(output.removesuffix(suffix), large_output("zod stdin closed\n"))
-        assert "capture/sessions/002/cell-001-post.txt" in output
+        assert "capture/sessions/001/cell-001-post.txt" in output
         assert (
-            session_directory(client) / "capture/sessions/002/cell-001-post.txt"
+            session_directory(client) / "capture/sessions/001/cell-001-post.txt"
         ).read_text() == large_output("zod stdin closed\n")
         normalize_preview_paths(client)
 
