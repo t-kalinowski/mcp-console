@@ -36,6 +36,10 @@ from support.resolvers import (
     uv_tool_run_requirements,
 )
 
+NATIVE_IMPORT_ERRORS = (
+    Path(__file__).parents[3] / "fixtures" / "native_import_errors.py"
+).read_text()
+
 
 def mixed_environment(root: Path) -> tuple[dict[str, str], Path, Path]:
     env, ir_record = recording_fixture_r_environment(root, ("mcpfirst", "mcpsecond"))
@@ -123,6 +127,7 @@ def test_requires_explicit_python_requirements_by_default(
                     print("dynamic imports require declared dependencies")
                     """),
             )
+            client.expect("native import errors\n", python=NATIVE_IMPORT_ERRORS)
             assert inspect(client) == startup
             assert uv_tool_run_requirements(uv_record) == baseline
             client.expect(
@@ -193,6 +198,8 @@ def test_locked_python_startup_and_fallback(
             assert baseline and all(
                 packages == ["packaging"] for packages in baseline
             ), baseline
+            client.expect("native import errors\n", python=NATIVE_IMPORT_ERRORS)
+            assert uv_tool_run_requirements(uv_record) == baseline
             for requirements in (
                 {"python": ["six"]},
                 {"python_version": [">=3.12"]},
@@ -383,6 +390,7 @@ def test_explicit_runtime_requests_and_deliberate_additions(
             accepted = inspect(client)
             assert accepted["requirements"]["python"] == ["six>=1.16,<2"]
             baseline = (ir_run_records(ir_record), uv_tool_run_requirements(uv_record))
+            client.expect("native import errors\n", python=NATIVE_IMPORT_ERRORS)
             client.send(python="import yaml12")
             assert "ModuleNotFoundError" in last_tool_text(client), last_tool_text(
                 client
@@ -451,6 +459,10 @@ def test_fixed_rejects_py_require_preparation(
             assert uv_tool_run_requirements(uv_record) == baseline
             client.expect(r="invisible(reticulate::py_config())")
             baseline = uv_tool_run_requirements(uv_record)
+            client.expect(
+                "native import errors\n",
+                r=f"reticulate::py_run_string({json.dumps(NATIVE_IMPORT_ERRORS)})",
+            )
             client.expect(
                 # fmt: r
                 r=code("""
