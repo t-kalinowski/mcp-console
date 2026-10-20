@@ -868,7 +868,10 @@ def test_live_extension_additions_require_an_idle_worker(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         env = managed_environment(root)
-        with sql_client(binary, execution, env) as client:
+        # Pin the debugger's frame/return events independently of cached Python.
+        with sql_client(
+            binary, execution, env, arguments=("-c", 'python.version="3.14"')
+        ) as client:
             client.send(requirements={"duckdb": ["json"]})
             client.send(
                 python="identity = object(); identity_id = id(identity); answer = input('answer> ')",

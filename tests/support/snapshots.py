@@ -116,10 +116,6 @@ def format_transcript(value: YamlStream) -> str:
     formatted = "\n".join(
         "" if line.isspace() else line for line in formatted.split("\n")
     )
-    if any(string.endswith("\n\n") for string in strings):
-        # Formatting can render trailing newlines as a final literal scalar.
-        # Close the document so preserving them does not add blank lines at EOF.
-        formatted += "...\n"
     assert identical(value, parse_yaml(formatted, multi=True)), (
         "formatted transcript did not round-trip"
     )

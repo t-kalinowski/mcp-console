@@ -142,7 +142,9 @@ result:
               "json",
               "sqlite"
             ],
-            "python_version": [],
+            "python_version": [
+              "3.14"
+            ],
             "exclude_newer": null
           },
           "prepared": true,
@@ -164,7 +166,8 @@ result:
         - icu
         - json
         - sqlite
-      python_version: []
+      python_version:
+        - "3.14"
       exclude_newer: ~
     prepared: true
     runtime_requirements:

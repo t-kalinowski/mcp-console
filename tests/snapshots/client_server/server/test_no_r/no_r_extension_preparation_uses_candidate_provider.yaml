@@ -24,6 +24,8 @@ send:
       - numpy
       - pandas
       - duckdb==1.4.4
+    python_version:
+      - "3.14"
     duckdb:
       - not_a_real_duckdb_extension
 result:

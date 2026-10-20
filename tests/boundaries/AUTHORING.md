@@ -88,4 +88,3 @@ Retain raw exchanges when delivery or polling is the contract being tested.
 
 See the [Python lifecycle cases](client_server/python/test_lifecycle.py) and [retention cases](client_server/output/test_spools.py).
 Preserve complete output assertions and use the [snapshot rules](README.md#snapshots) for normalization.
-When a final YAML literal scalar owns trailing blank lines, the serializer closes the document with `...` so those bytes remain part of the scalar without adding blank lines at EOF.
