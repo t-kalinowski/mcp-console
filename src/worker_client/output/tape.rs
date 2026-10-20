@@ -69,12 +69,16 @@ impl OutputTape {
         state.finish_idle_interval();
     }
 
-    pub(in crate::worker_client) fn worker_started(&self, pid: u32) {
+    pub(in crate::worker_client) fn worker_started(
+        &self,
+        pid: u32,
+        requirements: &serde_json::Value,
+    ) {
         let mut state = self.lock();
         state.seal(true);
         state.finish_idle_interval();
         if let Some(transcript) = &state.session_recording {
-            transcript.worker_started(pid);
+            transcript.worker_started(pid, requirements);
         }
     }
 

@@ -401,8 +401,10 @@ impl ServerHandler for ConsoleServer {
             .expect("console operations must carry transport admission");
         let call = context
             .extensions
-            .remove::<crate::transcript::Call>()
-            .expect("send carries its recording call");
+            .remove::<crate::server_transport::RecordingCall>()
+            .expect("send carries its recording call")
+            .recorded()
+            .await;
         let transcript = self.startup.runtime().transcript.clone();
         let admitted = tokio::select! {
             biased;

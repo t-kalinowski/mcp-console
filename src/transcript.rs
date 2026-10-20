@@ -6,6 +6,7 @@ use std::io::{BufWriter, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 use base64::Engine as _;
@@ -66,7 +67,11 @@ pub(crate) struct ResultPart {
 }
 
 #[derive(Clone)]
-pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>, Arc<Mutex<ProtocolEvents>>);
+pub(crate) struct Transcript(
+    Arc<Mutex<TranscriptState>>,
+    Arc<Mutex<ProtocolEvents>>,
+    Arc<AtomicU64>,
+);
 type ProtocolEvents = Vec<(Event<'static>, DateTime<Utc>)>;
 struct TranscriptState {
     started_at: DateTime<Utc>,
@@ -89,7 +94,6 @@ struct ActiveTranscript {
     pending_projection_failure: Option<String>,
     run_id: String,
     sequence: u64,
-    next_call_id: u64,
     next_artifact_id: u64,
     next_session_id: u64,
     owner: Option<Owner>,
@@ -155,6 +159,7 @@ impl Transcript {
                 active: None,
                 failure: None,
             })),
+            Arc::default(),
             Arc::default(),
         )
     }
@@ -269,7 +274,7 @@ impl Transcript {
             Ok(())
         });
     }
-    pub(crate) fn worker_started(&self, pid: u32) {
+    pub(crate) fn worker_started(&self, pid: u32, requirements: &Value) {
         self.update(|state| {
             let active = state.capture()?;
             active.worker_live = true;
@@ -282,7 +287,14 @@ impl Transcript {
                 interval: Interval::Startup,
             });
             active.image_number = 0;
-            active.append(Event::WorkerStarted { session_id, pid }, Utc::now())
+            active.append(
+                Event::WorkerStarted {
+                    session_id,
+                    pid,
+                    requirements,
+                },
+                Utc::now(),
+            )
         });
     }
     pub(crate) fn worker_ready(&self) {
@@ -332,8 +344,17 @@ impl Transcript {
     pub(crate) fn owner(&self) -> Option<Owner> {
         self.lock().0.active.as_ref().and_then(|a| a.owner)
     }
+    /// Reserve protocol identity without waiting for the journal writer.
+    pub(crate) fn reserve_call_id(&self) -> u64 {
+        self.2
+            .fetch_add(1, Ordering::Relaxed)
+            .checked_add(1)
+            .expect("recording call ID space exhausted")
+    }
     pub(crate) fn begin(
         &self,
+        call_id: u64,
+        at: DateTime<Utc>,
         request_id: &RequestId,
         request_meta: &RequestMetaObject,
         request: &CallToolRequestParams,
@@ -341,8 +362,6 @@ impl Transcript {
         self.activate();
         self.update(|state| {
             let active = state.capture()?;
-            active.next_call_id += 1;
-            let call_id = active.next_call_id;
             let mut request = request.clone();
             if !request_meta.is_empty() {
                 request.meta = Some(request_meta.clone());
@@ -353,7 +372,7 @@ impl Transcript {
                     request_id,
                     request: &request,
                 },
-                Utc::now(),
+                at,
             )?;
             let addressed_session = (active.worker_live
                 && request
@@ -594,7 +613,6 @@ impl TranscriptState {
                 projections,
                 pending_projection_failure,
                 sequence: 0,
-                next_call_id: 0,
                 next_artifact_id: 0,
                 next_session_id: 0,
                 owner: None,

@@ -16,18 +16,6 @@ md: |+
   }
   ```
 
-  ## Call 1: Requirements
-
-  ### Options
-
-  ```json
-  {
-    "requirements": {
-      "action": "get"
-    }
-  }
-  ```
-
   ## Runtime discovery
 
   ```json
@@ -60,6 +48,18 @@ md: |+
       ],
       "python_version": [],
       "exclude_newer": null
+    }
+  }
+  ```
+
+  ## Call 1: Requirements
+
+  ### Options
+
+  ```json
+  {
+    "requirements": {
+      "action": "get"
     }
   }
   ```
@@ -237,6 +237,8 @@ qmd: |+
       - dplyr
       - duckdb
       - ggplot2
+      - grDevices
+      - graphics
       - nanoarrow
       - reticulate
       - tidyverse

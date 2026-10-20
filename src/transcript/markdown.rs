@@ -158,6 +158,7 @@ impl Documents {
                 }
             }
             "worker_started" => {
+                self.metadata.requirements(&event["requirements"]);
                 let id = event["session_id"]
                     .as_u64()
                     .ok_or("worker session missing")?;
@@ -503,7 +504,9 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             Ok(())
         }
         Event::ProcessOutput { .. } => Ok(()),
-        Event::WorkerStarted { session_id, pid } => {
+        Event::WorkerStarted {
+            session_id, pid, ..
+        } => {
             writeln!(
                 document,
                 "## Session {session_id:03} started\n\nWorker process {pid}.\n"

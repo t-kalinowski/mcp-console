@@ -37,6 +37,7 @@ pub(super) enum Event<'a> {
     WorkerStarted {
         session_id: u64,
         pid: u32,
+        requirements: &'a Value,
     },
     WorkerReady {
         session_id: u64,

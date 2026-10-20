@@ -173,6 +173,71 @@ def test_export_after_automatic_replacement(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+def test_replacement_exports_retained_r_requirements(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        source = (
+            "retained <- packageVersion('praise'); cat('retained praise available\\n')"
+        )
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c",
+                "r.packages=[]",
+                *(
+                    ("--writable-root", str(workspace))
+                    if execution == SANDBOXED
+                    else ()
+                ),
+            ),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                "initial praise available\n",
+                r="initial <- packageVersion('praise'); cat('initial praise available\\n')",
+                requirements={"r": ["praise"]},
+            )
+            rejected = client.send(
+                r="stop('rejected source')",
+                requirements={"r": ["uncommittedpackage"], "python": [""]},
+            )
+            assert rejected["isError"], rejected
+            client.send(control="restart")
+            client.expect("retained praise available\n", r=source)
+            selected = client.send(requirements={"action": "get"})["structuredContent"]
+            assert selected["requirements"]["r"] == ["praise"], selected
+            client.expect(r='paths <- .console$export_session("report")')
+            transcript = client.finish()
+        (recording,) = (workspace / ".agents/console/sessions").iterdir()
+        capture = events(recording)
+        (call,) = [
+            event
+            for event in capture
+            if event["event"] == "tool_call"
+            and event["request"].get("arguments", {}).get("r") == source
+        ]
+        (cell,) = [
+            event
+            for event in capture
+            if event["event"] == "cell_started" and event["call_id"] == call["call_id"]
+        ]
+        session = cell["owner"]["session_id"]
+        for path in (
+            recording / f"sessions/session-{session:03}.qmd",
+            workspace / "report/session.qmd",
+        ):
+            qmd = path.read_text()
+            assert "  packages:\n    - praise\n" in qmd, qmd
+            assert "uncommittedpackage" not in qmd, qmd
+            assert source in qmd, qmd
+        return normalized(transcript, workspace)
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
 def test_r_export_without_python_initialization(
     binary: Path, execution: Execution
 ) -> Transcript:

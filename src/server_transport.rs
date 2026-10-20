@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -761,16 +761,27 @@ impl Drop for ResponseDeliveryWrite {
 
 type SendObserver = dyn Fn(&mut CallToolRequest) + Send;
 
+/// One ordered capture operation, awaited by its handler rather than MCP receipt.
+#[derive(Clone)]
+pub(crate) struct RecordingCall(tokio::sync::watch::Receiver<Option<crate::transcript::Call>>);
+
+impl RecordingCall {
+    pub(crate) async fn recorded(mut self) -> crate::transcript::Call {
+        match self.0.wait_for(Option::is_some).await {
+            Ok(call) => call.clone().expect("recorded call ready"),
+            Err(_) => crate::transcript::Call::unrecorded(),
+        }
+    }
+}
+
 pub(crate) struct ServerTransport<R: AsyncRead, W: AsyncWrite> {
     inner: AsyncRwTransport<RoleServer, R, W>,
     deliveries: ResponseDeliveries,
     send_observer: Option<Box<SendObserver>>,
     recording: Option<crate::transcript::Transcript>,
     recorded_calls: HashMap<RequestId, u64>,
-    pending_recording: Option<(
-        RxJsonRpcMessage<RoleServer>,
-        tokio::task::JoinHandle<crate::transcript::Call>,
-    )>,
+    recording_tail: Option<RecordingCall>,
+    recording_tasks: VecDeque<tokio::task::JoinHandle<()>>,
 }
 
 impl<R, W> ServerTransport<R, W>
@@ -785,7 +796,8 @@ where
             send_observer: None,
             recording: None,
             recorded_calls: HashMap::new(),
-            pending_recording: None,
+            recording_tail: None,
+            recording_tasks: VecDeque::new(),
         }
     }
 
@@ -890,18 +902,28 @@ where
     }
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
-        let mut message = if self.pending_recording.is_some() {
-            None
-        } else {
-            self.inner.receive().await
-        };
-        if self.pending_recording.is_none()
-            && let (Some(recording), Some(JsonRpcMessage::Request(request))) =
-                (&self.recording, &message)
-            && let ClientRequest::CallToolRequest(call) = &request.request
+        let mut message = self.inner.receive().await;
+        if let (Some(recording), Some(JsonRpcMessage::Request(request))) =
+            (&self.recording, &mut message)
+            && let ClientRequest::CallToolRequest(call) = &mut request.request
             && call.params.name.as_ref() == "send"
         {
+            while self
+                .recording_tasks
+                .front()
+                .is_some_and(|task| task.is_finished())
+            {
+                self.recording_tasks.pop_front();
+            }
+            // Apply the existing transport backlog bound to journal waits too.
+            // A stalled recorder must not grow an unbounded queue of handlers.
+            if self.recording_tasks.len() >= MAX_RESPONSE_GATED_CALLS {
+                self.deliveries.close();
+                return None;
+            }
             let recorder = recording.clone();
+            let call_id = recording.reserve_call_id();
+            let at = chrono::Utc::now();
             let request_id = request.id.clone();
             let params = call.params.clone();
             let meta = call
@@ -909,36 +931,30 @@ where
                 .get::<RequestMetaObject>()
                 .cloned()
                 .unwrap_or_default();
-            let task =
-                tokio::task::spawn_blocking(move || recorder.begin(&request_id, &meta, &params));
-            // The service can cancel receive while writing an earlier response.
-            // Retain both the consumed request and its activation task until a
-            // later receive resumes them; the task must run exactly once.
-            self.pending_recording = Some((message.take().expect("received send"), task));
-        }
-        if let Some((_, task)) = &mut self.pending_recording {
-            let recorded = match task.await {
-                Ok(recorded) => recorded,
-                Err(error) => {
-                    self.recording
-                        .as_ref()
-                        .expect("recording task owner")
-                        .disable(format!("recording activation task failed: {error}"));
-                    crate::transcript::Call::unrecorded()
+            let predecessor = self.recording_tail.take();
+            let (completed, ready) = tokio::sync::watch::channel(None);
+            let pending = RecordingCall(ready);
+            self.recording_tail = Some(pending.clone());
+            call.extensions.insert(pending);
+            self.recorded_calls.insert(request.id.clone(), call_id);
+            self.recording_tasks.push_back(tokio::spawn(async move {
+                if let Some(predecessor) = predecessor {
+                    predecessor.recorded().await;
                 }
-            };
-            let (mut retained, _) = self.pending_recording.take().expect("recorded request");
-            let JsonRpcMessage::Request(request) = &mut retained else {
-                unreachable!("only send requests have recording tasks")
-            };
-            let ClientRequest::CallToolRequest(call) = &mut request.request else {
-                unreachable!("only send requests have recording tasks")
-            };
-            if let Some(id) = recorded.id() {
-                self.recorded_calls.insert(request.id.clone(), id);
-            }
-            call.extensions.insert(recorded);
-            message = Some(retained);
+                let diagnostics = recorder.clone();
+                let recorded = match tokio::task::spawn_blocking(move || {
+                    recorder.begin(call_id, at, &request_id, &meta, &params)
+                })
+                .await
+                {
+                    Ok(recorded) => recorded,
+                    Err(error) => {
+                        diagnostics.disable(format!("recording activation task failed: {error}"));
+                        crate::transcript::Call::unrecorded()
+                    }
+                };
+                let _ = completed.send(Some(recorded));
+            }));
         }
         if let (Some(recording), Some(message)) = (&self.recording, &mut message) {
             let mut captured = serde_json::to_value(&*message);
@@ -992,17 +1008,13 @@ where
 
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
         self.deliveries.close();
-        let pending = self.pending_recording.take();
-        let recording = self.recording.clone();
+        let tasks = std::mem::take(&mut self.recording_tasks);
         let close = self.inner.close();
         async move {
-            // Final permissions must follow the last activation writer, even
-            // when the service stops before dispatching its retained request.
-            if let Some((_, task)) = pending
-                && let Err(error) = task.await
-                && let Some(recording) = recording
-            {
-                recording.disable(format!("recording activation task failed: {error}"));
+            // All ordered activation writers must settle before final permissions,
+            // including calls cancelled before their handler could run.
+            for task in tasks {
+                let _ = task.await;
             }
             close.await
         }

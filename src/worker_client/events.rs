@@ -172,7 +172,8 @@ fn dispatch_worker_events(
                 }
                 let result = match event {
                     RelayEvent::WorkerStarted { pid } => {
-                        output.worker_started(pid);
+                        let retained = callbacks.client.inspect_requirements();
+                        output.worker_started(pid, &retained["requirements"]);
                         if let Some(active) = callbacks
                             .client
                             .0

@@ -340,13 +340,15 @@ Storage selection and recording identifiers retain their existing owners.
 
 The relay reports actual worker launch separately from readiness and exit.
 Recording session IDs count these launches independently of lifecycle generations.
+Each launch event carries the committed requirements declaration; live projections and capture reconstruction seed the new session from that declaration, including R additions retained across replacement.
 Source attachment records admission to a worker separately from execution; an interrupted pending source can have an attachment without a cell log.
 The worker reports cell entry; the tape switches text/image intervals at observed entry and completion, and retains the final interval through producer retirement.
 A tool call can collect several intervals or sessions.
 Recorded result byte ranges preserve the association after bounded preview assembly, including output claimed by later polls.
 Transport envelopes reference recorded tool payloads instead of duplicating them, and the delivery owner supplies write evidence without asserting client receipt.
-The transport retains a consumed request and its activation task across receive cancellation while an earlier response is sent.
-Closing the transport settles that writer.
+The transport reserves call identities at receipt and schedules recording activation in wire order.
+Handlers await their recorded calls while MCP receipt remains available for later sends, cancellation, and ping.
+Pending activation tasks share the transport backlog bound; closing the transport settles those writers before recording finalization.
 Protocol envelopes and delivery evidence queue while another journal writer owns the recorder, so cancellation and ping remain available.
 The recorder flushes them in observation order with their original timestamps before its next event and at finalization.
 

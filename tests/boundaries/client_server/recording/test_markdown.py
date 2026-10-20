@@ -1,6 +1,9 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import os
+import shutil
+from contextlib import ExitStack
 import subprocess
 import sys
 import tempfile
@@ -11,11 +14,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.requirements import POSIX, R, SQL, command, requires
 from support.assertions import assert_result_content
 from support.client import McpClient
+from support.checkpoints import wait_for_checkpoint, wait_for_path
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
+from support.snapshots import platform_snapshots
 
 
 @requires(R)
@@ -69,31 +74,103 @@ def test_records_existing_python_startup_declaration(
         return [{"recorded_startup_requirements": startup}]
 
 
-@requires(R, SQL)
+@platform_snapshots(
+    "win32",
+    reason="Windows records forced unused-worker retirement as exit code 1; Unix records signal 9",
+)
+@requires(R, SQL, command("ir"), command("rustc"))
 @executions(DIRECT, SANDBOXED)
 def test_records_real_mixed_language_session(
     binary: Path,
     execution: Execution,
 ) -> TranscriptWithCompanions:
-    with tempfile.TemporaryDirectory(
-        prefix="console-recording-é-"
-    ) as temporary_directory:
+    with (
+        tempfile.TemporaryDirectory(
+            prefix="console-recording-é-"
+        ) as temporary_directory,
+        ExitStack() as resources,
+    ):
         workspace = Path(temporary_directory)
         environment, rscript = r_test_environment()
         environment.pop("RETICULATE_PYTHON", None)
-        client = McpClient(
-            binary,
-            execution.serve(),
-            environment,
-            current_directory=workspace,
+        real_ir = shutil.which("ir")
+        assert real_ir is not None
+        commands = workspace / "commands"
+        commands.mkdir()
+        fixture = commands / ("ir.exe" if os.name == "nt" else "ir")
+        subprocess.run(
+            [
+                "rustc",
+                str(Path(__file__).resolve().parents[3] / "fixtures/checkpoint_ir.rs"),
+                "-o",
+                str(fixture),
+            ],
+            check=True,
         )
+        release = workspace / "preparation-release"
+        started = workspace / "preparation-started"
+        environment.update(
+            {
+                "PATH": os.pathsep.join((str(commands), environment["PATH"])),
+                "UV_TOOL_DIR": str(workspace),
+                "MCP_CONSOLE_TEST_REAL_IR": real_ir,
+                "MCP_CONSOLE_TEST_IR_CLAIM": str(workspace / "preparation-claimed"),
+                "MCP_CONSOLE_TEST_IR_STARTED": str(started),
+                "MCP_CONSOLE_TEST_IR_RELEASE": str(release),
+            }
+        )
+        client = resources.enter_context(
+            McpClient(
+                binary,
+                execution.serve("-c", "cache=host"),
+                environment,
+                current_directory=workspace,
+            )
+        )
+        resources.callback(release.touch)
         client.initialize_and_list_tools()
-        # Finish initial worker startup before dependency preparation retires
-        # that unused worker, so its recorded shutdown has a fixed boundary.
-        assert (
-            "requirements"
-            in client.send(requirements={"action": "get"})["structuredContent"]
+        # Runtime discovery precedes initial package preparation. Hold that
+        # preparation until the first call is captured, fixing both discovery
+        # and worker-launch ordering without assuming startup speed.
+        wait_for_path(
+            started,
+            "initial worker preparation started",
+            client=client,
+            timeout=client.response_timeout,
         )
+        initial = client.start_send(requirements={"action": "get"})
+
+        def first_call_recorded() -> Path | None:
+            for path in (workspace / ".agents/console/sessions").glob(
+                "*/capture/events.jsonl"
+            ):
+                try:
+                    data = path.read_bytes()
+                except PermissionError:
+                    if os.name != "nt":
+                        raise
+                    # Windows CopyFile temporarily denies reads during capture
+                    # publication. Keep waiting for the complete call receipt.
+                    continue
+                lines = data.rpartition(b"\n")[0].splitlines()
+                if any(
+                    event["event"] == "tool_call"
+                    and event["request_id"] == initial["id"]
+                    for event in map(json.loads, lines)
+                ):
+                    return path
+            return None
+
+        wait_for_checkpoint(
+            first_call_recorded,
+            "initial request captured before worker launch",
+            root=workspace,
+            recursive=True,
+            client=client,
+        )
+        release.touch()
+        client.receive(initial)
+        assert "requirements" in initial["result"]["structuredContent"]
         # Standalone preparation finishes before recording the cells, even
         # when cold dependencies outlive an evaluation's observation budget.
         client.expect(
