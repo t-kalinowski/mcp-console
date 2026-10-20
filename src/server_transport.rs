@@ -5,8 +5,8 @@ use std::time::Instant;
 
 use rmcp::RoleServer;
 use rmcp::model::{
-    CallToolRequest, ClientNotification, ClientRequest, JsonRpcMessage, RequestId,
-    RequestMetaObject, ServerResult,
+    CallToolRequest, CallToolResponse, ClientNotification, ClientRequest, JsonRpcMessage,
+    RequestId, RequestMetaObject, ServerResult,
 };
 use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport};
@@ -763,14 +763,70 @@ type SendObserver = dyn Fn(&mut CallToolRequest) + Send;
 
 /// One ordered capture operation, awaited by its handler rather than MCP receipt.
 #[derive(Clone)]
-pub(crate) struct RecordingCall(tokio::sync::watch::Receiver<Option<crate::transcript::Call>>);
+pub(crate) struct RecordingCall {
+    id: u64,
+    ready: tokio::sync::watch::Receiver<Option<crate::transcript::Call>>,
+}
 
 impl RecordingCall {
+    // rmcp responses have no extensions. Carry instance identity through its
+    // handler channel, then remove this envelope before capture or wire encoding.
+    // A JSON-RPC ID can be reused or cancelled before an earlier response arrives.
+    const RESPONSE_ID: &'static str = "mcp-console/internal/recording-call";
+
     pub(crate) async fn recorded(mut self) -> crate::transcript::Call {
-        match self.0.wait_for(Option::is_some).await {
+        match self.ready.wait_for(Option::is_some).await {
             Ok(call) => call.clone().expect("recorded call ready"),
             Err(_) => crate::transcript::Call::unrecorded(),
         }
+    }
+
+    pub(crate) fn response(
+        self,
+        mut response: Result<CallToolResponse, rmcp::ErrorData>,
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
+        match &mut response {
+            Ok(CallToolResponse::Complete(result)) => {
+                let identity = serde_json::json!({"call_id": self.id, "meta": result.meta.take()});
+                let mut meta = rmcp::model::MetaObject::new();
+                meta.insert(Self::RESPONSE_ID.into(), identity);
+                result.meta = Some(meta);
+            }
+            Err(error) => {
+                let mut identity = serde_json::json!({Self::RESPONSE_ID: self.id});
+                if let Some(data) = error.data.take() {
+                    identity["data"] = data;
+                }
+                error.data = Some(identity);
+            }
+            Ok(_) => unreachable!("send returns complete results"),
+        }
+        response
+    }
+
+    fn take_response_id(message: &mut TxJsonRpcMessage<RoleServer>) -> Option<u64> {
+        let identity = match message {
+            JsonRpcMessage::Response(response) => {
+                let ServerResult::CallToolResult(result) = &mut response.result else {
+                    return None;
+                };
+                let mut identity = result.meta.as_mut()?.remove(Self::RESPONSE_ID)?;
+                result.meta = serde_json::from_value(identity["meta"].take())
+                    .expect("original response metadata");
+                identity["call_id"].take()
+            }
+            JsonRpcMessage::Error(error) => {
+                let identity = error.error.data.as_mut()?;
+                let id = identity.get(Self::RESPONSE_ID)?.clone();
+                error.error.data = identity
+                    .as_object_mut()
+                    .expect("recorded error")
+                    .remove("data");
+                id
+            }
+            JsonRpcMessage::Request(_) | JsonRpcMessage::Notification(_) => return None,
+        };
+        Some(identity.as_u64().expect("recorded response call ID"))
     }
 }
 
@@ -792,7 +848,6 @@ pub(crate) struct ServerTransport<R: AsyncRead, W: AsyncWrite> {
     deliveries: ResponseDeliveries,
     send_observer: Option<Box<SendObserver>>,
     recording: Option<crate::transcript::Transcript>,
-    recorded_calls: HashMap<RequestId, u64>,
     recording_queue: RecordingQueue,
     recording_tasks: VecDeque<tokio::task::JoinHandle<()>>,
 }
@@ -808,7 +863,6 @@ where
             deliveries,
             send_observer: None,
             recording: None,
-            recorded_calls: HashMap::new(),
             recording_queue: RecordingQueue::default(),
             recording_tasks: VecDeque::new(),
         }
@@ -842,8 +896,9 @@ where
 
     fn send(
         &mut self,
-        item: TxJsonRpcMessage<RoleServer>,
+        mut item: TxJsonRpcMessage<RoleServer>,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let call_id = RecordingCall::take_response_id(&mut item);
         let response = matches!(
             &item,
             JsonRpcMessage::Response(_) | JsonRpcMessage::Error(_)
@@ -867,9 +922,6 @@ where
             JsonRpcMessage::Error(error) => error.id.clone(),
             _ => None,
         };
-        let call_id = request_id
-            .as_ref()
-            .and_then(|id| self.recorded_calls.remove(id));
         if let Some(recording) = &recording {
             match serde_json::to_value(&item) {
                 Ok(mut message) => {
@@ -880,7 +932,7 @@ where
                             }
                         }
                     }
-                    recording.protocol("assembled", &message);
+                    recording.protocol("assembled", message);
                 }
                 Err(error) => recording.disable(format!("protocol capture failed: {error}")),
             }
@@ -922,6 +974,8 @@ where
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
         let mut message = self.inner.receive().await;
+        let mut received_call_id = None;
+        let mut capture = None;
         if let (Some(recording), Some(JsonRpcMessage::Request(request))) =
             (&self.recording, &mut message)
             && let ClientRequest::CallToolRequest(call) = &mut request.request
@@ -951,7 +1005,7 @@ where
                 .cloned()
                 .unwrap_or_default();
             let (completed, ready) = tokio::sync::watch::channel(None);
-            let pending = RecordingCall(ready);
+            let pending = RecordingCall { id: call_id, ready };
             let predecessor = self
                 .recording_queue
                 .0
@@ -959,8 +1013,8 @@ where
                 .expect("recording queue lock")
                 .replace(pending.clone());
             call.extensions.insert(pending);
-            self.recorded_calls.insert(request.id.clone(), call_id);
-            self.recording_tasks.push_back(tokio::spawn(async move {
+            received_call_id = Some(call_id);
+            capture = Some(async move {
                 if let Some(predecessor) = predecessor {
                     predecessor.recorded().await;
                 }
@@ -977,20 +1031,24 @@ where
                     }
                 };
                 let _ = completed.send(Some(recorded));
-            }));
+            });
         }
         if let (Some(recording), Some(message)) = (&self.recording, &mut message) {
             let mut captured = serde_json::to_value(&*message);
-            if let JsonRpcMessage::Request(request) = message
-                && let Some(id) = self.recorded_calls.get(&request.id)
+            if let Some(id) = received_call_id
                 && let Ok(message) = &mut captured
             {
                 message["params"] = serde_json::json!({"tool_call_id": id});
             }
             match captured {
-                Ok(message) => recording.protocol("received", &message),
+                Ok(message) => recording.protocol("received", message),
                 Err(error) => recording.disable(format!("protocol capture failed: {error}")),
             }
+        }
+        // Queue receipt before any capture task can activate or append the call,
+        // including when this transport runs on a multithreaded executor.
+        if let Some(capture) = capture {
+            self.recording_tasks.push_back(tokio::spawn(capture));
         }
         if message.is_some() {
             self.deliveries.lock().bootstrap_response_delivered = false;

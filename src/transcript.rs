@@ -38,8 +38,42 @@ pub(crate) struct Transcript(
 
 #[derive(Default)]
 struct ProtocolEvents {
-    pending: Vec<(Event<'static>, DateTime<Utc>)>,
+    pending: Vec<(Event<'static>, DateTime<Utc>, usize)>,
+    // Include batches held by flush_protocol while journal I/O is blocked.
+    retained_events: usize,
+    retained_bytes: usize,
+    failure: Option<String>,
     draining: bool,
+}
+
+const MAX_PROTOCOL_EVENTS: usize = 1024;
+const MAX_PROTOCOL_BYTES: usize = 8 * 1024 * 1024;
+
+impl ProtocolEvents {
+    fn stop(&mut self, error: String) {
+        self.failure.get_or_insert(error);
+        self.retained_events -= self.pending.len();
+        self.retained_bytes -= self
+            .pending
+            .drain(..)
+            .map(|(_, _, bytes)| bytes)
+            .sum::<usize>();
+    }
+}
+
+/// Measure serialized retention without allocating another copy of the payload.
+#[derive(Default)]
+struct ProtocolBytes(usize);
+
+impl Write for ProtocolBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 struct TranscriptState {
@@ -167,11 +201,8 @@ impl Transcript {
             state.capture()?.publish(&working_directory)
         });
     }
-    pub(crate) fn protocol(&self, direction: &'static str, message: &Value) {
-        self.queue_protocol(Event::Protocol {
-            direction,
-            message: message.clone(),
-        });
+    pub(crate) fn protocol(&self, direction: &'static str, message: Value) {
+        self.queue_protocol(Event::Protocol { direction, message });
     }
 
     pub(crate) fn delivery(&self, request_id: &Value, call_id: Option<u64>, delivered: bool) {
@@ -183,8 +214,37 @@ impl Transcript {
     }
 
     fn queue_protocol(&self, event: Event<'static>) {
+        if self
+            .1
+            .lock()
+            .expect("protocol capture lock")
+            .failure
+            .is_some()
+        {
+            return;
+        }
+        let at = Utc::now();
+        let mut bytes = ProtocolBytes::default();
+        let measured = serde_json::to_writer(&mut bytes, &event);
         let mut events = self.1.lock().expect("protocol capture lock");
-        events.pending.push((event, Utc::now()));
+        if events.failure.is_some() {
+            return;
+        }
+        if let Err(error) = measured {
+            events.stop(format!("protocol capture failed: {error}"));
+        } else if events.retained_events == MAX_PROTOCOL_EVENTS
+            || bytes.0 > MAX_PROTOCOL_BYTES - events.retained_bytes
+        {
+            // This lock never protects journal I/O. The drain reports the failure
+            // after its current write settles; frame reception remains fail-open.
+            events.stop(format!(
+                "protocol capture backlog exceeded ({MAX_PROTOCOL_EVENTS} events or {MAX_PROTOCOL_BYTES} bytes)"
+            ));
+        } else {
+            events.retained_events += 1;
+            events.retained_bytes += bytes.0;
+            events.pending.push((event, at, bytes.0));
+        }
         if events.draining {
             return;
         }
@@ -206,13 +266,25 @@ impl Transcript {
     }
 
     fn flush_protocol(&self, state: &mut TranscriptState) -> Result<(), String> {
-        let pending = std::mem::take(&mut self.1.lock().expect("protocol capture lock").pending);
-        if state.failure.is_none() {
-            for (event, at) in pending {
+        let pending = {
+            let mut events = self.1.lock().expect("protocol capture lock");
+            if let Some(error) = &events.failure {
+                return Err(error.clone());
+            }
+            std::mem::take(&mut events.pending)
+        };
+        let count = pending.len();
+        let bytes = pending.iter().map(|(_, _, bytes)| bytes).sum::<usize>();
+        let result = (|| {
+            for (event, at, _) in pending {
                 state.capture()?.append(event, at)?;
             }
-        }
-        Ok(())
+            Ok(())
+        })();
+        let mut events = self.1.lock().expect("protocol capture lock");
+        events.retained_events -= count;
+        events.retained_bytes -= bytes;
+        result
     }
 
     pub(crate) fn requirements_selected(
@@ -414,6 +486,10 @@ impl Transcript {
         let (mut state, _) = self.lock();
         let should_report = state.disable(error.clone());
         drop(state);
+        self.1
+            .lock()
+            .expect("protocol capture lock")
+            .stop(error.clone());
         if should_report {
             report_failure(&error);
         }
@@ -431,14 +507,21 @@ impl Transcript {
         operation: impl FnOnce(&mut TranscriptState) -> Result<T, String>,
     ) -> Option<T> {
         let (mut state, poisoned) = self.lock();
-        if state.failure.is_some() {
-            self.flush_protocol(&mut state).ok();
+        if let Some(error) = &state.failure {
+            self.1
+                .lock()
+                .expect("protocol capture lock")
+                .stop(error.clone());
             return None;
         }
         if poisoned {
             let error = "transcript lock poisoned".to_string();
             state.disable(error.clone());
             drop(state);
+            self.1
+                .lock()
+                .expect("protocol capture lock")
+                .stop(error.clone());
             report_failure(&error);
             return None;
         }
@@ -464,6 +547,10 @@ impl Transcript {
             Err(error) => {
                 state.disable(error.clone());
                 drop(state);
+                self.1
+                    .lock()
+                    .expect("protocol capture lock")
+                    .stop(error.clone());
                 report_failure(&error);
                 None
             }

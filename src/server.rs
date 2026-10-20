@@ -401,12 +401,11 @@ impl ServerHandler for ConsoleServer {
             .extensions
             .remove::<crate::server_transport::ResponseDeliveryAdmission>()
             .expect("console operations must carry transport admission");
-        let call = context
+        let recording = context
             .extensions
             .remove::<crate::server_transport::RecordingCall>()
-            .expect("send carries its recording call")
-            .recorded()
-            .await;
+            .expect("send carries its recording call");
+        let call = recording.clone().recorded().await;
         let transcript = self.startup.runtime().transcript.clone();
         let admitted = tokio::select! {
             biased;
@@ -436,7 +435,7 @@ impl ServerHandler for ConsoleServer {
             Ok(admitted) => admitted,
             Err(error) => {
                 transcript.finish(call, &Err(error.clone()));
-                return Err(error);
+                return recording.response(Err(error));
             }
         };
         let sandbox::CaptureResult(inherited) = context
@@ -526,7 +525,7 @@ impl ServerHandler for ConsoleServer {
         let result =
             Arc::into_inner(result).expect("transcript task should release the tool result");
         operation.complete();
-        result
+        recording.response(result)
     }
 }
 

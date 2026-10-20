@@ -98,6 +98,7 @@ Review those boundaries and choose the rendering environment explicitly rather t
 
 Recording can fail while computation continues.
 A notice identifies files or artifacts that are unavailable or only partially retained; do not assume all output was saved.
+If a stalled journal writer exhausts the bounded protocol backlog, Console disables recording and reports the failure on stderr while continuing to receive MCP traffic.
 
 The recording journal and generated file formats are not independently versioned APIs.
 Implementation and failure-handling details belong in [Architecture](ARCHITECTURE.md#output-and-delivery).

@@ -234,6 +234,8 @@ This does not guarantee exactly-once observation: cancellation can race with byt
 The journal records protocol traffic, canonical calls and assembled results, and actual worker lifetimes.
 Transport receipt reserves send capture in wire order without waiting for the recorder mutex or journal I/O.
 The bounded capture queue retains its ownership across handler and delivery cancellation and releases request payloads after capture.
+Protocol receipt is queued before the corresponding send capture starts.
+Response references carry the originating call's identity through handler completion; they do not infer it from a potentially reused JSON-RPC ID.
 EOF shutdown settles response delivery and every queued capture before recording finalization.
 Markdown and QMD are projections, not interpreter checkpoints; a journaled result does not prove client receipt.
 See [Recordings](RECORDING.md).
@@ -347,6 +349,9 @@ It preserves the existing storage-root selection, identifier generation, permiss
 `internal/events.jsonl` is the append-only journal underlying the Markdown and QMD projections.
 
 A journal or artifact failure disables further recording without stopping computation.
+Queued and in-flight protocol capture is bounded to 1,024 events or 8 MiB of serialized event data.
+Exceeding either limit discards pending protocol events and disables recording; it does not wait for the journal writer or close MCP input.
+The current write can finish before the recorder reports the failure, so the retained journal may end partway through the exchange.
 A raw-log failure affects that file.
 Failure of a derived projection disables the projections but can leave the journal and artifacts available.
 Diagnostics and notices report unavailable or partial retention.
