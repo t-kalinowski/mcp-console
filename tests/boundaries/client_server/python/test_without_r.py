@@ -2600,7 +2600,7 @@ False
                 json.loads(line)
                 for line in (session / "internal/events.jsonl").read_text().splitlines()
             ]
-            assert events[0]["event"] == "session_started"
+            assert events[0]["event"] == "recording_started"
             assert sum(event["event"] == "tool_call" for event in events) == 3
             records.append(
                 {
@@ -3216,8 +3216,11 @@ def test_records_managed_python_defaults(
             json.loads(line)
             for line in (session / "internal/events.jsonl").read_text().splitlines()
         ]
-        assert events[0]["dynamic_resolution"] is False
-        assert events[0]["python_preparation"] is True
+        discovered = next(
+            event for event in events if event["event"] == "environment_discovered"
+        )
+        assert discovered["dynamic_resolution"] is False
+        assert discovered["python_preparation"] is True
         return TranscriptWithCompanions(
             records,
             {

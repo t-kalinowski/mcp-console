@@ -388,7 +388,6 @@ impl ServerHandler for ConsoleServer {
         request: CallToolRequestParams,
         mut context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let request_id = context.id.clone();
         context.extensions.insert(Instant::now());
         if request.name.as_ref() != "send" {
             return self
@@ -402,30 +401,42 @@ impl ServerHandler for ConsoleServer {
             .extensions
             .remove::<crate::server_transport::ResponseDeliveryAdmission>()
             .expect("console operations must carry transport admission");
-        let (delivery, operation) = tokio::select! {
+        let call = context
+            .extensions
+            .remove::<crate::server_transport::RecordingCall>()
+            .expect("send carries its recording call")
+            .recorded()
+            .await;
+        let transcript = self.startup.runtime().transcript.clone();
+        let admitted = tokio::select! {
             biased;
-            _ = context.ct.cancelled() => {
-                return Err(ErrorData::internal_error(
+            _ = context.ct.cancelled() => Err(ErrorData::internal_error(
                     "request cancelled before execution",
                     None,
-                ));
-            }
+                )),
             delivery = admission.admit() => {
                 match delivery {
-                    Ok(delivery) => delivery,
+                    Ok(delivery) => Ok(delivery),
                     Err(crate::server_transport::ResponseDeliveryAdmissionError::Cancelled) => {
-                        return Err(ErrorData::internal_error(
+                        Err(ErrorData::internal_error(
                             "request cancelled before execution",
                             None,
-                        ));
+                        ))
                     }
                     Err(crate::server_transport::ResponseDeliveryAdmissionError::Closed) => {
-                        return Err(ErrorData::internal_error(
+                        Err(ErrorData::internal_error(
                             "MCP input closed before request execution",
                             None,
-                        ));
+                        ))
                     }
                 }
+            }
+        };
+        let (delivery, operation) = match admitted {
+            Ok(admitted) => admitted,
+            Err(error) => {
+                transcript.finish(call, &Err(error.clone()));
+                return Err(error);
             }
         };
         let sandbox::CaptureResult(inherited) = context
@@ -444,25 +455,7 @@ impl ServerHandler for ConsoleServer {
         // Its wait stays cancellable until initial configuration is accepted.
         let waiting_for_startup =
             !runtime.worker.startup_finished() || !runtime.worker.is_configured();
-        let transcript = runtime.transcript.clone();
         context.extensions.insert(runtime);
-        let request_meta = context.meta.clone();
-        let request = Arc::new(request);
-        let recording_request = Arc::clone(&request);
-        let recorder = transcript.clone();
-        let call = match tokio::task::spawn_blocking(move || {
-            recorder.begin(&request_id, &request_meta, &recording_request)
-        })
-        .await
-        {
-            Ok(call) => call,
-            Err(error) => {
-                transcript.disable(format!("transcript task failed: {error}"));
-                crate::transcript::Call::unrecorded()
-            }
-        };
-        let request =
-            Arc::into_inner(request).expect("transcript task should release the tool request");
         context.extensions.insert(call.clone());
         // Call the known send route directly so argument decoding errors enter
         // the bounded renderer before the router converts them to plain text.
@@ -589,12 +582,14 @@ pub async fn run(
         tokio::io::stdout(),
         server.deliveries.clone(),
     )
+    .with_recording(server.startup.runtime().transcript.clone())
     .with_send_observer(move |call| {
         // Pending response reservations do not order runnable handlers. Capture
         // before dispatch so cancellation or scheduling cannot select a later policy.
         let inherited = inheritance.capture(call.extensions.get_or_insert_default());
         call.extensions.insert(sandbox::CaptureResult(inherited));
     });
+    let recordings = transport.recording_queue();
     let startup_responses = deliveries.clone();
     let shutdown = async move {
         let shutdown_started = wait_for_input_close
@@ -606,17 +601,22 @@ pub async fn run(
             Ok(runtime) => runtime.worker.shutdown(deadline).await,
             Err(error) => {
                 let runtime = startup.runtime();
-                if runtime.worker.is_configured() {
-                    runtime.worker.shutdown(deadline).await?;
+                let retirement = if runtime.worker.is_configured() {
+                    runtime.worker.shutdown(deadline).await
                 } else {
                     runtime.worker.finish_recording();
-                }
-                startup.finish_failed_preparation(error)
+                    Ok(())
+                };
+                retirement.and_then(|()| startup.finish_failed_preparation(error))
             }
         };
         deliveries
             .settle_before_close(Instant::now() + WORKER_SHUTDOWN_GRACE)
             .await;
+        // Cancellation releases response admission, not capture ownership.
+        // Settle every received send before finalizing its journal and projections.
+        recordings.settle().await;
+        startup.runtime().transcript.finalize();
         cancellation?;
         result?;
         Ok::<(), String>(())

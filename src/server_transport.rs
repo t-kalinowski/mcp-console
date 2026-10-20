@@ -1,11 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use rmcp::RoleServer;
 use rmcp::model::{
-    CallToolRequest, ClientNotification, ClientRequest, JsonRpcMessage, RequestId, ServerResult,
+    CallToolRequest, ClientNotification, ClientRequest, JsonRpcMessage, RequestId,
+    RequestMetaObject, ServerResult,
 };
 use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport};
@@ -760,10 +761,40 @@ impl Drop for ResponseDeliveryWrite {
 
 type SendObserver = dyn Fn(&mut CallToolRequest) + Send;
 
+/// One ordered capture operation, awaited by its handler rather than MCP receipt.
+#[derive(Clone)]
+pub(crate) struct RecordingCall(tokio::sync::watch::Receiver<Option<crate::transcript::Call>>);
+
+impl RecordingCall {
+    pub(crate) async fn recorded(mut self) -> crate::transcript::Call {
+        match self.0.wait_for(Option::is_some).await {
+            Ok(call) => call.clone().expect("recorded call ready"),
+            Err(_) => crate::transcript::Call::unrecorded(),
+        }
+    }
+}
+
+/// The receive-order capture tail survives cancellation of individual deliveries.
+#[derive(Clone, Default)]
+pub(crate) struct RecordingQueue(Arc<Mutex<Option<RecordingCall>>>);
+
+impl RecordingQueue {
+    pub(crate) async fn settle(&self) {
+        let tail = self.0.lock().expect("recording queue lock").clone();
+        if let Some(tail) = tail {
+            tail.recorded().await;
+        }
+    }
+}
+
 pub(crate) struct ServerTransport<R: AsyncRead, W: AsyncWrite> {
     inner: AsyncRwTransport<RoleServer, R, W>,
     deliveries: ResponseDeliveries,
     send_observer: Option<Box<SendObserver>>,
+    recording: Option<crate::transcript::Transcript>,
+    recorded_calls: HashMap<RequestId, u64>,
+    recording_queue: RecordingQueue,
+    recording_tasks: VecDeque<tokio::task::JoinHandle<()>>,
 }
 
 impl<R, W> ServerTransport<R, W>
@@ -776,7 +807,20 @@ where
             inner: AsyncRwTransport::new_server(read, write),
             deliveries,
             send_observer: None,
+            recording: None,
+            recorded_calls: HashMap::new(),
+            recording_queue: RecordingQueue::default(),
+            recording_tasks: VecDeque::new(),
         }
+    }
+
+    pub(crate) fn with_recording(mut self, recording: crate::transcript::Transcript) -> Self {
+        self.recording = Some(recording);
+        self
+    }
+
+    pub(crate) fn recording_queue(&self) -> RecordingQueue {
+        self.recording_queue.clone()
     }
 
     /// Observe accepted sends in wire order, before asynchronous handler dispatch.
@@ -817,10 +861,37 @@ where
         let cancelled_tool_result = delivery.is_none()
             && matches!(&item, JsonRpcMessage::Response(response)
                 if matches!(response.result, ServerResult::CallToolResult(_)));
+        let recording = self.recording.clone();
+        let request_id = match &item {
+            JsonRpcMessage::Response(response) => Some(response.id.clone()),
+            JsonRpcMessage::Error(error) => error.id.clone(),
+            _ => None,
+        };
+        let call_id = request_id
+            .as_ref()
+            .and_then(|id| self.recorded_calls.remove(id));
+        if let Some(recording) = &recording {
+            match serde_json::to_value(&item) {
+                Ok(mut message) => {
+                    if let Some(id) = call_id {
+                        for field in ["result", "error"] {
+                            if let Some(payload) = message.get_mut(field) {
+                                *payload = serde_json::json!({"tool_result_call_id": id});
+                            }
+                        }
+                    }
+                    recording.protocol("assembled", &message);
+                }
+                Err(error) => recording.disable(format!("protocol capture failed: {error}")),
+            }
+        }
         let send = (!cancelled_tool_result).then(|| self.inner.send(item));
         let deliveries = self.deliveries.clone();
         async move {
             let Some(send) = send else {
+                if let (Some(recording), Some(id)) = (&recording, &request_id) {
+                    recording.delivery(&serde_json::json!(id), call_id, false);
+                }
                 return Ok(());
             };
             // Preserve a ready final response after input EOF, but abandon a
@@ -832,6 +903,9 @@ where
                     Err(std::io::ErrorKind::BrokenPipe.into())
                 },
             };
+            if let (Some(recording), Some(id)) = (&recording, &request_id) {
+                recording.delivery(&serde_json::json!(id), call_id, result.is_ok());
+            }
             if response && result.is_ok() {
                 deliveries.lock().bootstrap_response_delivered = true;
             }
@@ -848,6 +922,76 @@ where
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
         let mut message = self.inner.receive().await;
+        if let (Some(recording), Some(JsonRpcMessage::Request(request))) =
+            (&self.recording, &mut message)
+            && let ClientRequest::CallToolRequest(call) = &mut request.request
+            && call.params.name.as_ref() == "send"
+        {
+            while self
+                .recording_tasks
+                .front()
+                .is_some_and(|task| task.is_finished())
+            {
+                self.recording_tasks.pop_front();
+            }
+            // Apply the existing transport backlog bound to journal waits too.
+            // A stalled recorder must not grow an unbounded queue of handlers.
+            if self.recording_tasks.len() >= MAX_RESPONSE_GATED_CALLS {
+                self.deliveries.close();
+                return None;
+            }
+            let recorder = recording.clone();
+            let call_id = recording.reserve_call_id();
+            let at = chrono::Utc::now();
+            let request_id = request.id.clone();
+            let params = call.params.clone();
+            let meta = call
+                .extensions
+                .get::<RequestMetaObject>()
+                .cloned()
+                .unwrap_or_default();
+            let (completed, ready) = tokio::sync::watch::channel(None);
+            let pending = RecordingCall(ready);
+            let predecessor = self
+                .recording_queue
+                .0
+                .lock()
+                .expect("recording queue lock")
+                .replace(pending.clone());
+            call.extensions.insert(pending);
+            self.recorded_calls.insert(request.id.clone(), call_id);
+            self.recording_tasks.push_back(tokio::spawn(async move {
+                if let Some(predecessor) = predecessor {
+                    predecessor.recorded().await;
+                }
+                let diagnostics = recorder.clone();
+                let recorded = match tokio::task::spawn_blocking(move || {
+                    recorder.begin(call_id, at, &request_id, &meta, &params)
+                })
+                .await
+                {
+                    Ok(recorded) => recorded,
+                    Err(error) => {
+                        diagnostics.disable(format!("recording activation task failed: {error}"));
+                        crate::transcript::Call::unrecorded()
+                    }
+                };
+                let _ = completed.send(Some(recorded));
+            }));
+        }
+        if let (Some(recording), Some(message)) = (&self.recording, &mut message) {
+            let mut captured = serde_json::to_value(&*message);
+            if let JsonRpcMessage::Request(request) = message
+                && let Some(id) = self.recorded_calls.get(&request.id)
+                && let Ok(message) = &mut captured
+            {
+                message["params"] = serde_json::json!({"tool_call_id": id});
+            }
+            match captured {
+                Ok(message) => recording.protocol("received", &message),
+                Err(error) => recording.disable(format!("protocol capture failed: {error}")),
+            }
+        }
         if message.is_some() {
             self.deliveries.lock().bootstrap_response_delivered = false;
         }
@@ -887,7 +1031,16 @@ where
 
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
         self.deliveries.close();
-        self.inner.close()
+        let tasks = std::mem::take(&mut self.recording_tasks);
+        let close = self.inner.close();
+        async move {
+            // All ordered activation writers must settle before recording finalization,
+            // including calls cancelled before their handler could run.
+            for task in tasks {
+                let _ = task.await;
+            }
+            close.await
+        }
     }
 }
 

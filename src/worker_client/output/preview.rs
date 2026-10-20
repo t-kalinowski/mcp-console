@@ -198,7 +198,7 @@ impl Preview {
         if !self.admits_image(data, mime_type) {
             self.recorded_omitted_images += u64::from(artifact.is_some());
             if let Some(artifact) = artifact {
-                self.omitted_artifacts.add(&artifact.public_path, false);
+                self.omitted_artifacts.add(&artifact.public_path(), false);
             }
             self.omit_image(data.len());
             return;

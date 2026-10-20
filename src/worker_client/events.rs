@@ -171,6 +171,20 @@ fn dispatch_worker_events(
                     continue;
                 }
                 let result = match event {
+                    RelayEvent::WorkerStarted { pid } => {
+                        let retained = callbacks.client.inspect_requirements();
+                        if let Some(recording) = callbacks
+                            .client
+                            .0
+                            .recording
+                            .lock()
+                            .expect("recording lock")
+                            .as_ref()
+                        {
+                            recording.worker_started(pid, &retained["requirements"]);
+                        }
+                        Ok(())
+                    }
                     RelayEvent::Stdout { data } => {
                         if stdout_closed {
                             Err("worker relay sent stdout after closing the stream".to_string())
@@ -249,10 +263,30 @@ fn dispatch_worker_events(
                         shutdown_started.observe()
                     }
                     RelayEvent::WorkerExited { code } => {
+                        if let Some(recording) = callbacks
+                            .client
+                            .0
+                            .recording
+                            .lock()
+                            .expect("recording lock")
+                            .as_ref()
+                        {
+                            recording.worker_ended(&format!("exited with code {code}"));
+                        }
                         process_outcome = Some(WorkerProcessOutcome::Exited(code));
                         Ok(())
                     }
                     RelayEvent::WorkerSignaled { signal } => {
+                        if let Some(recording) = callbacks
+                            .client
+                            .0
+                            .recording
+                            .lock()
+                            .expect("recording lock")
+                            .as_ref()
+                        {
+                            recording.worker_ended(&format!("terminated by signal {signal}"));
+                        }
                         process_outcome = Some(WorkerProcessOutcome::Signaled(signal));
                         Ok(())
                     }
@@ -306,6 +340,16 @@ fn dispatch_worker_events(
                             // callback could mutate state for a worker not yet admitted.
                             match ready_commit.recv() {
                                 Ok(ReadyCommitOutcome::Committed) => {
+                                    if let Some(recording) = callbacks
+                                        .client
+                                        .0
+                                        .recording
+                                        .lock()
+                                        .expect("recording lock")
+                                        .as_ref()
+                                    {
+                                        recording.worker_ready();
+                                    }
                                     runtime_started = true;
                                     Ok(())
                                 }
@@ -421,7 +465,8 @@ fn bootstrap_callback(event: &RelayEvent) -> bool {
 fn sideband_semantic(event: &RelayEvent) -> bool {
     !matches!(
         event,
-        RelayEvent::Stdout { .. }
+        RelayEvent::WorkerStarted { .. }
+            | RelayEvent::Stdout { .. }
             | RelayEvent::RInitialization { .. }
             | RelayEvent::StdoutBytes { .. }
             | RelayEvent::Stderr { .. }
@@ -721,6 +766,7 @@ fn handle_semantic_event(
             operation.complete(event, &mut candidates.r, &mut candidates.python)
         }
         RelayEvent::Ready
+        | RelayEvent::WorkerStarted { .. }
         | RelayEvent::Stdout { .. }
         | RelayEvent::StdoutBytes { .. }
         | RelayEvent::Stderr { .. }

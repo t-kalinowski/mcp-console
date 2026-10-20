@@ -115,6 +115,7 @@ class ScriptedRelay:
         self.root = Path(self.temporary.name)
         self.capture = (self.root / CAPTURE_NAME).open("w", encoding="utf-8")
         self.checkpoints: dict[str, int] = {}
+        self.send({"kind": "worker_started", "pid": 42})
 
     def close(self) -> None:
         for checkpoint in self.checkpoints.values():
