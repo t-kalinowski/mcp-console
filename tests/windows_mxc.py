@@ -40,7 +40,9 @@ class WindowsMxc(unittest.TestCase):
                 root,
             ) as client:
                 client.initialize_and_list_tools()
-                result = client.send(python="print('recorded result')")
+                result = client.expect(
+                    "recorded result\n", python="print('recorded result')", timeout_ms=0
+                )
                 self.assertEqual(
                     result,
                     {

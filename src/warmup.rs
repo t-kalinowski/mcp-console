@@ -292,6 +292,9 @@ async fn evaluate(
             return Ok((output, is_error, r_available));
         }
         // An observation timeout does not cancel or authorize replaying the cell.
+        // Progress notices end their response without a newline. Separate them
+        // from later output so they cannot absorb a successful check's first line.
+        output.push('\n');
         arguments = serde_json::Map::new();
     }
 }
