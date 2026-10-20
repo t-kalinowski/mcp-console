@@ -47,7 +47,6 @@ struct Metadata {
 pub(super) struct QuartoWriter {
     metadata: Metadata,
     sources: Vec<QuartoSource>,
-    environment_boundaries: bool,
 }
 #[derive(Clone)]
 struct QuartoSource {
@@ -177,7 +176,6 @@ impl Documents {
                     QuartoWriter {
                         metadata: self.metadata.clone(),
                         sources: Vec::new(),
-                        environment_boundaries: false,
                     },
                 );
             }
@@ -292,24 +290,9 @@ impl Documents {
             // worker still lives. Session metadata follows committed live
             // requirements or an actual worker launch instead.
             "python_environment_accepted" => {}
-            "requirements_selected" => {
-                self.metadata
-                    .requirements(&event["snapshot"]["requirements"]);
-                if let Some(id) = self.current {
-                    let document = self.sessions.get_mut(&id).unwrap();
-                    document.environment_boundaries = true;
-                    document.sources.push(QuartoSource {
-                        language: "",
-                        contents: format!(
-                            "Requirements selected ({}):\n\n```json\n{}\n```\n\n",
-                            event["action"].as_str().unwrap_or(""),
-                            serde_json::to_string_pretty(&event["snapshot"])
-                                .map_err(|e| e.to_string())?
-                        ),
-                    });
-                    changed.push(id);
-                }
-            }
+            // Selection can describe a replacement before the old worker retires.
+            // Only accepted live requirements and actual starts own QMD metadata.
+            "requirements_selected" => {}
             _ => {}
         }
         Ok(changed)
@@ -344,7 +327,7 @@ impl QuartoWriter {
             "---\n# Source recorded by MCP Console; review before executing.\ntitle: MCP Console session\n",
         );
         writeln!(document, "# From a working copy, run `ir render {filename}` in a prepared environment.\n# IR rendering requires R on the render host, including for Python-only documents.").unwrap();
-        if !self.metadata.metadata_known || self.environment_boundaries {
+        if !self.metadata.metadata_known {
             document.push_str("execute:\n  eval: false\n");
         }
         if !self.metadata.metadata_known {
@@ -381,9 +364,6 @@ impl QuartoWriter {
             }
         }
         document.push_str("---\n\n");
-        if self.environment_boundaries {
-            document.push_str("Recreate the environments at the recorded boundaries before enabling execution.\nCells may require incompatible declarations; the header is not a replay manifest.\n\n");
-        }
         for source in &self.sources {
             if source.language.is_empty() {
                 document.push_str(&source.contents);

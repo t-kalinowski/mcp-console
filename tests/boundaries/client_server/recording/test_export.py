@@ -661,5 +661,50 @@ def test_export_reports_unavailable_capture(
             return normalized(transcript, workspace)
 
 
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_restart_requirements_leave_retired_source_unchanged(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c",
+                "r.packages=[]",
+                *(
+                    ("--writable-root", str(workspace))
+                    if execution == SANDBOXED
+                    else ()
+                ),
+            ),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("original session\n", r='cat("original session\\n")')
+            (recording,) = (workspace / ".agents/console/sessions").iterdir()
+            original = recording / "sessions/session-001.qmd"
+            before = original.read_text()
+            client.send(
+                control="restart", requirements={"action": "set", "r": ["praise"]}
+            )
+            client.expect(
+                "replacement session\n",
+                r='stopifnot(requireNamespace("praise", quietly = TRUE)); cat("replacement session\\n")',
+            )
+            client.expect(r='paths <- .console$export_session("report")')
+            assert original.read_text() == before, original.read_text()
+            for path in (
+                recording / "sessions/session-002.qmd",
+                workspace / "report/session.qmd",
+            ):
+                qmd = path.read_text()
+                assert "  packages:\n    - praise\n" in qmd, qmd
+                assert "original session" not in qmd and "replacement session" in qmd
+                assert "Requirements selected" not in qmd and "eval: false" not in qmd
+            return normalized(client.finish(), workspace)
+
+
 if __name__ == "__main__":
     run_this_suite(__file__)

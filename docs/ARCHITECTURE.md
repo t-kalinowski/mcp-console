@@ -354,6 +354,7 @@ Lifecycle observations use the bounded recorder drain, so journal writes do not 
 Recording session IDs count these launches independently of lifecycle generations.
 Each launch event carries the committed requirements declaration; live projections and capture reconstruction seed the new session from that declaration, including R additions retained across replacement.
 Changes to the committed declaration also update session metadata, including extensions added to a live DuckDB environment.
+Replacement selections remain journal and transcript events; they do not rewrite the retiring session's QMD or insert a control operation into its source.
 The source projection retains only source and relevant dependency declarations awaiting association, then moves them into their session document; complete requests remain in the journal.
 Source admission and settlement are recorded separately from response assembly, so an early response does not discard source still awaiting its worker.
 Source attachment records admission to a worker separately from execution; an interrupted pending source can have an attachment without a cell log.
