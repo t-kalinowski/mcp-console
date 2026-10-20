@@ -68,7 +68,7 @@ Console prepares packages in its own environments and libraries by default.
 The [Packages and environments](REQUIREMENTS.md) guide explains how those packages become available during an analysis.
 You can also use an existing Python environment, select an R installation, or limit the languages exposed to the agent.
 
-Exact settings: [Python environments](RUNTIME_CONFIGURATION.md#python-environment-selection), [R installations](RUNTIME_CONFIGURATION.md#r-executable-selection), and [model-visible languages](TOOL_CONFIGURATION.md#model-visible-languages).
+Exact settings: [Languages and startup](RUNTIME_CONFIGURATION.md).
 
 ## Work with databases {#sql-and-duckdb}
 

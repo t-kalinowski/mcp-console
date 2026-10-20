@@ -11,7 +11,7 @@ Console keeps prepared packages, environments, and extensions in its own caches 
 Starting another session can reuse those installations without resuming the previous session's live objects.
 No configuration file is required.
 
-Exact settings: [Interpreters and startup](RUNTIME_CONFIGURATION.md), [Package sources and caches](RESOLVER.md), and [Requirements API](REQUIREMENTS_API.md).
+Exact settings: [Package settings](PACKAGE_CONFIGURATION.md).
 
 ## Add packages as needed {#add-packages-during-an-analysis}
 
@@ -45,7 +45,7 @@ If an optional starter package cannot be prepared, Console reports the failure a
 You can declare packages at startup when a project needs a particular set.
 Packages you explicitly declare are required, so a failure to prepare one prevents Console from proceeding with an incomplete environment.
 
-Exact settings: [Startup package declarations](RUNTIME_CONFIGURATION.md#startup-package-declarations) and [default packages and extensions](RUNTIME_CONFIGURATION.md#default-startup-packages).
+Exact settings: [Startup package declarations](PACKAGE_CONFIGURATION.md#startup-package-declarations) and [default packages and extensions](PACKAGE_CONFIGURATION.md#default-startup-packages).
 
 ## When packages are prepared {#resolution-policy-admission}
 
@@ -59,7 +59,7 @@ A fixed declaration lets the agent use the packages prepared at startup while re
 Each language can have its own policy.
 These policies control Console's package preparation; they do not grant network access or restrict arbitrary installation commands in submitted code.
 
-Exact settings: [Resolution policies](RUNTIME_CONFIGURATION.md#dependency-resolution-policies).
+Exact settings: [Resolution policies](PACKAGE_CONFIGURATION.md#dependency-resolution-policies).
 
 ## Use an existing Python environment
 
@@ -74,7 +74,7 @@ Console uses the selected environment as supplied, without resolving or installi
 Install the packages you want your agent to use in that environment, such as pandas for data frames, Matplotlib for plotting, and DuckDB for the default SQL connection.
 The session's filesystem and network permissions still apply.
 
-Exact settings: [Python environment selection](RUNTIME_CONFIGURATION.md#python-environment-selection).
+Interpreter selection: [Python environments](RUNTIME_CONFIGURATION.md#python-environment-selection).
 
 ## Package sources and permissions {#host-resolution-and-trust}
 
@@ -88,7 +88,7 @@ DuckDB extensions come from its core extension repository.
 You can use other sources, such as a private Posit Package Manager instance or a company PyPI mirror, through the package managers' native settings.
 Installing a package does not give the agent's code those download or cache permissions.
 
-Exact settings: [Package sources and preparation permissions](RESOLVER.md#configuration).
+Exact settings: [Package sources and preparation permissions](PACKAGE_CONFIGURATION.md#configuration).
 
 ## Recordings {#saving-an-r-script}
 

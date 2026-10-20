@@ -14,7 +14,7 @@ Submit one complete R, Python, or SQL cell, inspect its result, and then submit 
 
 ## Runtime selection
 
-[Interpreters and startup](RUNTIME_CONFIGURATION.md#python-environment-selection) owns interpreter requirements and selection.
+[Languages and startup](RUNTIME_CONFIGURATION.md#python-environment-selection) owns interpreter requirements and selection.
 [Packages and environments](REQUIREMENTS.md) owns package defaults and preparation choices.
 Language visibility changes tool fields, not the availability of a SQL provider.
 Tool discovery is independent of [server readiness](SEND_OPERATIONS.md#server-readiness).

@@ -168,7 +168,7 @@ Automatic replacement can reuse a generation, so bundled follow-up work also che
 
 ## Preparation and activation
 
-The hidden `resolve` process materializes environments under the separate [resolver policy](RESOLVER.md).
+The hidden `resolve` process materializes environments under the separate [resolver policy](PACKAGE_CONFIGURATION.md).
 The preparation owner publishes a result only after its process and I/O cleanup contract completes.
 The server owns accepted declarations, not the materializer.
 

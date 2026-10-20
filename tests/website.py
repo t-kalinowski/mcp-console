@@ -511,7 +511,7 @@ class WebsiteTests(unittest.TestCase):
             "runtime_configuration",
             "tool_configuration",
             "sandbox_configuration",
-            "resolver",
+            "package_configuration",
             "environment",
             "runtime_reference",
             "cli",
@@ -533,6 +533,7 @@ class WebsiteTests(unittest.TestCase):
                 self.assertEqual(links, navigation[0])
                 for target in (
                     "configuration",
+                    "package_configuration",
                     "runtime_reference",
                     "cli",
                     "api",
@@ -618,13 +619,75 @@ class WebsiteTests(unittest.TestCase):
             "r-guide/index.html",
             "python-guide/index.html",
             "requirements/index.html",
-            "sandbox_configuration/index.html",
-            "runtime_reference/index.html#retrieve-the-last-sql-result",
+            "sandbox/index.html",
+            "builtin_runtime/index.html",
+            "build_on_console/index.html",
+            "send_operations/index.html",
             "recording/index.html",
         ):
             self.assertIn(target, links)
         runtime = self.pages[self.site / "runtime_reference/index.html"]
         self.assertIn("Language behavior", runtime.title)
+        for link in table.select("a[href]"):
+            self.assertIn(
+                linked_file(self.site / "readme/index.html", link["href"]).parent.name,
+                {
+                    "clients",
+                    "r-guide",
+                    "python-guide",
+                    "builtin_runtime",
+                    "requirements",
+                    "sandbox",
+                    "recording",
+                    "build_on_console",
+                    "send_operations",
+                    "sandbox_command",
+                },
+            )
+
+    def test_reference_indexes_settings_by_their_owning_page(self) -> None:
+        path = self.site / "reference/index.html"
+        reference = BeautifulSoup(path.read_text(), "html.parser")
+        settings = {}
+        for row in reference.select("#configuration table tbody tr"):
+            names = row.select("td:first-child code")
+            self.assertTrue(names, row.get_text())
+            target = row.select_one("a[href]")
+            self.assertIsNotNone(target)
+            for name in names:
+                settings[name.get_text()] = linked_file(path, target["href"])
+        for key, owner in {
+            "r.packages": "package_configuration",
+            "python.packages": "package_configuration",
+            "r.resolution": "package_configuration",
+            "python.resolution": "package_configuration",
+            "resolver": "package_configuration",
+            "cache": "package_configuration",
+            "python": "runtime_configuration",
+            "startup": "runtime_configuration",
+            "sandbox.profile": "sandbox_configuration",
+            "languages": "tool_configuration",
+        }.items():
+            with self.subTest(setting=key):
+                self.assertEqual(settings.get(key), self.site / owner / "index.html")
+
+        configuration = BeautifulSoup(
+            (self.site / "configuration/index.html").read_text(), "html.parser"
+        )
+        self.assertIsNone(configuration.select_one("section#settings-by-task"))
+        packages = self.pages[self.site / "package_configuration/index.html"]
+        self.assertLessEqual(
+            {
+                "startup-package-declarations",
+                "default-startup-packages",
+                "dependency-resolution-policies",
+                "cache-locations",
+                "configuration",
+                "filesystem-grants",
+                "trust-boundary",
+            },
+            packages.ids,
+        )
 
     def test_home_title_has_one_introduction_and_description_metadata(self) -> None:
         soup = BeautifulSoup((self.site / "index.html").read_text(), "html.parser")

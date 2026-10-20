@@ -31,7 +31,7 @@ Use [sandbox permissions](SANDBOX_CONFIGURATION.md) and database permissions to 
 
 ## Prepare the session
 
-Select [interpreters, startup packages, and package preparation policies](RUNTIME_CONFIGURATION.md) in configuration.
+Select [interpreters](RUNTIME_CONFIGURATION.md) and [startup packages and preparation policies](PACKAGE_CONFIGURATION.md) in configuration.
 You can [choose when packages may be prepared](REQUIREMENTS.md#resolution-policy-admission), from a fixed startup set to adding packages during a session.
 Preparing a package makes it available; loading data and defining variables require code in the session.
 Choose the setup approach that fits your session.

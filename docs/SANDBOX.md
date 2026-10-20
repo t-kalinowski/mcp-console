@@ -53,7 +53,7 @@ Your session can use prepared packages while its own networking remains restrict
 Installation and build steps can execute code, so the packages and package sources you choose still need to be trusted.
 The installation check, `warmup`, can also prepare dependencies ahead of a session; that preparation uses host permissions.
 
-Reference: [Package-preparation permissions](RESOLVER.md) and [installation checks](CLI.md#check-your-installation).
+Reference: [Package-preparation permissions](PACKAGE_CONFIGURATION.md) and [installation checks](CLI.md#check-your-installation).
 
 ## Configuration is part of the trust decision
 
@@ -64,7 +64,8 @@ Use `--no-project-config` for an unfamiliar project until you have reviewed and 
 When Console inherits permissions from Codex, it trusts the client to set its permissions.
 This includes disabling both the session and package-preparation sandboxes when the client supplies full access.
 
-Exact settings: [Configuration precedence](CONFIGURATION.md#files-and-precedence) and [inherited permissions](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex).
+Exact settings: [Inherited permissions](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex).
+See [Configuration precedence](CONFIGURATION.md#files-and-precedence) for how files and launch options combine.
 
 ## What remains after a session
 

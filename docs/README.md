@@ -20,30 +20,20 @@ These guides introduce Console through a session with your agent:
 
 <span id="find-a-task"></span>
 
-| I want to…                                                                                        | Start here                                                                                 |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Connect a coding agent or another MCP client                                                      | [MCP clients](CLIENTS.md)                                                                  |
-| Use Console from R                                                                                | [Use Console from R](R.md)                                                                 |
-| Use Console from Python                                                                           | [Use Console from Python](PYTHON.md)                                                       |
-| Install Console or check platform requirements                                                    | [Install and connect](CLIENTS.md)                                                          |
-| Run an analysis across R, Python, and SQL                                                         | [Sessions and languages](BUILTIN_RUNTIME.md)                                               |
-| Install packages or use an existing environment                                                   | [Packages and environments](REQUIREMENTS.md)                                               |
-| Customize the agent's tools and prepare its environment                                           | [Customize Console](BUILD_ON_CONSOLE.md)                                                   |
-| Create a configuration file, understand which settings win, or inspect the resolved configuration | [Configuration files](CONFIGURATION.md)                                                    |
-| Use a Python environment or select an R installation                                              | [Interpreters and startup](RUNTIME_CONFIGURATION.md)                                       |
-| Choose startup packages or control when more may be prepared                                      | [Package declarations and policies](RUNTIME_CONFIGURATION.md#startup-package-declarations) |
-| Connect to a database before the first SQL call                                                   | [Database startup](RUNTIME_CONFIGURATION.md#session-startup-source)                        |
-| Choose what languages, parameters, or instructions the agent sees                                 | [Tool configuration](TOOL_CONFIGURATION.md)                                                |
-| Allow project writes, protect files, or reach a service                                           | [Sandbox permissions](SANDBOX_CONFIGURATION.md)                                            |
-| Use a package mirror or change cache locations                                                    | [Package sources and caches](RESOLVER.md)                                                  |
-| Set environment variables or look up how Console handles them                                     | [Environment variables](ENVIRONMENT.md)                                                    |
-| Look up language helpers, SQL connections, plotting, or output behavior                           | [Language behavior](RUNTIME_REFERENCE.md)                                                  |
-| Retrieve a SQL result as an R or Python object                                                    | [Retrieve the last SQL result](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result)          |
-| Find recorded output or turn an analysis into a report                                            | [Recordings and reports](RECORDING.md)                                                     |
-| Run a program with filesystem and network limits                                                  | [Sandbox command](SANDBOX_COMMAND.md)                                                      |
-| Register a client, check an installation, or look up a command                                    | [Command-line reference](CLI.md) and [CLI help](cli-help.qmd)                              |
+| I want to…                                                   | Start here                                      |
+| ------------------------------------------------------------ | ----------------------------------------------- |
+| Install Console or connect an MCP client                     | [Install and connect](CLIENTS.md)               |
+| Use Console from R                                           | [Use Console from R](R.md)                      |
+| Use Console from Python                                      | [Use Console from Python](PYTHON.md)            |
+| Explore data across R, Python, and SQL                       | [Sessions and languages](BUILTIN_RUNTIME.md)    |
+| Use packages or an existing Python environment               | [Packages and environments](REQUIREMENTS.md)    |
+| Give the agent access to files or a service                  | [Sandbox and trust](SANDBOX.md)                 |
+| Find recorded output or turn an analysis into a report       | [Recordings and reports](RECORDING.md)          |
+| Prepare a data assistant with its own tools and environment  | [Build a data assistant](BUILD_ON_CONSOLE.md)   |
+| Implement a client that submits code and manages the session | [Drive send directly](SEND_OPERATIONS.md)       |
+| Run a program with filesystem and network limits             | [Run commands in a sandbox](SANDBOX_COMMAND.md) |
 
-For a particular configuration key, use the [settings index](CONFIGURATION.md#settings-by-task).
+For a particular configuration key, use the [settings index](REFERENCE.md#configuration).
 
 The [glossary](GLOSSARY.md) defines terms used in these pages.
 

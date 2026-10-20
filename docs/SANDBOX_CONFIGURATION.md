@@ -16,7 +16,7 @@ The two policies are independent.
 Examples below configure `sandbox`; the same fields are accepted under `resolver.sandbox`, except for the `inherit_codex` profile.
 Defaults below apply after launch defaults, configuration files, and command-line overrides have been combined.
 Worker defaults permit host reads, including readable secrets, and private temporary writes, with ordinary workspace writes and direct networking restricted.
-Preparation defaults also permit dependency-cache writes and approved downloads; see [Package sources and caches](RESOLVER.md).
+Preparation defaults also permit dependency-cache writes and approved downloads; see [Package settings](PACKAGE_CONFIGURATION.md).
 
 Configuration is trusted launcher input and can widen these permissions.
 Setting either whole permission node to `null` clears inherited settings and restores that context's built-in defaults; enforcement remains enabled.
@@ -67,7 +67,7 @@ Explicit absolute write grants, network settings, and temporary-storage settings
 
 For example, an agent can read `data.csv`, update `analysis.py`, and save `plot.png` in the workspace.
 It cannot edit `.agents/console/config.yaml`, delete `.git`, or write ordinary files outside the workspace and private temporary storage without another grant.
-Package preparation retains its [independent policy](RESOLVER.md).
+Package preparation retains its [independent policy](PACKAGE_CONFIGURATION.md).
 
 To construct the same permissions without selecting a profile, use:
 
@@ -131,7 +131,7 @@ Paths do not expand environment-variable references, create directories, grant p
 
 Worker entries modify the host-read/private-write baseline.
 When the resolved configuration contains neither a `profile` nor `read_write`, it grants no workspace writes.
-An explicit resolver filesystem instead **replaces** its default entries, including host reads and cache writes; see [resolver grants](RESOLVER.md#filesystem-grants).
+An explicit resolver filesystem instead **replaces** its default entries, including host reads and cache writes; see [resolver grants](PACKAGE_CONFIGURATION.md#filesystem-grants).
 
 Relative `read_write` paths and `--writable-root` arguments that resolve to a filesystem root, the user's home directory, or a parent of home are ignored with a warning.
 This applies to both worker and resolver filesystem settings.
@@ -184,7 +184,7 @@ The value of `sandbox.network` or `resolver.sandbox.network` selects the network
 | `network: {proxy: {…}}` | Restricted native networking with a managed proxy.     |
 
 Worker networking defaults to restricted without a proxy.
-Resolver networking defaults to its [download proxy](RESOLVER.md#expanded-public-default).
+Resolver networking defaults to its [download proxy](PACKAGE_CONFIGURATION.md#expanded-public-default).
 Explicit scalar values also remove that generated resolver proxy.
 
 A managed mapping requires a non-null `proxy` mapping.
@@ -456,7 +456,7 @@ See [Temporary storage](#temporary-storage) for runtime-specific behavior.
 
 `--no-sandbox` also conflicts with `--writable-root`.
 For an exported configuration, pass `--no-sandbox` to both `config resolve` and `serve`; launch flags are not stored in YAML.
-See [Cache selection](RESOLVER.md#cache-locations) for clearing inherited permission settings deliberately.
+See [Cache selection](PACKAGE_CONFIGURATION.md#cache-locations) for clearing inherited permission settings deliberately.
 
 ## Platform support {#native-capabilities}
 
@@ -493,7 +493,7 @@ Explicitly configured names containing `=` remain invalid.
 Working directories can contain Windows 8.3 aliases, including aliases in the system temporary path.
 
 Dependency preparation uses a separate MXC policy with host reads, dependency-cache and private temporary writes, and a managed download proxy by default.
-`resolver.sandbox` configures those permissions independently of evaluated code; see [Package preparation](RESOLVER.md).
+`resolver.sandbox` configures those permissions independently of evaluated code; see [Package preparation](PACKAGE_CONFIGURATION.md).
 Native setup or launch failure stops preparation without falling back to host execution.
 Package downloads, installation hooks, and cache writes use these resolver permissions.
 

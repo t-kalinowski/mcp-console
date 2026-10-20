@@ -55,29 +55,9 @@ This uses the same files and command-line overrides as starting a session, witho
 Built-in defaults are omitted; add `--full` to include them.
 You can [save the resolved configuration](#export-a-configuration) for a later session or [edit its generated tool descriptions and parameter settings](#edit-exported-tool-settings).
 
-## Settings by task {#settings-by-task}
+<span id="settings-by-task"></span> <span id="top-level-settings"></span> <span id="r-executable-selection"></span> <span id="native-r-startup"></span> <span id="python-environment-selection"></span> <span id="startup-package-declarations"></span> <span id="dependency-resolution-policies"></span> <span id="session-startup-source"></span> <span id="cache-selection"></span> <span id="shared-environment"></span> <span id="model-visible-languages"></span> <span id="tool-descriptions-and-parameters"></span>
 
-<span id="top-level-settings"></span>
-
-Use these references for accepted values, defaults, and examples.
-Dotted paths such as `r.packages` show nesting.
-
-| Setting                              | Value or form                                           | Reference                                                                                                                                                           |
-| ------------------------------------ | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `r`                                  | Executable path, mapping, or `null`                     | <span id="r-executable-selection"></span> <span id="native-r-startup"></span> [Select R and its startup behavior](RUNTIME_CONFIGURATION.md#r-executable-selection). |
-| `python`                             | Executable/venv path, selection mapping, or `null`      | <span id="python-environment-selection"></span> [Select an existing or managed Python environment](RUNTIME_CONFIGURATION.md#python-environment-selection).          |
-| `r.packages`, `python.packages`      | Lists within the runtime mapping                        | <span id="startup-package-declarations"></span> [Choose startup packages](RUNTIME_CONFIGURATION.md#startup-package-declarations).                                   |
-| `r.resolution`, `python.resolution`  | Policy names within the runtime mapping                 | <span id="dependency-resolution-policies"></span> [Control package preparation](RUNTIME_CONFIGURATION.md#dependency-resolution-policies).                           |
-| `startup`                            | Mapping or `null`                                       | <span id="session-startup-source"></span> [Select a database connection at startup](RUNTIME_CONFIGURATION.md#session-startup-source).                               |
-| `sandbox`                            | Mapping or `null`                                       | [Set filesystem and network permissions](SANDBOX_CONFIGURATION.md).                                                                                                 |
-| `resolver`                           | Mapping                                                 | [Configure package sources and preparation](RESOLVER.md#configuration).                                                                                             |
-| `cache`                              | `managed`, `host`, `{directory: PATH}`, or `null`       | <span id="cache-selection"></span> [Choose package cache locations](RESOLVER.md#cache-locations).                                                                   |
-| `inherit_environment`, `environment` | Boolean; mapping of names to strings                    | <span id="shared-environment"></span> [Set environment values and inheritance](ENVIRONMENT.md#where-to-set-variables).                                              |
-| `languages`                          | Nonempty list of `r`, `python`, and/or `sql`; or `null` | <span id="model-visible-languages"></span> [Choose the languages exposed to the agent](TOOL_CONFIGURATION.md#model-visible-languages).                              |
-| `tool`                               | Mapping                                                 | <span id="tool-descriptions-and-parameters"></span> [Customize tool descriptions and parameters](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters).           |
-
-For the underlying concepts, read [Packages and environments](REQUIREMENTS.md) and [Sandbox and trust](SANDBOX.md).
-For launch flags, see the [Command-line reference](CLI.md).
+Use the [Reference index](REFERENCE.md#configuration) to look up a configuration key.
 
 ## Choose which files to load
 
@@ -198,7 +178,7 @@ Changing one selector does not implicitly remove incompatible siblings.
 
 Before merging each layer, Console expands an R path to `r.executable` and direct managed Python fields to `python.managed`.
 An empty `python: {}` also selects the managed form.
-Flat and nested runtime settings therefore merge at the same paths; [Interpreters and startup](RUNTIME_CONFIGURATION.md) describes the selection rules.
+Flat and nested runtime settings therefore merge at the same paths; [Languages and startup](RUNTIME_CONFIGURATION.md) describes the selection rules.
 
 ## Export a configuration
 

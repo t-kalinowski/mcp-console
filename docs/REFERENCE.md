@@ -1,66 +1,79 @@
 # Reference
 
 Look up configuration keys, command-line options, language behavior, and the MCP, R, and Python APIs.
-For a walkthrough or a task, start with the [guides](README.md).
+For a walkthrough or a task, start with the [guides](README.md); for application integration, start with [Build on Console](BUILD.md).
 
 <span id="find-a-task"></span>
 
-The [“I want to…” table](README.md#task-index) connects tasks to their guides and reference pages.
-
 ## Configuration
 
-[Configuration files](CONFIGURATION.md) explains file discovery, precedence, merging, and resolved settings.
-Use the index below for a particular setting.
+[Configuration files](CONFIGURATION.md) explains discovery, precedence, merging, paths, and resolved settings.
+The index below links each setting to its reference section.
+Dotted paths show nesting; managed Python also accepts package and policy settings under `python.managed` and in managed fallback candidates.
 
-| Topic                                                                            | Reference                                                                            |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| <span id="top-level-settings"></span> Top-level settings                         | [Top-level settings](CONFIGURATION.md#settings-by-task)                              |
-| <span id="r"></span> R installation and startup                                  | [R installation and startup](RUNTIME_CONFIGURATION.md#r-executable-selection)        |
-| <span id="python"></span> Python selection                                       | [Python selection](RUNTIME_CONFIGURATION.md#python-environment-selection)            |
-| <span id="managed-python"></span> Managed Python                                 | [Managed Python](RUNTIME_CONFIGURATION.md#managed-python)                            |
-| <span id="first-available-python"></span> Python fallback choices                | [Python fallback choices](RUNTIME_CONFIGURATION.md#first-available-python)           |
-| <span id="resolution-policies"></span> Resolution policies                       | [Resolution policies](RUNTIME_CONFIGURATION.md#dependency-resolution-policies)       |
-| <span id="session-startup"></span> SQL connection startup                        | [SQL connection startup](RUNTIME_CONFIGURATION.md#session-startup-source)            |
-| <span id="environment"></span> Environment settings                              | [Environment settings](ENVIRONMENT.md#where-to-set-variables)                        |
-| <span id="caches"></span> Caches                                                 | [Caches](RESOLVER.md#cache-locations)                                                |
-| <span id="sandbox"></span> Sandbox settings                                      | [Sandbox settings](SANDBOX_CONFIGURATION.md)                                         |
-| <span id="workspace-profile"></span> Workspace profile                           | [Workspace profile](SANDBOX_CONFIGURATION.md#workspace-profile)                      |
-| <span id="temporary-storage"></span> Temporary storage                           | [Temporary storage](SANDBOX_CONFIGURATION.md#temporary-storage)                      |
-| <span id="filesystem"></span> Filesystem permissions                             | [Filesystem permissions](SANDBOX_CONFIGURATION.md#filesystem)                        |
-| <span id="network-access"></span> Network access                                 | [Network access](SANDBOX_CONFIGURATION.md#network-choices)                           |
-| <span id="proxy-settings"></span> Proxy settings                                 | [Proxy settings](SANDBOX_CONFIGURATION.md#proxy-modes-and-destinations)              |
-| <span id="destination-rules"></span> Destination rules                           | [Destination rules](SANDBOX_CONFIGURATION.md#destination-rules)                      |
-| <span id="local-sockets-and-binding"></span> Local sockets and binding           | [Local sockets and binding](SANDBOX_CONFIGURATION.md#unix-sockets-and-local-binding) |
-| <span id="package-preparation"></span> Package preparation                       | [Package preparation](RESOLVER.md#configuration)                                     |
-| <span id="languages"></span> Language visibility                                 | [Language visibility](TOOL_CONFIGURATION.md#model-visible-languages)                 |
-| <span id="tool-presentation"></span> Tool presentation                           | [Tool presentation](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters)          |
-| <span id="parameter-settings"></span> Parameter settings                         | [Parameter settings](TOOL_CONFIGURATION.md#parameter-settings)                       |
-| <span id="null-empty-values-and-merging"></span> Null, empty values, and merging | [Null, empty values, and merging](CONFIGURATION.md#merge-rules)                      |
+<span id="top-level-settings"></span> <span id="settings-by-task"></span>
 
-## Language behavior
+| Setting                                                                                                                                      | Reference                                                                                                                         |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `cache`, `cache.directory`                                                                                                                   | <span id="caches"></span> [Package cache locations](PACKAGE_CONFIGURATION.md#cache-locations)                                     |
+| `environment`, `inherit_environment`                                                                                                         | <span id="environment"></span> [Shared environment values and inheritance](ENVIRONMENT.md#where-to-set-variables)                 |
+| `languages`                                                                                                                                  | <span id="languages"></span> [Model-visible languages](TOOL_CONFIGURATION.md#model-visible-languages)                             |
+| `python`, `python.existing`                                                                                                                  | <span id="python"></span> [Python environment selection](RUNTIME_CONFIGURATION.md#python-environment-selection)                   |
+| `python.managed`, `python.version`                                                                                                           | <span id="managed-python"></span> [Managed Python selection](RUNTIME_CONFIGURATION.md#managed-python)                             |
+| `python.first_available`                                                                                                                     | <span id="first-available-python"></span> [Ordered Python choices](RUNTIME_CONFIGURATION.md#first-available-python)               |
+| `python.packages`, `r.packages`                                                                                                              | [Startup package declarations and defaults](PACKAGE_CONFIGURATION.md#startup-package-declarations)                                |
+| `python.resolution`, `r.resolution`                                                                                                          | <span id="resolution-policies"></span> [Package preparation policies](PACKAGE_CONFIGURATION.md#dependency-resolution-policies)    |
+| `r`, `r.executable`                                                                                                                          | <span id="r"></span> [R installation selection](RUNTIME_CONFIGURATION.md#r-executable-selection)                                  |
+| `r.vanilla`                                                                                                                                  | [Native R startup files](RUNTIME_CONFIGURATION.md#native-r-startup)                                                               |
+| `resolver`, `resolver.environment`, `resolver.inherit_environment`                                                                           | <span id="package-preparation"></span> [Package sources and preparation environment](PACKAGE_CONFIGURATION.md#configuration)      |
+| `resolver.sandbox`                                                                                                                           | [Package preparation permissions](PACKAGE_CONFIGURATION.md#preparation-permissions)                                               |
+| `sandbox`                                                                                                                                    | <span id="sandbox"></span> [Session and command permissions](SANDBOX_CONFIGURATION.md#which-permissions-to-configure)             |
+| `sandbox.profile`                                                                                                                            | <span id="workspace-profile"></span> [Base profiles](SANDBOX_CONFIGURATION.md#profiles-and-temporary-storage)                     |
+| `sandbox.profile.inherit_codex.fallback`                                                                                                     | [Fallback when client permissions are unavailable](SANDBOX_CONFIGURATION.md#choose-a-fallback)                                    |
+| `sandbox.tempdir`                                                                                                                            | <span id="temporary-storage"></span> [Temporary storage](SANDBOX_CONFIGURATION.md#temporary-storage)                              |
+| `sandbox.filesystem.read_only`, `sandbox.filesystem.read_write`, `sandbox.filesystem.deny`                                                   | <span id="filesystem"></span> [File access](SANDBOX_CONFIGURATION.md#filesystem)                                                  |
+| `sandbox.network`                                                                                                                            | <span id="network-access"></span> [Network choices](SANDBOX_CONFIGURATION.md#network-choices)                                     |
+| `sandbox.network.proxy.mode`, `sandbox.network.proxy.socks5`, `sandbox.network.proxy.allow_upstream_proxy`                                   | <span id="proxy-settings"></span> [Proxy settings](SANDBOX_CONFIGURATION.md#proxy-modes-and-destinations)                         |
+| `sandbox.network.proxy.domains.allow`, `sandbox.network.proxy.domains.deny`                                                                  | <span id="destination-rules"></span> [Destination rules](SANDBOX_CONFIGURATION.md#destination-rules)                              |
+| `sandbox.network.sockets.unix_sockets`, `sandbox.network.allow_local_binding`                                                                | <span id="local-sockets-and-binding"></span> [Local sockets and binding](SANDBOX_CONFIGURATION.md#unix-sockets-and-local-binding) |
+| `startup`, `startup.language`, `startup.code`                                                                                                | <span id="session-startup"></span> [SQL connection startup](RUNTIME_CONFIGURATION.md#session-startup-source)                      |
+| `tool`, `tool.description`, `tool.instructions`                                                                                              | <span id="tool-presentation"></span> [Tool descriptions and instructions](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters) |
+| `tool.parameters.<name>.enabled`, `tool.parameters.<name>.description`, `tool.parameters.<name>.parameters`, `tool.parameters.<name>.schema` | <span id="parameter-settings"></span> [Tool parameter settings](TOOL_CONFIGURATION.md#parameter-settings)                         |
+
+The sandbox fields also apply under `resolver.sandbox`, with the preparation defaults and profile restrictions documented in [Package settings](PACKAGE_CONFIGURATION.md#preparation-permissions).
+
+<span id="null-empty-values-and-merging"></span>
+
+See [Merge rules](CONFIGURATION.md#merge-rules) for omitted, `null`, and empty values, and [Environment variables](ENVIRONMENT.md) for recognized variable names.
+
+## Behavior
+
+<span id="language-behavior"></span>
 
 [Language behavior](RUNTIME_REFERENCE.md) specifies R and Python helpers, SQL connections and results, plotting, and output handling.
 For an introduction, read [Sessions and languages](BUILTIN_RUNTIME.md).
 
-## Command line
+## Interfaces
+
+### Command line
 
 - [Command-line reference](CLI.md) documents command behavior, options, and installation checks.
 - [CLI help](cli-help.qmd) contains the public commands' complete help text.
 
 <span id="apis-and-package-manuals"></span>
 
-## MCP
+### MCP
 
 - [MCP send reference](API.md) documents tool arguments, results, and output limits.
-- [Calls, input, and control](SEND_OPERATIONS.md) covers polling, interactive input, interruption, and restart.
 - [Requirements API](REQUIREMENTS_API.md) covers dependency actions.
+- [Drive send directly](SEND_OPERATIONS.md) is a guide to polling, interactive input, interruption, and restart.
 
-## Packages
+### Packages
 
 - The [Python API](https://t-kalinowski.github.io/mcp-console/python/reference/) documents synchronous and asynchronous clients and model integrations.
-  The [Python package overview](https://t-kalinowski.github.io/mcp-console/python/) links to installation, first calls, and framework integration guides.
+  [Use Console from Python](PYTHON.md) introduces the clients and framework adapters.
 - The [R API](https://t-kalinowski.github.io/mcp-console/r/reference/) documents tool registration and session configuration.
-  The [R package manual](../r/README.md) includes configuration and analysis examples.
+  [Use Console from R](R.md) introduces the ellmer integration and links to configuration and analysis examples.
 
 ## Glossary
 

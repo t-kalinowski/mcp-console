@@ -171,18 +171,18 @@ Both use one shared sidebar, beginning with an expanded Learn Console category: 
 The Set up group covers installation and MCP client connections; Other tasks contains Run commands in a sandbox.
 Build has its own sidebar for the data assistant walkthrough, R and Python integration, and driving `send` directly.
 Its Builder reference links use published routes so the linked sources remain owned by the Reference sidebar.
-Reference has one sidebar for configuration, language behavior, the command line, MCP, package APIs, and the glossary.
+Reference has one sidebar for configuration files, settings by concept, behavior, interfaces, and the glossary.
 Development has its own sidebar and a footer link.
 Quarto's previous/next links follow sidebar order so readers can walk through the learning chapters.
 Keep the chapter continuations in the same order.
 Each concept has one explanatory chapter, task guide, and reference topic where those roles are needed.
 Link between those counterparts near the top of each page.
 The home page and learning chapters link inline to guides; put exact-setting and behavior references at the end of a section so they do not interrupt the explanation.
-The "I want to…" table connects tasks directly to either kind of page.
+The "I want to…" table connects tasks to guides; the Reference index maps setting names to their owning reference sections.
 
 All settings accepted in `config.yaml` belong in the user reference.
-Each reference topic has one owner: [Configuration files](CONFIGURATION.md) for discovery, merging, paths, and export; [Interpreters and startup](RUNTIME_CONFIGURATION.md) for R/Python selection, startup packages, resolution policies, and database startup; [Tool configuration](TOOL_CONFIGURATION.md) for language visibility, descriptions, and accepted parameters; [Sandbox permissions](SANDBOX_CONFIGURATION.md) for permission fields and enforcement limits; [Package sources and caches](RESOLVER.md) for preparation and cache settings; and [Environment variables](ENVIRONMENT.md) for environment settings and recognized variables.
-The configuration settings index links to these owners instead of repeating their field tables.
+Each reference topic has one owner: [Configuration files](CONFIGURATION.md) for discovery, merging, paths, and export; [Languages and startup](RUNTIME_CONFIGURATION.md) for R/Python selection, native startup, and database startup; [Tool configuration](TOOL_CONFIGURATION.md) for language visibility, descriptions, and accepted parameters; [Sandbox permissions](SANDBOX_CONFIGURATION.md) for permission fields and enforcement limits; [Package settings](PACKAGE_CONFIGURATION.md) for startup declarations, preparation policies, sources, caches, and preparation permissions; and [Environment variables](ENVIRONMENT.md) for environment settings and recognized variables.
+The [Reference index](REFERENCE.md#configuration) links to these owners instead of repeating their field tables; do not add a second settings index to Configuration files.
 [Language behavior](RUNTIME_REFERENCE.md) owns code execution, language helpers, SQL results, and output; [Recordings and reports](RECORDING.md) owns recording behavior and report workflows.
 
 [Customize Console](BUILD_ON_CONSOLE.md) introduces tool descriptions, language and parameter visibility, and prepared sessions for any connection method.

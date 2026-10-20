@@ -106,27 +106,28 @@ website:
       contents:
       - href: REFERENCE.md
         text: Reference index
-      - section: Configuration
+      - CONFIGURATION.md
+      - section: Settings
         contents:
-        - CONFIGURATION.md
         - RUNTIME_CONFIGURATION.md
-        - TOOL_CONFIGURATION.md
-        - SANDBOX_CONFIGURATION.md
-        - RESOLVER.md
+        - href: PACKAGE_CONFIGURATION.md
+          text: Packages
+        - href: SANDBOX_CONFIGURATION.md
+          text: Sandbox
+        - href: TOOL_CONFIGURATION.md
+          text: Tool interface
         - ENVIRONMENT.md
-      - RUNTIME_REFERENCE.md
-      - section: Command line
+      - section: Behavior
+        contents:
+        - RUNTIME_REFERENCE.md
+      - section: Interfaces
         contents:
         - href: CLI.md
-          text: CLI reference
+          text: Command line
         - cli-help.qmd
-      - section: MCP
-        contents:
         - href: API.md
           text: MCP send
         - REQUIREMENTS_API.md
-      - section: Packages
-        contents:
         - href: r/reference/index.html
           text: R API
         - href: python/reference/index.qmd

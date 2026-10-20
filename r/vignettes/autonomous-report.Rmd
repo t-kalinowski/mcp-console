@@ -87,7 +87,7 @@ The `deny` entry blocks access to `~/.ssh`; add other sensitive locations as nee
 See [Sandbox permissions](https://t-kalinowski.github.io/mcp-console/SANDBOX.html) for the full policy.
 
 Package preparation has separate permissions and may download packages at startup or while the agent is working.
-See [Resolver configuration](https://t-kalinowski.github.io/mcp-console/RESOLVER.html) if you need to configure that access too; explicit resolver sandbox policies are unsupported on Windows.
+See [Package settings](https://t-kalinowski.github.io/mcp-console/package_configuration/#preparation-permissions) if you need to configure that access too; explicit resolver sandbox policies are unsupported on Windows.
 
 ## Add a writable directory and an allowed domain
 
