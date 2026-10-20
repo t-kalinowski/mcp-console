@@ -120,6 +120,10 @@ Do not disguise transport failure as an ordinary missing package.
 
 ### Live Python preparation
 
+Python environment and version-resolution requests carry `explicit_declaration` when they originate from evaluated `py_require()` declarations or MCP preparation, including still-lazy R declarations.
+The host admits these requests under `explicit` or `implicit`; inferred imports still require `implicit`.
+Declaration authorization does not itself accept a candidate.
+
 The ordinary sequence is:
 
 ```text
