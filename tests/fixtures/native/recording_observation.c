@@ -3,12 +3,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-static int observed;
+static _Atomic int observed;
 
 static ssize_t observed_write(int descriptor, const void *buffer, size_t length) {
 #ifdef __APPLE__
@@ -19,12 +20,11 @@ static ssize_t observed_write(int descriptor, const void *buffer, size_t length)
 #endif
     const char *event = getenv("MCP_CONSOLE_TEST_OBSERVED_EVENT");
     const char *path = getenv("MCP_CONSOLE_TEST_JOURNAL_OBSERVED");
-    if (!observed && event != NULL && path != NULL && result == (ssize_t)length) {
+    if (event != NULL && path != NULL && result == (ssize_t)length) {
         char marker[128];
         int size = snprintf(marker, sizeof(marker), "{\"event\":\"%s\",", event);
         if (size > 0 && (size_t)size < sizeof(marker) && length >= (size_t)size &&
-            memcmp(buffer, marker, size) == 0) {
-            observed = 1;
+            memcmp(buffer, marker, size) == 0 && !atomic_exchange(&observed, 1)) {
             int reached = open(path, O_WRONLY | O_NONBLOCK);
             if (reached < 0 || write(reached, "1", 1) != 1) _exit(124);
             close(reached);
