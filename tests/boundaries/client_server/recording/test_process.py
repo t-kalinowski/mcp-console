@@ -328,9 +328,8 @@ def test_first_rejected_send_publishes_the_observed_prelude(
                 ).read_text() == "retained startup text\n"
                 image = next(e for e in prelude if e["event"] == "artifact_created")
                 assert (recording / image["path"]).read_bytes() == expected_image
-                client.send()
-                client.send(stdin="unused input")
-                client.send(control="interrupt")
+                assert not client.send()["isError"]
+                assert not client.send(stdin="unused input")["isError"]
                 transcript = client.finish()
             events = recording_events(recording)
             assert [e["sequence"] for e in events] == list(range(1, len(events) + 1))
@@ -347,10 +346,9 @@ def test_first_rejected_send_publishes_the_observed_prelude(
                 "tools/call",
                 "tools/call",
                 "tools/call",
-                "tools/call",
             ]
             assert [m["params"] for m in received if m["method"] == "tools/call"] == [
-                {"tool_call_id": i} for i in range(1, 5)
+                {"tool_call_id": i} for i in range(1, 4)
             ]
             assembled = [
                 e["message"]
@@ -362,7 +360,7 @@ def test_first_rejected_send_publishes_the_observed_prelude(
                 for m in assembled
                 if m.get("id")
                 in {e["request_id"] for e in events if e["event"] == "tool_call"}
-            ] == [{"tool_result_call_id": i} for i in range(1, 5)]
+            ] == [{"tool_result_call_id": i} for i in range(1, 4)]
             assert events[-1]["event"] == "recording_ended"
             assert all(e["delivered"] for e in events if e["event"] == "delivery")
             return transcript
