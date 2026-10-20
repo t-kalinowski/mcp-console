@@ -156,6 +156,7 @@ Read-only permissions discourage accidental edits; they are not a security bound
 Abrupt termination can leave files writable.
 Recording and projection failures do not stop computation.
 Diagnostics identify unavailable or partial capture, and a projection failure can leave capture usable.
+If a stalled journal writer exhausts the bounded protocol backlog, Console disables recording and reports the failure on stderr while continuing to receive MCP traffic.
 An explicit failed export is an error, not a successful partial report.
 
 The capture and generated document formats are internal formats without independent versioning.

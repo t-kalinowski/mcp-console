@@ -43,193 +43,8 @@ from support.resolvers import bare_runtime_environment, record_resolved_r_librar
 from support.suites import run_this_suite
 from boundaries.client_server.server.test_startup import discovery_environment
 
+
 CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
-
-
-@requires(NATIVE_FIXTURES, PTHREAD_MUTEX_INTERPOSITION, PROCESS_EVENTS)
-@executions(DIRECT)
-def test_settles_cancelled_capture_before_finalization(
-    binary: Path, execution: Execution
-) -> Transcript:
-    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
-    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-        workspace = Path(directory)
-        reached = resources.enter_context(
-            closing(FifoCheckpoint.create(workspace / "reached"))
-        )
-        release = resources.enter_context(
-            closing(FifoCheckpoint.create(workspace / "release"))
-        )
-        exits = resources.enter_context(Events())
-        environment = {
-            **os.environ,
-            LOADER_VARIABLE: str(
-                build_interposer(workspace, "recording_receive_checkpoint")
-            ),
-            "MCP_CONSOLE_TEST_RECORDING_REACHED": str(reached.path),
-            "MCP_CONSOLE_TEST_RECORDING_RELEASE": str(release.path),
-            "TMPDIR": str(workspace),
-            "ZOD_REPORT_PID": "1",
-        }
-        with McpClient(
-            binary, execution.serve("--worker", str(worker)), environment, workspace
-        ) as client:
-            client.initialize_and_list_tools()
-            client.send(r="echo ready")
-            worker_pid = host_process_id(
-                int(
-                    wait_for_worker_file(
-                        workspace, "zod-worker-pid", client
-                    ).read_text()
-                ),
-                client.process.pid,
-            )
-            exits.watch_process(worker_pid)
-            try:
-                held = client.start_send(r="echo held capture")
-                reached.wait("call 2 captured but its recording task has not completed")
-                queued = [
-                    client.start_send(r=f"echo cancelled queued source {index}")
-                    for index in range(16)
-                ]
-                client.notify("notifications/cancelled", requestId=held["id"])
-                for cancelled in queued:
-                    client.notify("notifications/cancelled", requestId=cancelled["id"])
-                assert client.request("ping")["result"] == {}
-                client.stdin.close()
-                assert exits.wait(5) == {worker_pid}
-            finally:
-                release.release()
-            client.finish()
-        (recording,) = (workspace / ".agents/console/sessions").iterdir()
-        events = [
-            json.loads(line)
-            for line in (recording / "capture/events.jsonl").read_text().splitlines()
-        ]
-        calls = [event for event in events if event["event"] == "tool_call"]
-        assert [event["call_id"] for event in calls] == list(range(1, 19)), calls
-        assert [event["request"]["arguments"]["r"] for event in calls[2:]] == [
-            f"echo cancelled queued source {index}" for index in range(16)
-        ], calls
-        assert events[-1]["event"] == "recording_ended", events[-1]
-        return [
-            *client.transcript[:3],
-            {"capture": "all received calls retained before finalization"},
-        ]
-
-
-@requires(NATIVE_FIXTURES)
-@executions(DIRECT)
-def test_releases_completed_stdin_requests(
-    binary: Path, execution: Execution
-) -> Transcript:
-    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
-    with tempfile.TemporaryDirectory() as directory:
-        workspace = Path(directory)
-        with closing(RetentionProfile(workspace)) as profile:
-            environment = {**os.environ, **profile.environment}
-            with McpClient(
-                binary, execution.serve("--worker", str(worker)), environment, workspace
-            ) as client:
-                client.initialize_and_list_tools()
-                client.send(r="echo ready")
-                retained = []
-                for _ in range(2):
-                    for _ in range(24):
-                        client.send(stdin="x" * (1024 * 1024))
-                    client.send(control="restart")
-                    assert client.request("ping")["result"] == {}
-                    retained.append(profile.live)
-                # Permit live transport copies, but not another batch of retained input.
-                assert retained[1] - retained[0] < 4 * 1024 * 1024, retained
-                client.finish()
-                return [
-                    *client.transcript[:3],
-                    {"request memory": "released across batches and restart"},
-                ]
-
-
-@requires(NATIVE_FIXTURES, PTHREAD_MUTEX_INTERPOSITION)
-@executions(DIRECT)
-def test_retains_received_send_while_an_earlier_response_finishes(
-    binary: Path, execution: Execution
-) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-        workspace = Path(directory)
-        gates = {
-            name: resources.enter_context(
-                closing(FifoCheckpoint.create(workspace / name))
-            )
-            for name in (
-                "cell-entered",
-                "cell-release",
-                "recording-reached",
-                "recording-release",
-            )
-        }
-        environment = dict(
-            os.environ,
-            **{
-                LOADER_VARIABLE: str(
-                    build_interposer(workspace, "recording_receive_checkpoint")
-                ),
-                "MCP_CONSOLE_TEST_RECORDING_REACHED": str(
-                    gates["recording-reached"].path
-                ),
-                "MCP_CONSOLE_TEST_RECORDING_RELEASE": str(
-                    gates["recording-release"].path
-                ),
-            },
-        )
-        with McpClient(
-            binary,
-            execution.serve(
-                "-c", "languages=[python]", "-c", "python=" + json.dumps(sys.executable)
-            ),
-            environment,
-            workspace,
-            response_timeout=10,
-        ) as client:
-            try:
-                client.initialize_and_list_tools()
-                first = client.start_send(
-                    # fmt: python
-                    python=code(f"""
-                        from pathlib import Path
-
-                        with Path({str(gates["cell-entered"].path)!r}).open('wb', buffering=0) as gate:
-                            gate.write(b'1')
-                        with Path({str(gates["cell-release"].path)!r}).open('rb', buffering=0) as gate:
-                            assert gate.read(1) == b'1'
-                        print('first response')
-                        """),
-                )
-                gates["cell-entered"].wait("first cell awaits release")
-                second = client.start_send(python="21 * 2")
-                gates["recording-reached"].wait(
-                    "second request retained before dispatch"
-                )
-                gates["cell-release"].release()
-                client.receive(first)
-                assert first["result"] == {
-                    "content": [{"type": "text", "text": "first response\n"}],
-                    "isError": False,
-                }
-                gates["recording-release"].release()
-                client.receive(second)
-                assert second["result"] == {
-                    "content": [{"type": "text", "text": "42\n"}],
-                    "isError": False,
-                }
-                recorded = json.dumps(client.finish())
-                for path in (workspace, workspace.resolve()):
-                    recorded = recorded.replace(
-                        json.dumps(str(path))[1:-1], "<workspace>"
-                    )
-                return json.loads(recorded)
-            finally:
-                gates["cell-release"].release()
-                gates["recording-release"].release()
 
 
 PNG_1X1 = (
@@ -887,6 +702,10 @@ def test_disables_recording_after_transcript_failure(
         assert journal.read_text(encoding="utf-8") == journal_after_failure
 
         transcript, standard_error = client.finish_with_standard_error()
+        assert journal.read_text(encoding="utf-8") == journal_after_failure
+        for path in session.rglob("*"):
+            if path.is_file():
+                assert path.stat().st_mode & 0o222 == 0, path
         assert standard_error.count("\n") == 1, standard_error
         assert standard_error.startswith(
             "mcp-console: transcript recording disabled: failed to create "
@@ -1573,40 +1392,6 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
             release.release()
 
 
-@requires(NATIVE_FIXTURES, R)
-def test_discards_startup_failure_without_send(binary: Path) -> Transcript:
-    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-        root = Path(directory)
-        environment, reached, release, alive = resources.enter_context(
-            local_discovery(root, fail=True)
-        )
-        recorded = resources.enter_context(
-            closing(FifoCheckpoint.create(root / "failure-recorded"))
-        )
-        environment["MCP_CONSOLE_TEST_STARTUP_FAILURE_RECORDED"] = str(recorded.path)
-        try:
-            with McpClient(binary, DIRECT.serve(), environment, root) as client:
-                client.initialize_and_list_tools()
-                reached.wait("discovery ready to fail without send")
-                assert os.read(alive, 1) == b"1"
-                client.request("ping")
-                release.release()
-                # The discovery process has emitted its failure before shutdown;
-                # no send is used to observe or activate the recording.
-                recorded.wait(
-                    "server recorded the completed startup failure", client=client
-                )
-                _, stderr = client.finish_with_standard_error(expected_exit_status=1)
-                assert "fixture R discovery failed" in stderr
-                assert not (root / ".agents/console/sessions").exists()
-                assert not any(
-                    entry.get("method") == "tools/call" for entry in client.transcript
-                )
-            return [{"startup_failure_without_send": "capture discarded"}]
-        finally:
-            release.release()
-
-
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_does_not_attempt_recording_without_a_tool_call(
@@ -1719,6 +1504,74 @@ def test_discards_startup_capture_without_a_tool_call(
         finally:
             reached.close()
             release.close()
+
+
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS, R, command("ir"))
+def test_preserves_early_requirements_in_published_quarto(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+        root = Path(directory)
+        environment, reached, release, alive = resources.enter_context(
+            local_discovery(root)
+        )
+        try:
+            with McpClient(binary, DIRECT.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                reached.wait("discovery is held before recording metadata is known")
+                assert os.read(alive, 1) == b"1"
+                admitted = client.send(
+                    r="42L", requirements={"r": ["praise"]}, timeout_ms=0
+                )
+                assert not admitted["isError"], admitted
+                assert last_tool_text(client).endswith(
+                    "[running; poll with an empty send]"
+                ), admitted
+                release.release()
+                result = client.send()
+                assert not result["isError"], result
+                assert last_tool_text(client).endswith("[1] 42\n")
+                transcript = client.finish()
+            (recording,) = (root / ".agents/console/sessions").iterdir()
+            quarto = (recording / "sessions/session-001.qmd").read_text()
+            assert "    - praise\n" in quarto, quarto
+            assert "```{r}\n#| error: true\n42L\n```" in quarto, quarto
+            assert "eval: false" not in quarto, quarto
+            return transcript
+        finally:
+            release.release()
+
+
+@requires(NATIVE_FIXTURES, R)
+def test_discards_startup_failure_without_send(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+        root = Path(directory)
+        environment, reached, release, alive = resources.enter_context(
+            local_discovery(root, fail=True)
+        )
+        recorded = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "failure-recorded"))
+        )
+        environment["MCP_CONSOLE_TEST_STARTUP_FAILURE_RECORDED"] = str(recorded.path)
+        try:
+            with McpClient(binary, DIRECT.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                reached.wait("discovery ready to fail without send")
+                assert os.read(alive, 1) == b"1"
+                client.request("ping")
+                release.release()
+                # The discovery process has emitted its failure before shutdown;
+                # no send is used to observe or activate the recording.
+                recorded.wait(
+                    "server recorded the completed startup failure", client=client
+                )
+                _, stderr = client.finish_with_standard_error(expected_exit_status=1)
+                assert "fixture R discovery failed" in stderr
+                assert not (root / ".agents/console/sessions").exists()
+                assert not any(
+                    entry.get("method") == "tools/call" for entry in client.transcript
+                )
+            return [{"startup_failure_without_send": "capture discarded"}]
+        finally:
+            release.release()
 
 
 if __name__ == "__main__":

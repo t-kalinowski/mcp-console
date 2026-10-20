@@ -7,7 +7,7 @@ use std::io::{BufWriter, Write};
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -72,7 +72,110 @@ pub(crate) struct Transcript(
     Arc<Mutex<ProtocolEvents>>,
     Arc<AtomicU64>,
 );
-type ProtocolEvents = Vec<(Event<'static>, DateTime<Utc>)>;
+#[derive(Default)]
+struct ProtocolEvents {
+    pending: Vec<(QueuedEvent, DateTime<Utc>, usize)>,
+    // Include batches held by flush_protocol while journal I/O is blocked.
+    retained_events: usize,
+    retained_bytes: usize,
+    failure: Option<String>,
+    draining: bool,
+}
+
+// Lifecycle observations share the bounded, ordered drain with protocol events.
+// Session identity changes only when an actual acquisition is applied.
+#[derive(serde::Serialize)]
+enum QueuedEvent {
+    Event(Event<'static>),
+    WorkerStarting,
+    WorkerStarted { pid: u32, requirements: Value },
+    WorkerReady,
+    WorkerEnded { outcome: String },
+}
+
+impl QueuedEvent {
+    fn append(self, active: &mut ActiveTranscript, at: DateTime<Utc>) -> Result<(), String> {
+        match self {
+            Self::Event(event) => active.append(event, at),
+            Self::WorkerStarting => {
+                active.starting_session = None;
+                Ok(())
+            }
+            Self::WorkerStarted { pid, requirements } => {
+                active.next_session_id += 1;
+                let session_id = active.next_session_id;
+                active.worker_live = true;
+                active.owner = Some(Owner {
+                    session_id,
+                    cell_id: None,
+                    interval: Interval::Startup,
+                });
+                active.image_number = 0;
+                active.starting_session = Some(session_id);
+                active.append(
+                    Event::WorkerStarted {
+                        session_id,
+                        pid,
+                        requirements: &requirements,
+                    },
+                    at,
+                )
+            }
+            Self::WorkerReady => {
+                let session_id = active
+                    .starting_session
+                    .take()
+                    .ok_or("worker ready without a started session")?;
+                active.append(Event::WorkerReady { session_id }, at)
+            }
+            Self::WorkerEnded { outcome } => {
+                let session_id = active
+                    .owner
+                    .ok_or("worker outcome without a started session")?
+                    .session_id;
+                active.worker_live = false;
+                active.append(
+                    Event::WorkerEnded {
+                        session_id,
+                        outcome: &outcome,
+                    },
+                    at,
+                )
+            }
+        }
+    }
+}
+
+const MAX_PROTOCOL_EVENTS: usize = 1024;
+const MAX_PROTOCOL_BYTES: usize = 8 * 1024 * 1024;
+
+impl ProtocolEvents {
+    fn stop(&mut self, error: String) {
+        self.failure.get_or_insert(error);
+        self.retained_events -= self.pending.len();
+        self.retained_bytes -= self
+            .pending
+            .drain(..)
+            .map(|(_, _, bytes)| bytes)
+            .sum::<usize>();
+    }
+}
+
+/// Measure serialized retention without allocating another copy of the payload.
+#[derive(Default)]
+struct ProtocolBytes(usize);
+
+impl Write for ProtocolBytes {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 struct TranscriptState {
     started_at: DateTime<Utc>,
     working_directory: Result<PathBuf, String>,
@@ -194,43 +297,92 @@ impl Transcript {
             state.capture()?.publish(&working_directory)
         });
     }
-    pub(crate) fn protocol(&self, direction: &'static str, message: &Value) {
-        self.queue_protocol(Event::Protocol {
-            direction,
-            message: message.clone(),
-        });
+    pub(crate) fn protocol(&self, direction: &'static str, message: Value) {
+        self.queue_event(QueuedEvent::Event(Event::Protocol { direction, message }));
     }
+
     pub(crate) fn delivery(&self, request_id: &Value, call_id: Option<u64>, delivered: bool) {
-        self.queue_protocol(Event::Delivery {
+        self.queue_event(QueuedEvent::Event(Event::Delivery {
             request_id: request_id.clone(),
             call_id,
             delivered,
-        });
+        }));
     }
-    fn queue_protocol(&self, event: Event<'static>) {
-        // Cancellation and ping must remain usable while a result journal write
-        // owns the recorder. The next writer flushes these observed envelopes in
-        // order, before its own event, without blocking the transport on that lock.
-        self.1
+
+    fn queue_event(&self, event: QueuedEvent) {
+        if self
+            .1
             .lock()
             .expect("protocol capture lock")
-            .push((event, Utc::now()));
-        let (state, poisoned) = match self.0.try_lock() {
-            Ok(state) => (state, false),
-            Err(TryLockError::Poisoned(error)) => (error.into_inner(), true),
-            Err(TryLockError::WouldBlock) => return,
-        };
-        self.update_locked(state, poisoned, |_| Ok(()));
-    }
-    fn flush_protocol(&self, state: &mut TranscriptState) -> Result<(), String> {
-        let pending = std::mem::take(&mut *self.1.lock().expect("protocol capture lock"));
-        if state.failure.is_none() {
-            for (event, at) in pending {
-                state.capture()?.append(event, at)?;
-            }
+            .failure
+            .is_some()
+        {
+            return;
         }
-        Ok(())
+        let at = Utc::now();
+        let mut bytes = ProtocolBytes::default();
+        let measured = serde_json::to_writer(&mut bytes, &event);
+        let mut events = self.1.lock().expect("protocol capture lock");
+        if events.failure.is_some() {
+            return;
+        }
+        if let Err(error) = measured {
+            events.stop(format!("protocol capture failed: {error}"));
+        } else if events.retained_events == MAX_PROTOCOL_EVENTS
+            || bytes.0 > MAX_PROTOCOL_BYTES - events.retained_bytes
+        {
+            // This lock never protects journal I/O. The drain reports the failure
+            // after its current write settles; frame reception remains fail-open.
+            events.stop(format!(
+                "protocol capture backlog exceeded ({MAX_PROTOCOL_EVENTS} events or {MAX_PROTOCOL_BYTES} bytes)"
+            ));
+        } else {
+            events.retained_events += 1;
+            events.retained_bytes += bytes.0;
+            events.pending.push((event, at, bytes.0));
+        }
+        if events.draining {
+            return;
+        }
+        events.draining = true;
+        drop(events);
+        let recorder = self.clone();
+        // Neither journal I/O nor the recorder mutex runs on MCP frame receipt.
+        // One retained drain owns this queue, including cancelled deliveries.
+        std::thread::spawn(move || {
+            loop {
+                recorder.update(|_| Ok(()));
+                let mut events = recorder.1.lock().expect("protocol capture lock");
+                if events.pending.is_empty() {
+                    events.draining = false;
+                    return;
+                }
+            }
+        });
     }
+
+    fn flush_protocol(&self, state: &mut TranscriptState) -> Result<(), String> {
+        let pending = {
+            let mut events = self.1.lock().expect("protocol capture lock");
+            if let Some(error) = &events.failure {
+                return Err(error.clone());
+            }
+            std::mem::take(&mut events.pending)
+        };
+        let count = pending.len();
+        let bytes = pending.iter().map(|(_, _, bytes)| bytes).sum::<usize>();
+        let result = (|| {
+            for (event, at, _) in pending {
+                event.append(state.capture()?, at)?;
+            }
+            Ok(())
+        })();
+        let mut events = self.1.lock().expect("protocol capture lock");
+        events.retained_events -= count;
+        events.retained_bytes -= bytes;
+        result
+    }
+
     pub(crate) fn requirements_selected(
         &self,
         call_id: Option<u64>,
@@ -276,49 +428,26 @@ impl Transcript {
         });
     }
     pub(crate) fn worker_starting(&self) {
-        self.update(|state| {
-            state.capture()?.starting_session = None;
-            Ok(())
-        });
+        self.queue_event(QueuedEvent::WorkerStarting);
     }
+
     pub(crate) fn worker_started(&self, pid: u32, requirements: &Value) {
-        self.update(|state| {
-            let active = state.capture()?;
-            active.worker_live = true;
-            active.next_session_id += 1;
-            let session_id = active.next_session_id;
-            active.starting_session = Some(session_id);
-            active.owner = Some(Owner {
-                session_id,
-                cell_id: None,
-                interval: Interval::Startup,
-            });
-            active.image_number = 0;
-            active.append(
-                Event::WorkerStarted {
-                    session_id,
-                    pid,
-                    requirements,
-                },
-                Utc::now(),
-            )
+        self.queue_event(QueuedEvent::WorkerStarted {
+            pid,
+            requirements: requirements.clone(),
         });
     }
+
     pub(crate) fn worker_ready(&self) {
-        self.update(|state| {
-            let active = state.capture()?;
-            active.starting_session = None;
-            if let Some(owner) = active.owner {
-                active.append(
-                    Event::WorkerReady {
-                        session_id: owner.session_id,
-                    },
-                    Utc::now(),
-                )?;
-            }
-            Ok(())
+        self.queue_event(QueuedEvent::WorkerReady);
+    }
+
+    pub(crate) fn worker_ended(&self, outcome: &str) {
+        self.queue_event(QueuedEvent::WorkerEnded {
+            outcome: outcome.to_owned(),
         });
     }
+
     pub(crate) fn image_omitted(&self, encoded_bytes: usize, mime_type: &str) {
         self.update(|state| {
             let active = state.capture()?;
@@ -332,24 +461,9 @@ impl Transcript {
             )
         });
     }
-    pub(crate) fn worker_ended(&self, outcome: &str) {
-        self.update(|state| {
-            let active = state.capture()?;
-            active.worker_live = false;
-            if let Some(owner) = active.owner {
-                active.append(
-                    Event::WorkerEnded {
-                        session_id: owner.session_id,
-                        outcome,
-                    },
-                    Utc::now(),
-                )?;
-            }
-            Ok(())
-        });
-    }
     pub(crate) fn owner(&self) -> Option<Owner> {
-        self.lock().0.active.as_ref().and_then(|a| a.owner)
+        self.update(|state| Ok(state.active.as_ref().and_then(|a| a.owner)))
+            .flatten()
     }
     /// Reserve protocol identity without waiting for the journal writer.
     pub(crate) fn reserve_call_id(&self) -> u64 {
@@ -513,15 +627,22 @@ impl Transcript {
         });
     }
     pub(crate) fn finalize(&self) {
-        let (mut state, _) = self.lock();
-        let result = self.flush_protocol(&mut state).and_then(|()| {
-            state
-                .active
-                .as_mut()
-                .map(ActiveTranscript::finalize)
-                .transpose()
-                .map(|_| ())
+        self.update(|state| {
+            if let Some(active) = state.active.as_mut()
+                && !active.finished
+            {
+                active.append(Event::RecordingEnded, Utc::now())?;
+            }
+            Ok(())
         });
+        // Failed capture must not gain a completion event, but its producers
+        // have still retired. Complete the permissions on retained files too.
+        let (mut state, _) = self.lock();
+        let result = state
+            .active
+            .as_mut()
+            .map(ActiveTranscript::finalize)
+            .transpose();
         drop(state);
         if let Err(error) = result {
             report_failure(&error);
@@ -529,53 +650,62 @@ impl Transcript {
     }
     pub(crate) fn disable(&self, error: String) {
         let (mut state, _) = self.lock();
-        let report = state.disable(error.clone());
+        let should_report = state.disable(error.clone());
         drop(state);
-        if report {
+        self.1
+            .lock()
+            .expect("protocol capture lock")
+            .stop(error.clone());
+        if should_report {
             report_failure(&error);
         }
     }
-    fn lock(&self) -> (MutexGuard<'_, TranscriptState>, bool) {
+
+    fn lock(&self) -> (std::sync::MutexGuard<'_, TranscriptState>, bool) {
         match self.0.lock() {
             Ok(state) => (state, false),
-            Err(error) => (error.into_inner(), true),
+            Err(poisoned) => (poisoned.into_inner(), true),
         }
     }
+
     fn update<T>(
         &self,
         operation: impl FnOnce(&mut TranscriptState) -> Result<T, String>,
     ) -> Option<T> {
-        let (state, poisoned) = self.lock();
-        self.update_locked(state, poisoned, operation)
-    }
-    fn update_locked<T>(
-        &self,
-        mut state: MutexGuard<'_, TranscriptState>,
-        poisoned: bool,
-        operation: impl FnOnce(&mut TranscriptState) -> Result<T, String>,
-    ) -> Option<T> {
-        if state.failure.is_some() {
-            self.flush_protocol(&mut state).ok();
+        let (mut state, poisoned) = self.lock();
+        if let Some(error) = &state.failure {
+            self.1
+                .lock()
+                .expect("protocol capture lock")
+                .stop(error.clone());
             return None;
         }
-        let result = if poisoned {
-            Err("transcript lock poisoned".into())
-        } else {
-            self.flush_protocol(&mut state)
-                .and_then(|()| operation(&mut state))
-                .and_then(|value| {
-                    self.flush_protocol(&mut state)?;
-                    Ok(value)
-                })
-        };
+        if poisoned {
+            let error = "transcript lock poisoned".to_string();
+            state.disable(error.clone());
+            drop(state);
+            self.1
+                .lock()
+                .expect("protocol capture lock")
+                .stop(error.clone());
+            report_failure(&error);
+            return None;
+        }
+        let result = self
+            .flush_protocol(&mut state)
+            .and_then(|()| operation(&mut state))
+            .and_then(|value| {
+                self.flush_protocol(&mut state)?;
+                Ok(value)
+            });
         match result {
             Ok(value) => {
-                let failure = state
+                let projection_failure = state
                     .active
                     .as_mut()
                     .and_then(|a| a.pending_projection_failure.take());
                 drop(state);
-                if let Some(error) = failure {
+                if let Some(error) = projection_failure {
                     report_projection_failure(&error);
                 }
                 Some(value)
@@ -583,12 +713,17 @@ impl Transcript {
             Err(error) => {
                 state.disable(error.clone());
                 drop(state);
+                self.1
+                    .lock()
+                    .expect("protocol capture lock")
+                    .stop(error.clone());
                 report_failure(&error);
                 None
             }
         }
     }
 }
+
 pub(crate) fn validate_image_data(data: &str) -> Result<(), String> {
     decode_image_data(data).map(drop)
 }
@@ -872,9 +1007,6 @@ impl ActiveTranscript {
             return Ok(());
         }
         let mut errors = Vec::new();
-        if let Err(error) = self.append(Event::RecordingEnded, Utc::now()) {
-            errors.push(error);
-        }
         self.finished = true;
         // Retirement and response-delivery settling precede this call.
         for file in self.files.values() {

@@ -65,7 +65,13 @@ impl Location {
     fn resolved_path(&self) -> Option<PathBuf> {
         let path = PathBuf::from(self.path.as_ref()?);
         Some(match &self.public_directory {
-            Some(directory) => directory.lock().expect("recording path lock").join(path),
+            Some(directory) => {
+                let directory = directory.lock().expect("recording path lock");
+                if directory.as_os_str().is_empty() {
+                    return None;
+                }
+                directory.join(path)
+            }
             None => path,
         })
     }
@@ -258,7 +264,12 @@ impl Summary {
         {
             details.push(location);
         }
-        let unretained_images = images - recorded_images;
+        let unretained_images = images
+            - if artifacts.resolved_path().is_some() {
+                recorded_images
+            } else {
+                0
+            };
         if unretained_images != 0 {
             details.push(format!(
                 "{unretained_images} {} not retained",

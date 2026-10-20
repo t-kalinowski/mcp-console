@@ -87,12 +87,10 @@ def test_runs_without_a_resolver_bootstrap(
             .splitlines()
         ]
         assert events[0]["event"] == "recording_started", events[0]
-        assert (
-            next(
-                event for event in events if event["event"] == "environment_discovered"
-            )["dynamic_resolution"]
-            is False
-        ), events[0]
+        discovered = next(
+            event for event in events if event["event"] == "environment_discovered"
+        )
+        assert discovered["dynamic_resolution"] is False, discovered
 
         quarto = (session / "sessions/session-001.qmd").read_text(encoding="utf-8")
         assert "tidyverse" not in quarto, quarto
@@ -107,7 +105,7 @@ def test_runs_without_a_resolver_bootstrap(
                 "events.yaml": [
                     {
                         "recording_started": {
-                            "dynamic_resolution": events[0]["dynamic_resolution"]
+                            "dynamic_resolution": discovered["dynamic_resolution"]
                         }
                     }
                 ],

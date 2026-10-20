@@ -422,11 +422,11 @@ def test_first_received_send_selects_authority_before_cancelled_handler(
             client.transcript.append(
                 {
                     "scenario": "The first received send selects permissions even if its handler is cancelled.",
-                    "fixture": "Batch the first send, its cancellation, and a conflicting send in wire order. Cancellation is the next ready frame, before another send's asynchronous recording activation.",
+                    "fixture": "Write two conflicting sends and cancellation together so all three frames are ready before handler dispatch.",
                 }
             )
             client.initialize_and_list_tools()
-            first, _, second = client.send_messages(
+            first, second, _ = client.send_messages(
                 [
                     {
                         "jsonrpc": "2.0",
@@ -435,7 +435,11 @@ def test_first_received_send_selects_authority_before_cancelled_handler(
                         "params": {
                             "name": "send",
                             "arguments": {
-                                "python": "raise AssertionError('cancelled first handler ran')"
+                                # fmt: python
+                                "python": code("""
+                                    cancelled_first_handler_ran = True
+                                    raise AssertionError("cancelled first handler ran")
+                                    """),
                             },
                             "_meta": {
                                 STATE: {
@@ -450,11 +454,6 @@ def test_first_received_send_selects_authority_before_cancelled_handler(
                                 }
                             },
                         },
-                    },
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "notifications/cancelled",
-                        "params": {"requestId": 1000},
                     },
                     {
                         "jsonrpc": "2.0",
@@ -476,6 +475,11 @@ def test_first_received_send_selects_authority_before_cancelled_handler(
                             },
                         },
                     },
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/cancelled",
+                        "params": {"requestId": 1000},
+                    },
                 ]
             )
             client.receive(second)
@@ -491,6 +495,7 @@ def test_first_received_send_selects_authority_before_cancelled_handler(
                     import os
                     from pathlib import Path
 
+                    assert "cancelled_first_handler_ran" not in globals()
                     assert os.environ["MCP_CONSOLE_SANDBOX"] == "1"
                     try:
                         _ = Path("created").write_text("denied")

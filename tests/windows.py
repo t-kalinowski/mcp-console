@@ -1872,6 +1872,16 @@ class WindowsConsole(unittest.TestCase):
                 "42\n",
             )
 
+        for transition in ("worker_started", "worker_ready"):
+            self.assertEqual(
+                [
+                    event["session_id"]
+                    for event in events
+                    if event["event"] == transition
+                ],
+                list(range(1, 14)),
+            )
+
     def test_relay_setup_error_reaches_mcp(self):
         session = self.relay_session("block_sideband")
         result = session.send(r="42")

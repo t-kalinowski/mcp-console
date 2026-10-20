@@ -24,7 +24,6 @@ from support.requirements import (
     NATIVE_FIXTURES,
     POSIX,
     PROCESS_EVENTS,
-    PTHREAD_MUTEX_INTERPOSITION,
     R,
     command,
     requires,
@@ -675,7 +674,7 @@ def test_startup_poll_deadline_preserves_unclaimed_output(
 @executions(DIRECT, SANDBOXED)
 @requires(R, NATIVE_FIXTURES, PROCESS_EVENTS, command("ir"), command("uv"))
 @requires(POSIX)
-def test_poll_becomes_idle_after_terminal_response_delivery(
+def test_startup_poll_becomes_idle_after_terminal_response_delivery(
     binary: Path, execution: Execution
 ) -> Transcript:
     return early_requirements_with_pending_poll(

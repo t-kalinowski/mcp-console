@@ -15,6 +15,9 @@ pub(super) struct OutputTapeState {
     sealed: VecDeque<(u64, Response)>,
     next_cut: u64,
     cell_active: bool,
+    // Response attribution follows observed interval boundaries, without taking
+    // the journal mutex while restart collects already retained output.
+    owner: Option<crate::transcript::Owner>,
     cell_output: Option<crate::transcript::CellOutput>,
     session_output: Option<crate::transcript::CellOutput>,
     idle_recording_attempted: bool,
@@ -67,6 +70,14 @@ impl OutputTape {
         }
         state.cell_active = false;
         state.finish_idle_interval();
+        // EOF need not poll completed output. Retained response receipts must
+        // reach the journal before its owner emits recording_ended.
+        for (_, response) in &state.sealed {
+            response.preview.publish_output_records();
+        }
+        if let Some(response) = &state.recovered {
+            response.preview.publish_output_records();
+        }
     }
 
     pub(in crate::worker_client) fn worker_started(
@@ -77,9 +88,10 @@ impl OutputTape {
         let mut state = self.lock();
         state.seal(true);
         state.finish_idle_interval();
-        if let Some(transcript) = &state.session_recording {
+        state.owner = state.session_recording.as_ref().and_then(|transcript| {
             transcript.worker_started(pid, requirements);
-        }
+            transcript.owner()
+        });
     }
 
     pub(in crate::worker_client) fn worker_ended(&self, outcome: &str) {
@@ -91,10 +103,12 @@ impl OutputTape {
             record.publish();
         }
         state.cell_active = false;
-        if let Some(transcript) = &state.session_recording {
+        state.owner = state.session_recording.as_ref().and_then(|transcript| {
             transcript.end_cell(false);
+            let owner = transcript.owner();
             transcript.worker_ended(outcome);
-        }
+            owner
+        });
     }
 
     pub(in crate::worker_client) fn direct_stdout(&self) -> DirectOutput {
@@ -183,6 +197,9 @@ impl OutputTape {
         state.worker_revision += 1;
         state.flush_decoders();
         state.flush_terminal();
+        // Before the first send, startup images share this preview. Apply its
+        // budget before retaining artifacts, so omitted startup images never
+        // acquire receipts that could advertise unpublished paths.
         if state
             .current
             .response
@@ -294,6 +311,7 @@ impl OutputTape {
             Ok(output) => state.cell_output = output,
             Err(error) => state.recording_notice(Some(format!("cell output file was not created: {error}; text omitted from inline responses will be permanently discarded"))),
         }
+        state.owner = transcript.owner();
     }
 
     pub(in crate::worker_client) fn finish_cell_output(
@@ -304,9 +322,10 @@ impl OutputTape {
         let cut = state.seal(true);
         let notice = state.cell_output.take().and_then(|output| output.finish());
         state.cell_active = false;
-        if let Some(transcript) = &state.session_recording {
+        state.owner = state.session_recording.as_ref().and_then(|transcript| {
             transcript.end_cell(completion_confirmed);
-        }
+            transcript.owner()
+        });
         if notice.is_some() {
             state.recording_notice(notice);
             return state.seal(false);
@@ -391,7 +410,7 @@ impl OutputTapeState {
             && self.session_output.is_none()
             && let Some(transcript) = &self.session_recording
         {
-            if transcript.owner().is_none() {
+            if self.owner.is_none() {
                 transcript.unowned_text(bytes);
                 return None;
             }
@@ -482,7 +501,7 @@ impl OutputTapeState {
                 ..Source::default()
             },
         };
-        let owner = self.session_recording.as_ref().and_then(|t| t.owner());
+        let owner = self.owner;
         self.current
             .response
             .preview

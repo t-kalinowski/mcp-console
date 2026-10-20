@@ -399,12 +399,11 @@ impl ServerHandler for ConsoleServer {
             .extensions
             .remove::<crate::server_transport::ResponseDeliveryAdmission>()
             .expect("console operations must carry transport admission");
-        let call = context
+        let recording = context
             .extensions
             .remove::<crate::server_transport::RecordingCall>()
-            .expect("send carries its recording call")
-            .recorded()
-            .await;
+            .expect("send carries its recording call");
+        let call = recording.clone().recorded().await;
         let transcript = self.startup.runtime().transcript.clone();
         let admitted = tokio::select! {
             biased;
@@ -433,8 +432,16 @@ impl ServerHandler for ConsoleServer {
         let (delivery, operation) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
-                transcript.finish(call, &Err(error.clone()));
-                return Err(error);
+                let recorder = transcript.clone();
+                let recorded_error = error.clone();
+                if let Err(error) = tokio::task::spawn_blocking(move || {
+                    recorder.finish(call, &Err(recorded_error));
+                })
+                .await
+                {
+                    transcript.disable(format!("transcript task failed: {error}"));
+                }
+                return recording.response(Err(error));
             }
         };
         let sandbox::CaptureResult(inherited) = context
@@ -524,7 +531,7 @@ impl ServerHandler for ConsoleServer {
         let result =
             Arc::into_inner(result).expect("transcript task should release the tool result");
         operation.complete();
-        result
+        recording.response(result)
     }
 }
 
@@ -599,12 +606,12 @@ pub async fn run(
             Ok(runtime) => runtime.worker.shutdown(deadline).await,
             Err(error) => {
                 let runtime = startup.runtime();
-                if runtime.worker.is_configured() {
-                    runtime.worker.shutdown(deadline).await?;
+                let retirement = if runtime.worker.is_configured() {
+                    runtime.worker.shutdown(deadline).await
                 } else {
-                    runtime.worker.finish_recording();
-                }
-                startup.finish_failed_preparation(error)
+                    Ok(())
+                };
+                retirement.and_then(|()| startup.finish_failed_preparation(error))
             }
         };
         deliveries
@@ -612,8 +619,17 @@ pub async fn run(
             .await;
         // Cancellation releases response admission, not capture ownership.
         // Settle every received send before finalizing its journal and projections.
-        recordings.settle().await;
-        startup.runtime().transcript.finalize();
+        recordings.close_and_settle().await;
+        let runtime = startup.runtime();
+        let diagnostics = runtime.transcript.clone();
+        if let Err(error) = tokio::task::spawn_blocking(move || {
+            runtime.worker.finish_recording();
+            runtime.transcript.finalize();
+        })
+        .await
+        {
+            diagnostics.disable(format!("recording finalization task failed: {error}"));
+        }
         cancellation?;
         result?;
         Ok::<(), String>(())
@@ -625,6 +641,9 @@ pub async fn run(
         result = server.serve(transport) => match result {
             Ok(service) => service,
             Err(error) => {
+                // Shutdown can wake a blocked initialization write before this
+                // branch settles. Preserve its input-closure diagnosis.
+                let closed_by_shutdown = startup_responses.is_closed();
                 shutdown.await.map_err(std::io::Error::other)?;
                 if matches!(&error, rmcp::service::ServerInitializeError::ConnectionClosed(_))
                     && startup_responses.bootstrap_complete()
@@ -633,6 +652,8 @@ pub async fn run(
                 }
                 return Err(match error {
                     rmcp::service::ServerInitializeError::ConnectionClosed(_) =>
+                        std::io::Error::other(CLOSED_BEFORE_INITIALIZATION).into(),
+                    _ if closed_by_shutdown =>
                         std::io::Error::other(CLOSED_BEFORE_INITIALIZATION).into(),
                     error => error.into(),
                 });

@@ -30,6 +30,7 @@ from support.checkpoints import (
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import startup_r_package
 from support.normalization import code
+from support.native import LOADER_VARIABLE, build_interposer
 from support.records import Transcript
 from support.requirements import NATIVE_FIXTURES, POSIX, requires
 from support.suites import run_this_suite
@@ -100,7 +101,7 @@ after final image
         return client.finish()
 
 
-@requires(POSIX)
+@requires(POSIX, NATIVE_FIXTURES)
 @executions(DIRECT, SANDBOXED)
 def test_summarizes_empty_cell_after_oversized_startup_output(
     binary: Path, execution: Execution
@@ -111,6 +112,7 @@ def test_summarizes_empty_cell_after_oversized_startup_output(
         with (
             closing(FifoCheckpoint.create(root / "startup-reached")) as reached,
             closing(FifoCheckpoint.create(root / "startup-release")) as release,
+            closing(FifoCheckpoint.create(root / "worker-ready")) as ready,
         ):
             # fmt: r
             source = code(f"""
@@ -135,6 +137,15 @@ def test_summarizes_empty_cell_after_oversized_startup_output(
                 """)
             with startup_r_package(root, source) as environment:
                 environment["RETICULATE_PYTHON"] = sys.executable
+                environment.update(
+                    {
+                        LOADER_VARIABLE: str(
+                            build_interposer(root, "recording_observation")
+                        ),
+                        "MCP_CONSOLE_TEST_OBSERVED_TEXT": "\nstartup tail\n",
+                        "MCP_CONSOLE_TEST_JOURNAL_OBSERVED": str(ready.path),
+                    }
+                )
                 args = (
                     execution.serve("--writable-root", str(root))
                     if execution == SANDBOXED
@@ -146,7 +157,15 @@ def test_summarizes_empty_cell_after_oversized_startup_output(
                         reached.wait("startup output emitted", timeout=60)
                         sessions = root / ".agents/console/sessions"
                         assert not sessions.exists()
-                        pending = client.start_send(python="pass")
+                        ready.wait(
+                            "startup output drained before the first send",
+                            timeout=60,
+                            client=client,
+                        )
+                        assert not sessions.exists()
+                        release.release()
+                        result = client.send(python="pass")
+                        assert not result["isError"], result
                         log = wait_for_checkpoint(
                             lambda: next(
                                 (
@@ -163,10 +182,6 @@ def test_summarizes_empty_cell_after_oversized_startup_output(
                             recursive=True,
                             client=client,
                         )
-                        release.release()
-                        client.receive(pending)
-                        result = pending["result"]
-                        assert not result["isError"], result
                         text = last_tool_text(client)
                         assert len(text.encode()) <= TEXT_BUDGET, text
                         assert text.startswith("startup head\n") and text.endswith(

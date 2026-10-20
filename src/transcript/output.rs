@@ -15,6 +15,7 @@ pub(super) const MAX_CELL_OUTPUT_BYTES: u64 = 1024 * 1024 * 1024;
 pub(crate) struct CellOutput {
     file: Arc<Mutex<CaptureFile>>,
     path: String,
+    public_directory: Arc<Mutex<std::path::PathBuf>>,
     owner: Owner,
     transcript: Transcript,
     failed: bool,
@@ -147,6 +148,7 @@ impl Transcript {
         if state.failure.is_some() {
             return Ok(None);
         }
+        self.flush_protocol(&mut state)?;
         let active = state.capture()?;
         let Some(owner) = active.owner else {
             return Ok(None);
@@ -156,6 +158,7 @@ impl Transcript {
         Ok(Some(CellOutput {
             file,
             path: path.clone(),
+            public_directory: active.public_directory.clone(),
             owner,
             transcript: self.clone(),
             failed: false,
@@ -210,15 +213,7 @@ impl CellOutput {
     pub(crate) fn record(&self) -> OutputRecord {
         OutputRecord {
             state: self.record.clone(),
-            public_directory: self
-                .transcript
-                .lock()
-                .0
-                .active
-                .as_ref()
-                .expect("capture initialized")
-                .public_directory
-                .clone(),
+            public_directory: self.public_directory.clone(),
             path: Arc::from(self.path.as_str()),
             accounted: Arc::new(AtomicU64::new(0)),
         }
@@ -308,11 +303,25 @@ impl CellOutput {
         });
     }
     pub(crate) fn flush(&mut self) -> Option<String> {
-        let mut file = self.file.lock().expect("capture file lock");
-        file.writer
+        if self.failed {
+            return None;
+        }
+        let result = self
+            .file
+            .lock()
+            .expect("capture file lock")
+            .writer
             .as_mut()
-            .and_then(|writer| writer.flush().err())
-            .map(|e| format!("failed to flush {}: {e}", self.path))
+            .expect("open output interval")
+            .flush();
+        if let Err(error) = result {
+            self.failed = true;
+            return Some(format!(
+                "cell output file {} (relative to recording) stopped after {} retained bytes: {error}; later text is not retained in this file",
+                self.path, self.retained_bytes
+            ));
+        }
+        None
     }
     pub(crate) fn finish(mut self) -> Option<String> {
         let notice = self.flush();

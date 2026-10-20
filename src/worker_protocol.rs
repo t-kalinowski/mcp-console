@@ -140,6 +140,8 @@ pub(crate) struct PythonResolveRequest {
     pub(crate) requirements: PythonRequirementManifest,
     pub(crate) retained_requirements: PythonRequirementManifest,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) explicit_declaration: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) initialized: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) import_resolution: Option<PythonImportResolution>,
@@ -149,6 +151,8 @@ pub(crate) struct PythonResolveRequest {
 #[serde(deny_unknown_fields)]
 pub(crate) struct PythonVersionResolveRequest {
     pub(crate) constraints: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) explicit_declaration: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -363,6 +367,7 @@ mod tests {
             &PythonResolveRequest {
                 requirements: requirements.clone(),
                 retained_requirements: requirements,
+                explicit_declaration: false,
                 initialized: false,
                 import_resolution: Some(PythonImportResolution {
                     module: "yaml12".to_string(),

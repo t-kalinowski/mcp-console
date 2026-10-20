@@ -111,7 +111,7 @@ class WindowsMxc(unittest.TestCase):
                     "complete",
                     [
                         "sandbox",
-                        "--config-env",
+                        "--runner-config-env",
                         "POLICY",
                         "--",
                         sys.executable,
@@ -319,7 +319,7 @@ class WindowsMxc(unittest.TestCase):
                     [
                         BINARY,
                         "sandbox",
-                        "--config-env",
+                        "--runner-config-env",
                         "POLICY",
                         "--",
                         sys.executable,

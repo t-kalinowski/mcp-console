@@ -608,6 +608,7 @@ def test_custom_worker_prepares_r_and_duckdb_requirements(
         recorded_result = next(
             event for event in reversed(events) if event["event"] == "tool_result"
         )
+        assert artifact["sequence"] < recorded_result["sequence"]
         assert artifact["event"] == "artifact_created", artifact
         assert recorded_result["event"] == "tool_result", recorded_result
         assert artifact["call_id"] is None, artifact

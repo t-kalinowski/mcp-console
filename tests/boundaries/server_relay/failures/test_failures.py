@@ -52,6 +52,32 @@ def test_reports_fatal_failure(binary: Path, execution: Execution) -> Transcript
 
 @requires(POSIX)
 @executions(DIRECT, SANDBOXED)
+def test_rejects_duplicate_worker_started(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(binary, "duplicate_worker_started", execution=execution)
+    failed = client.client.start_send(r="42")
+    return client.release_failure(
+        failed, "worker relay sent an unexpected worker start"
+    )
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_rejects_worker_started_after_ready(
+    binary: Path, execution: Execution
+) -> Transcript:
+    client = ServerRelayClient(
+        binary, "worker_started_after_ready", execution=execution
+    )
+    failed = client.client.start_send(r="42")
+    return client.release_failure(
+        failed, "worker relay sent an unexpected worker start"
+    )
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
 def test_rejects_truncated_output(binary: Path, execution: Execution) -> Transcript:
     client = ServerRelayClient(binary, "truncated", execution=execution)
     failed = client.client.start_send(r="42")

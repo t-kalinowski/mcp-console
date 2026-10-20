@@ -3,9 +3,8 @@ scenario: >-
   The first received send selects permissions even if its handler is
   cancelled.
 fixture: >-
-  Batch the first send, its cancellation, and a conflicting send in wire
-  order. Cancellation is the next ready frame, before another send's
-  asynchronous recording activation.
+  Write two conflicting sends and cancellation together so all three
+  frames are ready before handler dispatch.
 ---
 !same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.client-sandbox-python-only.yaml
 ---
@@ -14,7 +13,9 @@ input:
   params:
     name: send
     arguments:
-      python: raise AssertionError('cancelled first handler ran')
+      python: |
+        cancelled_first_handler_ran = True
+        raise AssertionError("cancelled first handler ran")
     _meta:
       codex/sandbox-state:
         permissionProfile:
@@ -24,11 +25,6 @@ input:
             entries: []
           network: restricted
 id: <cancelled request 1>
----
-input:
-  method: notifications/cancelled
-  params:
-    requestId: <cancelled request 1>
 ---
 input:
   method: tools/call
@@ -52,12 +48,18 @@ result:
         sending more code
   isError: true
 ---
+input:
+  method: notifications/cancelled
+  params:
+    requestId: <cancelled request 1>
+---
 send:
   python: |
     import errno
     import os
     from pathlib import Path
 
+    assert "cancelled_first_handler_ran" not in globals()
     assert os.environ["MCP_CONSOLE_SANDBOX"] == "1"
     try:
         _ = Path("created").write_text("denied")
