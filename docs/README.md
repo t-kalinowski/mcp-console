@@ -25,7 +25,7 @@ These guides introduce Console through a session with your agent:
 | Connect a coding agent or another MCP client                                                      | [MCP clients](CLIENTS.md)                                                                  |
 | Use Console from R                                                                                | [Use Console from R](R.md)                                                                 |
 | Use Console from Python                                                                           | [Use Console from Python](PYTHON.md)                                                       |
-| Install Console or check platform requirements                                                    | [Installation](INSTALLATION.md)                                                            |
+| Install Console or check platform requirements                                                    | [Install and connect](CLIENTS.md)                                                          |
 | Run an analysis across R, Python, and SQL                                                         | [Sessions and languages](BUILTIN_RUNTIME.md)                                               |
 | Install packages or use an existing environment                                                   | [Packages and environments](REQUIREMENTS.md)                                               |
 | Customize the agent's tools and prepare its environment                                           | [Customize Console](BUILD_ON_CONSOLE.md)                                                   |

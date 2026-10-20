@@ -329,7 +329,6 @@ class WebsiteTests(unittest.TestCase):
             "readme/index.html",
             "getting-started/index.html",
             "clients/index.html",
-            "installation/index.html",
             "build_from_source/index.html",
             "linux_compatibility/index.html",
             "windows/index.html",
@@ -368,6 +367,13 @@ class WebsiteTests(unittest.TestCase):
                     ["Learn Console", "Set up", "Other tasks"],
                 )
                 learning = sections[0]
+                self.assertEqual(
+                    [
+                        linked_file(self.site / name, link["href"])
+                        for link in sections[1].select("a[href]")
+                    ],
+                    [self.site / "clients/index.html"],
+                )
                 heading = learning.select_one(".sidebar-item-text")
                 self.assertEqual(heading.get_text(strip=True), "Learn Console")
                 self.assertFalse(heading.has_attr("href"))
@@ -896,6 +902,9 @@ class WebsiteTests(unittest.TestCase):
             ),
             "CLIENTS": (
                 "mcp-clients",
+                "supported-platforms",
+                "r-python-and-sql",
+                "build-from-source",
                 "connect-from-application-code",
                 "from-r",
                 "from-python",

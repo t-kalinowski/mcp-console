@@ -10,8 +10,8 @@ This walkthrough uses Python; you don't need to install R or create a Console co
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) to run Console with `uvx`, without a separate Console installation.
 Console prepares Python and its packages for you, so the first setup can take longer while they download.
 
-If you also want to use R, [install it separately](INSTALLATION.md#r-python-and-sql).
-[Installation](INSTALLATION.md) covers supported platforms and runtime requirements, including the Windows sandbox prerequisite.
+If you also want to use R, [install it separately](CLIENTS.md#r-python-and-sql).
+[Install and connect](CLIENTS.md) covers supported platforms and runtime requirements, including the Windows sandbox prerequisite.
 
 <span id="build-from-source"></span>
 

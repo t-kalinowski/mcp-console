@@ -1,8 +1,29 @@
-# Use Console with an MCP client
+# Install and connect
 
-Connect Console to your coding agent or another client that supports MCP over standard input and output.
-[Get started](getting-started.qmd) walks through installation, connection, and a first analysis.
-This page covers registration scope and client setup options; the commands below require [uv](https://docs.astral.sh/uv/getting-started/installation/).
+Install Console's prerequisites, then connect your coding agent or another MCP client.
+[Get started](getting-started.qmd) walks through a first analysis once you are connected.
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) so `uvx` is available to your client.
+It can run Console without a separate Console installation.
+
+## Supported platforms
+
+Prebuilt packages are available for macOS and Linux on ARM64 and x86-64, and for Windows x64.
+Sandboxed Windows sessions require Windows 11 with [Microsoft Execution Containers (MXC)](https://support.microsoft.com/en-us/servicing/os/windows-11/2026/08/kb5120998-windows-11-24h2-25h2-update#microsoft-execution-containers).
+
+If Console fails to start on Linux, see [Linux host compatibility](LINUX_COMPATIBILITY.md) for missing libraries or sandbox restrictions.
+
+## R, Python, and SQL
+
+To let your agent use R, install it separately, for example with [rig](https://github.com/r-lib/rig#id-installation) and `rig add release`.
+Python and SQL work without R.
+The first session may download Python and packages.
+
+To verify the selected runtimes and prepare caches before opening a client, follow [Check your installation](CLI.md#check-your-installation).
+
+<span id="build-from-source"></span>
+
+To install the development version, follow [Build from source](BUILD_FROM_SOURCE.md).
 
 <span id="mcp-clients"></span>
 

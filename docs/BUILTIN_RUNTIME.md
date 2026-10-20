@@ -62,7 +62,7 @@ Reference: [R and Python interoperability](RUNTIME_REFERENCE.md#r-and-python-int
 
 R and Python can each run without the other.
 SQL uses a database connection supplied by one of them.
-Console can prepare Python for you; to let your agent use R, [install it separately](INSTALLATION.md#r-python-and-sql).
+Console can prepare Python for you; to let your agent use R, [install it separately](CLIENTS.md#r-python-and-sql).
 
 Console prepares packages in its own environments and libraries by default.
 The [Packages and environments](REQUIREMENTS.md) guide explains how those packages become available during an analysis.

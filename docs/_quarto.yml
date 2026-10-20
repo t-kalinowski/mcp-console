@@ -67,9 +67,7 @@ website:
         - RECORDING.md
       - section: Set up
         contents:
-        - INSTALLATION.md
-        - href: CLIENTS.md
-          text: MCP clients
+        - CLIENTS.md
       - section: Other tasks
         contents:
         - SANDBOX_COMMAND.md

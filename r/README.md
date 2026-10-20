@@ -36,7 +36,7 @@ console_tool(path = Sys.which("mcp-console"))
 ```
 
 On Windows, `console_tool()` can resolve the Console x64 wheel through `reticulate::uv_run_tool()`.
-See [installation requirements](https://t-kalinowski.github.io/mcp-console/installation/).
+See [installation requirements](https://t-kalinowski.github.io/mcp-console/clients/#supported-platforms).
 
 ## Session configuration
 

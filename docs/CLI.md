@@ -3,7 +3,7 @@
 Use `serve` to run the MCP server, `warmup` to check the runtimes and warm caches, `sandbox` to run one command under a sandbox, `config init` to create shared settings, `config resolve` to inspect configuration, and `configure-client` to register Console with a client.
 Console runs on the local host; it does not create remote connections.
 
-See [Installation](INSTALLATION.md) for supported hosts and runtime setup.
+See [Install and connect](CLIENTS.md) for supported hosts and runtime setup.
 The [CLI help page](cli-help.qmd) shows tested public-command help.
 Run `mcp-console --help` for the version installed on your machine.
 
