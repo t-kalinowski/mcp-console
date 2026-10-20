@@ -326,6 +326,16 @@ def test_separates_native_diagnostics_from_worker_stderr(
                             return path
                     return None
 
+                # Native stderr and CellStarted use independent relay streams.
+                # Establish the cell interval before releasing its first bytes.
+                wait_for_checkpoint(
+                    recorded,
+                    "executing cell capture ready before native diagnostics",
+                    root=sessions,
+                    recursive=True,
+                    client=client,
+                    events=events,
+                )
                 for _, data in chunks:
                     release.release()
                     raw += data

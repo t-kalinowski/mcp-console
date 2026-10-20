@@ -577,7 +577,7 @@ def test_combines_old_worker_and_replacement_cell_under_one_budget(
         assert text.endswith("after final image\n[done]")
         assert text.count("[output omitted:") == 1
         assert (
-            f"retained logs: .agents/console/sessions/{session_directory(client).name}/outputs"
+            f"retained logs: .agents/console/sessions/{session_directory(client).name}/capture/sessions/"
             in text
         )
         assert not result.get("isError", False), result

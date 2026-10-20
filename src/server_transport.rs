@@ -5,7 +5,8 @@ use std::time::Instant;
 
 use rmcp::RoleServer;
 use rmcp::model::{
-    CallToolRequest, ClientNotification, ClientRequest, JsonRpcMessage, RequestId, ServerResult,
+    CallToolRequest, ClientNotification, ClientRequest, JsonRpcMessage, RequestId,
+    RequestMetaObject, ServerResult,
 };
 use rmcp::service::{RxJsonRpcMessage, TxJsonRpcMessage};
 use rmcp::transport::{Transport, async_rw::AsyncRwTransport};
@@ -766,6 +767,10 @@ pub(crate) struct ServerTransport<R: AsyncRead, W: AsyncWrite> {
     send_observer: Option<Box<SendObserver>>,
     recording: Option<crate::transcript::Transcript>,
     recorded_calls: HashMap<RequestId, u64>,
+    pending_recording: Option<(
+        RxJsonRpcMessage<RoleServer>,
+        tokio::task::JoinHandle<crate::transcript::Call>,
+    )>,
 }
 
 impl<R, W> ServerTransport<R, W>
@@ -780,6 +785,7 @@ where
             send_observer: None,
             recording: None,
             recorded_calls: HashMap::new(),
+            pending_recording: None,
         }
     }
 
@@ -884,35 +890,63 @@ where
     }
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
-        let mut message = self.inner.receive().await;
+        let mut message = if self.pending_recording.is_some() {
+            None
+        } else {
+            self.inner.receive().await
+        };
+        if self.pending_recording.is_none()
+            && let (Some(recording), Some(JsonRpcMessage::Request(request))) =
+                (&self.recording, &message)
+            && let ClientRequest::CallToolRequest(call) = &request.request
+            && call.params.name.as_ref() == "send"
+        {
+            let recorder = recording.clone();
+            let request_id = request.id.clone();
+            let params = call.params.clone();
+            let meta = call
+                .extensions
+                .get::<RequestMetaObject>()
+                .cloned()
+                .unwrap_or_default();
+            let task =
+                tokio::task::spawn_blocking(move || recorder.begin(&request_id, &meta, &params));
+            // The service can cancel receive while writing an earlier response.
+            // Retain both the consumed request and its activation task until a
+            // later receive resumes them; the task must run exactly once.
+            self.pending_recording = Some((message.take().expect("received send"), task));
+        }
+        if let Some((_, task)) = &mut self.pending_recording {
+            let recorded = match task.await {
+                Ok(recorded) => recorded,
+                Err(error) => {
+                    self.recording
+                        .as_ref()
+                        .expect("recording task owner")
+                        .disable(format!("recording activation task failed: {error}"));
+                    crate::transcript::Call::unrecorded()
+                }
+            };
+            let (mut retained, _) = self.pending_recording.take().expect("recorded request");
+            let JsonRpcMessage::Request(request) = &mut retained else {
+                unreachable!("only send requests have recording tasks")
+            };
+            let ClientRequest::CallToolRequest(call) = &mut request.request else {
+                unreachable!("only send requests have recording tasks")
+            };
+            if let Some(id) = recorded.id() {
+                self.recorded_calls.insert(request.id.clone(), id);
+            }
+            call.extensions.insert(recorded);
+            message = Some(retained);
+        }
         if let (Some(recording), Some(message)) = (&self.recording, &mut message) {
             let mut captured = serde_json::to_value(&*message);
             if let JsonRpcMessage::Request(request) = message
-                && let ClientRequest::CallToolRequest(call) = &mut request.request
-                && call.params.name.as_ref() == "send"
+                && let Some(id) = self.recorded_calls.get(&request.id)
+                && let Ok(message) = &mut captured
             {
-                // Activation occurs at receipt, including rejected or cancelled sends.
-                let recorder = recording.clone();
-                let request_id = request.id.clone();
-                let params = call.params.clone();
-                let recorded = match tokio::task::spawn_blocking(move || {
-                    recorder.begin(&request_id, &Default::default(), &params)
-                })
-                .await
-                {
-                    Ok(recorded) => recorded,
-                    Err(error) => {
-                        recording.disable(format!("recording activation task failed: {error}"));
-                        crate::transcript::Call::unrecorded()
-                    }
-                };
-                if let Some(id) = recorded.id() {
-                    self.recorded_calls.insert(request.id.clone(), id);
-                    if let Ok(message) = &mut captured {
-                        message["params"] = serde_json::json!({"tool_call_id": id});
-                    }
-                }
-                call.extensions.insert(recorded);
+                message["params"] = serde_json::json!({"tool_call_id": id});
             }
             match captured {
                 Ok(message) => recording.protocol("received", &message),
@@ -958,7 +992,20 @@ where
 
     fn close(&mut self) -> impl Future<Output = Result<(), Self::Error>> + Send {
         self.deliveries.close();
-        self.inner.close()
+        let pending = self.pending_recording.take();
+        let recording = self.recording.clone();
+        let close = self.inner.close();
+        async move {
+            // Final permissions must follow the last activation writer, even
+            // when the service stops before dispatching its retained request.
+            if let Some((_, task)) = pending
+                && let Err(error) = task.await
+                && let Some(recording) = recording
+            {
+                recording.disable(format!("recording activation task failed: {error}"));
+            }
+            close.await
+        }
     }
 }
 

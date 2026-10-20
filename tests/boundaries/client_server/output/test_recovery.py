@@ -22,6 +22,7 @@ from support.previews import (
     compact_previews,
     cell_text,
     normalize_preview_paths,
+    recording_events,
     session_directory,
     TEXT_BUDGET,
 )
@@ -102,6 +103,22 @@ def cancelled_control_recovery(
 [starting new worker]
 [done]""",
                 "x",
+            )
+            received = [
+                event["message"]["method"]
+                for event in recording_events(session_directory(client))
+                if event["event"] == "protocol" and event["direction"] == "received"
+            ]
+            # Protocol capture must retain the cancellation and ping exchanges
+            # that completed while each result's journal writer was paused.
+            assert (
+                received[4 : 4 + 3 * count]
+                == [
+                    "tools/call",
+                    "notifications/cancelled",
+                    "ping",
+                ]
+                * count
             )
             return client.finish()
 
@@ -206,7 +223,7 @@ def recovered_recorded_cells(
                 assert text.count("[output omitted:") == 1, text
                 assert (
                     text.count(
-                        f".agents/console/sessions/{session_directory(client).name}/capture/sessions/001/"
+                        f".agents/console/sessions/{session_directory(client).name}/capture/sessions/"
                     )
                     == 1
                 )

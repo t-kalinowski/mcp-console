@@ -3,12 +3,11 @@
 import base64
 import json
 import os
-import select
 import shutil
 import subprocess
 import sys
 import tempfile
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, closing, contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +21,7 @@ from support.requirements import (
     NATIVE_FIXTURES,
     POSIX,
     PROCESS_EVENTS,
+    PTHREAD_MUTEX_INTERPOSITION,
     R,
     SQL,
     command,
@@ -40,6 +40,90 @@ from support.suites import run_this_suite
 from boundaries.client_server.server.test_startup import discovery_environment
 
 CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
+
+
+@requires(NATIVE_FIXTURES, PTHREAD_MUTEX_INTERPOSITION)
+@executions(DIRECT)
+def test_retains_received_send_while_an_earlier_response_finishes(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+        workspace = Path(directory)
+        gates = {
+            name: resources.enter_context(
+                closing(FifoCheckpoint.create(workspace / name))
+            )
+            for name in (
+                "cell-entered",
+                "cell-release",
+                "recording-reached",
+                "recording-release",
+            )
+        }
+        environment = dict(
+            os.environ,
+            **{
+                LOADER_VARIABLE: str(
+                    build_interposer(workspace, "recording_receive_checkpoint")
+                ),
+                "MCP_CONSOLE_TEST_RECORDING_REACHED": str(
+                    gates["recording-reached"].path
+                ),
+                "MCP_CONSOLE_TEST_RECORDING_RELEASE": str(
+                    gates["recording-release"].path
+                ),
+            },
+        )
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c", "languages=[python]", "-c", "python=" + json.dumps(sys.executable)
+            ),
+            environment,
+            workspace,
+            response_timeout=10,
+        ) as client:
+            try:
+                client.initialize_and_list_tools()
+                first = client.start_send(
+                    # fmt: python
+                    python=code(f"""
+                        from pathlib import Path
+
+                        with Path({str(gates["cell-entered"].path)!r}).open('wb', buffering=0) as gate:
+                            gate.write(b'1')
+                        with Path({str(gates["cell-release"].path)!r}).open('rb', buffering=0) as gate:
+                            assert gate.read(1) == b'1'
+                        print('first response')
+                        """),
+                )
+                gates["cell-entered"].wait("first cell awaits release")
+                second = client.start_send(python="21 * 2")
+                gates["recording-reached"].wait(
+                    "second request retained before dispatch"
+                )
+                gates["cell-release"].release()
+                client.receive(first)
+                assert first["result"] == {
+                    "content": [{"type": "text", "text": "first response\n"}],
+                    "isError": False,
+                }
+                gates["recording-release"].release()
+                client.receive(second)
+                assert second["result"] == {
+                    "content": [{"type": "text", "text": "42\n"}],
+                    "isError": False,
+                }
+                recorded = json.dumps(client.finish())
+                for path in (workspace, workspace.resolve()):
+                    recorded = recorded.replace(
+                        json.dumps(str(path))[1:-1], "<workspace>"
+                    )
+                return json.loads(recorded)
+            finally:
+                gates["cell-release"].release()
+                gates["recording-release"].release()
+
 
 PNG_1X1 = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42Y"
@@ -752,7 +836,7 @@ def test_keeps_recording_after_cell_output_failure(
         )
         assert failure.endswith("zod: second\n"), failure
         client.transcript[-1]["result"]["content"][0]["text"] = (
-            "[cell output file was not created: <output path is not a directory>; "
+            "[cell output file was not created: <output file creation failed>; "
             "text omitted from inline responses will be permanently discarded]\n"
             "zod: second\n"
         )
@@ -1384,6 +1468,10 @@ def test_discards_startup_failure_without_send(binary: Path) -> Transcript:
         environment, reached, release, alive = resources.enter_context(
             local_discovery(root, fail=True)
         )
+        recorded = resources.enter_context(
+            closing(FifoCheckpoint.create(root / "failure-recorded"))
+        )
+        environment["MCP_CONSOLE_TEST_STARTUP_FAILURE_RECORDED"] = str(recorded.path)
         try:
             with McpClient(binary, DIRECT.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
@@ -1393,8 +1481,9 @@ def test_discards_startup_failure_without_send(binary: Path) -> Transcript:
                 release.release()
                 # The discovery process has emitted its failure before shutdown;
                 # no send is used to observe or activate the recording.
-                assert select.select([alive], [], [], client.response_timeout)[0]
-                assert os.read(alive, 1) == b""
+                recorded.wait(
+                    "server recorded the completed startup failure", client=client
+                )
                 _, stderr = client.finish_with_standard_error(expected_exit_status=1)
                 assert "fixture R discovery failed" in stderr
                 assert not (root / ".agents/console/sessions").exists()

@@ -422,11 +422,11 @@ def test_first_received_send_selects_authority_before_cancelled_handler(
             client.transcript.append(
                 {
                     "scenario": "The first received send selects permissions even if its handler is cancelled.",
-                    "fixture": "Write two conflicting sends and cancellation together so all three frames are ready before handler dispatch.",
+                    "fixture": "Batch the first send, its cancellation, and a conflicting send in wire order. Cancellation is the next ready frame, before another send's asynchronous recording activation.",
                 }
             )
             client.initialize_and_list_tools()
-            first, second, _ = client.send_messages(
+            first, _, second = client.send_messages(
                 [
                     {
                         "jsonrpc": "2.0",
@@ -453,6 +453,11 @@ def test_first_received_send_selects_authority_before_cancelled_handler(
                     },
                     {
                         "jsonrpc": "2.0",
+                        "method": "notifications/cancelled",
+                        "params": {"requestId": 1000},
+                    },
+                    {
+                        "jsonrpc": "2.0",
                         "id": 1001,
                         "method": "tools/call",
                         "params": {
@@ -470,11 +475,6 @@ def test_first_received_send_selects_authority_before_cancelled_handler(
                                 STATE: {"permissionProfile": {"type": "disabled"}}
                             },
                         },
-                    },
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "notifications/cancelled",
-                        "params": {"requestId": 1000},
                     },
                 ]
             )

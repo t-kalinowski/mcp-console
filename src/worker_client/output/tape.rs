@@ -270,33 +270,26 @@ impl OutputTape {
         response
     }
 
-    pub(in crate::worker_client) fn begin_cell_output_before(
+    pub(in crate::worker_client) fn begin_cell_output(
         &self,
         transcript: &crate::transcript::Transcript,
         call_id: Option<u64>,
-        capture_prelude: bool,
-        boundary: impl FnOnce(),
-    ) -> Response {
+    ) {
         let mut state = self.lock();
         assert!(
             !state.cell_active,
             "only one cell output file can be active"
         );
-        // Always seal the preceding source, even if this caller does not own it.
-        let cut = state.seal(true);
-        let response = if capture_prelude {
-            state.drain(cut)
-        } else {
-            Response::default()
-        };
+        // Idle response ownership was captured when the operation attached.
+        // Cell entry only changes raw capture ownership; startup/preparation
+        // output arriving in that gap stays in the call's ordinary response.
+        state.seal(true);
         state.finish_idle_interval();
         state.cell_active = true;
         match transcript.create_cell_output(call_id) {
             Ok(output) => state.cell_output = output,
             Err(error) => state.recording_notice(Some(format!("cell output file was not created: {error}; text omitted from inline responses will be permanently discarded"))),
         }
-        boundary();
-        response
     }
 
     pub(in crate::worker_client) fn finish_cell_output(

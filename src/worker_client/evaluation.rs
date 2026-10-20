@@ -340,14 +340,8 @@ impl Evaluation {
     }
 
     pub(super) fn start_cell_capture(&self) {
-        let prelude =
-            self.output
-                .begin_cell_output_before(&self.transcript, self.call_id, true, || {});
-        let mut state = self.state.lock().expect("evaluation lock");
-        state
-            .idle_prelude
-            .get_or_insert_with(Response::default)
-            .extend(prelude);
+        self.output
+            .begin_cell_output(&self.transcript, self.call_id);
     }
 
     /// Queues text and briefly defers any outstanding input report for its receipt.

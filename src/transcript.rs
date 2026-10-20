@@ -6,7 +6,7 @@ use std::io::{BufWriter, Write};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 use base64::Engine as _;
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -66,7 +66,8 @@ pub(crate) struct ResultPart {
 }
 
 #[derive(Clone)]
-pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>);
+pub(crate) struct Transcript(Arc<Mutex<TranscriptState>>, Arc<Mutex<ProtocolEvents>>);
+type ProtocolEvents = Vec<(Event<'static>, DateTime<Utc>)>;
 struct TranscriptState {
     started_at: DateTime<Utc>,
     working_directory: Result<PathBuf, String>,
@@ -141,18 +142,21 @@ impl Transcript {
         r_available: bool,
         startup_requirements: crate::worker_client::Declaration,
     ) -> Self {
-        Self(Arc::new(Mutex::new(TranscriptState {
-            started_at: Utc::now(),
-            working_directory: working_directory
-                .map_err(|e| format!("failed to find the current working directory: {e}")),
-            dynamic_resolution,
-            python_preparation,
-            r_available,
-            startup_requirements,
-            metadata_known: true,
-            active: None,
-            failure: None,
-        })))
+        Self(
+            Arc::new(Mutex::new(TranscriptState {
+                started_at: Utc::now(),
+                working_directory: working_directory
+                    .map_err(|e| format!("failed to find the current working directory: {e}")),
+                dynamic_resolution,
+                python_preparation,
+                r_available,
+                startup_requirements,
+                metadata_known: true,
+                active: None,
+                failure: None,
+            })),
+            Arc::default(),
+        )
     }
     pub(crate) fn pending(working_directory: std::io::Result<PathBuf>) -> Self {
         let value = Self::configured(working_directory, false, false, false, Default::default());
@@ -185,24 +189,42 @@ impl Transcript {
             state.capture()?.publish(&working_directory)
         });
     }
-    pub(crate) fn protocol(&self, direction: &str, message: &Value) {
-        self.update(|state| {
-            state
-                .capture()?
-                .append(Event::Protocol { direction, message }, Utc::now())
+    pub(crate) fn protocol(&self, direction: &'static str, message: &Value) {
+        self.queue_protocol(Event::Protocol {
+            direction,
+            message: message.clone(),
         });
     }
     pub(crate) fn delivery(&self, request_id: &Value, call_id: Option<u64>, delivered: bool) {
-        self.update(|state| {
-            state.capture()?.append(
-                Event::Delivery {
-                    request_id,
-                    call_id,
-                    delivered,
-                },
-                Utc::now(),
-            )
+        self.queue_protocol(Event::Delivery {
+            request_id: request_id.clone(),
+            call_id,
+            delivered,
         });
+    }
+    fn queue_protocol(&self, event: Event<'static>) {
+        // Cancellation and ping must remain usable while a result journal write
+        // owns the recorder. The next writer flushes these observed envelopes in
+        // order, before its own event, without blocking the transport on that lock.
+        self.1
+            .lock()
+            .expect("protocol capture lock")
+            .push((event, Utc::now()));
+        let (state, poisoned) = match self.0.try_lock() {
+            Ok(state) => (state, false),
+            Err(TryLockError::Poisoned(error)) => (error.into_inner(), true),
+            Err(TryLockError::WouldBlock) => return,
+        };
+        self.update_locked(state, poisoned, |_| Ok(()));
+    }
+    fn flush_protocol(&self, state: &mut TranscriptState) -> Result<(), String> {
+        let pending = std::mem::take(&mut *self.1.lock().expect("protocol capture lock"));
+        if state.failure.is_none() {
+            for (event, at) in pending {
+                state.capture()?.append(event, at)?;
+            }
+        }
+        Ok(())
     }
     pub(crate) fn requirements_selected(
         &self,
@@ -448,9 +470,16 @@ impl Transcript {
     }
     pub(crate) fn finalize(&self) {
         let (mut state, _) = self.lock();
-        let result = state.active.as_mut().map(ActiveTranscript::finalize);
+        let result = self.flush_protocol(&mut state).and_then(|()| {
+            state
+                .active
+                .as_mut()
+                .map(ActiveTranscript::finalize)
+                .transpose()
+                .map(|_| ())
+        });
         drop(state);
-        if let Some(Err(error)) = result {
+        if let Err(error) = result {
             report_failure(&error);
         }
     }
@@ -462,7 +491,7 @@ impl Transcript {
             report_failure(&error);
         }
     }
-    fn lock(&self) -> (std::sync::MutexGuard<'_, TranscriptState>, bool) {
+    fn lock(&self) -> (MutexGuard<'_, TranscriptState>, bool) {
         match self.0.lock() {
             Ok(state) => (state, false),
             Err(error) => (error.into_inner(), true),
@@ -472,14 +501,28 @@ impl Transcript {
         &self,
         operation: impl FnOnce(&mut TranscriptState) -> Result<T, String>,
     ) -> Option<T> {
-        let (mut state, poisoned) = self.lock();
+        let (state, poisoned) = self.lock();
+        self.update_locked(state, poisoned, operation)
+    }
+    fn update_locked<T>(
+        &self,
+        mut state: MutexGuard<'_, TranscriptState>,
+        poisoned: bool,
+        operation: impl FnOnce(&mut TranscriptState) -> Result<T, String>,
+    ) -> Option<T> {
         if state.failure.is_some() {
+            self.flush_protocol(&mut state).ok();
             return None;
         }
         let result = if poisoned {
             Err("transcript lock poisoned".into())
         } else {
-            operation(&mut state)
+            self.flush_protocol(&mut state)
+                .and_then(|()| operation(&mut state))
+                .and_then(|value| {
+                    self.flush_protocol(&mut state)?;
+                    Ok(value)
+                })
         };
         match result {
             Ok(value) => {
@@ -693,10 +736,15 @@ impl ActiveTranscript {
     }
     fn capture_file(&mut self, relative: &str) -> Result<Arc<Mutex<CaptureFile>>, String> {
         let path = self.directory.join(relative);
+        let public_path = self
+            .public_directory
+            .lock()
+            .map_err(|_| "recording path lock poisoned")?
+            .join(relative);
         create_private_directory(path.parent().expect("capture parent"), true)
             .map_err(|e| e.to_string())?;
         let writer = create_private_file(&path)
-            .map_err(|e| format!("failed to create {}: {e}", path.display()))?;
+            .map_err(|e| format!("failed to create {}: {e}", public_path.display()))?;
         let file = Arc::new(Mutex::new(CaptureFile {
             writer: Some(writer),
             path,
@@ -911,6 +959,9 @@ fn discard_temporary_capture(temporary: tempfile::TempDir) {
     // Windows deletion can reject read-only files. This tree is private scratch
     // storage; clearing the flag here never changes the published recording.
     #[cfg(windows)]
+    // This changes the Windows file attribute, preserving its existing ACL.
+    // The lint's world-writable Unix behavior cannot occur in this function.
+    #[allow(clippy::permissions_set_readonly_false)]
     fn clear_readonly(directory: &Path) -> std::io::Result<()> {
         for entry in std::fs::read_dir(directory)? {
             let entry = entry?;

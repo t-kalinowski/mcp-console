@@ -510,6 +510,10 @@ impl Preview {
             None
         };
         let mut image_marker = true;
+        // Capture boundaries can split one interval into several receipts.
+        // Coalesce adjacent gaps only when their interval ownership agrees.
+        let mut at_gap = false;
+        let mut gap_owner = None;
         let mut start = 0;
         for end in 0..=self.parts.len() {
             let source = match self.parts.get(end) {
@@ -532,22 +536,35 @@ impl Preview {
             let mut text_marker = true;
             for part in parts {
                 match part {
-                    Part::Text(text) | Part::Information(text) => projection.text(text),
-                    Part::Notice(control) => projection.text(&control.render()),
+                    Part::Text(text) | Part::Information(text) => {
+                        projection.text(text);
+                        at_gap = false;
+                    }
+                    Part::Notice(control) => {
+                        projection.text(&control.render());
+                        at_gap = false;
+                    }
                     Part::Gap(_) => {
-                        if text_marker {
+                        if text_marker && (!at_gap || gap_owner != source.owner) {
                             projection.owner = marker_owner;
                             projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
                             projection.owner = source.owner;
-                            text_marker = false;
+                            at_gap = true;
+                            gap_owner = source.owner;
+                        }
+                        text_marker = false;
+                    }
+                    Part::Summary(summary) => {
+                        if !at_gap || gap_owner != summary.owner {
+                            projection.owner = marker_owner;
+                            projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
+                            projection.owner = source.owner;
+                            at_gap = true;
+                            gap_owner = summary.owner;
                         }
                     }
-                    Part::Summary(_) => {
-                        projection.owner = marker_owner;
-                        projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
-                        projection.owner = source.owner;
-                    }
                     Part::Image(image) => {
+                        at_gap = false;
                         if let Some(content) = &mut projection.content {
                             let owner = match image.as_ref() {
                                 Content::Image {
@@ -566,12 +583,14 @@ impl Preview {
                         }
                     }
                     Part::ImageGap => {
-                        if image_marker {
+                        if image_marker && (!at_gap || gap_owner != source.owner) {
                             projection.owner = marker_owner;
                             projection.text(&marker.take().unwrap_or_else(|| "\n[…]\n".to_owned()));
                             projection.owner = source.owner;
-                            image_marker = false;
+                            at_gap = true;
+                            gap_owner = source.owner;
                         }
+                        image_marker = false;
                     }
                     Part::Source(_) => unreachable!(),
                 }

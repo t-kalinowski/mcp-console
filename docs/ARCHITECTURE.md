@@ -345,6 +345,10 @@ The worker reports cell entry; the tape switches text/image intervals at observe
 A tool call can collect several intervals or sessions.
 Recorded result byte ranges preserve the association after bounded preview assembly, including output claimed by later polls.
 Transport envelopes reference recorded tool payloads instead of duplicating them, and the delivery owner supplies write evidence without asserting client receipt.
+The transport retains a consumed request and its activation task across receive cancellation while an earlier response is sent.
+Closing the transport settles that writer.
+Protocol envelopes and delivery evidence queue while another journal writer owns the recorder, so cancellation and ping remain available.
+The recorder flushes them in observation order with their original timestamps before its next event and at finalization.
 
 The recorder owns capture files and read-only completion; the output tape retains each open interval's producer ownership.
 Publication relocates shared file handles without changing that ownership.

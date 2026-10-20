@@ -27,10 +27,10 @@ pub(super) enum Event<'a> {
     RecordingEnded,
     Protocol {
         direction: &'a str,
-        message: &'a Value,
+        message: Value,
     },
     Delivery {
-        request_id: &'a Value,
+        request_id: Value,
         call_id: Option<u64>,
         delivered: bool,
     },
