@@ -635,6 +635,9 @@ pub async fn run(
         result = server.serve(transport) => match result {
             Ok(service) => service,
             Err(error) => {
+                // Shutdown can wake a blocked initialization write before this
+                // branch settles. Preserve its input-closure diagnosis.
+                let closed_by_shutdown = startup_responses.is_closed();
                 shutdown.await.map_err(std::io::Error::other)?;
                 if matches!(&error, rmcp::service::ServerInitializeError::ConnectionClosed(_))
                     && startup_responses.bootstrap_complete()
@@ -643,6 +646,8 @@ pub async fn run(
                 }
                 return Err(match error {
                     rmcp::service::ServerInitializeError::ConnectionClosed(_) =>
+                        std::io::Error::other(CLOSED_BEFORE_INITIALIZATION).into(),
+                    _ if closed_by_shutdown =>
                         std::io::Error::other(CLOSED_BEFORE_INITIALIZATION).into(),
                     error => error.into(),
                 });

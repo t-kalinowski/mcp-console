@@ -118,6 +118,10 @@ impl Drop for ProtocolWrite {
 }
 
 impl ResponseDeliveries {
+    pub(crate) fn is_closed(&self) -> bool {
+        self.lock().closed
+    }
+
     pub(crate) fn bootstrap_complete(&self) -> bool {
         let state = self.lock();
         state.input_drained && state.bootstrap_response_delivered

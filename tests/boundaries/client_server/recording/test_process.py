@@ -211,14 +211,21 @@ def test_retains_received_send_while_an_earlier_response_finishes(
                 "cell-release",
                 "recording-reached",
                 "recording-release",
+                "worker-ready",
             )
         }
         environment = dict(
             os.environ,
             **{
-                LOADER_VARIABLE: str(
-                    build_interposer(workspace, "recording_receive_checkpoint")
+                LOADER_VARIABLE: os.pathsep.join(
+                    str(build_interposer(workspace, fixture))
+                    for fixture in (
+                        "recording_receive_checkpoint",
+                        "recording_observation",
+                    )
                 ),
+                "MCP_CONSOLE_TEST_OBSERVED_EVENT": "worker_ready",
+                "MCP_CONSOLE_TEST_JOURNAL_OBSERVED": str(gates["worker-ready"].path),
                 "MCP_CONSOLE_TEST_RECORDING_REACHED": str(
                     gates["recording-reached"].path
                 ),
@@ -238,6 +245,11 @@ def test_retains_received_send_while_an_earlier_response_finishes(
         ) as client:
             try:
                 client.initialize_and_list_tools()
+                # Preparation has its own checkpoint; the short cell gate below
+                # measures the capture race after the interpreter is ready.
+                gates["worker-ready"].wait(
+                    "Python worker ready", timeout=600, client=client
+                )
                 first = client.start_send(
                     # fmt: python
                     python=code(f"""
@@ -373,7 +385,9 @@ def test_first_rejected_send_publishes_the_observed_prelude(
             with McpClient(binary, execution.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
                 observed.wait(
-                    "server recorded startup text, image, and readiness", client=client
+                    "server recorded startup text and image",
+                    timeout=600,
+                    client=client,
                 )
                 assert client.request("ping")["result"] == {}
                 assert not (root / ".agents/console/sessions").exists()
