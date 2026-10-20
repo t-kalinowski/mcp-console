@@ -102,8 +102,25 @@ class WebsiteTests(unittest.TestCase):
                 "\n[Send API](`mcp_console.MCPConsole.send`)\n"
                 "\n[](`~mcp_console.AsyncMCPConsole`)\n"
             )
+        # Quarto's Python has the page-filter dependencies but no Great Docs.
+        # Reference generation must prepare its own pinned environment.
         result = subprocess.run(
-            ["quarto", "render", str(docs), "--to", "html"],
+            [
+                "uv",
+                "run",
+                "--no-project",
+                "--isolated",
+                "--with",
+                "pandocfilters",
+                "--with",
+                "py-yaml12>=0.2.0",
+                "quarto",
+                "render",
+                str(docs),
+                "--to",
+                "html",
+            ],
+            env={**os.environ, "QUARTO_PYTHON": "python"},
             capture_output=True,
             text=True,
             timeout=180,

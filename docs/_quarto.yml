@@ -1,7 +1,9 @@
 project:
   type: website
   pre-render:
-    - _python.py
+    - >-
+      uv run --no-project --isolated --with-requirements requirements.txt
+      python _python.py
   post-render:
     - _pkgdown.R
   render:

@@ -101,7 +101,7 @@ Keep Markdown usable in the repository.
 The website filter takes page titles from first headings, rewrites links outside `docs/` to GitHub, and maps the R README and published package-reference URLs to local rendered pages.
 Keep public filenames stable when possible; update references and navigation when adding or moving a page.
 
-Install Quarto, R, pkgdown, and the R package dependencies:
+Install Quarto, uv, R, pkgdown, and the R package dependencies:
 
 ```r
 pak::pak(c("pkgdown", "local::r"))
@@ -117,6 +117,8 @@ quarto preview docs --render html
 On Windows use `.venv/Scripts/python.exe` and activate `.venv/Scripts/Activate.ps1`.
 
 The pre-render script `docs/_python.py` uses the pinned Great Docs generator to write Python reference sources before Quarto discovers pages.
+The hook runs through uv, which prepares a separate environment from `docs/requirements.txt`; Great Docs does not need to be installed in the Python environment Quarto selects.
+The page filters and website tests still use the documentation environment installed above.
 Start preview with `--render html` so its initial render discovers generated pages on a clean checkout; plain preview selects its initial page list before the hook runs.
 It preserves explicit members, inline methods, static introspection, symbol anchors, and source links.
 Generated pages use the main site's Reference sidebar, theme, and search.
