@@ -33,6 +33,9 @@ pub(crate) enum ServerMessage {
     SessionExported {
         result: Result<crate::transcript::export::SessionExport, String>,
     },
+    SessionImageExported {
+        result: Result<String, String>,
+    },
     Evaluate {
         language: Language,
         source: String,
@@ -161,6 +164,8 @@ pub(crate) enum WorkerMessage {
     CellStarted,
     #[serde(deserialize_with = "deserialize_payload_free")]
     ExportSession,
+    #[serde(deserialize_with = "deserialize_payload_free")]
+    ExportImage,
     #[serde(deserialize_with = "deserialize_payload_free")]
     Ready,
     RuntimeInitialized {

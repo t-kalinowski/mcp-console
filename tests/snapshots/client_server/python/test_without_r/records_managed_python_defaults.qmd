@@ -1,6 +1,8 @@
 ---
 # Source recorded by MCP Console; review before executing.
 title: MCP Console session
+# From a working copy, run `ir render session-001.qmd` in a prepared environment.
+# IR rendering requires R on the render host, including for Python-only documents.
 ir:
   isolated: true
   packages: []
@@ -21,10 +23,8 @@ mcp-console:
   python-version: []
 ---
 
-This source includes failed or rejected submissions.
-It is not a checkpoint or a guarantee of independent reproducibility.
-
 ```{python}
+#| error: true
 import numpy, pandas
 
 retained = 42
@@ -32,6 +32,7 @@ retained
 ```
 
 ```{python}
+#| error: true
 retained
 ```
 

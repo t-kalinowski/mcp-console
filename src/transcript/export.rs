@@ -4,14 +4,14 @@ use super::{Interval, Owner, ResultPart, Transcript};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::path::{Path, PathBuf};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct SessionExport {
-    recording_directory: PathBuf,
+    recording_directory: String,
     qmd: String,
     markdown: String,
     images: Vec<ExportImage>,
@@ -19,7 +19,8 @@ pub(crate) struct SessionExport {
 #[derive(Serialize, Deserialize)]
 struct ExportImage {
     name: String,
-    data: String,
+    #[serde(skip)]
+    source: PathBuf,
 }
 
 impl Transcript {
@@ -46,7 +47,7 @@ impl Transcript {
             .map_err(|e| format!("session capture unavailable: {e}"))?;
         let mut events = Vec::new();
         for line in BufReader::new(journal).lines() {
-            let event: Value = serde_json::from_str(&line.map_err(|e| e.to_string())?)
+            let mut event: Value = serde_json::from_str(&line.map_err(|e| e.to_string())?)
                 .map_err(|e| format!("invalid session capture: {e}"))?;
             if event["sequence"]
                 .as_u64()
@@ -65,7 +66,10 @@ impl Transcript {
                             | "worker_ended"
                             | "python_environment_accepted"
                             | "requirements_selected"
+                            | "requirements_accepted"
                             | "tool_call"
+                            | "source_admitted"
+                            | "source_finished"
                             | "source_associated"
                             | "cell_started"
                             | "tool_result"
@@ -75,6 +79,18 @@ impl Transcript {
                     )
                 )
             {
+                // Reports need submitted source and dependency declarations,
+                // not cumulative stdin or unrelated request metadata.
+                if event["event"] == "tool_call" {
+                    if let Some(request) = event["request"].as_object_mut() {
+                        request.retain(|key, _| matches!(key.as_str(), "name" | "arguments"));
+                    }
+                    if let Some(arguments) = event["request"]["arguments"].as_object_mut() {
+                        arguments.retain(|key, _| {
+                            matches!(key.as_str(), "r" | "python" | "sql" | "requirements")
+                        });
+                    }
+                }
                 events.push(event);
             }
         }
@@ -266,13 +282,11 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
                     if !image.starts_with(&capture) {
                         return Err("recorded image is outside this recording's capture".into());
                     }
-                    let bytes = std::fs::read(image)
-                        .map_err(|e| format!("recorded image {path} unavailable: {e}"))?;
                     images.insert(
                         path.into(),
                         ExportImage {
                             name: name.clone(),
-                            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                            source: image,
                         },
                     );
                 }
@@ -284,7 +298,7 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
         .sessions
         .get(&session)
         .ok_or("session metadata unavailable")?
-        .render();
+        .render("session.qmd");
     let mut markdown = format!(
         "# MCP Console session {session:03}\n\nResults below were assembled before the exporting cell began. A completed transport write is not confirmation that the client or model read it. Output previews and omission notices are preserved; supplementary raw logs are not expanded or copied.\n\n"
     );
@@ -302,7 +316,10 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
     Ok(SessionExport {
         recording_directory: directory
             .canonicalize()
-            .map_err(|e| format!("recording location unavailable: {e}"))?,
+            .map_err(|e| format!("recording location unavailable: {e}"))?
+            .into_os_string()
+            .into_string()
+            .map_err(|_| "session export requires a UTF-8 recording path")?,
         qmd,
         markdown,
         images: images.into_values().collect(),
@@ -327,8 +344,21 @@ fn interval_key(owner: Owner) -> String {
 }
 
 impl SessionExport {
+    /// The server retains only this snapshot's ordered image paths. The worker
+    /// requests the next payload after writing the previous one; it supplies
+    /// neither a capture path nor a destination to the server.
+    pub(crate) fn take_image_sources(&mut self) -> VecDeque<PathBuf> {
+        self.images
+            .iter_mut()
+            .map(|image| std::mem::take(&mut image.source))
+            .collect()
+    }
     /// Executed inside the worker. No destination ever travels to the server.
-    pub(crate) fn write(self, directory: &Path) -> Result<Vec<PathBuf>, String> {
+    pub(crate) fn write(
+        self,
+        directory: &Path,
+        mut next_image: impl FnMut() -> Result<String, String>,
+    ) -> Result<Vec<PathBuf>, String> {
         let absolute = if directory.is_absolute() {
             directory.to_owned()
         } else {
@@ -339,6 +369,8 @@ impl SessionExport {
         let mut ancestor = absolute.as_path();
         let mut suffix = Vec::new();
         while !ancestor.exists() {
+            // An unresolved `..` has no file_name and is rejected here, before
+            // creating parents. Do not normalize it past unknown symlinks.
             suffix.push(ancestor.file_name().ok_or("invalid export destination")?);
             ancestor = ancestor.parent().ok_or("invalid export destination")?;
         }
@@ -346,7 +378,7 @@ impl SessionExport {
         for component in suffix.into_iter().rev() {
             resolved.push(component);
         }
-        if resolved.starts_with(&self.recording_directory) {
+        if resolved.starts_with(Path::new(&self.recording_directory)) {
             return Err("export destination must be outside the managed recording".into());
         }
         let absolute = resolved;
@@ -376,8 +408,9 @@ impl SessionExport {
             }
             for image in self.images {
                 let path = absolute.join("images").join(&image.name);
+                let data = next_image()?;
                 let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(&image.data)
+                    .decode(&data)
                     .map_err(|e| e.to_string())?;
                 let mut file = super::create_private_file(&path).map_err(|e| e.to_string())?;
                 paths.push(path);

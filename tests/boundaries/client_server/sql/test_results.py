@@ -585,9 +585,12 @@ def test_dbi_bounds_fetches_and_preserves_transactions(
         ) SELECT i FROM rows"""
         client.send(sql=query)
         client.expect(r="metrics$gate <- TRUE")
-        client.expect(
+        wait_for_evaluation_output(
+            client,
             '[input requested: "fetch> "]\n[waiting for stdin]',
+            "DBI retrieval reached its interrupt gate",
             r=".console$sql_last_result(30L)",
+            timeout_ms=0,
         )
         client.expect("\n", control="interrupt")
         client.expect(

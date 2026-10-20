@@ -57,22 +57,3 @@ pub(crate) use r_integration::{
     available as r_available, ensure_bridge, ensure_initialized as ensure_r,
     initialized as r_initialized,
 };
-
-#[cfg(any(unix, windows))]
-use libr::SEXP;
-
-#[cfg(any(unix, windows))]
-#[allow(clippy::result_large_err)]
-#[harp::register]
-pub extern "C-unwind" fn mcp_console_export_session(directory: SEXP) -> harp::Result<SEXP> {
-    let directory = String::try_from(harp::object::RObject::view(directory))?;
-    let paths =
-        export_session(std::path::Path::new(&directory)).map_err(|e| harp::anyhow!("{e}"))?;
-    Ok(harp::object::RObject::from(
-        paths
-            .iter()
-            .map(|p| p.to_string_lossy().into_owned())
-            .collect::<Vec<_>>(),
-    )
-    .sexp)
-}

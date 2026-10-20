@@ -21,6 +21,9 @@ pub(crate) enum RelayCommand {
     SessionExported {
         result: Result<crate::transcript::export::SessionExport, String>,
     },
+    SessionImageExported {
+        result: Result<String, String>,
+    },
     Evaluate {
         language: Language,
         source: String,
@@ -70,6 +73,8 @@ pub(crate) enum RelayEvent {
     CellStarted,
     #[serde(deserialize_with = "deserialize_payload_free")]
     ExportSession,
+    #[serde(deserialize_with = "deserialize_payload_free")]
+    ExportImage,
     WorkerStarted {
         pid: u32,
     },
@@ -177,6 +182,7 @@ impl From<WorkerMessage> for RelayEvent {
         match message {
             WorkerMessage::CellStarted => Self::CellStarted,
             WorkerMessage::ExportSession => Self::ExportSession,
+            WorkerMessage::ExportImage => Self::ExportImage,
             WorkerMessage::Ready => Self::Ready,
             WorkerMessage::RuntimeInitialized { interrupted } => {
                 Self::RuntimeInitialized { interrupted }

@@ -30,6 +30,10 @@ from support.requirements import (
 from support.assertions import last_result_text, last_tool_text
 from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
 from support.native import LOADER_VARIABLE, build_interposer
+from support.allocations import RetentionProfile
+from support.events import Events
+from support.processes import host_process_id
+from support.checkpoints import wait_for_worker_file
 from support.normalization import code
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -40,6 +44,109 @@ from support.suites import run_this_suite
 from boundaries.client_server.server.test_startup import discovery_environment
 
 CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
+
+
+@requires(NATIVE_FIXTURES, PTHREAD_MUTEX_INTERPOSITION, PROCESS_EVENTS)
+@executions(DIRECT)
+def test_settles_cancelled_capture_before_finalization(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+        workspace = Path(directory)
+        reached = resources.enter_context(
+            closing(FifoCheckpoint.create(workspace / "reached"))
+        )
+        release = resources.enter_context(
+            closing(FifoCheckpoint.create(workspace / "release"))
+        )
+        exits = resources.enter_context(Events())
+        environment = {
+            **os.environ,
+            LOADER_VARIABLE: str(
+                build_interposer(workspace, "recording_receive_checkpoint")
+            ),
+            "MCP_CONSOLE_TEST_RECORDING_REACHED": str(reached.path),
+            "MCP_CONSOLE_TEST_RECORDING_RELEASE": str(release.path),
+            "TMPDIR": str(workspace),
+            "ZOD_REPORT_PID": "1",
+        }
+        with McpClient(
+            binary, execution.serve("--worker", str(worker)), environment, workspace
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(r="echo ready")
+            worker_pid = host_process_id(
+                int(
+                    wait_for_worker_file(
+                        workspace, "zod-worker-pid", client
+                    ).read_text()
+                ),
+                client.process.pid,
+            )
+            exits.watch_process(worker_pid)
+            try:
+                held = client.start_send(r="echo held capture")
+                reached.wait("call 2 captured but its recording task has not completed")
+                queued = [
+                    client.start_send(r=f"echo cancelled queued source {index}")
+                    for index in range(16)
+                ]
+                client.notify("notifications/cancelled", requestId=held["id"])
+                for cancelled in queued:
+                    client.notify("notifications/cancelled", requestId=cancelled["id"])
+                assert client.request("ping")["result"] == {}
+                client.stdin.close()
+                assert exits.wait(5) == {worker_pid}
+            finally:
+                release.release()
+            client.finish()
+        (recording,) = (workspace / ".agents/console/sessions").iterdir()
+        events = [
+            json.loads(line)
+            for line in (recording / "capture/events.jsonl").read_text().splitlines()
+        ]
+        calls = [event for event in events if event["event"] == "tool_call"]
+        assert [event["call_id"] for event in calls] == list(range(1, 19)), calls
+        assert [event["request"]["arguments"]["r"] for event in calls[2:]] == [
+            f"echo cancelled queued source {index}" for index in range(16)
+        ], calls
+        assert events[-1]["event"] == "recording_ended", events[-1]
+        return [
+            *client.transcript[:3],
+            {"capture": "all received calls retained before finalization"},
+        ]
+
+
+@requires(NATIVE_FIXTURES)
+@executions(DIRECT)
+def test_releases_completed_stdin_requests(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        with closing(RetentionProfile(workspace)) as profile:
+            environment = {**os.environ, **profile.environment}
+            with McpClient(
+                binary, execution.serve("--worker", str(worker)), environment, workspace
+            ) as client:
+                client.initialize_and_list_tools()
+                client.send(r="echo ready")
+                retained = []
+                for _ in range(2):
+                    for _ in range(24):
+                        client.send(stdin="x" * (1024 * 1024))
+                    client.send(control="restart")
+                    assert client.request("ping")["result"] == {}
+                    retained.append(profile.live)
+                # Permit live transport copies, but not another batch of retained input.
+                assert retained[1] - retained[0] < 4 * 1024 * 1024, retained
+                client.finish()
+                return [
+                    *client.transcript[:3],
+                    {"request memory": "released across batches and restart"},
+                ]
 
 
 @requires(NATIVE_FIXTURES, PTHREAD_MUTEX_INTERPOSITION)
@@ -433,8 +540,8 @@ def test_updates_quarto_without_rereading_journal(
 
             journal.chmod(0o600)
             journal_read_disabled = False
-            assert "```{r}\necho first\n```" in quarto, quarto
-            assert "```{python}\necho second\n```" in quarto, quarto
+            assert "```{r}\n#| error: true\necho first\n```" in quarto, quarto
+            assert "```{python}\n#| error: true\necho second\n```" in quarto, quarto
 
             transcript = client.finish()
             transcript.append(
@@ -686,7 +793,7 @@ def test_records_tool_calls_and_images(
         assert journal_text.endswith("\n"), journal_text
         assert markdown_text.endswith("\n"), markdown_text
         assert quarto_text.endswith("\n"), quarto_text
-        assert "```{r}\nemit image\n```" in quarto_text
+        assert "```{r}\n#| error: true\nemit image\n```" in quarto_text
         assert quarto_path.stat().st_ino != quarto_before_inode
         assert "    - praise" in quarto_text
         assert "    - transcript-fixture" in quarto_text
@@ -940,7 +1047,10 @@ def test_flushes_calls_and_keeps_unpolled_images(
         assert "## Call 1: R" in before_release_markdown
         assert "complete after release" in before_release_markdown
         assert "## Result for call 1" not in before_release_markdown
-        assert "```{r}\ncomplete after release\n```" in before_release_quarto
+        assert (
+            "```{r}\n#| error: true\ncomplete after release\n```"
+            in before_release_quarto
+        )
         markdown_inode = markdown.stat().st_ino
         quarto_inode = quarto.stat().st_ino
 
@@ -1044,7 +1154,10 @@ def test_flushes_calls_and_keeps_unpolled_images(
         assert f"[Artifact {artifact['artifact_id']} from call 2]" in unpolled_markdown
         assert artifact["path"] in unpolled_markdown
         assert unpolled_quarto.startswith(after_release_quarto)
-        assert "```{r}\nemit image before completion\n```" in unpolled_quarto
+        assert (
+            "```{r}\n#| error: true\nemit image before completion\n```"
+            in unpolled_quarto
+        )
         assert quarto.stat().st_ino != quarto_inode
         unpolled_quarto_inode = quarto.stat().st_ino
 
@@ -1305,9 +1418,8 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
             )
             assert all(event["at"] < discovered["at"] for event in early), events
             markdown = (session / "transcript.md").read_text()
-            assert markdown.index("## Call 1:") < markdown.index(
-                "## Runtime discovery"
-            ), markdown
+            assert markdown.index("## Call 1:") < markdown.index("## Call 2:"), markdown
+            assert "## Runtime discovery" not in markdown, markdown
             quarto = (session / "sessions/session-001.qmd").read_text()
             assert "environment: unknown" not in quarto, quarto
             assert "eval: false" not in quarto, quarto

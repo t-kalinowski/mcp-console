@@ -1537,7 +1537,7 @@ def test_records_managed_sql_cells(
         assert "root.dir:" not in quarto
         assert f"  original-working-directory: {workspace.resolve()}" in quarto
         assert "```sql\nSELECT 42 AS recorded\n```" in markdown
-        assert "```{sql}\nSELECT 42 AS recorded\n```" in quarto
+        assert "```{sql}\n--| error: true\nSELECT 42 AS recorded\n```" in quarto
         assert (
             """  python-packages:
     - numpy

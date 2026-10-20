@@ -80,8 +80,8 @@ def test_renders_generated_document(binary: Path) -> Transcript:
             workspace / "render-value.txt", document.parent / "render-value.txt"
         )
         document_text = document.read_text(encoding="utf-8")
-        assert f"```{{r}}\n\n{r_source}\n```" in document_text
-        assert f"`````{{python}}\n\n{source}\n`````" in document_text
+        assert f"```{{r}}\n#| error: true\n\n{r_source}\n```" in document_text
+        assert f"`````{{python}}\n#| error: true\n\n{source}\n`````" in document_text
         assert "zod:" not in document_text
         assert "zod python:" not in document_text
         assert "execute:" not in document_text

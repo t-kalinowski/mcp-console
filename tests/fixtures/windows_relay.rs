@@ -39,6 +39,8 @@ unsafe extern "system" {
 fn main() -> io::Result<()> {
     match std::env::var("TEST_RELAY_SCENARIO").unwrap().as_str() {
         "stall_shutdown" | "exit_shutdown" => {
+            // This fixture stands in for both relay and worker lifetime.
+            println!(r#"{{"kind":"worker_started","pid":{}}}"#, std::process::id());
             println!(r#"{{"kind":"ready"}}"#);
             io::stdout().flush()?;
             for line in io::stdin().lock().lines() {
@@ -51,6 +53,7 @@ fn main() -> io::Result<()> {
                     }
                     std::thread::sleep(Duration::from_secs(60));
                 } else if line.contains(r#""kind":"evaluate""#) {
+                    println!(r#"{{"kind":"cell_started"}}"#);
                     println!(r#"{{"kind":"console_output","data":"42\n"}}"#);
                     println!(r#"{{"kind":"completed"}}"#);
                     io::stdout().flush()?;

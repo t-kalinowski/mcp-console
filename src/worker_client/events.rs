@@ -6,6 +6,9 @@ pub(super) use operation::{
 };
 use operation::{Route, RuntimeRCallbackAdmission};
 
+use base64::Engine as _;
+use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
 
@@ -48,12 +51,14 @@ struct PendingPythonCandidate {
 struct RuntimeCandidates {
     r: Vec<crate::resolver::ManagedR>,
     python: Vec<PendingPythonCandidate>,
+    export_images: VecDeque<PathBuf>,
 }
 
 impl RuntimeCandidates {
     fn clear(&mut self) {
         self.r.clear();
         self.python.clear();
+        self.export_images.clear();
     }
 }
 
@@ -471,6 +476,7 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
         RelayEvent::Ready
             | RelayEvent::CellStarted
             | RelayEvent::ExportSession
+            | RelayEvent::ExportImage
             | RelayEvent::RuntimeInitialized { .. }
             | RelayEvent::RInitialization { .. }
             | RelayEvent::InputRequested { .. }
@@ -541,7 +547,8 @@ fn handle_semantic_event(
             _ => Err("worker started a cell without an admitted source".into()),
         }),
         RelayEvent::ExportSession => {
-            let result = callbacks
+            candidates.export_images.clear();
+            let mut result = callbacks
                 .client
                 .0
                 .recording
@@ -550,7 +557,21 @@ fn handle_semantic_event(
                 .as_ref()
                 .ok_or_else(|| "session capture unavailable".to_string())
                 .and_then(|recording| recording.export_session());
+            if let Ok(export) = &mut result {
+                candidates.export_images = export.take_image_sources();
+            }
             commands.send(RelayCommand::SessionExported { result })
+        }
+        RelayEvent::ExportImage => {
+            let result = candidates
+                .export_images
+                .pop_front()
+                .ok_or_else(|| "no pending export image".to_string())
+                .and_then(|path| {
+                    std::fs::read(path).map_err(|e| format!("recorded image unavailable: {e}"))
+                })
+                .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes));
+            commands.send(RelayCommand::SessionImageExported { result })
         }
         RelayEvent::ConsoleOutput { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Output, data),
@@ -767,6 +788,7 @@ fn handle_semantic_event(
         | RelayEvent::PythonPrepared
         | RelayEvent::PythonPreparationFailed { .. }
         | RelayEvent::PythonPreparationRejected { .. }) => {
+            candidates.export_images.clear();
             if matches!(event, RelayEvent::Completed) {
                 output.finish_cell_output(true);
             }

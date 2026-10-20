@@ -45,11 +45,7 @@ def main() -> None:
     )
     if not startup_ready_sent:
         send(context.writer, {"kind": "ready"})
-    if os.environ.get("ZOD_RECORDING_INTERVALS") == "1":
-        send_output(context.writer, "startup text\n")
-        send(
-            context.writer, {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"}
-        )
+    context.recording_startup_pending = os.environ.get("ZOD_RECORDING_INTERVALS") == "1"
     if startup_callback:
         send(
             context.writer,
@@ -93,6 +89,15 @@ def main() -> None:
 
         assert message_kind == "evaluate"
         assert set(message) == {"kind", "language", "source"}
+        if context.recording_startup_pending:
+            # Evaluate follows the restart/admission response cuts. Emit startup
+            # before cell entry, without racing those cuts against Ready.
+            send_output(context.writer, "startup text\n")
+            send(
+                context.writer,
+                {"kind": "image", "data": PNG_1X1, "mime_type": "image/png"},
+            )
+            context.recording_startup_pending = False
         send(context.writer, {"kind": "cell_started"})
         language = message["language"]
         source = message["source"]

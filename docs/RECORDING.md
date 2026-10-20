@@ -124,6 +124,9 @@ A later export takes a new snapshot; it does not update an earlier destination.
 `session.qmd` contains source and dependency metadata without captured output.
 Review the code and provide its required data, connections, and environment before executing it.
 The original working directory is descriptive metadata, not an execution root imposed on the copy.
+The document includes an `ir render session.qmd` hint; IR rendering requires R, even when the recorded session used only Python.
+Each chunk permits errors on execution so failed submissions can remain in the document without stopping later chunks.
+These options do not assert that a submission succeeded or failed in the recorded session.
 
 `session.md` assembles recorded source and client-facing results into a report with output blocks, errors, and images.
 Results collected by later polls remain associated with their actual cells.
@@ -135,6 +138,7 @@ Included images keep their encoded format and use portable relative links.
 Export does not run Quarto, execute source, repeat SQL, or recompute plots.
 The worker writes the files under the same filesystem and sandbox permissions as submitted code.
 Destination collisions, permission denial, and unavailable capture produce runtime errors.
+Export requires a UTF-8 recording path; an unsupported path produces a runtime error without retiring the worker.
 Exported files are writable and do not depend on the original recording for their included content or images.
 
 A recorded result proves response assembly.

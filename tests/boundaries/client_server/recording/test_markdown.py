@@ -20,7 +20,6 @@ from support.normalization import code
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
-from support.snapshots import platform_snapshots
 
 
 @requires(R)
@@ -74,10 +73,6 @@ def test_records_existing_python_startup_declaration(
         return [{"recorded_startup_requirements": startup}]
 
 
-@platform_snapshots(
-    "win32",
-    reason="Windows records forced unused-worker retirement as exit code 1; Unix records signal 9",
-)
 @requires(R, SQL, command("ir"), command("rustc"))
 @executions(DIRECT, SANDBOXED)
 def test_records_real_mixed_language_session(
@@ -238,6 +233,10 @@ def test_records_real_mixed_language_session(
         assert (session / artifact["path"]).read_bytes() == expected_plot[0]
 
         markdown = (session / "transcript.md").read_text(encoding="utf-8")
+        assert "Retained text output" not in markdown, markdown
+        assert "terminated by signal" not in markdown, markdown
+        assert "## Runtime discovery" not in markdown, markdown
+        assert markdown.count('"runtime_requirements"') == 1, markdown
         (cell,) = [
             event
             for event in events
@@ -266,17 +265,14 @@ def test_records_real_mixed_language_session(
             for event in completed_events
             if event["event"] == "worker_ended" and event["session_id"] == session_id
         ]
-        assert (
-            f"## Session {session_id:03} ended\n\n```text\n{ended['outcome']}\n```"
-            in completed
-        )
+        assert ended["outcome"], ended
+        assert f"## Session {session_id:03} ended\n" in completed
         assert completed_events[-1]["event"] == "recording_ended"
-        assert "[Artifact 1 from call 3]" in markdown
         assert "![Artifact 1]" in markdown
         assert artifact["path"] in markdown
-        assert f"```{{r}}\n{r}```" in quarto
-        assert f"```{{python}}\n{python}```" in quarto
-        assert f"```{{sql}}\n{sql}```" in quarto
+        assert f"```{{r}}\n#| error: true\n{r}```" in quarto
+        assert f"```{{python}}\n#| error: true\n{python}```" in quarto
+        assert f"```{{sql}}\n--| error: true\n{sql}```" in quarto
         assert "Artifact 1" not in quarto
         assert "execute:" not in quarto
         assert "original-working-directory:" in quarto
@@ -381,10 +377,11 @@ echo SELECT 42
             in markdown
         )
         assert '"typo": true' in markdown
-        assert "```{r}\nemit image\n```" in quarto
-        assert f"`````{{python}}\n{source}\n`````" in quarto
+        assert "```{r}\n#| error: true\nemit image\n```" in quarto
+        assert f"`````{{python}}\n#| error: true\n{source}\n`````" in quarto
         assert (
             """```{sql}
+--| error: true
 
   --| eval: false
 echo SELECT 42

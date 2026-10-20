@@ -1848,6 +1848,29 @@ class WindowsConsole(unittest.TestCase):
                 result = session.send(control="restart", r="42", timeout_ms=10000)
                 self.assertFalse(result.get("isError"), result)
                 self.assertIn("42", json.dumps(result))
+        (recording,) = (
+            Path(session.directory.name) / ".agents/console/sessions"
+        ).iterdir()
+        events = [
+            json.loads(line)
+            for line in (recording / "capture/events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        workers = [event for event in events if event["event"] == "worker_started"]
+        cells = [event["owner"] for event in events if event["event"] == "cell_started"]
+        self.assertEqual(len(workers), 13)
+        self.assertEqual(
+            [(owner["session_id"], owner["cell_id"]) for owner in cells],
+            [(session_id, 1) for session_id in range(1, 14)],
+        )
+        for session_id in range(1, 14):
+            self.assertEqual(
+                (
+                    recording / f"capture/sessions/{session_id:03}/cell-001.txt"
+                ).read_text(),
+                "42\n",
+            )
 
     def test_relay_setup_error_reaches_mcp(self):
         session = self.relay_session("block_sideband")

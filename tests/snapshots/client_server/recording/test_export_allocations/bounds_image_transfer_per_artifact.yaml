@@ -1,0 +1,160 @@
+---
+!same-as custom MCP initialization for this execution mode
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: emit export image
+result:
+  content:
+    - type: image
+      data: <512 KiB PNG with a deterministic ancillary chunk>
+      mimeType: image/png
+  isError: false
+---
+send:
+  r: export image summary
+result:
+  content:
+    - type: text
+      text: >
+        {"images": 16, "bytes": 8390016, "sha256":
+        "f9b5d250e7a3468b54c816fc8aa49f631b2729f4cb2b8d60fdc637b98e22d1b9"}
+  isError: false
+---
+input:
+  method: ping
+result: {}

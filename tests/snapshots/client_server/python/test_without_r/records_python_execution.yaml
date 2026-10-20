@@ -46,8 +46,10 @@ recording:
     - recording_activated
     - recording_ended
     - recording_started
+    - source_admitted
     - source_associated
     - source_attached
+    - source_finished
     - tool_call
     - tool_result
     - worker_ended

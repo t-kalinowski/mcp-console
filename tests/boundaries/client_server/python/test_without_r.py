@@ -771,30 +771,59 @@ def test_prepares_managed_python_at_startup_and_restart(
             )
             records = client.finish()[3:]
         (session,) = (workspace / ".agents/console/sessions").iterdir()
-        quarto = sorted((session / "sessions").glob("session-*.qmd"))[-1].read_text()
-        assert "execute:\n  eval: false" not in quarto
-        assert "original-working-directory:" in quarto and "\nir:" in quarto
-        assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
-        packages = [
-            "numpy",
-            "pandas",
-            "matplotlib",
-            "plotnine",
-            "py-yaml12",
-            "more-itertools",
+        capture = [
+            json.loads(line)
+            for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
-        if SQL.available:
-            packages.append("duckdb")
-        for package in packages:
-            assert f"    - {package}\n" in quarto
-    return TranscriptWithCompanions(
-        records,
-        {
-            "qmd": quarto.replace(str(workspace.resolve()), "<workspace>").replace(
-                str(workspace), "<workspace>"
+        calls = {
+            event["call_id"]: event["request"]["arguments"]
+            for event in capture
+            if event["event"] == "tool_call"
+        }
+        sources = {}
+        for event in capture:
+            if (
+                event["event"] == "source_associated"
+                and "python" in calls[event["call_id"]]
+            ):
+                sources.setdefault(event["session_id"], []).append(
+                    calls[event["call_id"]]["python"]
+                )
+        documents = []
+        for path in sorted((session / "sessions").glob("session-*.qmd")):
+            quarto = path.read_text()
+            session_id = int(path.stem.removeprefix("session-"))
+            expected = sources.pop(session_id)
+            for source in set(expected):
+                assert quarto.count(source) == expected.count(source), (
+                    path,
+                    source,
+                    quarto,
+                )
+            assert "execute:\n  eval: false" not in quarto
+            assert "original-working-directory:" in quarto and "\nir:" in quarto
+            assert (
+                "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
             )
-        },
-    )
+            started = next(
+                event
+                for event in capture
+                if event["event"] == "worker_started"
+                and event["session_id"] == session_id
+            )
+            for package in started["requirements"]["python"]:
+                assert f"    - {package}\n" in quarto, (path, package, quarto)
+            documents.append(
+                {
+                    "session": session_id,
+                    "qmd": quarto.replace(
+                        str(workspace.resolve()), "<workspace>"
+                    ).replace(str(workspace), "<workspace>"),
+                }
+            )
+        assert not sources, sources
+        assert len(documents) > 1, documents
+    return TranscriptWithCompanions(records, {"documents.yaml": documents})
 
 
 @requires(SQL)

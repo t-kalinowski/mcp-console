@@ -587,6 +587,7 @@ pub async fn run(
         let inherited = inheritance.capture(call.extensions.get_or_insert_default());
         call.extensions.insert(sandbox::CaptureResult(inherited));
     });
+    let recordings = transport.recording_queue();
     let startup_responses = deliveries.clone();
     let shutdown = async move {
         let shutdown_started = wait_for_input_close
@@ -609,6 +610,9 @@ pub async fn run(
         deliveries
             .settle_before_close(Instant::now() + WORKER_SHUTDOWN_GRACE)
             .await;
+        // Cancellation releases response admission, not capture ownership.
+        // Settle every received send before finalizing its journal and projections.
+        recordings.settle().await;
         startup.runtime().transcript.finalize();
         cancellation?;
         result?;

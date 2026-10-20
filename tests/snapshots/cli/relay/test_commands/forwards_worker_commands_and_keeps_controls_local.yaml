@@ -76,6 +76,12 @@ forwarded:
     message: |-
       version 🦀
       failed
+  - kind: session_exported
+    result:
+      Err: capture unavailable
+  - kind: session_image_exported
+    result:
+      Err: image unavailable
   - kind: shutdown
 stdin: "stdin 🦀\nsecond line\r\n"
 controls:

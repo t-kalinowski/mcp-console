@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::local_runtime::RInstallation;
+use libr::SEXP;
 
 static R_INSTALLATION: OnceLock<Option<RInstallation>> = OnceLock::new();
 static R_SETTINGS: OnceLock<crate::settings::R> = OnceLock::new();
@@ -185,4 +186,19 @@ impl Integration {
         }
         runtime().unwrap().prepare(library)
     }
+}
+
+#[allow(clippy::result_large_err)]
+#[harp::register]
+pub extern "C-unwind" fn mcp_console_export_session(directory: SEXP) -> harp::Result<SEXP> {
+    let directory = String::try_from(harp::object::RObject::view(directory))?;
+    let paths =
+        core::export_session(std::path::Path::new(&directory)).map_err(|e| harp::anyhow!("{e}"))?;
+    Ok(harp::object::RObject::from(
+        paths
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+    )
+    .sexp)
 }

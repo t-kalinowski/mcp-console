@@ -58,6 +58,8 @@ WORKER_COMMANDS = [
     {"kind": "python_resolution_failed", "message": "Python resolution 🦀\nfailed"},
     {"kind": "python_version_resolved", "version": ">=3.13,<3.14"},
     {"kind": "python_version_resolution_failed", "message": "version 🦀\nfailed"},
+    {"kind": "session_exported", "result": {"Err": "capture unavailable"}},
+    {"kind": "session_image_exported", "result": {"Err": "image unavailable"}},
 ]
 
 

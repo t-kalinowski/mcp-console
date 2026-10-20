@@ -34,5 +34,68 @@ def export_session(context: WorkerContext, source: str) -> None:
     response = json.loads(context.reader.readline())
     assert response["kind"] == "session_exported", response
     assert set(response["result"]) == {"Ok"}, response
-    send_output(context.writer, json.dumps(response["result"]["Ok"]) + "\n")
+    bundle = response["result"]["Ok"]
+    for image in bundle["images"]:
+        send(context.writer, {"kind": "export_image"})
+        response = json.loads(context.reader.readline())
+        assert response["kind"] == "session_image_exported", response
+        image["data"] = response["result"]["Ok"]
+    send_output(context.writer, json.dumps(bundle) + "\n")
+    send(context.writer, {"kind": "completed"})
+
+
+def emit_export_image(context: WorkerContext, source: str) -> None:
+    import base64
+    import struct
+    import zlib
+
+    png = base64.b64decode(PNG_1X1)
+    text = b"fixture\0" + b"x" * (512 * 1024)
+    chunk = b"tEXt" + text
+    image = (
+        png[:-12]
+        + struct.pack(">I", len(text))
+        + chunk
+        + struct.pack(">I", zlib.crc32(chunk))
+        + png[-12:]
+    )
+    send(
+        context.writer,
+        {
+            "kind": "image",
+            "mime_type": "image/png",
+            "data": base64.b64encode(image).decode(),
+        },
+    )
+    send(context.writer, {"kind": "completed"})
+
+
+def export_image_summary(context: WorkerContext, source: str) -> None:
+    import base64
+    import hashlib
+
+    send(context.writer, {"kind": "export_session"})
+    response = json.loads(context.reader.readline())
+    assert response["kind"] == "session_exported", response
+    bundle = response["result"]["Ok"]
+    digest = hashlib.sha256()
+    total = 0
+    for image in bundle["images"]:
+        send(context.writer, {"kind": "export_image"})
+        response = json.loads(context.reader.readline())
+        assert response["kind"] == "session_image_exported", response
+        data = base64.b64decode(response["result"]["Ok"], validate=True)
+        digest.update(data)
+        total += len(data)
+    send_output(
+        context.writer,
+        json.dumps(
+            {
+                "images": len(bundle["images"]),
+                "bytes": total,
+                "sha256": digest.hexdigest(),
+            }
+        )
+        + "\n",
+    )
     send(context.writer, {"kind": "completed"})

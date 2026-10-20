@@ -131,6 +131,7 @@ impl Evaluation {
         controlled_completion: bool,
         worker_revision: u64,
     ) -> Self {
+        transcript.source_admitted(call_id);
         let delivery_changed = Arc::new(tokio::sync::Notify::new());
         Self {
             admission: super::admission::CellAdmission::new(generation),
@@ -480,17 +481,23 @@ impl Evaluation {
     }
 
     pub(super) fn complete_cell(&self, result: Result<(), SendFailure>) {
-        self.admission.finish(if result.is_ok() {
+        if self.admission.finish(if result.is_ok() {
             super::admission::CellOutcome::Completed
         } else {
             super::admission::CellOutcome::Failed
-        });
+        }) {
+            self.transcript.source_finished(self.call_id);
+        }
         self.complete(result, CompletionKind::Cell, None);
     }
 
     pub(super) fn complete_cell_after_grace(self: &Arc<Self>) {
-        self.admission
-            .finish(super::admission::CellOutcome::Completed);
+        if self
+            .admission
+            .finish(super::admission::CellOutcome::Completed)
+        {
+            self.transcript.source_finished(self.call_id);
+        }
         // Give raw-output readers a brief window to publish cross-pipe output that
         // arrived with Completed. The cut still leaves later observations for the
         // next response; it does not claim cross-pipe chronology.
@@ -537,7 +544,9 @@ impl Evaluation {
     }
 
     pub(super) fn start_replacement(&self, failure: SendFailure) {
-        self.admission.finish(super::admission::CellOutcome::Failed);
+        if self.admission.finish(super::admission::CellOutcome::Failed) {
+            self.transcript.source_finished(self.call_id);
+        }
         let Ok(mut state) = self.state.lock() else {
             return;
         };

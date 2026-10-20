@@ -22,10 +22,16 @@ struct ProjectionWriter {
 /// Source-only state, shared by live QMD projection and capture reconstruction.
 #[derive(Default)]
 pub(super) struct Documents {
-    calls: BTreeMap<u64, CallToolRequestParams>,
+    calls: BTreeMap<u64, PendingSource>,
     pub(super) sessions: BTreeMap<u64, QuartoWriter>,
     metadata: Metadata,
     current: Option<u64>,
+}
+struct PendingSource {
+    admitted: bool,
+    sources: Vec<QuartoSource>,
+    r_requirements: Vec<String>,
+    python_requirements: Vec<String>,
 }
 #[derive(Clone, Default)]
 struct Metadata {
@@ -99,7 +105,10 @@ impl Writers {
             if document.has_source() {
                 let path = self.directory.join(format!("sessions/session-{id:03}.qmd"));
                 let first = !path.exists();
-                super::replace_private_file(&path, document.render().as_bytes())?;
+                super::replace_private_file(
+                    &path,
+                    document.render(&format!("session-{id:03}.qmd")).as_bytes(),
+                )?;
                 if first {
                     writeln!(
                         fragment,
@@ -175,73 +184,114 @@ impl Documents {
             "worker_ended" => self.current = None,
             "tool_call" => {
                 let id = event["call_id"].as_u64().ok_or("call ID missing")?;
-                self.calls.insert(
-                    id,
-                    serde_json::from_value(event["request"].clone()).map_err(|e| e.to_string())?,
+                let mut sources = Vec::new();
+                // The journal owns full requests. Projection retains only source
+                // awaiting a worker association, never stdin or request metadata.
+                for language in ["r", "python", "sql"] {
+                    if let Some(contents) = event["request"]["arguments"][language].as_str() {
+                        sources.push(QuartoSource {
+                            language,
+                            contents: contents.into(),
+                        });
+                    }
+                }
+                let requirements = &event["request"]["arguments"]["requirements"];
+                let additions = !matches!(
+                    requirements["action"].as_str(),
+                    Some("get" | "set" | "reset")
                 );
+                let r_requirements = if additions {
+                    strings(&requirements["r"])
+                } else {
+                    Vec::new()
+                };
+                let python_requirements = if additions {
+                    strings(&requirements["python"])
+                } else {
+                    Vec::new()
+                };
+                if !sources.is_empty()
+                    || !r_requirements.is_empty()
+                    || !python_requirements.is_empty()
+                {
+                    self.calls.insert(
+                        id,
+                        PendingSource {
+                            admitted: false,
+                            sources,
+                            r_requirements,
+                            python_requirements,
+                        },
+                    );
+                }
+            }
+            "source_admitted" => {
+                if let Some(pending) = self
+                    .calls
+                    .get_mut(&event["call_id"].as_u64().ok_or("call ID missing")?)
+                {
+                    pending.admitted = true;
+                }
+            }
+            "source_finished" => {
+                self.calls
+                    .remove(&event["call_id"].as_u64().ok_or("call ID missing")?);
             }
             "source_associated" => {
                 let call_id = event["call_id"].as_u64().ok_or("call ID missing")?;
                 let id = event["session_id"]
                     .as_u64()
                     .ok_or("worker session missing")?;
-                let request = self
+                if let Some(pending) = self.calls.remove(&call_id) {
+                    let document = self
+                        .sessions
+                        .get_mut(&id)
+                        .ok_or("associated source has no session")?;
+                    if document.metadata.dynamic_resolution {
+                        for (retained, additions) in [
+                            (
+                                &mut document.metadata.r_requirements,
+                                pending.r_requirements,
+                            ),
+                            (
+                                &mut document.metadata.python_requirements,
+                                pending.python_requirements,
+                            ),
+                        ] {
+                            for addition in additions {
+                                if !retained.contains(&addition) {
+                                    retained.push(addition);
+                                }
+                            }
+                        }
+                    }
+                    document.sources.extend(pending.sources);
+                    changed.push(id);
+                }
+            }
+            "tool_result" => {
+                let call_id = event["call_id"].as_u64().ok_or("call ID missing")?;
+                // Response assembly can precede the admitted cell's worker.
+                // Keep that source until association or actual settlement.
+                if self
                     .calls
                     .get(&call_id)
-                    .ok_or("associated source has no request")?;
-                let document = self
-                    .sessions
-                    .get_mut(&id)
-                    .ok_or("associated source has no session")?;
-                let before = (
-                    document.sources.len(),
-                    document.metadata.r_requirements.len(),
-                    document.metadata.python_requirements.len(),
-                );
-                if document.metadata.dynamic_resolution
-                    && let Some(requirements) = declared_requirements(request)
+                    .is_some_and(|pending| !pending.admitted)
                 {
-                    extend_unique(&mut document.metadata.r_requirements, requirements.r);
-                    extend_unique(
-                        &mut document.metadata.python_requirements,
-                        requirements.python,
-                    );
-                }
-                // Retain every submitted string, including invalid multi-language calls.
-                for language in ["r", "python", "sql"] {
-                    if let Some(source) = request
-                        .arguments
-                        .as_ref()
-                        .and_then(|a| a.get(language))
-                        .and_then(Value::as_str)
-                    {
-                        document.sources.push(QuartoSource {
-                            language,
-                            contents: source.into(),
-                        });
-                    }
-                }
-                if before
-                    != (
-                        document.sources.len(),
-                        document.metadata.r_requirements.len(),
-                        document.metadata.python_requirements.len(),
-                    )
-                {
-                    changed.push(id);
+                    self.calls.remove(&call_id);
                 }
             }
-            "python_environment_accepted" => {
-                self.metadata.python_requirements = strings(&event["packages"]);
+            "requirements_accepted" => {
+                self.metadata.requirements(&event["requirements"]);
                 if let Some(id) = self.current {
-                    self.sessions
-                        .get_mut(&id)
-                        .unwrap()
-                        .metadata
-                        .python_requirements = self.metadata.python_requirements.clone();
+                    self.sessions.get_mut(&id).unwrap().metadata = self.metadata.clone();
                     changed.push(id);
                 }
             }
+            // Python acceptance can prepare a replacement while the old
+            // worker still lives. Session metadata follows committed live
+            // requirements or an actual worker launch instead.
+            "python_environment_accepted" => {}
             "requirements_selected" => {
                 self.metadata
                     .requirements(&event["snapshot"]["requirements"]);
@@ -289,10 +339,11 @@ impl QuartoWriter {
     fn has_source(&self) -> bool {
         self.sources.iter().any(|s| !s.language.is_empty())
     }
-    pub(super) fn render(&self) -> String {
+    pub(super) fn render(&self, filename: &str) -> String {
         let mut document = String::from(
             "---\n# Source recorded by MCP Console; review before executing.\ntitle: MCP Console session\n",
         );
+        writeln!(document, "# From a working copy, run `ir render {filename}` in a prepared environment.\n# IR rendering requires R on the render host, including for Python-only documents.").unwrap();
         if !self.metadata.metadata_known || self.environment_boundaries {
             document.push_str("execute:\n  eval: false\n");
         }
@@ -329,7 +380,7 @@ impl QuartoWriter {
                 writeln!(document, "  exclude-newer: {}", yaml_string(value)).unwrap();
             }
         }
-        document.push_str("---\n\nThis source includes failed or rejected submissions.\nIt is not a checkpoint or a guarantee of independent reproducibility.\n\n");
+        document.push_str("---\n\n");
         if self.environment_boundaries {
             document.push_str("Recreate the environments at the recorded boundaries before enabling execution.\nCells may require incompatible declarations; the header is not a replay manifest.\n\n");
         }
@@ -348,52 +399,6 @@ impl QuartoWriter {
         document
     }
 }
-struct DeclaredRequirements<'a> {
-    r: Vec<&'a str>,
-    python: Vec<&'a str>,
-}
-
-fn declared_requirements(request: &CallToolRequestParams) -> Option<DeclaredRequirements<'_>> {
-    if request.name != "send" {
-        return None;
-    }
-    let requirements = request
-        .arguments
-        .as_ref()?
-        .get("requirements")?
-        .as_object()?;
-    if matches!(
-        requirements.get("action").and_then(Value::as_str),
-        Some("get" | "set" | "reset")
-    ) {
-        return None;
-    }
-    let r = requirement_strings(requirements, "r")?;
-    let python = requirement_strings(requirements, "python")?;
-    if r.is_empty() && python.is_empty() {
-        return None;
-    }
-    Some(DeclaredRequirements { r, python })
-}
-
-fn requirement_strings<'a>(
-    requirements: &'a Map<String, Value>,
-    language: &str,
-) -> Option<Vec<&'a str>> {
-    match requirements.get(language) {
-        Some(values) => values.as_array()?.iter().map(Value::as_str).collect(),
-        None => Some(Vec::new()),
-    }
-}
-
-fn extend_unique<'a>(requirements: &mut Vec<String>, additions: impl IntoIterator<Item = &'a str>) {
-    for requirement in additions {
-        if !requirements.iter().any(|existing| existing == requirement) {
-            requirements.push(requirement.to_string());
-        }
-    }
-}
-
 fn push_yaml_sequence(document: &mut String, name: &str, values: &[String]) {
     if values.is_empty() {
         writeln!(document, "{name}: []").expect("writing to a String cannot fail");
@@ -493,12 +498,17 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
         | Event::Delivery { .. }
         | Event::RecordingActivated
         | Event::OutputText { .. }
+        | Event::SourceAdmitted { .. }
+        | Event::SourceFinished { .. }
         | Event::SourceAssociated { .. }
         | Event::CellStarted { .. }
         | Event::CellEnded { .. }
         | Event::SourceAttached { .. }
         | Event::WorkerReady { .. }
-        | Event::ImageOmitted { .. } => Ok(()),
+        | Event::ImageOmitted { .. }
+        | Event::RequirementsAccepted { .. }
+        | Event::PythonEnvironmentAccepted { .. }
+        | Event::EnvironmentDiscovered { .. } => Ok(()),
         Event::RecordingEnded => {
             document.push_str("## Recording finished\n\n");
             Ok(())
@@ -514,29 +524,9 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             .unwrap();
             Ok(())
         }
-        Event::WorkerEnded {
-            session_id,
-            outcome,
-        } => {
+        Event::WorkerEnded { session_id, .. } => {
             writeln!(document, "## Session {session_id:03} ended\n").unwrap();
-            push_fence(document, "text", outcome);
             Ok(())
-        }
-        Event::EnvironmentDiscovered {
-            dynamic_resolution,
-            python_preparation,
-            r_available,
-            startup_requirements,
-        } => {
-            document.push_str("## Runtime discovery\n\n");
-            push_json(
-                document,
-                &json!({ "dynamic_resolution": dynamic_resolution, "python_preparation": python_preparation, "r_available": r_available, "startup_requirements": startup_requirements }),
-            )
-        }
-        Event::PythonEnvironmentAccepted { packages } => {
-            document.push_str("## Accepted Python environment\n\n");
-            push_json(document, &json!({ "packages": packages }))
         }
         Event::RecordingStarted {
             working_directory, ..
@@ -570,14 +560,7 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             ..
         } => {
             let owner = call_id.map_or_else(|| "session".into(), |id| format!("call {id}"));
-            writeln!(
-                document,
-                "## Artifact {artifact_id} for {owner}
-
-[Artifact {artifact_id} from {owner}](<{path}>)
-"
-            )
-            .expect("writing to a String cannot fail");
+            writeln!(document, "## Artifact {artifact_id} for {owner}\n\n[Artifact {artifact_id} from {owner}](<{path}>)\n").unwrap();
             Ok(())
         }
         Event::SessionOutput {
@@ -605,7 +588,7 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             discarded_bytes,
             ..
         } => {
-            {
+            if *inline_omitted_bytes != 0 || *discarded_bytes != 0 {
                 writeln!(
                     document,
                     "## Retained output for call {call_id}
@@ -836,12 +819,12 @@ pub(super) fn push_fence(document: &mut String, language: &str, contents: &str) 
 }
 
 fn push_quarto_fence(document: &mut String, language: &str, source_language: &str, contents: &str) {
-    let prefix = if starts_with_quarto_cell_option(source_language, contents) {
-        "\n"
-    } else {
-        ""
-    };
-    push_fence_with_prefix(document, language, prefix, contents);
+    let comment = if source_language == "sql" { "--" } else { "#" };
+    let mut prefix = format!("{comment}| error: true\n");
+    if starts_with_quarto_cell_option(source_language, contents) {
+        prefix.push('\n');
+    }
+    push_fence_with_prefix(document, language, &prefix, contents);
 }
 
 fn starts_with_quarto_cell_option(language: &str, contents: &str) -> bool {

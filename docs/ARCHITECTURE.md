@@ -341,6 +341,9 @@ Storage selection and recording identifiers retain their existing owners.
 The relay reports actual worker launch separately from readiness and exit.
 Recording session IDs count these launches independently of lifecycle generations.
 Each launch event carries the committed requirements declaration; live projections and capture reconstruction seed the new session from that declaration, including R additions retained across replacement.
+Changes to the committed declaration also update session metadata, including extensions added to a live DuckDB environment.
+The source projection retains only source and relevant dependency declarations awaiting association, then moves them into their session document; complete requests remain in the journal.
+Source admission and settlement are recorded separately from response assembly, so an early response does not discard source still awaiting its worker.
 Source attachment records admission to a worker separately from execution; an interrupted pending source can have an attachment without a cell log.
 The worker reports cell entry; the tape switches text/image intervals at observed entry and completion, and retains the final interval through producer retirement.
 A tool call can collect several intervals or sessions.
@@ -348,20 +351,23 @@ Recorded result byte ranges preserve the association after bounded preview assem
 Transport envelopes reference recorded tool payloads instead of duplicating them, and the delivery owner supplies write evidence without asserting client receipt.
 The transport reserves call identities at receipt and schedules recording activation in wire order.
 Handlers await their recorded calls while MCP receipt remains available for later sends, cancellation, and ping.
-Pending activation tasks share the transport backlog bound; closing the transport settles those writers before recording finalization.
+Pending activation tasks share the transport backlog bound.
+EOF shutdown settles the receive-order capture tail before recording finalization, independently of response-delivery cancellation and transport closure.
 Protocol envelopes and delivery evidence queue while another journal writer owns the recorder, so cancellation and ping remain available.
 The recorder flushes them in observation order with their original timestamps before its next event and at finalization.
 
 The recorder owns capture files and read-only completion; the output tape retains each open interval's producer ownership.
 Publication relocates shared file handles without changing that ownership.
 Images finish after writing, cell logs at completion, and idle intervals at the next cell or confirmed producer retirement.
-Session projections finish after session updates; process projections and events finish after worker retirement and response-delivery settlement.
+Session projections finish after session updates; process projections and events finish after worker retirement, response-delivery settlement, and queued capture.
 Permission errors use recording diagnostics, not computation errors.
 
 Runtime export uses the existing worker sideband to request a snapshot ending before the current cell began.
 The server reconstructs source and report content from capture, excluding the exporting call.
+It discards non-source request fields while reading the journal rather than retaining historical stdin in the reconstruction.
 It receives no destination path.
 The worker writes the returned content under its existing sandbox and filesystem permissions.
+Image payloads cross the sideband one at a time, requested after the preceding image has been written; the server retains their snapshot paths rather than buffering every image.
 No interpreter, SQL query, plot replay, or Quarto process participates in reconstruction.
 
 A journal or artifact failure disables further recording without stopping computation.

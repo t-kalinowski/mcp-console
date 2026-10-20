@@ -248,6 +248,13 @@ impl Transcript {
             )
         });
     }
+    pub(crate) fn requirements_accepted(&self, requirements: &Value) {
+        self.update(|state| {
+            state
+                .capture()?
+                .append(Event::RequirementsAccepted { requirements }, Utc::now())
+        });
+    }
     pub(crate) fn startup_failed(&self, message: &str) {
         self.update(|state| {
             let active = state.capture()?;
@@ -391,6 +398,24 @@ impl Transcript {
             })
         })
         .unwrap_or_else(Call::unrecorded)
+    }
+    pub(crate) fn source_admitted(&self, call_id: Option<u64>) {
+        if let Some(call_id) = call_id {
+            self.update(|state| {
+                state
+                    .capture()?
+                    .append(Event::SourceAdmitted { call_id }, Utc::now())
+            });
+        }
+    }
+    pub(crate) fn source_finished(&self, call_id: Option<u64>) {
+        if let Some(call_id) = call_id {
+            self.update(|state| {
+                state
+                    .capture()?
+                    .append(Event::SourceFinished { call_id }, Utc::now())
+            });
+        }
     }
     /// An admitted source may wait for startup without ever reaching execution.
     /// Bind it to a live worker, but never replay that association onto an

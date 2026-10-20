@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
+from support.checkpoints import release_fixture_checkpoint
 from support.normalization import code
 from support.progress import normalize_elapsed
 from boundaries.client_server._harness import wait_for_marker
@@ -46,6 +47,45 @@ def normalized(transcript: Transcript, workspace: Path) -> Transcript:
     ):
         data = data.replace(json.dumps(str(path))[1:-1], "<workspace>")
     return json.loads(data)
+
+
+@requires(SQL)
+@executions(DIRECT, SANDBOXED)
+def test_exports_accepted_live_duckdb_additions(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        with McpClient(
+            binary,
+            execution.serve(
+                *(("--writable-root", str(workspace)) if execution == SANDBOXED else ())
+            ),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(python="session_identity = object()")
+            before = client.send(requirements={"action": "get"})["structuredContent"][
+                "requirements"
+            ]
+            assert "fts" not in before["duckdb"], before
+            client.expect("[prepared]", requirements={"duckdb": ["fts"]})
+            accepted = client.send(requirements={"action": "get"})["structuredContent"][
+                "requirements"
+            ]
+            assert "fts" in accepted["duckdb"], accepted
+            client.send(
+                python="assert session_identity is not None; print('same worker')"
+            )
+            client.send(python="exported = _console.export_session('report')")
+            qmd = (workspace / "report/session.qmd").read_text()
+            assert "    - fts\n" in qmd, qmd
+            assert "eval: false" not in qmd, qmd
+            (recording,) = (workspace / ".agents/console/sessions").iterdir()
+            managed = list((recording / "sessions").glob("*.qmd"))
+            assert len(managed) == 1, managed
+            assert "    - fts\n" in managed[0].read_text()
+            return normalized(client.finish(), workspace)
 
 
 @platform_snapshots(
@@ -104,6 +144,8 @@ def test_python_export_without_r(binary: Path, execution: Execution) -> Transcri
             qmd = (report / "session.qmd").read_text()
             md = (report / "session.md").read_text()
             assert "counter = 1" in qmd and "retained failure" in qmd
+            assert "ir render session.qmd" in qmd, qmd
+            assert "#| error: true\nraise ValueError('retained failure')" in qmd, qmd
             assert "export_session" not in qmd and "export_session" not in md
             assert "original result" in md and "ValueError: retained failure" in md
             assert md.index("## Startup output") < md.index("## Cell 001")
@@ -418,7 +460,10 @@ def test_cell_intervals_and_empty_cells(
         ) as client:
             client.initialize_and_list_tools()
             client.send(r="record intervals")
+            post = wait_for_marker(workspace, "zod-recording-post-release", client)
+            release_fixture_checkpoint(post, client=client)
             wait_for_marker(workspace, "zod-recording-post-observed", client)
+            client.send()
             (active_recording,) = (workspace / ".agents/console/sessions").iterdir()
             active_capture = active_recording / "capture/sessions/001"
             assert (active_capture / "cell-001.txt").stat().st_mode & 0o222 == 0
@@ -562,10 +607,9 @@ def test_export_obeys_worker_write_permissions(
         workspace = Path(directory).resolve()
         allowed = workspace / "allowed"
         allowed.mkdir()
-        filesystem = json.dumps({"read_only": ["/"], "read_write": [str(allowed)]})
         with McpClient(
             binary,
-            execution.serve("-c", "sandbox.filesystem=" + filesystem),
+            execution.serve("--writable-root", str(allowed)),
             current_directory=workspace,
         ) as client:
             client.initialize_and_list_tools()

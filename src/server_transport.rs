@@ -774,13 +774,26 @@ impl RecordingCall {
     }
 }
 
+/// The receive-order capture tail survives cancellation of individual deliveries.
+#[derive(Clone, Default)]
+pub(crate) struct RecordingQueue(Arc<Mutex<Option<RecordingCall>>>);
+
+impl RecordingQueue {
+    pub(crate) async fn settle(&self) {
+        let tail = self.0.lock().expect("recording queue lock").clone();
+        if let Some(tail) = tail {
+            tail.recorded().await;
+        }
+    }
+}
+
 pub(crate) struct ServerTransport<R: AsyncRead, W: AsyncWrite> {
     inner: AsyncRwTransport<RoleServer, R, W>,
     deliveries: ResponseDeliveries,
     send_observer: Option<Box<SendObserver>>,
     recording: Option<crate::transcript::Transcript>,
     recorded_calls: HashMap<RequestId, u64>,
-    recording_tail: Option<RecordingCall>,
+    recording_queue: RecordingQueue,
     recording_tasks: VecDeque<tokio::task::JoinHandle<()>>,
 }
 
@@ -796,7 +809,7 @@ where
             send_observer: None,
             recording: None,
             recorded_calls: HashMap::new(),
-            recording_tail: None,
+            recording_queue: RecordingQueue::default(),
             recording_tasks: VecDeque::new(),
         }
     }
@@ -804,6 +817,10 @@ where
     pub(crate) fn with_recording(mut self, recording: crate::transcript::Transcript) -> Self {
         self.recording = Some(recording);
         self
+    }
+
+    pub(crate) fn recording_queue(&self) -> RecordingQueue {
+        self.recording_queue.clone()
     }
 
     /// Observe accepted sends in wire order, before asynchronous handler dispatch.
@@ -931,10 +948,14 @@ where
                 .get::<RequestMetaObject>()
                 .cloned()
                 .unwrap_or_default();
-            let predecessor = self.recording_tail.take();
             let (completed, ready) = tokio::sync::watch::channel(None);
             let pending = RecordingCall(ready);
-            self.recording_tail = Some(pending.clone());
+            let predecessor = self
+                .recording_queue
+                .0
+                .lock()
+                .expect("recording queue lock")
+                .replace(pending.clone());
             call.extensions.insert(pending);
             self.recorded_calls.insert(request.id.clone(), call_id);
             self.recording_tasks.push_back(tokio::spawn(async move {

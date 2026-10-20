@@ -16,42 +16,6 @@ md: |+
   }
   ```
 
-  ## Runtime discovery
-
-  ```json
-  {
-    "dynamic_resolution": true,
-    "python_preparation": false,
-    "r_available": true,
-    "startup_requirements": {
-      "r": [
-        "DBI",
-        "dbplyr",
-        "dplyr",
-        "duckdb",
-        "ggplot2",
-        "nanoarrow",
-        "reticulate",
-        "tidyverse",
-        "yyjsonr"
-      ],
-      "python": [
-        "numpy",
-        "pandas",
-        "matplotlib",
-        "plotnine"
-      ],
-      "duckdb": [
-        "icu",
-        "json",
-        "sqlite"
-      ],
-      "python_version": [],
-      "exclude_newer": null
-    }
-  }
-  ```
-
   ## Call 1: Requirements
 
   ### Options
@@ -138,10 +102,6 @@ md: |+
 
   ## Session 001 ended
 
-  ```text
-  terminated by signal 9
-  ```
-
   ## Result for call 2
 
   ```text
@@ -173,12 +133,6 @@ md: |+
 
   [Artifact 1 from call 3](<capture/sessions/002/cell-001-001.png>)
 
-  ## Retained output for call 3
-
-  [Retained text output for call 3](<capture/sessions/002/cell-001.txt>)
-
-  0 raw bytes retained; 0 rendered UTF-8 bytes omitted from inline responses; 0 raw bytes not retained in this file.
-
   ## Result for call 3
 
   ![Artifact 1](<capture/sessions/002/cell-001-001.png>)
@@ -188,12 +142,6 @@ md: |+
   ```python
   int(r.measurements["value"].sum())
   ```
-
-  ## Retained output for call 4
-
-  [Retained text output for call 4](<capture/sessions/002/cell-002.txt>)
-
-  2 raw bytes retained; 0 rendered UTF-8 bytes omitted from inline responses; 0 raw bytes not retained in this file.
 
   ## Result for call 4
 
@@ -209,12 +157,6 @@ md: |+
   ORDER BY label
   ```
 
-  ## Retained output for call 5
-
-  [Retained text output for call 5](<capture/sessions/002/cell-003.txt>)
-
-  95 raw bytes retained; 0 rendered UTF-8 bytes omitted from inline responses; 0 raw bytes not retained in this file.
-
   ## Result for call 5
 
   ```text
@@ -229,6 +171,8 @@ qmd: |+
   ---
   # Source recorded by MCP Console; review before executing.
   title: MCP Console session
+  # From a working copy, run `ir render session-002.qmd` in a prepared environment.
+  # IR rendering requires R on the render host, including for Python-only documents.
   ir:
     isolated: true
     packages:
@@ -259,10 +203,8 @@ qmd: |+
     python-version: []
   ---
 
-  This source includes failed or rejected submissions.
-  It is not a checkpoint or a guarantee of independent reproducibility.
-
   ```{r}
+  #| error: true
   options(
     console.plot.width_in = 4,
     console.plot.height_in = 3,
@@ -276,10 +218,12 @@ qmd: |+
   ```
 
   ```{python}
+  #| error: true
   int(r.measurements["value"].sum())
   ```
 
   ```{sql}
+  --| error: true
   SELECT label, value * 10 AS scaled
   FROM measurements
   ORDER BY label

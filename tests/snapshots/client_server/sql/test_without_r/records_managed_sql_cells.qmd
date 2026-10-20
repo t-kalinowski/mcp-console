@@ -1,6 +1,8 @@
 ---
 # Source recorded by MCP Console; review before executing.
 title: MCP Console session
+# From a working copy, run `ir render session-001.qmd` in a prepared environment.
+# IR rendering requires R on the render host, including for Python-only documents.
 ir:
   isolated: true
   packages: []
@@ -21,14 +23,13 @@ mcp-console:
   python-version: []
 ---
 
-This source includes failed or rejected submissions.
-It is not a checkpoint or a guarantee of independent reproducibility.
-
 ```{sql}
+--| error: true
 SELECT 42 AS recorded
 ```
 
 ```{python}
+#| error: true
 _console.sql_connection().execute("SELECT 1").fetchone()
 ```
 
