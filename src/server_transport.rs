@@ -54,6 +54,8 @@ struct ResponseDeliveryState {
     next_admission_token: u64,
     /// Console response-write futures registered before they run on the service task.
     pending_writes: usize,
+    /// All assembled protocol writes, including discovery, ping, and error responses.
+    pending_protocol_writes: usize,
     /// Last waiting member of the wire-order chain, retained across cancellation gaps.
     admission_tail: Option<Arc<ResponseDeliveryAdmissionNode>>,
     /// Physical EOF is insufficient until the transport exhausts buffered requests.
@@ -94,6 +96,25 @@ struct ResponseDeliveryWrite {
     request_id: RequestId,
     call: ResponseDeliveryCall,
     finished: bool,
+}
+
+/// Retains delivery evidence even when the service drops an unpolled write future.
+struct ProtocolWrite {
+    deliveries: ResponseDeliveries,
+    recording: Option<crate::transcript::Transcript>,
+    request_id: Option<RequestId>,
+    call_id: Option<u64>,
+    delivered: bool,
+}
+
+impl Drop for ProtocolWrite {
+    fn drop(&mut self) {
+        if let (Some(recording), Some(id)) = (&self.recording, &self.request_id) {
+            recording.delivery(&serde_json::json!(id), self.call_id, self.delivered);
+        }
+        self.deliveries.lock().pending_protocol_writes -= 1;
+        self.deliveries.gate_changed.notify_waiters();
+    }
 }
 
 impl ResponseDeliveries {
@@ -306,7 +327,8 @@ impl ResponseDeliveries {
                         || (state.input_drained
                             && state.active.is_empty()
                             && state.pending.is_empty()
-                            && state.pending_writes == 0)
+                            && state.pending_writes == 0
+                            && state.pending_protocol_writes == 0)
                     {
                         return;
                     }
@@ -316,6 +338,21 @@ impl ResponseDeliveries {
         };
         let _ = tokio::time::timeout_at(deadline.into(), settled).await;
         self.close();
+        // Closing wakes blocked writes. Let their delivery observations settle
+        // before the caller finalizes recording, including on a current-thread runtime.
+        loop {
+            let changed = self.gate_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let settled = {
+                let state = self.lock();
+                state.pending_writes == 0 && state.pending_protocol_writes == 0
+            };
+            if settled {
+                return;
+            }
+            changed.await;
+        }
     }
 
     fn take_write_delivery(
@@ -937,13 +974,19 @@ where
                 Err(error) => recording.disable(format!("protocol capture failed: {error}")),
             }
         }
+        self.deliveries.lock().pending_protocol_writes += 1;
+        let mut write = ProtocolWrite {
+            deliveries: self.deliveries.clone(),
+            recording,
+            request_id,
+            call_id,
+            delivered: false,
+        };
         let send = (!cancelled_tool_result).then(|| self.inner.send(item));
         let deliveries = self.deliveries.clone();
         async move {
             let Some(send) = send else {
-                if let (Some(recording), Some(id)) = (&recording, &request_id) {
-                    recording.delivery(&serde_json::json!(id), call_id, false);
-                }
+                drop(write);
                 return Ok(());
             };
             // Preserve a ready final response after input EOF, but abandon a
@@ -955,9 +998,8 @@ where
                     Err(std::io::ErrorKind::BrokenPipe.into())
                 },
             };
-            if let (Some(recording), Some(id)) = (&recording, &request_id) {
-                recording.delivery(&serde_json::json!(id), call_id, result.is_ok());
-            }
+            write.delivered = result.is_ok();
+            drop(write);
             if response && result.is_ok() {
                 deliveries.lock().bootstrap_response_delivered = true;
             }
@@ -991,6 +1033,15 @@ where
             // Apply the existing transport backlog bound to journal waits too.
             // A stalled recorder must not grow an unbounded queue of handlers.
             if self.recording_tasks.len() >= MAX_RESPONSE_GATED_CALLS {
+                // No capture slot remains for a canonical call. Preserve this
+                // final received frame in the bounded protocol queue instead.
+                match serde_json::to_value(&message) {
+                    Ok(message) => recording.protocol("received", message),
+                    Err(error) => recording.disable(format!("protocol capture failed: {error}")),
+                }
+                eprintln!(
+                    "mcp-console: recording capture backlog exceeded ({MAX_RESPONSE_GATED_CALLS} calls); closing MCP input"
+                );
                 self.deliveries.close();
                 return None;
             }

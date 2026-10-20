@@ -42,6 +42,89 @@ def recording_events(recording: Path) -> list[dict]:
 
 @requires(NATIVE_FIXTURES, PTHREAD_MUTEX_INTERPOSITION, PROCESS_EVENTS)
 @executions(DIRECT)
+def test_retains_the_send_that_exceeds_capture_backlog(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+        workspace = Path(directory)
+        reached = resources.enter_context(
+            closing(FifoCheckpoint.create(workspace / "reached"))
+        )
+        release = resources.enter_context(
+            closing(FifoCheckpoint.create(workspace / "release"))
+        )
+        exits = resources.enter_context(Events())
+        with McpClient(
+            binary,
+            execution.serve("--worker", str(worker)),
+            {
+                **os.environ,
+                LOADER_VARIABLE: str(
+                    build_interposer(workspace, "recording_receive_checkpoint")
+                ),
+                "MCP_CONSOLE_TEST_RECORDING_REACHED": str(reached.path),
+                "MCP_CONSOLE_TEST_RECORDING_RELEASE": str(release.path),
+                "TMPDIR": str(workspace),
+                "ZOD_REPORT_PID": "1",
+            },
+            workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.send(r="echo ready")
+            worker_pid = host_process_id(
+                int(
+                    wait_for_worker_file(
+                        workspace, "zod-worker-pid", client
+                    ).read_text()
+                ),
+                client.process.pid,
+            )
+            exits.watch_process(worker_pid)
+            held = client.start_send(r="echo held capture")
+            try:
+                reached.wait("capture queue head has not completed", client=client)
+                client.notify("notifications/cancelled", requestId=held["id"])
+                for index in range(63):
+                    queued = client.start_send(r=f"echo queued {index}")
+                    client.notify("notifications/cancelled", requestId=queued["id"])
+                assert client.request("ping")["result"] == {}
+                overflow = client.start_send(r="echo overload receipt")
+                assert client.stderr.readline(timeout=5) == (
+                    "mcp-console: recording capture backlog exceeded (64 calls); closing MCP input\n"
+                )
+                client.stdin.close()
+            finally:
+                release.release()
+            assert exits.wait(10) == {worker_pid}
+            client.finish()
+        (recording,) = (workspace / ".agents/console/sessions").iterdir()
+        events = recording_events(recording)
+        calls = [e for e in events if e["event"] == "tool_call"]
+        assert [e["call_id"] for e in calls] == list(range(1, 66))
+        received = [
+            e
+            for e in events
+            if e["event"] == "protocol"
+            and e["direction"] == "received"
+            and e["message"].get("method") == "tools/call"
+        ]
+        assert [e["message"]["id"] for e in received] == [
+            e["id"] for e in client.transcript if "send" in e
+        ]
+        assert received[-1]["message"]["params"] == {
+            "name": "send",
+            "arguments": overflow["send"],
+        }
+        assert events[-1]["event"] == "recording_ended"
+        return [
+            *client.transcript[:3],
+            {"capture": "overload-triggering send retained before finalization"},
+        ]
+
+
+@requires(NATIVE_FIXTURES, PTHREAD_MUTEX_INTERPOSITION, PROCESS_EVENTS)
+@executions(DIRECT)
 def test_settles_cancelled_capture_before_finalization(
     binary: Path, execution: Execution
 ) -> Transcript:

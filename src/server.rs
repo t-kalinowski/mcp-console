@@ -434,7 +434,15 @@ impl ServerHandler for ConsoleServer {
         let (delivery, operation) = match admitted {
             Ok(admitted) => admitted,
             Err(error) => {
-                transcript.finish(call, &Err(error.clone()));
+                let recorder = transcript.clone();
+                let recorded_error = error.clone();
+                if let Err(error) = tokio::task::spawn_blocking(move || {
+                    recorder.finish(call, &Err(recorded_error));
+                })
+                .await
+                {
+                    transcript.disable(format!("transcript task failed: {error}"));
+                }
                 return recording.response(Err(error));
             }
         };

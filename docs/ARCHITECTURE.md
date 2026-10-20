@@ -234,9 +234,11 @@ This does not guarantee exactly-once observation: cancellation can race with byt
 The journal records protocol traffic, canonical calls and assembled results, and actual worker lifetimes.
 Transport receipt reserves send capture in wire order without waiting for the recorder mutex or journal I/O.
 The bounded capture queue retains its ownership across handler and delivery cancellation and releases request payloads after capture.
+If 64 captures remain unfinished, the next send is retained in the bounded protocol queue without a canonical call record, and the transport reports the overload on stderr before retiring the connection.
 Protocol receipt is queued before the corresponding send capture starts.
 Response references carry the originating call's identity through handler completion; they do not infer it from a potentially reused JSON-RPC ID.
 EOF shutdown settles response delivery and every queued capture before recording finalization.
+Closing the delivery gate also settles failed or abandoned protocol writes, including discovery and ping responses, before recording ends.
 Markdown and QMD are projections, not interpreter checkpoints; a journaled result does not prove client receipt.
 See [Recordings](RECORDING.md).
 

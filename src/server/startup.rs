@@ -134,7 +134,15 @@ impl Startup {
             .and_then(|result| result);
             // Recording belongs to the Console process, including later setup retries.
             if let Err(error) = &result {
-                recording.startup_failed(error);
+                let recorder = recording.clone();
+                let message = error.clone();
+                if let Err(error) = tokio::task::spawn_blocking(move || {
+                    recorder.startup_failed(&message);
+                })
+                .await
+                {
+                    recording.disable(format!("startup recording task failed: {error}"));
+                }
             }
             let mut control = completion.lock().expect("startup cancellation lock");
             worker.finish_startup(result);
