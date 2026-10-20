@@ -18,7 +18,8 @@ Console prepares environments and packages automatically; no Console configurati
 [Get started](getting-started.qmd){.btn .btn-primary} [User guides](README.md){.btn .btn-outline-primary}
 :::
 
-Console is a **development preview** for macOS, Linux, and Windows x64.
+Console provides a unified API across macOS, Linux, and Windows x64.
+It is currently a **development preview**.
 
 ## Work iteratively
 
@@ -44,15 +45,18 @@ See [Sessions and languages](BUILTIN_RUNTIME.md) for examples, database connecti
 
 ## Use a full runtime in a sandbox {#status-and-trust}
 
-Console runs native R and Python, with access to their package ecosystems, including packages with compiled code.
-An [OS-level sandbox](SANDBOX.md) enforces file and network permissions.
+Console uses native R and Python runtimes, with access to their package ecosystems, including packages with compiled code.
+An [OS-level sandbox](SANDBOX.md) enforces limits on file and network access.
 
-The default `read_only` profile restricts network access and filesystem writes.
-You can [customize permissions](SANDBOX_CONFIGURATION.md) for your workload.
+The default `read_only` sandbox profile restricts network access and filesystem writes.
+
+You can allow writes to selected paths, block reads from selected paths, and control network access with domain allowlists or denylists.
+See [Sandbox permissions](SANDBOX_CONFIGURATION.md) for profiles and custom permissions.
 
 <span id="run-commands-in-a-sandbox"></span>
 
-Use the same sandbox to [run standalone scripts and programs](SANDBOX_COMMAND.md):
+The [`mcp-console sandbox` subcommand](SANDBOX_COMMAND.md) makes the same sandbox available for scripts and other programs, independently of an agent session.
+The permissions apply to the command and its child processes.
 
 ```sh
 mcp-console sandbox -- python analysis.py
