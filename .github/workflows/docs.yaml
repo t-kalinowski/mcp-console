@@ -10,6 +10,8 @@ on:
       - pyproject.toml
       - great-docs.yml
       - tests/website.py
+      - scripts/preview-site
+      - scripts/render-site
       - tests/snapshots/cli/interface/test_help/**
       - tests/snapshots/cli/interface/test_config_init/dry_run_previews_the_created_contents.yaml
       - .github/workflows/docs.yaml
@@ -24,6 +26,8 @@ on:
       - pyproject.toml
       - great-docs.yml
       - tests/website.py
+      - scripts/preview-site
+      - scripts/render-site
       - tests/snapshots/cli/interface/test_help/**
       - tests/snapshots/cli/interface/test_config_init/dry_run_previews_the_created_contents.yaml
       - .github/workflows/docs.yaml
@@ -66,7 +70,7 @@ jobs:
       - name: Check website pages and links
         run: python tests/website.py
       - name: Render website
-        run: quarto render docs
+        run: scripts/render-site
       - uses: actions/upload-pages-artifact@v5
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         with:

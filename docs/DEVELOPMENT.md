@@ -108,25 +108,28 @@ pak::pak(c("pkgdown", "local::r"))
 ```
 
 ```sh
-uv venv .venv
-uv pip install --python .venv/bin/python -r docs/requirements.txt
-source .venv/bin/activate
-quarto preview docs --render html
+scripts/preview-site
+scripts/render-site
 ```
 
-On Windows use `.venv/Scripts/python.exe` and activate `.venv/Scripts/Activate.ps1`.
+These scripts run `quarto preview docs --render html` and `quarto render docs --to html` with the Python documentation tools supplied by uv.
+Run them from the repository root.
+Additional arguments are passed to Quarto.
+Use `scripts/preview-site --port 3604 --no-browser` to choose a port and keep the browser closed.
+On Windows, invoke either script explicitly with `uv run --no-project --isolated --with-requirements docs/requirements.txt python scripts/preview-site` or `scripts/render-site` in its place.
 
 The pre-render script `docs/_python.py` uses the pinned Great Docs generator to write Python reference sources before Quarto discovers pages.
 The hook runs through uv, which prepares a separate environment from `docs/requirements.txt`; Great Docs does not need to be installed in the Python environment Quarto selects.
-The page filters and website tests still use the documentation environment installed above.
-Start preview with `--render html` so its initial render discovers generated pages on a clean checkout; plain preview selects its initial page list before the hook runs.
 It preserves explicit members, inline methods, static introspection, symbol anchors, and source links.
 Generated pages use the main site's Reference sidebar, theme, and search.
-After the initial build, preview rerenders changed pages; run a full render after editing Python docstrings or `great-docs.yml`, or to refresh the R package site:
+Preview starts with a full HTML render so Quarto discovers generated pages on a clean checkout, then rerenders changed pages.
+Run `scripts/render-site` after editing Python docstrings or `great-docs.yml`, or to refresh the R package site.
+Both commands write to `docs/_site`.
+
+To check the rendered pages:
 
 ```sh
-quarto render docs
-python3 tests/website.py
+uv run --no-project --with-requirements docs/requirements.txt python tests/website.py
 ```
 
 The website test renders a fresh temporary copy and checks titles, navigation, search, and local links/anchors, including both package references.
