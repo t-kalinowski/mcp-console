@@ -47,6 +47,17 @@ See [Sessions and languages](BUILTIN_RUNTIME.md) for examples, database connecti
 [Recordings](RECORDING.md) retain code, output, and plots so you can see what the agent ran in Console and inspect the results.
 They also provide a starting point for reproducible analyses and reports.
 
+## Run commands in a sandbox
+
+Use Console's sandbox directly from your terminal to run scripts and other programs with controlled file and network access.
+The permissions apply to the command and its child processes.
+
+```sh
+mcp-console sandbox -- python analysis.py
+```
+
+[Run commands in a sandbox](SANDBOX_COMMAND.md) covers installation, workspace writes, network access, and reusable settings.
+
 ## Build on Console
 
 Build LLM applications on Console's persistent runtime.

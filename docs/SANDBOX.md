@@ -7,6 +7,8 @@ These permissions also apply to programs the code starts.
 This lets you give an agent access to data while choosing where it can save its work and which services it can contact.
 The sandbox limits access; it does not establish that a project, dependency, or piece of code is trustworthy.
 
+You can also [run commands directly](SANDBOX_COMMAND.md) from your terminal using the same sandbox.
+
 ## What code can do by default {#default-permissions}
 
 With Console's built-in `read_only` profile, code can read files that your account can read, use private temporary storage, and start other programs.

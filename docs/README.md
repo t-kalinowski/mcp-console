@@ -13,6 +13,7 @@ These pages introduce Console and show how its pieces fit together:
 3. [Sandbox and trust](SANDBOX.md) explains where code runs, what it can access, and how session permissions differ from package-preparation permissions.
 
 When you want to try it, [Get started](getting-started.qmd) walks through installation, client setup, and a first analysis.
+To use the sandbox directly from your terminal or scripts, see [Run commands in a sandbox](SANDBOX_COMMAND.md).
 
 ## Reference {#reference}
 
@@ -32,6 +33,7 @@ Each reference includes the relevant settings, accepted values, defaults, and pr
 | Set environment variables or look up how Console handles them                                     | [Environment variables](ENVIRONMENT.md)                                                    |
 | Look up language helpers, SQL connections, plotting, or output behavior                           | [Runtime behavior](RUNTIME_REFERENCE.md)                                                   |
 | Find recorded output or turn an analysis into a report                                            | [Recordings and reports](RECORDING.md)                                                     |
+| Run a program with filesystem and network limits                                                  | [Run commands in a sandbox](SANDBOX_COMMAND.md)                                            |
 | Register a client, check an installation, or look up a command                                    | [Command-line reference](CLI.md) and [CLI help](cli-help.qmd)                              |
 | Choose what languages, parameters, or instructions the agent sees                                 | [Tool configuration](TOOL_CONFIGURATION.md)                                                |
 

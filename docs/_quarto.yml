@@ -27,6 +27,8 @@ website:
         text: User guides
       - href: README.md#reference
         text: Reference
+      - href: SANDBOX_COMMAND.md
+        text: Sandbox
       - href: CLIENTS.md
         text: Client integration
       - href: DEVELOPMENT.md
@@ -50,6 +52,7 @@ website:
       - href: README.md
         text: Overview
       - getting-started.qmd
+      - SANDBOX_COMMAND.md
       - section: Learn Console
         contents:
         - BUILTIN_RUNTIME.md

@@ -2,14 +2,15 @@
 
 Use this reference to choose which files code can read or change, which network connections it can make, and where it can write temporary files.
 For an introduction to the trust model, read [Sandbox and trust](SANDBOX.md).
+For command-line examples, see [Run commands in a sandbox](SANDBOX_COMMAND.md).
 [Configuration files](CONFIGURATION.md) explains where to put these settings and how files and command-line overrides combine.
 
 ## Which permissions to configure
 
-| Node               | Accepted values   | Applies to                                            |
-| ------------------ | ----------------- | ----------------------------------------------------- |
-| `sandbox`          | Mapping or `null` | Code evaluated in the session and programs it starts. |
-| `resolver.sandbox` | Mapping or `null` | Runtime inspection and package preparation.           |
+| Node               | Accepted values   | Applies to                                                                 |
+| ------------------ | ----------------- | -------------------------------------------------------------------------- |
+| `sandbox`          | Mapping or `null` | Code evaluated in Console, standalone commands, and their child processes. |
+| `resolver.sandbox` | Mapping or `null` | Runtime inspection and package preparation.                                |
 
 The two policies are independent.
 Examples below configure `sandbox`; the same fields are accepted under `resolver.sandbox`, except for the `inherit_codex` profile.
@@ -26,10 +27,10 @@ To disable enforcement, see [Run without the sandbox](#run-without-the-sandbox).
 
 ## Choose a base profile {#profiles-and-temporary-storage}
 
-| Node                       | Accepted values                                                                  | Meaning and default                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `sandbox.profile`          | `read_only`, `workspace`, `inherit_codex`, an `inherit_codex` mapping, or `null` | Select the session's base profile. Omitted, `null`, or `read_only`: host reads without workspace writes. |
-| `resolver.sandbox.profile` | `read_only`, `workspace`, or `null`                                              | Select a preparation profile. Omitted, `null`, or `read_only`: no workspace profile.                     |
+| Node                       | Accepted values                                                                  | Meaning and default                                                                            |
+| -------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `sandbox.profile`          | `read_only`, `workspace`, `inherit_codex`, an `inherit_codex` mapping, or `null` | Select the base profile. Omitted, `null`, or `read_only`: host reads without workspace writes. |
+| `resolver.sandbox.profile` | `read_only`, `workspace`, or `null`                                              | Select a preparation profile. Omitted, `null`, or `read_only`: no workspace profile.           |
 
 For evaluated code, `read_only` keeps private writable temporary storage and restricted networking without a proxy by default.
 It does not deny host reads.

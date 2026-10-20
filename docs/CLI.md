@@ -249,16 +249,11 @@ It adds filesystem grants without selecting the workspace profile, does not crea
 ## Standalone sandbox
 
 ```sh
-mcp-console sandbox -- Rscript analysis.R
-mcp-console sandbox --writable-root . -- python script.py
-mcp-console sandbox -c sandbox.network=enabled -- python download.py
+mcp-console sandbox -- python analysis.py
 ```
 
-Arguments after `--` and standard input belong to the target command.
-This applies the sandbox and workload environment, but does not provide a persistent Console session, automatic package preparation, plot capture, or recordings.
-
-The default permits host-file reads and private temporary writes, not workspace writes.
-See [Sandbox permissions](SANDBOX_CONFIGURATION.md) for networking and cleanup limits.
+Run an installed program with Console's filesystem and network permissions.
+[Run commands in a sandbox](SANDBOX_COMMAND.md) covers command arguments, workspace writes, networking, saved configuration, and cleanup.
 
 ## Configuration options
 
