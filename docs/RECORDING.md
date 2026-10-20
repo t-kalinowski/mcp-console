@@ -40,6 +40,7 @@ The recorded process start time remains separate from recording activation time.
 
 `capture/events.jsonl` is the authoritative event record.
 It retains MCP requests, responses, notifications, environment information, worker transitions, source associations, output ranges, images, and assembled results.
+Use it to inspect a recording with scripts or investigate a failed call.
 Routine protocol exchanges appear there without filling the readable transcript.
 Sequence numbers and timestamps establish observation order; filenames do not establish a timeline across independent streams.
 Preparation output observed before a worker exists is retained in process output events rather than assigned to a fabricated session.
@@ -72,9 +73,18 @@ Text and images can alternate; event text ranges preserve that interleaving whil
 Console does not collect arbitrary files written by user code.
 
 Raw text retention is limited to 1 GiB per interval, independently of response preview limits.
-When Console omits response text, the notice points to retained logs and identifies unavailable or partially retained output.
-Reading a log does not consume pending output or execute the code again.
-Logs contain only text the language printers emitted; an abbreviated table display does not contain hidden rows.
+Console limits how much text it sends to the agent at once.
+When a response leaves out text, a notice points to the existing log file and says if any output could not be saved.
+The agent can read that file with its client's file-reading tools, without running the code again.
+
+The agent can also read the log while the code is still running.
+Console updates the log before sending each response.
+Reading it does not remove output from later responses.
+
+Logs contain the text that R, Python, or SQL displayed.
+For example, if a table's display includes only a few rows, the log contains that abbreviated display.
+To get the complete data, ask the agent to fetch it or save it to a file.
+For SQL, your agent can [retrieve the last result](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result) in R or Python without running the query again.
 
 Returned recording paths refer to the Console host.
 Project paths are normally relative to the launch directory; fallback paths are absolute.
