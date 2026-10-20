@@ -147,4 +147,4 @@ If SDK teardown raises after consuming its cleanup callbacks, the client records
 
 A journaled result records response assembly, not confirmed client receipt.
 Cancellation can race with delivery.
-See the generated [Python client API](https://t-kalinowski.github.io/mcp-console/python/reference/MCPConsole.html) for signatures and connection lifetime.
+See the generated [Python client API](https://t-kalinowski.github.io/mcp-console/python/reference/mcpconsole/) for signatures and connection lifetime.

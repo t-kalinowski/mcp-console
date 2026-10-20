@@ -5,7 +5,8 @@ import os
 import sys
 
 os.environ["QUARTO_PYTHON"] = sys.executable
+os.environ["MCP_CONSOLE_WEBSITE_PREVIEW"] = "1"
 os.execvp(
     "quarto",
-    ["quarto", "preview", "docs", "--render", "html", *sys.argv[1:]],
+    ["quarto", "preview", "docs", "--render", "html", "--no-navigate", *sys.argv[1:]],
 )

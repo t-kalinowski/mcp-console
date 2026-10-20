@@ -6,17 +6,31 @@ import ast
 import json
 import os
 from pathlib import Path
+import queue
 import shutil
+import signal
 import subprocess
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from urllib.parse import unquote, urlsplit
+from urllib.request import urlopen
 from xml.etree import ElementTree
 
 from bs4 import BeautifulSoup
+from websockets.sync.client import connect
 from yaml12 import read_yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def linked_file(page: Path, link: str) -> Path:
+    """Resolve a rendered local link, including directory index pages."""
+    path = unquote(urlsplit(link).path)
+    destination = (page.parent / path).resolve() if path else page
+    return destination / "index.html" if destination.is_dir() else destination
 
 
 class Page(HTMLParser):
@@ -130,6 +144,35 @@ class WebsiteTests(unittest.TestCase):
         cls.site = (docs / "_site").resolve()
         cls.pages = {path.resolve(): Page(path) for path in cls.site.rglob("*.html")}
 
+    def test_pages_use_lowercase_directory_urls(self) -> None:
+        for route in (
+            "builtin_runtime",
+            "readme",
+            "r-guide",
+            "python-guide",
+            "python/reference/mcpconsole",
+            "r/reference/consoleconfig",
+        ):
+            with self.subTest(route=route):
+                self.assertTrue((self.site / route / "index.html").is_file())
+        self.assertFalse((self.site / "BUILTIN_RUNTIME.html").exists())
+        search = json.loads((self.site / "search.json").read_text())
+        indexed = {urlsplit(entry["href"]).path for entry in search}
+        self.assertIn("builtin_runtime/", indexed)
+        self.assertIn("python/reference/mcpconsole/", indexed)
+        for path, page in self.pages.items():
+            for link in page.links:
+                url = urlsplit(link)
+                if url.scheme or url.netloc or not url.path:
+                    continue
+                target = path.parent / unquote(url.path)
+                if target.is_dir():
+                    target /= "index.html"
+                if target.resolve() in self.pages:
+                    with self.subTest(page=str(path), link=link):
+                        self.assertEqual(url.path, url.path.lower())
+                        self.assertFalse(url.path.endswith(".html"))
+
     def test_guides_have_titles_navigation_and_search(self) -> None:
         search = json.loads((self.site / "search.json").read_text())
         indexed = {urlsplit(entry["href"]).path for entry in search}
@@ -138,7 +181,10 @@ class WebsiteTests(unittest.TestCase):
             *(ROOT / "docs/benchmarks").glob("*.md"),
         ]
         for source in sources:
-            relative = source.relative_to(ROOT / "docs").with_suffix(".html")
+            route = source.relative_to(ROOT / "docs").with_suffix("").as_posix().lower()
+            if route in ("r", "python"):
+                route += "-guide"
+            relative = Path(route) / "index.html"
             with self.subTest(page=str(relative)):
                 page = self.pages[(self.site / relative).resolve()]
                 heading = (
@@ -152,16 +198,16 @@ class WebsiteTests(unittest.TestCase):
                 )
                 self.assertIn(heading, page.title)
                 self.assertIn("quarto-sidebar", page.ids)
-                self.assertIn(relative.as_posix(), indexed)
-        for name in ("index.html", "getting-started.html"):
+                self.assertIn(route + "/", indexed)
+        for name in ("index.html", "getting-started/index.html"):
             self.assertIn((self.site / name).resolve(), self.pages)
         self.assertFalse((self.site / "templates").exists())
 
     def test_guides_detect_system_color_scheme(self) -> None:
         for name in (
             "index.html",
-            "cli-help.html",
-            "benchmarks/transcript-concurrency.html",
+            "cli-help/index.html",
+            "benchmarks/transcript-concurrency/index.html",
         ):
             with self.subTest(page=name):
                 soup = BeautifulSoup((self.site / name).read_text(), "html.parser")
@@ -173,8 +219,8 @@ class WebsiteTests(unittest.TestCase):
     def test_r_reference_offers_automatic_color_scheme(self) -> None:
         for name in (
             "r/index.html",
-            "r/reference/console_tool.html",
-            "r/articles/autonomous-report.html",
+            "r/reference/console_tool/index.html",
+            "r/articles/autonomous-report/index.html",
         ):
             with self.subTest(page=name):
                 path = self.site / name
@@ -187,27 +233,43 @@ class WebsiteTests(unittest.TestCase):
                 )
                 self.assertIsNotNone(soup.select_one('[data-bs-theme-value="auto"]'))
 
+    def test_r_reference_aliases_use_local_directory_urls(self) -> None:
+        for alias, target in (
+            ("sandboxsockets", "sandboxpolicy"),
+            ("existingpython", "pythonconfig"),
+        ):
+            with self.subTest(alias=alias):
+                page = self.site / f"r/reference/{alias}/index.html"
+                soup = BeautifulSoup(page.read_text(), "html.parser")
+                redirect = soup.find("meta", attrs={"http-equiv": "refresh"})
+                self.assertEqual(redirect["content"], f"0;URL=../{target}/")
+                self.assertTrue(linked_file(page, f"../{target}/").is_file())
+
     def test_r_report_vignette_is_discoverable(self) -> None:
-        article = self.site / "r/articles/autonomous-report.html"
+        article = self.site / "r/articles/autonomous-report/index.html"
         self.assertIn(article, self.pages, "autonomous report vignette is missing")
         self.assertIn("Giving an agent an R session", self.pages[article].title)
-        for source in ("index", "reference/console_tool", "reference/config-workflow"):
-            page = self.site / f"r/{source}.html"
+        for source in (
+            "index.html",
+            "reference/console_tool/index.html",
+            "reference/config-workflow/index.html",
+        ):
+            page = self.site / "r" / source
             with self.subTest(source=source):
                 destinations = {
-                    (page.parent / unquote(urlsplit(link).path)).resolve()
+                    linked_file(page, link)
                     for link in self.pages[page].links
                     if not urlsplit(link).scheme and not urlsplit(link).netloc
                 }
                 self.assertIn(article, destinations)
         search = json.loads((self.site / "r/search.json").read_text())
         self.assertIn(
-            "https://t-kalinowski.github.io/mcp-console/r/articles/autonomous-report.html",
+            "https://t-kalinowski.github.io/mcp-console/r/articles/autonomous-report/",
             {entry["path"] for entry in search},
         )
 
     def test_cli_help_matches_tested_transcripts(self) -> None:
-        path = self.site / "cli-help.html"
+        path = self.site / "cli-help/index.html"
         self.assertIn(path, self.pages, "CLI help page is missing")
         soup = BeautifulSoup(path.read_text(), "html.parser")
         public_commands = [
@@ -257,12 +319,10 @@ class WebsiteTests(unittest.TestCase):
                     [command.removesuffix(" --help") for command in public_commands],
                 )
         search = json.loads((self.site / "search.json").read_text())
-        self.assertIn(
-            "cli-help.html", {urlsplit(entry["href"]).path for entry in search}
-        )
-        guide = self.site / "CLI.html"
+        self.assertIn("cli-help/", {urlsplit(entry["href"]).path for entry in search})
+        guide = self.site / "cli/index.html"
         destinations = {
-            (guide.parent / unquote(urlsplit(link).path)).resolve()
+            linked_file(guide, link)
             for link in self.pages[guide].links
             if not urlsplit(link).scheme and not urlsplit(link).netloc
         }
@@ -270,25 +330,25 @@ class WebsiteTests(unittest.TestCase):
 
     def test_documentation_keeps_shared_navigation(self) -> None:
         pages = (
-            "README.html",
-            "getting-started.html",
-            "CLIENTS.html",
-            "R.html",
-            "PYTHON.html",
-            "INSTALLATION.html",
-            "BUILD_FROM_SOURCE.html",
-            "LINUX_COMPATIBILITY.html",
-            "WINDOWS.html",
-            "BUILTIN_RUNTIME.html",
-            "BUILD_ON_CONSOLE.html",
-            "CONFIGURATION.html",
-            "RUNTIME_CONFIGURATION.html",
-            "RUNTIME_REFERENCE.html",
-            "CONFIGURATION_REFERENCE.html",
-            "SANDBOX_CONFIGURATION.html",
-            "CLI.html",
-            "cli-help.html",
-            "SANDBOX_COMMAND.html",
+            "readme/index.html",
+            "getting-started/index.html",
+            "clients/index.html",
+            "r-guide/index.html",
+            "python-guide/index.html",
+            "installation/index.html",
+            "build_from_source/index.html",
+            "linux_compatibility/index.html",
+            "windows/index.html",
+            "builtin_runtime/index.html",
+            "build_on_console/index.html",
+            "configuration/index.html",
+            "runtime_configuration/index.html",
+            "runtime_reference/index.html",
+            "configuration_reference/index.html",
+            "sandbox_configuration/index.html",
+            "cli/index.html",
+            "cli-help/index.html",
+            "sandbox_command/index.html",
         )
         navigation = []
         for name in pages:
@@ -297,16 +357,18 @@ class WebsiteTests(unittest.TestCase):
                 sidebar = soup.find(id="quarto-sidebar")
                 self.assertIsNotNone(sidebar)
                 links = [
-                    urlsplit(link["href"]).path.removeprefix("./")
+                    linked_file(self.site / name, link["href"])
+                    .relative_to(self.site)
+                    .as_posix()
                     for link in sidebar.select("a[href]")
                     if urlsplit(link["href"]).path
                 ]
                 navigation.append(links)
                 self.assertEqual(links, navigation[0])
-                self.assertIn("CLIENTS.html", links)
-                self.assertIn("SANDBOX_CONFIGURATION.html", links)
-                self.assertIn("RUNTIME_REFERENCE.html", links)
-                self.assertNotIn("API.html", links)
+                self.assertIn("clients/index.html", links)
+                self.assertIn("sandbox_configuration/index.html", links)
+                self.assertIn("runtime_reference/index.html", links)
+                self.assertNotIn("api/index.html", links)
                 labels = [
                     link.get_text(" ", strip=True)
                     for link in soup.select(".navbar-nav .nav-link")
@@ -318,9 +380,17 @@ class WebsiteTests(unittest.TestCase):
 
     def test_api_and_development_have_focused_navigation(self) -> None:
         paths = (
-            ("REFERENCE.html", "API.html", "CONFIGURATION.html"),
-            ("API.html", "REQUIREMENTS_API.html", "SANDBOX_CONFIGURATION.html"),
-            ("ARCHITECTURE.html", "WINDOWS_DEVELOPMENT.html", "REQUIREMENTS.html"),
+            ("reference/index.html", "api/index.html", "configuration/index.html"),
+            (
+                "api/index.html",
+                "requirements_api/index.html",
+                "sandbox_configuration/index.html",
+            ),
+            (
+                "architecture/index.html",
+                "windows_development/index.html",
+                "requirements/index.html",
+            ),
         )
         for name, included, excluded in paths:
             with self.subTest(page=name):
@@ -328,8 +398,12 @@ class WebsiteTests(unittest.TestCase):
                 sidebar = soup.find(id="quarto-sidebar")
                 self.assertIsNotNone(sidebar)
                 links = {
-                    urlsplit(link["href"]).path.removeprefix("./")
+                    linked_file(self.site / name, link["href"])
+                    .relative_to(self.site)
+                    .as_posix()
                     for link in sidebar.select("a[href]")
+                    if not urlsplit(link["href"]).scheme
+                    and not urlsplit(link["href"]).netloc
                 }
                 self.assertIn(included, links)
                 self.assertNotIn(excluded, links)
@@ -339,23 +413,35 @@ class WebsiteTests(unittest.TestCase):
                 self.assertNotIn("Packages", navbar.get_text(" ", strip=True))
 
     def test_documentation_starts_with_task_index(self) -> None:
-        page = BeautifulSoup((self.site / "README.html").read_text(), "html.parser")
+        page = BeautifulSoup(
+            (self.site / "readme/index.html").read_text(), "html.parser"
+        )
         self.assertEqual(page.select_one("h1").get_text(strip=True), "Documentation")
         table = page.select_one("main table")
         self.assertIsNotNone(table)
         self.assertIn("I want to", table.get_text())
-        links = {link["href"].removeprefix("./") for link in table.select("a[href]")}
+        links = {
+            linked_file(self.site / "readme/index.html", link["href"])
+            .relative_to(self.site)
+            .as_posix()
+            + (
+                "#" + urlsplit(link["href"]).fragment
+                if urlsplit(link["href"]).fragment
+                else ""
+            )
+            for link in table.select("a[href]")
+        }
         for target in (
-            "CLIENTS.html",
-            "R.html",
-            "PYTHON.html",
-            "REQUIREMENTS.html",
-            "SANDBOX_CONFIGURATION.html",
-            "RUNTIME_REFERENCE.html#retrieve-the-last-sql-result",
-            "RECORDING.html",
+            "clients/index.html",
+            "r-guide/index.html",
+            "python-guide/index.html",
+            "requirements/index.html",
+            "sandbox_configuration/index.html",
+            "runtime_reference/index.html#retrieve-the-last-sql-result",
+            "recording/index.html",
         ):
             self.assertIn(target, links)
-        runtime = self.pages[self.site / "RUNTIME_REFERENCE.html"]
+        runtime = self.pages[self.site / "runtime_reference/index.html"]
         self.assertIn("Language behavior", runtime.title)
 
     def test_home_title_has_one_introduction_and_description_metadata(self) -> None:
@@ -415,25 +501,181 @@ class WebsiteTests(unittest.TestCase):
             for path, content in python_resources.items():
                 self.assertEqual(path.read_bytes(), content, str(path))
 
+            source = docs / "BUILTIN_RUNTIME.md"
+            original = source.read_text()
+            for heading in ("Preview draft", "Preview revised"):
+                source.write_text(original + f"\n## {heading}\n\n{marker}\n")
+                result = subprocess.run(
+                    ["quarto", "render", str(source), "--to", "html"],
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(
+                    heading, (site / "builtin_runtime/index.html").read_text()
+                )
+                self.assertFalse((site / "BUILTIN_RUNTIME.html").exists())
+            search = json.loads((site / "search.json").read_text())
+            hrefs = [entry["href"] for entry in search]
+            self.assertEqual(len(hrefs), len(set(hrefs)), "duplicate search results")
+            self.assertIn("builtin_runtime/#preview-revised", hrefs)
+            self.assertNotIn("builtin_runtime/#preview-draft", hrefs)
+            sitemap = ElementTree.parse(site / "sitemap.xml")
+            locations = [
+                element.text
+                for element in sitemap.findall(
+                    ".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"
+                )
+            ]
+            self.assertEqual(
+                len(locations), len(set(locations)), "duplicate sitemap URLs"
+            )
+
+    def test_preview_serves_clean_urls_and_updates_changed_pages(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="console-preview-") as directory:
+            workspace = Path(directory) / "project"
+            shutil.copytree(self.workspace.name, workspace)
+            routes = (
+                "/readme/",
+                "/builtin_runtime/",
+                "/python/reference/openai.responses_tool/",
+                "/r/reference/console_tool/",
+            )
+            # Start from a completed render, as when switching from render-site
+            # to preview-site. Preview must retain the outputs Quarto tracks.
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts/preview-site"),
+                    "--port",
+                    "0",
+                    "--host",
+                    "127.0.0.1",
+                    "--no-browser",
+                ],
+                cwd=workspace,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=os.name != "nt",
+            )
+            output: queue.Queue[str | None] = queue.Queue()
+            log: list[str] = []
+
+            def read_output() -> None:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    output.put(line)
+                output.put(None)
+
+            reader = threading.Thread(target=read_output, daemon=True)
+            reader.start()
+
+            def wait_for(message: str) -> str:
+                deadline = time.monotonic() + 180
+                while True:
+                    try:
+                        line = output.get(timeout=max(0, deadline - time.monotonic()))
+                    except queue.Empty:
+                        self.fail(
+                            f"Preview did not report {message!r}:\n{''.join(log)}"
+                        )
+                    if line is None:
+                        self.fail(f"Preview exited before {message!r}:\n{''.join(log)}")
+                    log.append(line)
+                    if message in line:
+                        return line
+
+            try:
+                ready = wait_for("Browse at ")
+                address = urlsplit(ready.split("Browse at ", 1)[1].strip())
+                self.assertIsNotNone(address.port, ready)
+                base = f"http://127.0.0.1:{address.port}"
+                for route in routes:
+                    with self.subTest(route=route):
+                        with urlopen(base + route, timeout=15) as response:
+                            html = response.read().decode()
+                        self.assertIn("<h1", html)
+                        self.assertIn("quarto-preview.js", html)
+                with urlopen(base + "/quarto-preview.js", timeout=15) as response:
+                    self.assertEqual(response.status, 200)
+
+                source = workspace / "docs/BUILTIN_RUNTIME.md"
+                marker = "Preview updates this guide without restarting the server."
+                with connect(
+                    base.replace("http:", "ws:") + "/builtin_runtime/",
+                    proxy=None,
+                    open_timeout=15,
+                ) as client:
+                    source.write_text(source.read_text() + f"\n{marker}\n")
+                    deadline = time.monotonic() + 180
+                    while True:
+                        message = client.recv(
+                            timeout=max(0, deadline - time.monotonic())
+                        )
+                        if message.startswith("reload"):
+                            self.assertEqual(message, "reload")
+                            break
+                with urlopen(base + "/builtin_runtime/", timeout=15) as response:
+                    html = response.read().decode()
+                self.assertIn(marker, html)
+                self.assertIn("quarto-preview.js", html)
+                self.assertIsNone(process.poll(), "".join(log))
+            finally:
+                if process.poll() is None:
+                    if os.name == "nt":
+                        subprocess.run(
+                            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                            check=True,
+                            capture_output=True,
+                        )
+                    else:
+                        os.killpg(process.pid, signal.SIGTERM)
+                process.wait(timeout=15)
+                reader.join(timeout=15)
+                assert process.stdout is not None
+                process.stdout.close()
+
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/render-site")],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            site = workspace / "docs/_site"
+            self.assertFalse((site / "BUILTIN_RUNTIME.html").exists())
+            for route in routes:
+                self.assertNotIn(
+                    "quarto-preview.js",
+                    (site / route.lstrip("/") / "index.html").read_text(),
+                )
+
     def test_get_started_has_connection_navigation(self) -> None:
         soup = BeautifulSoup(
-            (self.site / "getting-started.html").read_text(), "html.parser"
+            (self.site / "getting-started/index.html").read_text(), "html.parser"
         )
         navbar = soup.select_one(".navbar")
         sidebar = soup.find(id="quarto-sidebar")
         for element, included, excluded in (
-            (navbar, "getting-started.html", "WINDOWS.html"),
-            (sidebar, "CONFIGURATION.html", "API.html"),
+            (navbar, "getting-started/index.html", "windows/index.html"),
+            (sidebar, "configuration/index.html", "api/index.html"),
         ):
             links = {
-                urlsplit(link["href"]).path.removeprefix("./")
+                linked_file(self.site / "getting-started/index.html", link["href"])
+                .relative_to(self.site)
+                .as_posix()
                 for link in element.select("a[href]")
+                if not urlsplit(link["href"]).scheme
+                and not urlsplit(link["href"]).netloc
             }
             self.assertIn(included, links)
             self.assertNotIn(excluded, links)
 
     def test_mcp_client_setup_uses_uvx_and_global_scope(self) -> None:
-        for name in ("getting-started.html", "CLIENTS.html"):
+        for name in ("getting-started/index.html", "clients/index.html"):
             with self.subTest(page=name):
                 commands = [
                     line.strip()
@@ -449,7 +691,7 @@ class WebsiteTests(unittest.TestCase):
     def test_other_client_configuration_uses_uvx(self) -> None:
         configuration = next(
             json.loads(code)
-            for code in self.pages[self.site / "CLI.html"].code_blocks
+            for code in self.pages[self.site / "cli/index.html"].code_blocks
             if '"mcpServers"' in code
         )
         server = configuration["mcpServers"]["console"]
@@ -529,7 +771,7 @@ class WebsiteTests(unittest.TestCase):
             ),
             "LINUX_COMPATIBILITY": ("reproducing-the-comparisons",),
             "SEND_OPERATIONS": ("python-client-cancellation",),
-            "python/index": (
+            "python": (
                 "start-without-a-model",
                 "add-a-model-framework",
                 "calls-and-dependencies",
@@ -538,7 +780,8 @@ class WebsiteTests(unittest.TestCase):
         for name, identifiers in fragments.items():
             with self.subTest(page=name):
                 self.assertLessEqual(
-                    set(identifiers), self.pages[self.site / f"{name}.html"].ids
+                    set(identifiers),
+                    self.pages[self.site / f"{name.lower()}/index.html"].ids,
                 )
         for name in (
             "RUNTIME_REFERENCE",
@@ -548,14 +791,15 @@ class WebsiteTests(unittest.TestCase):
         ):
             with self.subTest(reference=name):
                 soup = BeautifulSoup(
-                    (self.site / f"{name}.html").read_text(), "html.parser"
+                    (self.site / f"{name.lower()}/index.html").read_text(),
+                    "html.parser",
                 )
                 self.assertGreater(len(soup.select_one("main").get_text()), 1000)
 
     def test_workspace_profile_is_available_in_setup_guides(self) -> None:
         commands = [
             line.strip()
-            for name in ("getting-started.html", "CLIENTS.html")
+            for name in ("getting-started/index.html", "clients/index.html")
             for code in self.pages[self.site / name].code_blocks
             for line in code.splitlines()
         ]
@@ -569,13 +813,15 @@ class WebsiteTests(unittest.TestCase):
                 self.assertTrue(
                     any(
                         line.strip() == "profile: workspace"
-                        for code in self.pages[self.site / f"{name}.html"].code_blocks
+                        for code in self.pages[
+                            self.site / f"{name.lower()}/index.html"
+                        ].code_blocks
                         for line in code.splitlines()
                     )
                 )
 
     def test_permission_examples_distinguish_global_and_project_scope(self) -> None:
-        soup = BeautifulSoup((self.site / "CLI.html").read_text(), "html.parser")
+        soup = BeautifulSoup((self.site / "cli/index.html").read_text(), "html.parser")
         examples = (
             ("allow-workspace-writes-across-projects", "global"),
             ("grant-writes-to-one-directory", "project"),
@@ -616,7 +862,11 @@ class WebsiteTests(unittest.TestCase):
                     self.assertIn("sandbox.profile=workspace", arguments)
 
     def test_reference_tables_have_keyboard_accessible_scroll_regions(self) -> None:
-        for name in ("CONFIGURATION.html", "REQUIREMENTS.html", "PYTHON.html"):
+        for name in (
+            "configuration/index.html",
+            "requirements/index.html",
+            "python-guide/index.html",
+        ):
             with self.subTest(page=name):
                 soup = BeautifulSoup((self.site / name).read_text(), "html.parser")
                 tables = soup.select("main table")
@@ -630,7 +880,7 @@ class WebsiteTests(unittest.TestCase):
 
     def test_r_package_subsite(self) -> None:
         home = (self.site / "r/index.html").resolve()
-        reference = (self.site / "r/reference/console_tool.html").resolve()
+        reference = (self.site / "r/reference/console_tool/index.html").resolve()
         self.assertIn(home, self.pages, "pkgdown home page is missing")
         self.assertIn(reference, self.pages, "console_tool reference is missing")
         self.assertIn("mcp.console", self.pages[home].title)
@@ -643,29 +893,29 @@ class WebsiteTests(unittest.TestCase):
             )
         }
         reference_url = (
-            "https://t-kalinowski.github.io/mcp-console/r/reference/console_tool.html"
+            "https://t-kalinowski.github.io/mcp-console/r/reference/console_tool/"
         )
         self.assertIn(reference_url, urls)
         search = json.loads((self.site / "r/search.json").read_text())
         self.assertIn(reference_url, {entry["path"] for entry in search})
         self.assertIn("arguments", self.pages[reference].ids)
-        self.assertIn("../../index.html", self.pages[reference].links)
-        for target in ("getting-started.html", "README.html", "REFERENCE.html"):
-            self.assertIn(f"../../{target}", self.pages[reference].links)
+        self.assertIn("../../../", self.pages[reference].links)
+        for target in ("getting-started/", "readme/", "reference/"):
+            self.assertIn(f"../../../{target}", self.pages[reference].links)
         self.assertIn(
             "https://github.com/t-kalinowski/mcp-console/blob/main/r/R/console-tool.R",
             self.pages[reference].links,
         )
         for name in (
-            "REFERENCE.html",
-            "R.html",
-            "package-links.html",
-            "benchmarks/package-links.html",
+            "reference/index.html",
+            "r-guide/index.html",
+            "package-links/index.html",
+            "benchmarks/package-links/index.html",
         ):
             with self.subTest(page=name):
                 page = self.site / name
                 destinations = {
-                    (page.parent / unquote(urlsplit(link).path)).resolve()
+                    linked_file(page, link)
                     for link in self.pages[page].links
                     if not urlsplit(link).scheme and not urlsplit(link).netloc
                 }
@@ -696,7 +946,9 @@ class WebsiteTests(unittest.TestCase):
             "codex.server",
         ):
             with self.subTest(symbol=name):
-                page = (self.site / f"python/reference/{name}.html").resolve()
+                page = (
+                    self.site / f"python/reference/{name.lower()}/index.html"
+                ).resolve()
                 self.assertIn(page, self.pages, "Python API page is missing")
                 self.assertIn(name, self.pages[page].title)
         sitemap = ElementTree.parse(self.site / "sitemap.xml")
@@ -707,7 +959,7 @@ class WebsiteTests(unittest.TestCase):
             )
         }
         self.assertIn(
-            "https://t-kalinowski.github.io/mcp-console/python/reference/MCPConsole.html",
+            "https://t-kalinowski.github.io/mcp-console/python/reference/mcpconsole/",
             urls,
         )
         self.assertIn(
@@ -715,30 +967,30 @@ class WebsiteTests(unittest.TestCase):
             (self.site / "python/llms-full.txt").read_text(),
         )
         self.assertIn(
-            "reference/MCPConsole.html",
+            "reference/mcpconsole/",
             (self.site / "python/llms.txt").read_text(),
         )
         self.assertTrue((self.site / "python/reference/MCPConsole.md").is_file())
         inventory = json.loads((self.site / "python/objects.json").read_text())
         for item in inventory["items"]:
             url = urlsplit(item["uri"])
-            target = self.site / url.path
+            target = self.site / url.path / "index.html"
             with self.subTest(symbol=item["name"]):
                 self.assertIn(target, self.pages)
                 self.assertIn(url.fragment, self.pages[target].ids)
-        for name in ("index.html", "reference/MCPConsole.html"):
+        for name in ("index.html", "reference/mcpconsole/index.html"):
             with self.subTest(package_page=name):
                 page = self.site / "python" / name
                 destinations = {
-                    (page.parent / unquote(urlsplit(link).path)).resolve()
+                    linked_file(page, link)
                     for link in self.pages[page].links
                     if not urlsplit(link).scheme and not urlsplit(link).netloc
                 }
                 for target in (
                     "index.html",
-                    "getting-started.html",
-                    "README.html",
-                    "REFERENCE.html",
+                    "getting-started/index.html",
+                    "readme/index.html",
+                    "reference/index.html",
                 ):
                     self.assertIn(self.site / target, destinations)
         self.assertIn(
@@ -746,27 +998,32 @@ class WebsiteTests(unittest.TestCase):
             {
                 link.split("#")[0]
                 for link in self.pages[
-                    (self.site / "python/reference/MCPConsole.html").resolve()
+                    (self.site / "python/reference/mcpconsole/index.html").resolve()
                 ].links
             },
         )
-        for name, target in (("REFERENCE.html", home), ("PYTHON.html", reference)):
+        for name, target in (
+            ("reference/index.html", home),
+            ("python-guide/index.html", reference),
+        ):
             with self.subTest(page=name):
                 page = self.site / name
                 destinations = {
-                    (page.parent / unquote(urlsplit(link).path)).resolve()
+                    linked_file(page, link)
                     for link in self.pages[page].links
                     if not urlsplit(link).scheme and not urlsplit(link).netloc
                 }
                 self.assertIn(target, destinations)
 
     def test_python_reference_uses_main_website(self) -> None:
-        guide = BeautifulSoup((self.site / "PYTHON.html").read_text(), "html.parser")
+        guide = BeautifulSoup(
+            (self.site / "python-guide/index.html").read_text(), "html.parser"
+        )
         for name in (
             "python/index.html",
             "python/reference/index.html",
-            "python/reference/MCPConsole.html",
-            "python/reference/openai.AsyncResponsesTool.html",
+            "python/reference/mcpconsole/index.html",
+            "python/reference/openai.asyncresponsestool/index.html",
         ):
             with self.subTest(page=name):
                 path = self.site / name
@@ -792,13 +1049,13 @@ class WebsiteTests(unittest.TestCase):
                 self.assertNotIn("great-docs", str(page.select("link[rel=stylesheet]")))
         search = json.loads((self.site / "search.json").read_text())
         self.assertIn(
-            "python/reference/MCPConsole.html",
+            "python/reference/mcpconsole/",
             {urlsplit(entry["href"]).path for entry in search},
         )
         self.assertTrue(
             any(
                 "send_tool" in entry["text"]
-                and urlsplit(entry["href"]).path == "python/reference/MCPConsole.html"
+                and urlsplit(entry["href"]).path == "python/reference/mcpconsole/"
                 for entry in search
             ),
             "The shared search must include inline method documentation",
@@ -827,15 +1084,20 @@ class WebsiteTests(unittest.TestCase):
             with self.subTest(group=label):
                 self.assertIn(label, sections.keys())
                 links = {
-                    (reference.parent / unquote(urlsplit(link["href"]).path)).resolve()
+                    linked_file(reference, link["href"])
                     for link in sections[label].select("a[href]")
-                    if urlsplit(link["href"]).path.endswith(".html")
+                    if urlsplit(link["href"]).path
                 }
                 self.assertEqual(
                     links,
-                    {reference.parent / f"{symbol}.html" for symbol in symbols},
+                    {
+                        reference.parent / f"{symbol.lower()}/index.html"
+                        for symbol in symbols
+                    },
                 )
-        page = BeautifulSoup((self.site / "PYTHON.html").read_text(), "html.parser")
+        page = BeautifulSoup(
+            (self.site / "python-guide/index.html").read_text(), "html.parser"
+        )
         labels = {
             row.find("td").get_text(" ", strip=True)
             for row in page.select("table tbody tr")
@@ -843,7 +1105,7 @@ class WebsiteTests(unittest.TestCase):
         self.assertEqual(groups.keys() & labels, groups.keys())
         adapter = (
             BeautifulSoup(
-                (self.site / "python/reference/codex.server.html").read_text(),
+                (self.site / "python/reference/codex.server/index.html").read_text(),
                 "html.parser",
             )
             .select_one("main")
@@ -858,7 +1120,7 @@ class WebsiteTests(unittest.TestCase):
             ("AsyncMCPConsole", ("__aenter__", "__aexit__")),
         ):
             with self.subTest(client=name):
-                path = self.site / f"python/reference/{name}.html"
+                path = self.site / f"python/reference/{name.lower()}/index.html"
                 page = self.pages[path]
                 for method in (
                     "connect",
@@ -872,30 +1134,33 @@ class WebsiteTests(unittest.TestCase):
                         path.read_text().count(f'id="mcp_console.{name}.{method}"'), 1
                     )
                     self.assertFalse(
-                        (self.site / f"python/reference/{name}.{method}.html").exists(),
+                        (
+                            self.site
+                            / f"python/reference/{name.lower()}.{method}/index.html"
+                        ).exists(),
                         "methods should be documented on the class page",
                     )
 
     def test_package_links_are_relative_at_each_depth(self) -> None:
         for name, prefix in (
-            ("package-links.html", ""),
-            ("benchmarks/package-links.html", "../"),
+            ("package-links/index.html", "../"),
+            ("benchmarks/package-links/index.html", "../../"),
         ):
             with self.subTest(page=name):
                 page = self.pages[self.site / name]
                 for target in (
-                    "r/reference/console_tool.html?view=full#arguments",
-                    "python/reference/MCPConsole.html?view=full#"
+                    "r/reference/console_tool/?view=full#arguments",
+                    "python/reference/mcpconsole/?view=full#"
                     "mcp_console.MCPConsole.send",
-                    "r/index.html",
-                    "r/index.html#inspect-and-edit-configuration",
+                    "r/",
+                    "r/#inspect-and-edit-configuration",
                 ):
                     self.assertIn(prefix + target, page.links)
 
     def test_repository_links_are_classified_at_each_depth(self) -> None:
         for name, prefix in (
-            ("package-links.html", "./"),
-            ("benchmarks/package-links.html", "../"),
+            ("package-links/index.html", "../"),
+            ("benchmarks/package-links/index.html", "../../"),
         ):
             with self.subTest(page=name):
                 page = self.pages[self.site / name]
@@ -909,7 +1174,7 @@ class WebsiteTests(unittest.TestCase):
                         page.links,
                     )
                 self.assertIn(
-                    prefix + "SEND_OPERATIONS.html#standard-input-and-managed-reads",
+                    prefix + "send_operations/#standard-input-and-managed-reads",
                     page.links,
                 )
 
@@ -927,7 +1192,9 @@ class WebsiteTests(unittest.TestCase):
             ("codex.server", "codex.server"),
         ):
             with self.subTest(adapter=name):
-                page = self.pages[self.site / f"python/reference/{name}.html"]
+                page = self.pages[
+                    self.site / f"python/reference/{name.lower()}/index.html"
+                ]
                 examples = [
                     code
                     for code in page.code_blocks

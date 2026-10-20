@@ -52,8 +52,8 @@ tool <- console_tool(config = config, project = "/path/to/project")
 
 An explicit configuration skips file discovery.
 Here the `workspace` profile allows ordinary project writes; network access is configured separately.
-[Configure a Console session](https://t-kalinowski.github.io/mcp-console/r/articles/configuration.html) covers inspecting, editing, saving, and reusing settings.
-The [R API](https://t-kalinowski.github.io/mcp-console/r/reference/index.html) documents the complete configuration interface.
+[Configure a Console session](https://t-kalinowski.github.io/mcp-console/r/articles/configuration/) covers inspecting, editing, saving, and reusing settings.
+The [R API](https://t-kalinowski.github.io/mcp-console/r/reference/) documents the complete configuration interface.
 
 ## Work with the session
 
@@ -61,4 +61,4 @@ The shared guides explain [sessions and languages](BUILTIN_RUNTIME.md), [package
 These describe the same workbench your agent uses from R.
 
 [Customize Console](BUILD_ON_CONSOLE.md) shows how to change the descriptions, languages, and parameters the agent sees.
-For a complete analysis example, see [Giving an agent an R session](https://t-kalinowski.github.io/mcp-console/r/articles/autonomous-report.html).
+For a complete analysis example, see [Giving an agent an R session](https://t-kalinowski.github.io/mcp-console/r/articles/autonomous-report/).

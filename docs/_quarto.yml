@@ -6,6 +6,9 @@ project:
       python _python.py
   post-render:
     - _pkgdown.R
+    - >-
+      uv run --no-project --isolated --with-requirements requirements.txt
+      python _urls.py
   render:
     - index.qmd
     - getting-started.qmd

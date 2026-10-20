@@ -17,7 +17,7 @@ The documentation's [“I want to…” table](README.md#find-a-task) is the mai
 
 ## Python and R
 
-- The [Python API](https://t-kalinowski.github.io/mcp-console/python/reference/index.html) documents synchronous and asynchronous clients and model integrations.
-  The [Python package overview](https://t-kalinowski.github.io/mcp-console/python/index.html) links to installation, first calls, and framework integration guides.
-- The [R API](https://t-kalinowski.github.io/mcp-console/r/reference/index.html) documents tool registration and session configuration.
+- The [Python API](https://t-kalinowski.github.io/mcp-console/python/reference/) documents synchronous and asynchronous clients and model integrations.
+  The [Python package overview](https://t-kalinowski.github.io/mcp-console/python/) links to installation, first calls, and framework integration guides.
+- The [R API](https://t-kalinowski.github.io/mcp-console/r/reference/) documents tool registration and session configuration.
   The [R package manual](../r/README.md) includes configuration and analysis examples.

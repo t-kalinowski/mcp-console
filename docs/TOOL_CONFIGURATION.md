@@ -141,7 +141,7 @@ The exported document keeps the ordinary configuration semantics; deleting a par
 
 Changing `languages` may make saved parameter entries unavailable; resolve the desired language selection before editing the tool.
 
-R exposes these operations through [`discover_console_config()`, `materialize_console_config()`, and `prune_console_config()`](https://t-kalinowski.github.io/mcp-console/r/articles/configuration.html#inspect-and-edit-configuration).
+R exposes these operations through [`discover_console_config()`, `materialize_console_config()`, and `prune_console_config()`](https://t-kalinowski.github.io/mcp-console/r/articles/configuration/#inspect-and-edit-configuration).
 They return ordinary S7 `ConsoleConfig` objects with file discovery disabled.
 `read_console_config()` imports one required JSON or YAML file; `ConsoleConfig(...)` builds settings directly in R.
 Edit properties with `@`; use `$` to select named parameter entries.

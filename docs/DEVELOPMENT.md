@@ -99,7 +99,12 @@ Historical design sketches, task templates, and root/test documentation are not 
 
 Keep Markdown usable in the repository.
 The website filter takes page titles from first headings, rewrites links outside `docs/` to GitHub, and maps the R README and published package-reference URLs to local rendered pages.
-Keep public filenames stable when possible; update references and navigation when adding or moving a page.
+Keep source filenames descriptive; use source paths in navigation and relative Markdown links.
+After Quarto and pkgdown render, `docs/_urls.py` publishes lowercase directory URLs, so `BUILTIN_RUNTIME.md` appears at `builtin_runtime/`.
+The generated `index.html` files belong only to the build output; source files do not move.
+The R and Python guides use `r-guide/` and `python-guide/`, leaving `r/` and `python/` for the package overviews.
+The hook updates page links, asset paths, search, sitemaps, and the Python inventory while preserving symbol fragments.
+Partial renders update only the affected pages and their search entries.
 
 Install Quarto, uv, R, pkgdown, and the R package dependencies:
 
@@ -112,7 +117,7 @@ scripts/preview-site
 scripts/render-site
 ```
 
-These scripts run `quarto preview docs --render html` and `quarto render docs --to html` with the Python documentation tools supplied by uv.
+These scripts run `quarto preview docs --render html --no-navigate` and `quarto render docs --to html` with the Python documentation tools supplied by uv.
 Run them from the repository root.
 Additional arguments are passed to Quarto.
 Use `scripts/preview-site --port 3604 --no-browser` to choose a port and keep the browser closed.
@@ -123,6 +128,9 @@ The hook runs through uv, which prepares a separate environment from `docs/requi
 It preserves explicit members, inline methods, static introspection, symbol anchors, and source links.
 Generated pages use the main site's API reference sidebar, theme, and search.
 Preview starts with a full HTML render so Quarto discovers generated pages on a clean checkout, then rerenders changed pages.
+Use `scripts/preview-site` so the URL hook retains the original outputs Quarto needs to track those renders.
+The clean URLs use Quarto's reload client, and preview stays on the current page when a source changes.
+Full renders remove the original outputs and omit the preview client.
 Run `scripts/render-site` after editing Python docstrings or `great-docs.yml`, or to refresh the R package site.
 Both commands write to `docs/_site`.
 

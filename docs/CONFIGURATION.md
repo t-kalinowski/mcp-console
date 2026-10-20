@@ -231,7 +231,7 @@ Managed fallback entries include their effective resolution policy even when an 
 An export does not pin installed dependencies or copy the host environment.
 Exported interpreter paths must be representable as UTF-8.
 
-R exposes the same operations through its [configuration workflow](https://t-kalinowski.github.io/mcp-console/r/reference/config-workflow.html).
+R exposes the same operations through its [configuration workflow](https://t-kalinowski.github.io/mcp-console/r/reference/config-workflow/).
 
 ## Paths
 
