@@ -53,7 +53,7 @@ mcp-console config resolve
 
 This uses the same files and command-line overrides as starting a session, without starting interpreters or preparing packages.
 Built-in defaults are omitted; add `--full` to include them.
-You can also [save the resolved configuration](#export-a-configuration) and use it for a later session.
+You can [save the resolved configuration](#export-a-configuration) for a later session or [edit its generated tool descriptions and parameter settings](#edit-exported-tool-settings).
 
 ## Settings by task {#settings-by-task}
 
@@ -221,7 +221,9 @@ An unchanged configuration produces `{}`.
 Mappings are pruned recursively.
 Changed arrays and scalar values stay complete, including empty arrays and strings; overrides needed to preserve conditional defaults remain explicit.
 `--full` includes defaults and generated tool descriptions; it cannot be combined with `--prune`.
-See [Tool configuration](TOOL_CONFIGURATION.md#inspect-and-edit-resolved-configuration) before editing that generated text or schema metadata.
+
+Tool prose is pruned against generated text for the selected languages, permissions, and timeout visibility.
+Explicit text remains when those conditional defaults differ.
 
 Use the same launch directory for export and execution so relative paths retain their meaning.
 For host execution, pass `--no-sandbox` to both commands; launch flags are not stored in YAML.
@@ -231,7 +233,30 @@ Managed fallback entries include their effective resolution policy even when an 
 An export does not pin installed dependencies or copy the host environment.
 Exported interpreter paths must be representable as UTF-8.
 
-R exposes the same operations through its [configuration workflow](https://t-kalinowski.github.io/mcp-console/r/reference/config-workflow/).
+### Edit exported tool settings
+
+The full output contains captured settings, configuration defaults, generated instructions and descriptions, and every parameter selected by `languages`, including disabled parameters.
+Each parameter has explicit `enabled` and `description` fields, read-only `schema` metadata for its type and constraints, and a `parameters` mapping for nested fields.
+Generated Python parameter descriptions export as `null` so the next launch regenerates guidance for its selected environment and resolution policy.
+An explicit Python description remains verbatim, including an empty string.
+Changes to the `schema` metadata fail validation.
+Use `enabled: false` to hide a parameter while retaining its details for inspection or re-enabling.
+
+Materialized text is an explicit override: subsequently hiding `timeout_ms` does not rewrite the saved tool description.
+Edit that text too if the experiment should remove its timeout guidance.
+Removing an override or setting `description: null` restores generated text; an empty string replaces it with empty text.
+The exported document keeps the ordinary configuration semantics; deleting a parameter entry restores its defaults rather than hiding it.
+
+Changing `languages` may make saved parameter entries unavailable; resolve the desired language selection before editing the tool.
+
+### Inspect and edit settings from R
+
+R exposes these operations through [`discover_console_config()`, `materialize_console_config()`, and `prune_console_config()`](https://t-kalinowski.github.io/mcp-console/r/articles/configuration/#inspect-and-edit-configuration).
+They return ordinary S7 `ConsoleConfig` objects with file discovery disabled.
+`read_console_config()` imports one required JSON or YAML file; `ConsoleConfig(...)` builds settings directly in R.
+Edit properties with `@`; use `$` to select named parameter entries.
+The sandbox choice remains in the configuration, while executable and launch-directory choices remain explicit arguments to each call.
+`console_tool()` discovers optional files by default; pass `config = ConsoleConfig(...)` to skip them.
 
 ## Paths
 

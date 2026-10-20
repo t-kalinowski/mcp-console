@@ -128,7 +128,7 @@ mcp-console serve --config-file application.yaml
 
 Choose the languages and enabled arguments before exporting so the generated text and parameter entries match the interface.
 The client decides when to show initialization instructions and tool descriptions to the model.
-See [Tool configuration](TOOL_CONFIGURATION.md#inspect-and-edit-resolved-configuration) for export details and the effect of omitted, `null`, and empty descriptions.
+See [Edit exported tool settings](CONFIGURATION.md#edit-exported-tool-settings) for the effect of omitted, `null`, and empty descriptions and for read-only schema metadata.
 
 ## Name and connect your tool
 
