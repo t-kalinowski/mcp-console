@@ -115,7 +115,7 @@ The complete native-policy interface remains separate from application YAML; see
 
 ## Client packages
 
-[Client integration](CLIENTS.md) links the Python and R packages and their generated references.
+[Connect to Console](CLIENTS.md) links the Python and R guides and their package references.
 Register tools through the supplied adapters so the model receives the connected server's schema; inferring it from Python method annotations loses configured capabilities.
 
 ## What is not a public compatibility contract

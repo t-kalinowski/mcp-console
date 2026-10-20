@@ -28,7 +28,7 @@ To install the development version, follow [Build from source](BUILD_FROM_SOURCE
 
 ## Connect to Console {#connect-your-client}
 
-Use an MCP client or integrate Console into your own R or Python application.
+Use Console with an MCP client, from R, or from Python.
 
 ### Codex and Claude Code
 
@@ -57,10 +57,10 @@ See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
 
 ### R and Python packages
 
-The [R package, `mcp.console`](../r/README.md), adds Console to an ellmer chat.
-The [Python package, `mcp_console`](PYTHON.md), provides synchronous and asynchronous clients and adapters for chatlas, OpenAI, and Anthropic.
+The [R guide](R.md) shows how to add Console to an ellmer chat with `mcp.console`.
+The [Python guide](PYTHON.md) covers synchronous and asynchronous calls and adapters for chatlas, OpenAI, and Anthropic through `mcp_console`.
 
-See [Client integration](CLIENTS.md) for package APIs and [Tool configuration](TOOL_CONFIGURATION.md) for language visibility and tool descriptions.
+See [Connect to Console](CLIENTS.md) for all connection methods and [Customize Console](BUILD_ON_CONSOLE.md) for tool descriptions, language visibility, and prepared environments.
 
 ## Try an analysis
 

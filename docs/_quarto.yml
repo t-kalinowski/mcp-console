@@ -25,14 +25,6 @@ website:
     left:
       - href: README.md
         text: User guides
-      - href: README.md#reference
-        text: Reference
-      - href: SANDBOX_COMMAND.md
-        text: Sandbox
-      - href: BUILD_ON_CONSOLE.md
-        text: Build on Console
-      - href: DEVELOPMENT.md
-        text: Development
     right:
       - text: Packages
         menu:
@@ -52,12 +44,19 @@ website:
       - href: README.md
         text: Overview
       - getting-started.qmd
-      - SANDBOX_COMMAND.md
+      - section: CLIENTS.md
+        contents:
+        - href: CLIENTS.md#mcp-clients
+          text: MCP clients
+        - R.md
+        - PYTHON.md
       - section: Learn Console
         contents:
         - BUILTIN_RUNTIME.md
         - REQUIREMENTS.md
         - SANDBOX.md
+        - RECORDING.md
+      - BUILD_ON_CONSOLE.md
       - section: Reference
         contents:
         - CONFIGURATION.md
@@ -67,33 +66,24 @@ website:
         - RESOLVER.md
         - ENVIRONMENT.md
         - RUNTIME_REFERENCE.md
-        - RECORDING.md
         - CLI.md
         - cli-help.qmd
+        - href: SANDBOX_COMMAND.md
+          text: Sandbox command
+        - section: MCP
+          contents:
+          - API.md
+          - SEND_OPERATIONS.md
+          - REQUIREMENTS_API.md
+        - href: python/reference/index.html
+          text: Python API
+        - href: r/reference/index.html
+          text: R API
       - section: Platforms and installation
         contents:
         - LINUX_COMPATIBILITY.md
         - BUILD_FROM_SOURCE.md
       - GLOSSARY.md
-    - id: clients
-      title: Build on Console
-      style: docked
-      collapse-level: 1
-      contents:
-      - BUILD_ON_CONSOLE.md
-      - CLIENTS.md
-      - PYTHON.md
-      - href: r/index.html
-        text: R and ellmer
-      - section: MCP reference
-        contents:
-        - API.md
-        - SEND_OPERATIONS.md
-        - REQUIREMENTS_API.md
-      - href: python/reference/index.html
-        text: Python API
-      - href: r/reference/index.html
-        text: R API
     - id: development
       title: Development
       style: docked
@@ -115,6 +105,8 @@ website:
   page-footer:
     left: MCP Console · MIT License
     right:
+      - text: Development
+        href: DEVELOPMENT.md
       - text: Source
         href: https://github.com/t-kalinowski/mcp-console
 

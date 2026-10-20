@@ -128,7 +128,10 @@ class WebsiteTests(unittest.TestCase):
                     .replace("`", "")
                 )
                 self.assertIn(heading, page.title)
-                self.assertIn("quarto-sidebar", page.ids)
+                if relative == Path("README.html"):
+                    self.assertNotIn("quarto-sidebar", page.ids)
+                else:
+                    self.assertIn("quarto-sidebar", page.ids)
                 self.assertIn(relative.as_posix(), indexed)
         for name in ("index.html", "getting-started.html"):
             self.assertIn((self.site / name).resolve(), self.pages)
@@ -245,13 +248,17 @@ class WebsiteTests(unittest.TestCase):
         }
         self.assertIn(path, destinations)
 
-    def test_reading_paths_have_their_own_navigation(self) -> None:
+    def test_user_guides_share_navigation_and_development_is_separate(self) -> None:
         paths = (
-            ("CONFIGURATION.html", "REQUIREMENTS.html", "SEND_OPERATIONS.html"),
-            ("RUNTIME_CONFIGURATION.html", "CONFIGURATION.html", "API.html"),
-            ("RUNTIME_REFERENCE.html", "CONFIGURATION.html", "API.html"),
-            ("CONFIGURATION_REFERENCE.html", "CONFIGURATION.html", "API.html"),
-            ("API.html", "REQUIREMENTS_API.html", "SANDBOX_CONFIGURATION.html"),
+            ("CLIENTS.html", "CONFIGURATION.html", "ARCHITECTURE.html"),
+            ("R.html", "REQUIREMENTS.html", "WORKER_PROTOCOL.html"),
+            ("PYTHON.html", "R.html", "ARCHITECTURE.html"),
+            ("BUILD_ON_CONSOLE.html", "CLIENTS.html", "ARCHITECTURE.html"),
+            ("CONFIGURATION.html", "SEND_OPERATIONS.html", "WORKER_PROTOCOL.html"),
+            ("RUNTIME_CONFIGURATION.html", "API.html", "ARCHITECTURE.html"),
+            ("RUNTIME_REFERENCE.html", "API.html", "ARCHITECTURE.html"),
+            ("CONFIGURATION_REFERENCE.html", "API.html", "ARCHITECTURE.html"),
+            ("API.html", "SANDBOX_CONFIGURATION.html", "WORKER_PROTOCOL.html"),
             ("ARCHITECTURE.html", "WINDOWS_DEVELOPMENT.html", "REQUIREMENTS.html"),
         )
         for name, included, excluded in paths:
@@ -266,14 +273,7 @@ class WebsiteTests(unittest.TestCase):
                 self.assertIn(included, links)
                 self.assertNotIn(excluded, links)
                 navbar = soup.select_one(".navbar")
-                for label in (
-                    "User guides",
-                    "Reference",
-                    "Sandbox",
-                    "Build on Console",
-                    "Development",
-                    "Packages",
-                ):
+                for label in ("User guides", "Packages"):
                     self.assertIn(label, navbar.get_text(" ", strip=True))
 
     def test_home_title_has_one_introduction_and_description_metadata(self) -> None:

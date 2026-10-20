@@ -119,6 +119,6 @@ Ask the agent for the recording's location.
 The recorded Quarto document provides a starting point for a report; review its code, inputs, and package requirements before rendering it.
 
 For precise language behavior, see the [runtime reference](RUNTIME_REFERENCE.md).
-[Client integration](CLIENTS.md) covers applications that call Console directly.
+[Connect to Console](CLIENTS.md) covers using Console with an MCP client, from R, or from Python.
 
 Continue with [Packages and environments](REQUIREMENTS.md) to learn how Console prepares the libraries your agent uses.

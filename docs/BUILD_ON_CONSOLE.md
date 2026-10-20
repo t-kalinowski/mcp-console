@@ -1,8 +1,8 @@
-# Build on Console
+# Customize Console
 
-Use Console as the execution environment behind a data assistant or a tool for a specific analysis.
-You can choose the languages and arguments the model can use, describe the data available to it, and prepare a session with data, connections, and helper functions.
-Your application keeps the same Console connection open as the model works, so later calls can use what is already in memory.
+Choose the languages and arguments your agent can use, describe the data available to it, and prepare a session with packages, data, connections, and helper functions.
+These settings work with an MCP client or with the R and Python packages.
+See [Connect to Console](CLIENTS.md) to choose how to connect.
 
 ## Choose languages and arguments
 
@@ -21,7 +21,7 @@ tool:
 
 The tool accepts SQL, polling, and the remaining control arguments.
 R and Python source fields, `requirements`, and `stdin` are absent from the advertised schema and rejected if supplied, including as `null`.
-Use `[r]`, `[python]`, or a combination of languages for other applications.
+Use `[r]`, `[python]`, or a combination of languages for other tasks.
 
 Language selection controls the interface; SQL can still use an R or Python connection underneath.
 Use [sandbox permissions](SANDBOX_CONFIGURATION.md) and database permissions to control what the workload can access.
@@ -30,8 +30,9 @@ Use [sandbox permissions](SANDBOX_CONFIGURATION.md) and database permissions to 
 ## Prepare the session
 
 Select [interpreters, startup packages, and package preparation policies](RUNTIME_CONFIGURATION.md) in configuration.
+You can [choose when packages may be prepared](REQUIREMENTS.md#resolution-policy-admission), from a fixed startup set to adding packages during a session.
 Preparing a package makes it available; loading data and defining variables require code in the session.
-Choose the setup approach that fits your application.
+Choose the setup approach that fits your session.
 
 ### Select a database connection
 
@@ -163,17 +164,10 @@ with MCPConsole(args=["serve", "--config-file", "application.yaml"]) as console:
 `set_tools()` replaces the chat's tool list.
 Using `console.send_tool.input_schema` preserves configured languages and hidden arguments; inferring a schema from the Python method's signature would lose those settings.
 
-[Client integration](CLIENTS.md) links to MCP, Python, and R interfaces.
-The [Python adapters](PYTHON.md#choose-a-model-integration) and [R package](../r/README.md) cover model integration and connection lifetime.
+[Connect to Console](CLIENTS.md) links to MCP, Python, and R interfaces.
+The [Python](PYTHON.md#choose-a-model-integration) and [R](R.md) guides cover adding Console to a chat or model framework.
 Your application chooses the model and manages the conversation.
 
-## Use the sandbox independently
+<span id="use-the-sandbox-independently"></span>
 
-You can also use Console's sandbox to run a program from a terminal, script, or build job:
-
-```sh
-mcp-console sandbox -- python analysis.py
-```
-
-[Run commands in a sandbox](SANDBOX_COMMAND.md) covers installation, file and network permissions, reusable policies, and cleanup.
-It provides a separate entry point for applications that need command isolation without a persistent Console session.
+To configure permissions for standalone programs, see [Run commands in a sandbox](SANDBOX_COMMAND.md).

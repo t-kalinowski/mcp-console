@@ -12,6 +12,7 @@ for page in project.rglob("*.qmd"):
     navigation = (
         '<nav aria-label="Console documentation">'
         f'<a href="{parent}index.html">MCP Console</a> · '
+        f'<a href="{parent}README.html">User guides</a> · '
         f'<a href="{parent}PYTHON.html">Python guide</a> · '
         f'<a href="{parent}r/index.html">R package</a></nav>\n\n'
     )

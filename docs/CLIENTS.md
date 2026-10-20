@@ -1,15 +1,36 @@
-# Client integration
+# Connect to Console
 
-Use these references when writing an application that connects to Console.
-For examples of shaping the tool interface and preparing its workspace, start with [Build on Console](BUILD_ON_CONSOLE.md).
-To connect an existing MCP client without writing integration code, use [Get started](getting-started.qmd).
+Use Console with an MCP client, from an R chat, or from Python.
+Each connects to the same persistent workbench for R, Python, and SQL.
 
-## Connect from application code
+## With an MCP client {#mcp-clients}
 
-[Python clients and adapters](PYTHON.md) provides direct calls and integrations with model frameworks.
-[R and ellmer](../r/README.md) adds Console to an R chat.
+[Get started](getting-started.qmd#connect-your-client) covers setup for Codex, Claude Code, and other MCP clients.
+Console uses MCP over standard input and output.
+For a client with manual MCP settings, use command `uvx` and arguments `["mcp-console", "serve"]`.
+See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
 
-The [Python API](https://t-kalinowski.github.io/mcp-console/python/reference/index.html) and [R API](https://t-kalinowski.github.io/mcp-console/r/reference/index.html) document exact signatures and complete examples.
+<span id="connect-from-application-code"></span>
+
+## From R
+
+The `mcp.console` package adds Console to an ellmer chat.
+[Use Console from R](R.md) shows installation, tool registration, and session configuration.
+The [R API](https://t-kalinowski.github.io/mcp-console/r/reference/index.html) documents exact signatures.
+
+## From Python
+
+The `mcp_console` package provides synchronous and asynchronous clients and adapters for model frameworks.
+[Use Console from Python](PYTHON.md) covers direct calls, adapters, results, and connection lifetime.
+The [Python API](https://t-kalinowski.github.io/mcp-console/python/reference/index.html) documents exact signatures and complete examples.
+
+## Learn and customize Console
+
+<span id="configure-the-models-interface"></span>
+
+The [user guides](README.md#learn-console) cover sessions, packages, sandbox permissions, and recordings for all three connection methods.
+[Customize Console](BUILD_ON_CONSOLE.md) shows how to change the tool descriptions, exposed languages and parameters, and prepared environment.
+[Tool configuration](TOOL_CONFIGURATION.md) documents the exact settings.
 
 ## Use the MCP tool
 
@@ -18,11 +39,6 @@ The [Python API](https://t-kalinowski.github.io/mcp-console/python/reference/ind
 
 [Requirements API](REQUIREMENTS_API.md) documents dependency actions and their effects on a running session.
 [Runtime reference](RUNTIME_REFERENCE.md) provides detailed language behavior and helper contracts.
-
-## Configure the model's interface
-
-[Tool configuration](TOOL_CONFIGURATION.md) covers language visibility, descriptions, parameter visibility, and configuration exports for evaluations.
-These settings change the interface presented to a client; they are not sandbox permissions.
 
 ## Developing Console itself
 

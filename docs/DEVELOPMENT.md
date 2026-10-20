@@ -146,17 +146,19 @@ A saved choice from a page's theme control takes precedence over the browser pre
 
 ### Documentation ownership
 
-The [user guides](README.md) offer two reading paths: [Learn Console](README.md#learn-console) introduces the concepts without requiring installation, and [Reference](README.md#reference) supports specific tasks and precise lookups.
-Keep Sessions and languages, Packages and environments, and Sandbox and trust readable as a sequence.
+The [user guides](README.md) bring together [connection methods](CLIENTS.md), [Learn Console](README.md#learn-console), and a [task index](README.md#reference).
+MCP, R, and Python users share the same guides and sidebar; the overview uses its own links instead of a sidebar.
+Keep Sessions and languages, Packages and environments, Sandbox and trust, and Recordings and reports readable as a sequence.
 Use examples to explain the concepts, then link to the reference for complete settings and edge cases.
 
 All settings accepted in `config.yaml` belong in the user reference.
 Each reference topic has one owner: [Configuration files](CONFIGURATION.md) for discovery, merging, paths, and export; [Interpreters and startup](RUNTIME_CONFIGURATION.md) for R/Python selection, startup packages, resolution policies, and database startup; [Tool configuration](TOOL_CONFIGURATION.md) for language visibility, descriptions, and accepted parameters; [Sandbox permissions](SANDBOX_CONFIGURATION.md) for permission fields and enforcement limits; [Package sources and caches](RESOLVER.md) for preparation and cache settings; and [Environment variables](ENVIRONMENT.md) for environment settings and recognized variables.
 The configuration settings index links to these owners instead of repeating their field tables.
-[Runtime behavior](RUNTIME_REFERENCE.md) and [Recordings and reports](RECORDING.md) also belong in the user reference.
+[Runtime behavior](RUNTIME_REFERENCE.md) owns language behavior; [Recordings and reports](RECORDING.md) owns recording behavior and report workflows.
 
-[Build on Console](BUILD_ON_CONSOLE.md) introduces application building with examples of tool customization, prepared sessions, and integration.
-[Client integration](CLIENTS.md) collects the interfaces for applications that call Console.
+[Customize Console](BUILD_ON_CONSOLE.md) introduces tool descriptions, language and parameter visibility, and prepared sessions for any connection method.
+[Connect to Console](CLIENTS.md) introduces MCP clients and the [R](R.md) and [Python](PYTHON.md) guides.
+Generated package manuals provide exact signatures and package-specific examples.
 Exact MCP calls and requirement operations belong in [MCP send reference](API.md) and [Requirements API](REQUIREMENTS_API.md).
 Keep compatibility anchors when moving public sections and include every new page in the appropriate sidebar and search index.
 Architecture belongs in [Architecture](ARCHITECTURE.md); exact private message schemas belong with their source definitions.

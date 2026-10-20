@@ -14,6 +14,9 @@ MCP Console lets your agent explore data and develop code interactively in R, Py
 Code runs in an [OS-level sandbox](SANDBOX.md) by default.
 Console prepares environments and packages automatically; no Console configuration file is required.
 
+Console works with MCP-compatible clients such as Codex and Claude Code and does not depend on a particular model provider.
+You can also [use Console from R or Python](CLIENTS.md).
+
 ::: {.home-links}
 [Get started](getting-started.qmd){.btn .btn-primary} [User guides](README.md){.btn .btn-outline-primary}
 :::
@@ -66,18 +69,14 @@ mcp-console sandbox -- python analysis.py
 [Recordings](RECORDING.md) retain code, output, and plots so you can see what the agent ran in Console and inspect the results.
 They also provide a starting point for reproducible analyses and reports.
 
-## Build on Console
+## Customize Console {#build-on-console}
 
-Build LLM applications on Console's persistent runtime.
 Replace the complete [tool description and instructions](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters), choose which language interfaces and parameters the model can use, and [preconfigure the runtime](RUNTIME_CONFIGURATION.md).
 Set [sandbox permissions](SANDBOX_CONFIGURATION.md) to control access to files and networks.
 
 For example, build a data chat with only SQL and a selected database connection, or a reporting assistant with a prepared R or Python environment.
 
-[Build on Console](BUILD_ON_CONSOLE.md) shows how to customize the tool interface, describe available data, prepare the session, and connect your application.
-
-Console works with MCP-compatible clients such as Codex and Claude Code and does not depend on a particular model provider.
-To connect from your own application, see [Client integration](CLIENTS.md).
+[Customize Console](BUILD_ON_CONSOLE.md) shows how to customize the tool interface, describe available data, and prepare the session.
 
 ## Choose how packages are prepared {#environment-setup}
 

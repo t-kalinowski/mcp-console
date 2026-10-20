@@ -1,8 +1,10 @@
-# Python clients and adapters
+# Use Console from Python
 
-Use `mcp_console` to connect a Python application to Console or add it to a model framework.
+Use `mcp_console` to call Console from Python or add it to a model framework.
 This is the client package, not the Python environment in which the agent's analysis runs.
 It requires Python 3.11 or newer.
+
+The [user guides](README.md) cover the shared workbench: sessions, packages, sandbox permissions, and recordings.
 
 ## Call Console directly
 
