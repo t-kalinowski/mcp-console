@@ -37,10 +37,10 @@ website:
   repo-actions: [edit, issue]
   navbar:
     left:
-      - href: README.md
-        text: Documentation
       - href: getting-started.qmd
         text: Get started
+      - href: README.md
+        text: Documentation
       - href: REFERENCE.md
         text: API reference
     right:
@@ -51,42 +51,41 @@ website:
     - id: documentation
       title: Documentation
       style: docked
-      collapse-level: 1
+      collapse-level: 2
       contents:
       - href: README.md
-        text: Find a task
-      - href: getting-started.qmd
-        text: Get started
+        text: Overview
+      - section: Learn Console
+        contents:
+        - BUILTIN_RUNTIME.md
+        - getting-started.qmd
+        - REQUIREMENTS.md
+        - SANDBOX.md
+        - RECORDING.md
       - section: Connect to Console
         contents:
-        - INSTALLATION.md
         - href: CLIENTS.md
           text: MCP clients
         - R.md
         - PYTHON.md
-      - section: Use Console
-        contents:
-        - BUILTIN_RUNTIME.md
-        - RUNTIME_REFERENCE.md
-        - REQUIREMENTS.md
-        - SANDBOX.md
-        - RECORDING.md
-        - BUILD_ON_CONSOLE.md
       - section: Configuration
         contents:
+        - BUILD_ON_CONSOLE.md
         - CONFIGURATION.md
         - RUNTIME_CONFIGURATION.md
         - TOOL_CONFIGURATION.md
         - SANDBOX_CONFIGURATION.md
         - RESOLVER.md
         - ENVIRONMENT.md
-      - section: Command line
+      - section: Reference
         contents:
+        - RUNTIME_REFERENCE.md
+        - INSTALLATION.md
         - CLI.md
         - cli-help.qmd
         - href: SANDBOX_COMMAND.md
           text: Sandbox command
-      - GLOSSARY.md
+        - GLOSSARY.md
     - id: reference
       title: API reference
       style: docked

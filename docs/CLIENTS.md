@@ -1,8 +1,8 @@
 # Use Console with an MCP client
 
 Connect Console to your coding agent or another client that supports MCP over standard input and output.
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) to run the commands below.
-See [Installation](INSTALLATION.md) for platform requirements and optional R setup.
+[Get started](getting-started.qmd) walks through installation, connection, and a first analysis.
+This page covers registration scope and client setup options; the commands below require [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 <span id="mcp-clients"></span>
 
@@ -30,16 +30,6 @@ See [client configuration](CLI.md#configure-a-client) for project registration, 
 In your client's MCP settings, use command `uvx` and arguments `["mcp-console", "serve"]`.
 See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
 
-## Try an analysis
-
-Ask your agent:
-
-> Use MCP Console to simulate rolling two dice 1,000 times in Python.
-> Plot the distribution of their sums and keep the results for follow-up.
-
-See [Get started](getting-started.qmd#try-an-analysis) for an analysis across R, Python, and SQL, and [permission settings](getting-started.qmd#choose-permissions) for project writes.
-The [documentation](README.md) covers sessions, packages, sandbox permissions, and recordings.
-
 ## R and Python clients {#connect-from-application-code}
 
 <span id="from-r"></span> <span id="from-python"></span>
@@ -47,22 +37,9 @@ The [documentation](README.md) covers sessions, packages, sandbox permissions, a
 To use Console from R or Python, follow [Use Console from R](R.md) or [Use Console from Python](PYTHON.md).
 These clients use the same workbench and settings.
 
-## Learn and customize Console
-
 <span id="configure-the-models-interface"></span>
 
 [Customize Console](BUILD_ON_CONSOLE.md) shows how to change the tool descriptions, exposed languages and parameters, and prepared environment.
 [Tool configuration](TOOL_CONFIGURATION.md) documents the exact settings.
 
-## Use the MCP tool
-
-[`send` reference](API.md) documents arguments, results, and output limits.
-[Calls, input, and control](SEND_OPERATIONS.md) covers sequencing, polling, interactive input, interruption, and restart.
-
-[Requirements API](REQUIREMENTS_API.md) documents dependency actions and their effects on a running session.
-[Language behavior](RUNTIME_REFERENCE.md) documents language helpers, SQL results, plots, and output.
-
-## Developing Console itself
-
-The relay and worker protocols are implementation details, not alternative MCP interfaces.
-They are documented under [Development](DEVELOPMENT.md).
+After connecting, [Sessions and languages](BUILTIN_RUNTIME.md) explains how your agent can work with Console.

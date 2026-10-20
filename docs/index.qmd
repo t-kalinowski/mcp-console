@@ -64,12 +64,23 @@ The permissions apply to the command and its child processes.
 mcp-console sandbox -- python analysis.py
 ```
 
+## Use packages without managing environments {#environment-setup}
+
+Console automatically prepares its own environments and package libraries, reusing cached installations across sessions.
+You don't need to create an environment or install packages for the agent.
+
+The agent can request packages from the full R and Python ecosystems as an analysis develops, without requiring approval for each package.
+By default, these requests are handled in a separate OS-level sandbox, with writes limited to dependency caches and temporary directories and network access limited to allowed package and tooling hosts.
+Installing a package doesn't expand the permissions of the agent's code.
+
+See [Packages and environments](REQUIREMENTS.md).
+
 ## Review the agent's work
 
 [Recordings](RECORDING.md) retain code, output, and plots so you can see what the agent ran in Console and inspect the results.
 They also provide a starting point for reproducible analyses and reports.
 
-## Customize Console {#build-on-console}
+## Build on Console {#build-on-console}
 
 Replace the complete [tool description and instructions](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters), choose which language interfaces and parameters the model can use, and [preconfigure the runtime](RUNTIME_CONFIGURATION.md).
 Set [sandbox permissions](SANDBOX_CONFIGURATION.md) to control access to files and networks.
@@ -78,18 +89,10 @@ For example, build a data chat with only SQL and a selected database connection,
 
 [Customize Console](BUILD_ON_CONSOLE.md) shows how to customize the tool interface, describe available data, and prepare the session.
 
-## Choose how packages are prepared {#environment-setup}
-
-By default, Console prepares packages for the session and reuses cached installations.
-The agent can request additional packages as it works.
-
-You can instead [select an existing Python environment](RUNTIME_CONFIGURATION.md#python-environment-selection) or choose when Console may prepare dependencies.
-See [Packages and environments](REQUIREMENTS.md).
-
 ## Where Console fits
 
 - **Unattended analysis:** run long analyses with limits on filesystem writes and network access.
 - **Model evaluations:** evaluate how an agent explores data, checks its work, and responds to results.
-- **Conversational analysis:** discuss questions and results while the agent works in its own session.
+- **Conversational exploration:** discuss questions and results while the agent works in its own session.
 - **Large datasets:** keep data and intermediate results in memory for follow-up questions.
 - **Debugging and package development:** pause execution and inspect live objects where a failure occurs.

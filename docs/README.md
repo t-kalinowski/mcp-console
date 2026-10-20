@@ -1,11 +1,24 @@
 # Documentation
 
-Choose a task below, or follow [Get started](getting-started.qmd) to connect a client and run a first analysis.
 These pages apply whether you connect with an MCP client, from R, or from Python.
 
 <span id="get-connected"></span> <span id="platform-setup"></span>
 
-## Find a task
+## Learn Console {#learn-console}
+
+<span id="using-console"></span> <span id="use-console"></span> <span id="work-with-console"></span> <span id="how-console-works"></span>
+
+These guides introduce Console through a session with your agent:
+
+1. [Sessions and languages](BUILTIN_RUNTIME.md): run code and build on earlier results.
+2. [Get started](getting-started.qmd): connect an agent and try a first analysis.
+3. [Packages and environments](REQUIREMENTS.md): use packages without preparing an environment yourself.
+4. [Sandbox and trust](SANDBOX.md): understand what the agent can access.
+5. [Recordings and reports](RECORDING.md): inspect and reuse the work.
+
+## I want to… {#task-index}
+
+<span id="find-a-task"></span>
 
 | I want to…                                                                                        | Start here                                                                                 |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
@@ -31,17 +44,6 @@ These pages apply whether you connect with an MCP client, from R, or from Python
 | Register a client, check an installation, or look up a command                                    | [Command-line reference](CLI.md) and [CLI help](cli-help.qmd)                              |
 
 For a particular configuration key, use the [settings index](CONFIGURATION.md#settings-by-task).
-
-## Learn Console {#learn-console}
-
-<span id="using-console"></span> <span id="use-console"></span> <span id="work-with-console"></span> <span id="how-console-works"></span>
-
-These pages introduce Console and show how its pieces fit together:
-
-1. [Sessions and languages](BUILTIN_RUNTIME.md) shows how your agent can run code, query databases, and inspect help, plots, and results.
-2. [Packages and environments](REQUIREMENTS.md) explains how Console prepares packages, adds dependencies during an analysis, and uses environments you already manage.
-3. [Sandbox and trust](SANDBOX.md) explains where code runs, what it can access, and how session permissions differ from package-preparation permissions.
-4. [Recordings and reports](RECORDING.md) explains how to inspect the agent's work and reuse its code, output, and plots.
 
 The [glossary](GLOSSARY.md) defines terms used in these pages.
 

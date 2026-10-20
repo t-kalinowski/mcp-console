@@ -63,11 +63,11 @@ python:
   resolution: explicit
 ```
 
-| Setting             | Accepted values                                                                      | Meaning and default                                                                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `python.version`    | One quoted Python version or constraint string, such as `"3.13"` or `">=3.12,<3.14"` | Restrict the managed CPython version. Omission adds no version constraint; versions older than 3.10 are always excluded.                                              |
-| `python.packages`   | List of named PEP 508 registry requirements                                          | Packages to prepare at startup. Omission keeps the [default Python packages](REQUIREMENTS.md#defaults-and-startup-configuration); `[]` requests no optional packages. |
-| `python.resolution` | `implicit`, `explicit`, or `fixed`                                                   | When Console may prepare packages. Default: `explicit`. See [Resolution policies](#dependency-resolution-policies).                                                   |
+| Setting             | Accepted values                                                                      | Meaning and default                                                                                                                          |
+| ------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `python.version`    | One quoted Python version or constraint string, such as `"3.13"` or `">=3.12,<3.14"` | Restrict the managed CPython version. Omission adds no version constraint; versions older than 3.10 are always excluded.                     |
+| `python.packages`   | List of named PEP 508 registry requirements                                          | Packages to prepare at startup. Omission keeps the [default Python packages](#default-startup-packages); `[]` requests no optional packages. |
+| `python.resolution` | `implicit`, `explicit`, or `fixed`                                                   | When Console may prepare packages. Default: `explicit`. See [Resolution policies](#dependency-resolution-policies).                          |
 
 The same fields are accepted under `python.managed` and in a managed fallback candidate.
 See [Startup packages](#startup-package-declarations) for package syntax and replacement rules.
@@ -126,13 +126,13 @@ r:
   vanilla: true
 ```
 
-| Setting        | Accepted values                                | Meaning and default                                                                                                                                              |
-| -------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `r`            | Executable path, mapping, or `null`            | Select an installation and its package/startup settings. Omission or `null` uses normal R discovery and defaults.                                                |
-| `r.executable` | Nonempty path string                           | Installed R executable or ordinary launcher. Omission uses installation hints and `PATH` discovery.                                                              |
-| `r.packages`   | List of single-line `ir` package references    | Packages to prepare at startup. Omission keeps the [default R packages](REQUIREMENTS.md#defaults-and-startup-configuration); `[]` requests no optional packages. |
-| `r.resolution` | `implicit`, `explicit`, `fixed`, or `disabled` | When Console may prepare packages. Default: `implicit`. See [Resolution policies](#dependency-resolution-policies).                                              |
-| `r.vanilla`    | `true` or `false`                              | Request R's native `--vanilla` startup. Default: `false`, retaining normal environment files, profiles, and workspace restoration.                               |
+| Setting        | Accepted values                                | Meaning and default                                                                                                                     |
+| -------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `r`            | Executable path, mapping, or `null`            | Select an installation and its package/startup settings. Omission or `null` uses normal R discovery and defaults.                       |
+| `r.executable` | Nonempty path string                           | Installed R executable or ordinary launcher. Omission uses installation hints and `PATH` discovery.                                     |
+| `r.packages`   | List of single-line `ir` package references    | Packages to prepare at startup. Omission keeps the [default R packages](#default-startup-packages); `[]` requests no optional packages. |
+| `r.resolution` | `implicit`, `explicit`, `fixed`, or `disabled` | When Console may prepare packages. Default: `implicit`. See [Resolution policies](#dependency-resolution-policies).                     |
+| `r.vanilla`    | `true` or `false`                              | Request R's native `--vanilla` startup. Default: `false`, retaining normal environment files, profiles, and workspace restoration.      |
 
 Select an executable or launcher, not an R installation directory, Rscript, or a command with arguments.
 An explicit executable overrides installation hints and `PATH` discovery.
@@ -151,14 +151,12 @@ python:
   packages: [numpy, pandas, matplotlib]
 ```
 
-An omitted package list keeps that runtime's [default startup declaration](REQUIREMENTS.md#defaults-and-startup-configuration).
+An omitted package list keeps that runtime's [default startup declaration](#default-startup-packages).
 A supplied list replaces it; an empty list (`[]`) requests no optional packages.
 Empty lists do not remove Console's required runtime infrastructure, uninstall packages, or delete cached installations.
 Preparation makes packages available without attaching R packages or importing Python modules.
 
-Built-in optional defaults are prepared on a best-effort basis; Console reports and skips failed defaults.
 Packages listed explicitly in configuration are required, even if they also occur in the built-in defaults.
-Required runtime infrastructure remains strict.
 
 R package strings use single-line `ir` references, including supported remote references; local sources, NUL, and line breaks are rejected.
 Python strings use named PEP 508 registry requirements, including versions, extras, and markers; paths, editable requirements, URLs, archives, and `name @ URL` references are rejected.
@@ -166,6 +164,21 @@ See [accepted requirement input](REQUIREMENTS_API.md#accepted-requirement-input)
 
 Later `requirements` calls with `action: reset` restore the effective startup declaration captured at server launch, rather than rereading a subsequently edited configuration file.
 [Requirements API](REQUIREMENTS_API.md) covers additions, replacement, and changes that require a runtime restart.
+
+### Default packages and extensions {#default-startup-packages}
+
+Console prepares these packages and extensions at startup:
+
+| Runtime | Packages or extensions                                                                           |
+| ------- | ------------------------------------------------------------------------------------------------ |
+| R       | `tidyverse`, `dplyr`, `dbplyr`, `reticulate`, `DBI`, `duckdb`, `nanoarrow`, `yyjsonr`, `ggplot2` |
+| Python  | `numpy`, `pandas`, `matplotlib`, `plotnine`; also `duckdb` without R                             |
+| DuckDB  | `icu`, `json`, `sqlite`, when the managed provider is available                                  |
+
+Built-in convenience defaults are prepared on a best-effort basis: Console reports each failed default, skips it, and continues with the other defaults.
+Required runtime infrastructure remains strict, including packages used by the R/Python bridge and SQL adapters.
+Default DuckDB extensions follow the same best-effort rule; an extension requested explicitly remains required.
+Extensions already built into the selected DuckDB do not need downloading.
 
 ## Choose when packages may be prepared {#dependency-resolution-policies}
 
@@ -199,7 +212,7 @@ DuckDB extension preparation follows the resolution policy of its managed provid
 
 Changing a resolution policy requires a new server connection.
 These policies govern Console's preparation; they do not restrict arbitrary installation commands in submitted code or grant network access.
-[Packages and environments](REQUIREMENTS.md#resolution-policy-admission) explains the policies with examples, and [Requirements API](REQUIREMENTS_API.md) specifies live-request behavior.
+[Requirements API](REQUIREMENTS_API.md) specifies live-request behavior.
 [Package sources and caches](RESOLVER.md) covers download permissions and package sources.
 
 ## Control R startup files {#native-r-startup}

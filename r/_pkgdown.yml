@@ -19,8 +19,8 @@ navbar:
   structure:
     left:
       - console
-      - documentation
       - start
+      - documentation
       - console_reference
       - reference
       - articles

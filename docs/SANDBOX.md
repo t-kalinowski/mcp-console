@@ -4,10 +4,8 @@ Console runs your agent's code in an operating-system sandbox.
 The sandbox controls which files that code can read or change and which network connections it can make.
 These permissions also apply to programs the code starts.
 
-This lets you give an agent access to data while choosing where it can save its work and which services it can contact.
+For example, you can let an agent read a dataset and calculate results while limiting where it can save files or which services it can contact.
 The sandbox limits access; it does not establish that a project, dependency, or piece of code is trustworthy.
-
-You can also [run commands directly](SANDBOX_COMMAND.md) from your terminal using the same sandbox.
 
 ## What code can do by default {#default-permissions}
 
@@ -23,7 +21,16 @@ In particular, [`mcp-console configure-client codex`](CLI.md#configure-a-client)
 
 ## Give a session the access it needs
 
-If the agent needs to edit scripts or save reports in your project, the `workspace` profile permits those writes while keeping the project's `.git`, `.agents`, `.codex`, and `.aws` paths read-only by default.
+If the agent needs to edit scripts or save reports in your project, you can select the `workspace` profile.
+Run this from the directory where your client launches Console:
+
+```sh
+uvx mcp-console config init
+```
+
+This creates `.agents/console/config.yaml` with `sandbox.profile: workspace`.
+Restart the client to load it.
+The profile permits project writes while keeping the project's `.git`, `.agents`, `.codex`, and `.aws` paths read-only by default.
 The workspace is the directory where Console starts; changing directories during a session does not move that boundary.
 You can also grant writes to selected output directories or block reads from particular paths.
 
@@ -39,11 +46,9 @@ Console may need to download and install a package before running code that uses
 Package preparation therefore has its own permissions: by default, it can read host files, write dependency caches and private temporary files, and download from approved package sources.
 Your session can use prepared packages while its own networking remains restricted.
 
-The installation check, [`warmup`](CLI.md#check-your-installation), prepares dependencies with host permissions so they can be cached before a sandboxed session; its runtime checks still use the session's sandbox.
-
 Installation and build steps can execute code, so the packages and package sources you choose still need to be trusted.
-The session's `sandbox` settings and preparation's `resolver.sandbox` settings are independent.
 [Package sources and caches](RESOLVER.md) explains how to change preparation permissions and download sources.
+The installation check, [`warmup`](CLI.md#check-your-installation), can also prepare dependencies ahead of a session; that preparation uses host permissions.
 
 ## Configuration is part of the trust decision
 
@@ -59,18 +64,17 @@ This includes disabling both the session and package-preparation sandboxes when 
 
 Files saved to writable project paths are your data and remain after the session ends.
 With the default managed temporary storage, Console removes its private temporary files after the sandboxed processes have stopped.
-Cleanup failures are reported as errors.
-A crashed or forcibly stopped runner can leave processes or temporary files behind; there is no separate recovery process.
+Crashes, cleanup failures, and other temporary-storage settings can leave files behind; [Temporary storage](SANDBOX_CONFIGURATION.md#temporary-storage) and [Process cleanup](SANDBOX_CONFIGURATION.md#supported-hosts-and-lifetime-limits) cover those limits.
 
-Alternative temporary-storage settings and `--no-sandbox` have different cleanup guarantees.
-See [Temporary storage](SANDBOX_CONFIGURATION.md#temporary-storage) and [Process cleanup](SANDBOX_CONFIGURATION.md#supported-hosts-and-lifetime-limits) for the exact behavior.
-Recordings and reports can contain code, data, and output from the session; the sandbox does not make recorded output safe to share or execute.
+Recordings also remain after the session ends.
+They can contain code, data, and output from the session; review them before sharing or executing recorded code.
 
 ## Further details
 
 <span id="supported-hosts-and-lifetime-limits"></span> <span id="application-policy-and-launch"></span> <span id="policy-extensions-and-compatibility"></span>
 
+The [permissions reference](SANDBOX_CONFIGURATION.md) covers exact settings, platform support, and enforcement limits.
 Console reports sandbox setup failures without automatically retrying with weaker permissions.
-The reference covers [platform support](SANDBOX_CONFIGURATION.md#native-capabilities) and [process cleanup](SANDBOX_CONFIGURATION.md#supported-hosts-and-lifetime-limits); [Architecture](ARCHITECTURE.md#application-policy-and-launch) covers implementation ownership and [policy extensions](ARCHITECTURE.md#policy-extensions-and-compatibility).
+You can also [run commands directly](SANDBOX_COMMAND.md) using the same sandbox.
 
 Continue with [Recordings and reports](RECORDING.md) to learn how to inspect and reuse the agent's code, output, and plots.

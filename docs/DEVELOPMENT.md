@@ -163,13 +163,15 @@ A saved choice from a page's theme control takes precedence over the browser pre
 
 ### Documentation ownership
 
-The top navigation links to [Documentation](README.md), [Get started](getting-started.qmd), and [API reference](REFERENCE.md).
-Documentation opens the "I want to…" task index.
-Get started is a shortcut to installation, client setup, and a first analysis.
-Both use one shared sidebar for connections, language behavior, workflows, configuration, and commands.
+The top navigation links to [Get started](getting-started.qmd), [Documentation](README.md), and [API reference](REFERENCE.md).
+Documentation opens a compact reading list followed by the "I want to…" table.
+Get started is a walkthrough of connecting an agent, running a first analysis, following up, and reviewing the work.
+Both use one shared sidebar, beginning with an expanded Learn Console category: Sessions and languages, Get started, Packages and environments, Sandbox and trust, and Recordings and reports.
+The remaining groups cover connections, configuration, and reference material.
+Language behavior belongs in Reference, outside the learning sequence.
 API reference has a smaller sidebar for the MCP interface and Python and R package references.
 Development has its own sidebar and a footer link.
-Keep Sessions and languages, Packages and environments, Sandbox and trust, and Recordings and reports readable as a sequence.
+Keep the learning chapters readable in order, with a continuation at the end of each.
 Use examples to explain the concepts, then link to the owning topic for complete settings and edge cases.
 
 All settings accepted in `config.yaml` belong in the user reference.

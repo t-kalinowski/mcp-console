@@ -369,13 +369,47 @@ class WebsiteTests(unittest.TestCase):
                 self.assertIn("sandbox_configuration/index.html", links)
                 self.assertIn("runtime_reference/index.html", links)
                 self.assertNotIn("api/index.html", links)
+                sections = sidebar.select(".sidebar-item-section")
+                learning = sections[0]
+                heading = learning.select_one(".sidebar-item-text")
+                self.assertEqual(heading.get_text(strip=True), "Learn Console")
+                self.assertFalse(heading.has_attr("href"))
+                self.assertIn("show", learning.select_one("ul")["class"])
+                chapters = [
+                    linked_file(self.site / name, link["href"])
+                    .relative_to(self.site)
+                    .as_posix()
+                    for link in learning.select("a[href]")
+                ]
+                self.assertEqual(
+                    chapters,
+                    [
+                        "builtin_runtime/index.html",
+                        "getting-started/index.html",
+                        "requirements/index.html",
+                        "sandbox/index.html",
+                        "recording/index.html",
+                    ],
+                )
+                language_reference = next(
+                    link
+                    for link in sidebar.select("a[href]")
+                    if linked_file(self.site / name, link["href"])
+                    == self.site / "runtime_reference/index.html"
+                ).find_parent("li", class_="sidebar-item-section")
+                self.assertEqual(
+                    language_reference.select_one(".sidebar-item-text").get_text(
+                        strip=True
+                    ),
+                    "Reference",
+                )
                 labels = [
                     link.get_text(" ", strip=True)
                     for link in soup.select(".navbar-nav .nav-link")
                     if link.get_text(strip=True)
                 ]
                 self.assertEqual(
-                    labels, ["Documentation", "Get started", "API reference"]
+                    labels, ["Get started", "Documentation", "API reference"]
                 )
 
     def test_api_and_development_have_focused_navigation(self) -> None:
@@ -412,7 +446,7 @@ class WebsiteTests(unittest.TestCase):
                     self.assertIn(label, navbar.get_text(" ", strip=True))
                 self.assertNotIn("Packages", navbar.get_text(" ", strip=True))
 
-    def test_documentation_starts_with_task_index(self) -> None:
+    def test_documentation_links_to_learning_and_tasks(self) -> None:
         page = BeautifulSoup(
             (self.site / "readme/index.html").read_text(), "html.parser"
         )
@@ -796,10 +830,14 @@ class WebsiteTests(unittest.TestCase):
                 )
                 self.assertGreater(len(soup.select_one("main").get_text()), 1000)
 
-    def test_workspace_profile_is_available_in_setup_guides(self) -> None:
+    def test_workspace_profile_is_available_in_the_sandbox_guide(self) -> None:
         commands = [
             line.strip()
-            for name in ("getting-started/index.html", "clients/index.html")
+            for name in (
+                "getting-started/index.html",
+                "clients/index.html",
+                "sandbox/index.html",
+            )
             for code in self.pages[self.site / name].code_blocks
             for line in code.splitlines()
         ]
@@ -864,7 +902,7 @@ class WebsiteTests(unittest.TestCase):
     def test_reference_tables_have_keyboard_accessible_scroll_regions(self) -> None:
         for name in (
             "configuration/index.html",
-            "requirements/index.html",
+            "runtime_configuration/index.html",
             "python-guide/index.html",
         ):
             with self.subTest(page=name):
