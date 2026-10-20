@@ -127,11 +127,25 @@ impl QuartoWriter {
         r_available: bool,
         startup_requirements: &crate::worker_client::Declaration,
     ) {
+        let mut r_requirements = startup_requirements.r.clone();
+        let mut python_requirements = startup_requirements.python.clone();
+        // Calls now enter the projection before discovery. Preserve their
+        // declarations under the same policy used for calls after discovery.
+        if !self.metadata_known && dynamic_resolution {
+            extend_unique(
+                &mut r_requirements,
+                self.r_requirements.iter().map(String::as_str),
+            );
+            extend_unique(
+                &mut python_requirements,
+                self.python_requirements.iter().map(String::as_str),
+            );
+        }
         self.dynamic_resolution = dynamic_resolution;
         self.r_available = r_available;
         self.metadata_known = true;
-        self.r_requirements = startup_requirements.r.clone();
-        self.python_requirements = startup_requirements.python.clone();
+        self.r_requirements = r_requirements;
+        self.python_requirements = python_requirements;
     }
 
     fn append(&mut self, event: &Event<'_>) -> Result<(), String> {
@@ -175,7 +189,7 @@ impl QuartoWriter {
                 request, call_id, ..
             } => {
                 let mut changed = false;
-                if self.dynamic_resolution
+                if (self.dynamic_resolution || !self.metadata_known)
                     && let Some(requirements) = declared_requirements(request)
                 {
                     extend_unique(&mut self.r_requirements, requirements.r);

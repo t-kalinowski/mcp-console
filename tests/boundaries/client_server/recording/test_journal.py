@@ -1371,6 +1371,40 @@ def test_discards_startup_capture_without_a_tool_call(
             release.close()
 
 
+@requires(NATIVE_FIXTURES, PROCESS_EVENTS, R, command("ir"))
+def test_preserves_early_requirements_in_published_quarto(binary: Path) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+        root = Path(directory)
+        environment, reached, release, alive = resources.enter_context(
+            local_discovery(root)
+        )
+        try:
+            with McpClient(binary, DIRECT.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                reached.wait("discovery is held before recording metadata is known")
+                assert os.read(alive, 1) == b"1"
+                admitted = client.send(
+                    r="42L", requirements={"r": ["praise"]}, timeout_ms=0
+                )
+                assert not admitted["isError"], admitted
+                assert last_tool_text(client).endswith(
+                    "[running; poll with an empty send]"
+                ), admitted
+                release.release()
+                result = client.send()
+                assert not result["isError"], result
+                assert last_tool_text(client).endswith("[1] 42\n")
+                transcript = client.finish()
+            (recording,) = (root / ".agents/console/sessions").iterdir()
+            quarto = (recording / "transcript.qmd").read_text()
+            assert "    - praise\n" in quarto, quarto
+            assert "```{r}\n42L\n```" in quarto, quarto
+            assert "eval: false" not in quarto, quarto
+            return transcript
+        finally:
+            release.release()
+
+
 @requires(NATIVE_FIXTURES, R)
 def test_discards_startup_failure_without_send(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:

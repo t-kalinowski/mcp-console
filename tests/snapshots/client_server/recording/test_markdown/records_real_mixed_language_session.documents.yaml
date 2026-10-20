@@ -116,6 +116,8 @@ qmd: |+
       - reticulate
       - tidyverse
       - yyjsonr
+      - graphics
+      - grDevices
     python-packages:
       - numpy
       - pandas
