@@ -792,7 +792,7 @@ class WebsiteTests(unittest.TestCase):
     def test_other_client_configuration_uses_uvx(self) -> None:
         configuration = next(
             json.loads(code)
-            for code in self.pages[self.site / "cli/index.html"].code_blocks
+            for code in self.pages[self.site / "clients/index.html"].code_blocks
             if '"mcpServers"' in code
         )
         server = configuration["mcpServers"]["console"]
@@ -926,7 +926,9 @@ class WebsiteTests(unittest.TestCase):
                 )
 
     def test_permission_examples_distinguish_global_and_project_scope(self) -> None:
-        soup = BeautifulSoup((self.site / "cli/index.html").read_text(), "html.parser")
+        soup = BeautifulSoup(
+            (self.site / "sandbox_configuration/index.html").read_text(), "html.parser"
+        )
         examples = (
             ("allow-workspace-writes-across-projects", "global"),
             ("grant-writes-to-one-directory", "project"),

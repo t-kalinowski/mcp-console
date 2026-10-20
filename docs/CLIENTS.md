@@ -27,8 +27,22 @@ See [client configuration](CLI.md#configure-a-client) for project registration, 
 
 ## Other MCP clients
 
-In your client's MCP settings, use command `uvx` and arguments `["mcp-console", "serve"]`.
-See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
+Configure a stdio server with command `uvx` and arguments `["mcp-console", "serve"]`.
+Clients using an `mcpServers` mapping can use:
+
+```json
+{
+  "mcpServers": {
+    "console": {
+      "command": "uvx",
+      "args": ["mcp-console", "serve"]
+    }
+  }
+}
+```
+
+Console runs on the same host as the client, usually in the agent's workspace.
+For remote work, run both on the remote host; Console does not manage remote connections or containers.
 
 ## R and Python clients {#connect-from-application-code}
 

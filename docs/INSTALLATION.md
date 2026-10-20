@@ -16,10 +16,7 @@ To let your agent use R, install it separately, for example with [rig](https://g
 Python and SQL work without R.
 The first session may download Python and packages.
 
-## Check your installation
-
-To check your installation and prepare runtime and package caches before opening a client, run `uvx mcp-console warmup`.
-See [Check your installation](CLI.md#check-your-installation) for configuration and diagnostics.
+To verify the selected runtimes and prepare caches before opening a client, follow [Check your installation](CLI.md#check-your-installation).
 
 ## Build from source
 

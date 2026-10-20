@@ -88,6 +88,19 @@ Explicit filesystem entries compose with the profile: narrower rules override an
 An explicit write at a protected metadata path or beneath it can therefore permit changes there; these defaults are not an unchangeable ceiling.
 Network and temporary-storage selections remain independent.
 
+### Allow workspace writes across projects
+
+To select workspace writes for future launches across projects, update the global client registration:
+
+```sh
+uvx mcp-console configure-client claude -- -c sandbox.profile=workspace
+```
+
+The profile uses each future launch directory as the workspace; running setup does not bind it to the setup directory.
+The `-c` setting overrides profiles selected in configuration files or inherited from the client.
+Use this option when you want that write policy across projects.
+An existing project client entry may take precedence over the global entry; see [client configuration](CLI.md#configure-a-client).
+
 ## Grant or restrict file access {#filesystem}
 
 To save results in `output` while blocking access to `secrets`:
@@ -142,6 +155,23 @@ macOS can grant individual files and creation at absent granted paths.
 Linux can reject file write roots, skips absent write roots until a later launch, and cannot reliably reopen a narrower read beneath a broader denied mount.
 Create intended writable directories first.
 Console does not grant extra paths or switch backends to make an unsupported policy work.
+
+### Grant writes to one directory
+
+To add a writable path through a project client entry, create the directory before registering the grant:
+
+```sh
+mkdir output
+uvx mcp-console configure-client claude --directory . -- -c sandbox.profile=read_only --writable-root output
+```
+
+Use `codex` in place of `claude` for Codex.
+The client chooses Console's launch directory, and Console resolves `output` there.
+The `read_only` base restricts ordinary workspace writes; `--writable-root` adds the explicit grant.
+Other configured filesystem permissions still apply.
+`--writable-root PATH` may be repeated.
+It adds filesystem grants without selecting the workspace profile, does not create missing directories, and remains subject to more specific permission rules.
+See the [path rules above](#filesystem) for protected metadata and more specific permissions.
 
 ## Configure network access {#network-choices}
 
@@ -423,6 +453,10 @@ This mode defaults to host caches and rejects managed caches, including custom c
 It removes native enforcement and native descendant cleanup, and omits managed temporary storage and temporary-environment redirection.
 Normal relay shutdown still reaps its direct worker, but Console does not add a temporary-storage cleanup guarantee.
 See [Temporary storage](#temporary-storage) for runtime-specific behavior.
+
+`--no-sandbox` also conflicts with `--writable-root`.
+For an exported configuration, pass `--no-sandbox` to both `config resolve` and `serve`; launch flags are not stored in YAML.
+See [Cache selection](RESOLVER.md#cache-locations) for clearing inherited permission settings deliberately.
 
 ## Platform support {#native-capabilities}
 

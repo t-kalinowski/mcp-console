@@ -36,7 +36,7 @@ Restart your client after setup so it loads the new tool.
 ### Other MCP clients
 
 In your client's MCP settings, use command `uvx` and arguments `["mcp-console", "serve"]`.
-See [MCP client setup](CLIENTS.md#other-mcp-clients) for other clients.
+See [MCP client setup](CLIENTS.md#other-mcp-clients) for a configuration example.
 
 ### R and Python packages
 
