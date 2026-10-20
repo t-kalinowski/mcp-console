@@ -53,6 +53,9 @@ See [Merge rules](CONFIGURATION.md#merge-rules) for omitted, `null`, and empty v
 [Language behavior](RUNTIME_REFERENCE.md) specifies R and Python helpers, SQL connections and results, plotting, and output handling.
 For an introduction, read [Sessions and languages](BUILTIN_RUNTIME.md).
 
+[Recording reference](RECORDING_REFERENCE.md) specifies storage locations, files, retention, and failure behavior.
+For reading and reusing a session, see [Recordings and reports](RECORDING.md).
+
 ## Interfaces
 
 ### Command line
@@ -64,8 +67,7 @@ For an introduction, read [Sessions and languages](BUILTIN_RUNTIME.md).
 
 ### MCP
 
-- [MCP send reference](API.md) documents tool arguments, results, and output limits.
-- [Requirements API](REQUIREMENTS_API.md) covers dependency actions.
+- [MCP send reference](API.md) documents tool arguments, results, output limits, call ordering, and requirements actions.
 - [Drive send directly](SEND_OPERATIONS.md) is a guide to polling, interactive input, interruption, and restart.
 
 ### Packages
@@ -74,6 +76,8 @@ For an introduction, read [Sessions and languages](BUILTIN_RUNTIME.md).
   [Use Console from Python](PYTHON.md) introduces the clients and framework adapters.
 - The [R API](https://t-kalinowski.github.io/mcp-console/r/reference/) documents tool registration and session configuration.
   [Use Console from R](R.md) introduces the ellmer integration and links to configuration and analysis examples.
+
+Package overviews: [Python](https://t-kalinowski.github.io/mcp-console/python/) and [R](../r/README.md).
 
 ## Glossary
 

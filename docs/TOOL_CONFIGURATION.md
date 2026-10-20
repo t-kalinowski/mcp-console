@@ -4,7 +4,7 @@ Customize which languages, parameters, and descriptions the agent sees through y
 These settings change presentation, not sandbox permissions.
 For interpreter selection and database startup, see [Languages and startup](RUNTIME_CONFIGURATION.md).
 For startup packages and preparation policies, see [Package settings](PACKAGE_CONFIGURATION.md).
-For a guide with examples, see [Customize Console](BUILD_ON_CONSOLE.md).
+For a guide with examples, see [Build a data assistant](BUILD_ON_CONSOLE.md).
 
 ## Model-visible languages
 

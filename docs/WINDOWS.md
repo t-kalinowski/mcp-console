@@ -13,7 +13,7 @@ See [Install and connect](CLIENTS.md) for platform requirements, [Get started](g
 <span id="native-sandbox"></span> <span id="lifecycle-and-platform-differences"></span> <span id="troubleshooting"></span>
 
 [Sandbox permissions](SANDBOX_CONFIGURATION.md#windows-mxc-requirement) covers Windows host requirements, cleanup, and troubleshooting.
-[Calls, input, and control](SEND_OPERATIONS.md#interruption) covers interruption.
+[Drive send directly](SEND_OPERATIONS.md#interruption) covers interruption.
 
 <span id="build-from-source"></span>
 

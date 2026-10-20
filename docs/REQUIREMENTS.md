@@ -34,7 +34,7 @@ The agent can also make a request on its own.
 
 Adding a package can preserve the work in memory, but switching Python versions or changing package versions already in use can require a restart.
 
-Reference: [Requirements API](REQUIREMENTS_API.md) for request fields and which changes require a restart.
+Reference: [Requirements](API.md#requirements) for request fields and which changes require a restart.
 
 ## Packages available at startup {#defaults-and-startup-configuration}
 

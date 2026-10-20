@@ -42,7 +42,7 @@ A recording belongs to one Console instance and can include multiple sessions.
 **Sandbox:** Operating-system restrictions on the code Console runs.
 Default permissions restrict writes and direct networking but allow host-file reads, including readable secrets.
 
-For polling and other client operations, see [Calls, input, and control](SEND_OPERATIONS.md).
+For polling and other client operations, see [Drive send directly](SEND_OPERATIONS.md).
 Internal terms such as worker, relay, generation, and retirement are defined in [Architecture](ARCHITECTURE.md).
 
 <span id="developer-terms"></span>

@@ -12,7 +12,7 @@ Start with [Use Console from Python](../PYTHON.md), or jump to a task:
 
 - <span id="start-without-a-model"></span> [Call Console directly](../PYTHON.md#call-console-directly): install the client and make synchronous or asynchronous calls.
 - <span id="add-a-model-framework"></span> [Choose a model integration](../PYTHON.md#choose-a-model-integration): select an adapter and its package extra.
-- <span id="calls-and-dependencies"></span> [Results and lifetime](../PYTHON.md#results-and-lifetime) and [requirements](../PYTHON.md#inspect-or-replace-requirements): collect output, manage the connection, and prepare packages.
+- <span id="calls-and-dependencies"></span> [Drive send directly](../SEND_OPERATIONS.md) for call sequencing, or [Requirements](reference/Requirements.qmd) for dependency declarations.
 
 ## API reference
 

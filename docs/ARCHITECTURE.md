@@ -155,7 +155,7 @@ Worker terminal receipts or terminal generation failure settle execution; output
 Completed but unclaimed responses retain the ordinary cell slot until collected.
 Control-and-cell calls retain that admission across their ordered steps.
 Restart input/code targets only the replacement; an interrupt's follow-up cannot silently migrate after a failure.
-[Send operations](SEND_OPERATIONS.md) owns the public ordering and partial-effect rules.
+[Send operations](API.md#operations) owns the public ordering and partial-effect rules.
 
 Restart prepares a changed environment before retiring the current worker.
 Failure before acceptance preserves the old declaration and worker.
@@ -233,7 +233,7 @@ This does not guarantee exactly-once observation: cancellation can race with byt
 
 The journal records calls and assembled results.
 Markdown and QMD are projections, not interpreter checkpoints; a journaled result does not prove client receipt.
-See [Recordings](RECORDING.md).
+See [Recording reference](RECORDING_REFERENCE.md).
 
 ### Why native R graphics callbacks
 

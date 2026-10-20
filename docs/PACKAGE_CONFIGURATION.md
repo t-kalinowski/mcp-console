@@ -6,7 +6,7 @@ For interpreter selection and native startup, see [Languages and startup](RUNTIM
 
 Put these settings in a [configuration file](CONFIGURATION.md).
 They are captured when the server starts; open a new connection after changing them.
-The `requirements` argument can change the live declaration within the configured policies; its request format is documented in the [send reference](REQUIREMENTS_API.md).
+The `requirements` argument can change the live declaration within the configured policies; its request format is documented in the [send reference](API.md#requirements).
 
 ## Choose startup packages {#startup-package-declarations}
 
@@ -31,10 +31,10 @@ Packages listed explicitly in configuration are required, even if they also occu
 
 R package strings use single-line `ir` references, including supported remote references; local sources, NUL, and line breaks are rejected.
 Python strings use named PEP 508 registry requirements, including versions, extras, and markers; paths, editable requirements, URLs, archives, and `name @ URL` references are rejected.
-See [accepted requirement input](REQUIREMENTS_API.md#accepted-requirement-input) for package-request fields.
+See [accepted requirement input](API.md#accepted-requirement-input) for package-request fields.
 
 Later `requirements` calls with `action: reset` restore the effective startup declaration captured at server launch, rather than rereading a subsequently edited configuration file.
-[Requirements API](REQUIREMENTS_API.md) covers additions, replacement, and changes that require a runtime restart.
+[Requirements API](API.md#requirements) covers additions, replacement, and changes that require a runtime restart.
 
 ### Default packages and extensions {#default-startup-packages}
 
@@ -84,7 +84,7 @@ DuckDB extension preparation follows the resolution policy of its managed provid
 
 Changing a resolution policy requires a new server connection.
 These policies govern Console's preparation; they do not restrict arbitrary installation commands in submitted code or grant network access.
-[Requirements API](REQUIREMENTS_API.md) specifies live-request behavior.
+[Requirements API](API.md#requirements) specifies live-request behavior.
 Preparation permissions and package sources are configured separately, as described below.
 
 ## Preparation permissions
@@ -293,7 +293,7 @@ Captured names and interpreter identity checks do not prevent every concurrent f
 
 `UV_OFFLINE=1` in a worker is a uv setting, not process-level network enforcement or a description of resolver permissions.
 R discovery/preparation is profile-free.
-See [Requirements API](REQUIREMENTS_API.md#accepted-requirement-input) for supported request syntax and [live preparation](REQUIREMENTS_API.md#live-preparation) for partial effects.
+See [Requirements API](API.md#accepted-requirement-input) for supported request syntax and [live preparation](API.md#live-preparation) for partial effects.
 
 ## Selecting resolver tools
 

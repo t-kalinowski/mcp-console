@@ -1,10 +1,12 @@
-# Customize Console
+# Build a data assistant
 
-Choose the languages and arguments your agent can use, describe the data available to it, and prepare a session with packages, data, connections, and helper functions.
-These settings work with an MCP client or with the R and Python packages.
-See [Get started](getting-started.qmd) to choose how to connect.
+Give an assistant SQL access to a sales database, describe its tables, and connect the configured tool to a client.
+This walkthrough uses an existing SQLite database at `data/sales.sqlite`, with an `orders` table containing `order_date`, `region`, and `revenue` columns.
+The same configuration works with an MCP client or the R and Python packages.
 
-For the complete tool settings, see [Tool configuration](TOOL_CONFIGURATION.md).
+The main example uses a read-only SQL connection.
+The session setup section also shows alternatives for preparing R objects or initializing from application code.
+For an overview of the integration choices, see [Build on Console](BUILD.md); for exact tool settings, see [Tool configuration](TOOL_CONFIGURATION.md).
 
 ## Choose languages and arguments
 

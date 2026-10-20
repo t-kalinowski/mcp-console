@@ -74,7 +74,7 @@ These clients use the same workbench and settings.
 
 <span id="configure-the-models-interface"></span>
 
-[Customize Console](BUILD_ON_CONSOLE.md) shows how to change the tool descriptions, exposed languages and parameters, and prepared environment.
+[Build a data assistant](BUILD_ON_CONSOLE.md) shows how to change the tool descriptions, exposed languages and parameters, and prepared environment.
 [Tool configuration](TOOL_CONFIGURATION.md) documents the exact settings.
 
 After connecting, [Sessions and languages](BUILTIN_RUNTIME.md) explains how your agent can work with Console.

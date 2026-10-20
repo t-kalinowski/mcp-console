@@ -60,5 +60,5 @@ The [R API](https://t-kalinowski.github.io/mcp-console/r/reference/) documents t
 The shared guides explain [sessions and languages](BUILTIN_RUNTIME.md), [packages and environments](REQUIREMENTS.md), [sandbox permissions](SANDBOX.md), and [recordings and reports](RECORDING.md).
 These describe the same workbench your agent uses from R.
 
-[Customize Console](BUILD_ON_CONSOLE.md) shows how to change the descriptions, languages, and parameters the agent sees.
+[Build a data assistant](BUILD_ON_CONSOLE.md) shows how to change the descriptions, languages, and parameters the agent sees.
 For a complete analysis example, see [Giving an agent an R session](https://t-kalinowski.github.io/mcp-console/r/articles/autonomous-report/).

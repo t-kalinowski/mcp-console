@@ -183,13 +183,14 @@ The "I want to…" table connects tasks to guides; the Reference index maps sett
 All settings accepted in `config.yaml` belong in the user reference.
 Each reference topic has one owner: [Configuration files](CONFIGURATION.md) for discovery, merging, paths, and export; [Languages and startup](RUNTIME_CONFIGURATION.md) for R/Python selection, native startup, and database startup; [Tool configuration](TOOL_CONFIGURATION.md) for language visibility, descriptions, and accepted parameters; [Sandbox permissions](SANDBOX_CONFIGURATION.md) for permission fields and enforcement limits; [Package settings](PACKAGE_CONFIGURATION.md) for startup declarations, preparation policies, sources, caches, and preparation permissions; and [Environment variables](ENVIRONMENT.md) for environment settings and recognized variables.
 The [Reference index](REFERENCE.md#configuration) links to these owners instead of repeating their field tables; do not add a second settings index to Configuration files.
-[Language behavior](RUNTIME_REFERENCE.md) owns code execution, language helpers, SQL results, and output; [Recordings and reports](RECORDING.md) owns recording behavior and report workflows.
+[Language behavior](RUNTIME_REFERENCE.md) owns code execution, language helpers, SQL results, and output; [Recording reference](RECORDING_REFERENCE.md) owns storage and retention, while [Recordings and reports](RECORDING.md) explains reading and reusing a session.
 
-[Customize Console](BUILD_ON_CONSOLE.md) introduces tool descriptions, language and parameter visibility, and prepared sessions for any connection method.
+[Build a data assistant](BUILD_ON_CONSOLE.md) introduces tool descriptions, language and parameter visibility, and prepared sessions for any connection method.
 [MCP client setup](CLIENTS.md) belongs in Guides under Set up.
 [R](R.md) and [Python](PYTHON.md) belong in Build, with direct links from Get started and the Guides task table.
 Generated package manuals provide exact signatures and package-specific examples, with links back to the main documentation.
-Exact MCP calls and requirement operations belong in [MCP send reference](API.md) and [Requirements API](REQUIREMENTS_API.md).
+Exact MCP calls and requirement operations belong in [MCP send reference](API.md).
+[Drive send directly](SEND_OPERATIONS.md) walks client authors through common operations; Python-specific result and cancellation details belong in the generated client API.
 Keep compatibility anchors when moving public sections and include every new page in the appropriate sidebar and search index.
 Architecture belongs in [Architecture](ARCHITECTURE.md); exact private message schemas belong with their source definitions.
 Prefer a cross-reference over another explanation of restart, preparation, or sandbox trust.

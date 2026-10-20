@@ -120,6 +120,8 @@ website:
       - section: Behavior
         contents:
         - RUNTIME_REFERENCE.md
+        - href: RECORDING_REFERENCE.md
+          text: Recordings
       - section: Interfaces
         contents:
         - href: CLI.md
@@ -127,7 +129,6 @@ website:
         - cli-help.qmd
         - href: API.md
           text: MCP send
-        - REQUIREMENTS_API.md
         - href: r/reference/index.html
           text: R API
         - href: python/reference/index.qmd

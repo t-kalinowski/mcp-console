@@ -514,10 +514,10 @@ class WebsiteTests(unittest.TestCase):
             "package_configuration",
             "environment",
             "runtime_reference",
+            "recording_reference",
             "cli",
             "cli-help",
             "api",
-            "requirements_api",
             "glossary",
             "python/reference/mcpconsole",
         ):
@@ -535,6 +535,7 @@ class WebsiteTests(unittest.TestCase):
                     "configuration",
                     "package_configuration",
                     "runtime_reference",
+                    "recording_reference",
                     "cli",
                     "api",
                     "python/reference",
@@ -1019,6 +1020,24 @@ class WebsiteTests(unittest.TestCase):
             ),
             "LINUX_COMPATIBILITY": ("reproducing-the-comparisons",),
             "SEND_OPERATIONS": ("python-client-cancellation",),
+            "API": (
+                "server-readiness",
+                "operations",
+                "wait-timing-and-cancellation",
+                "inspecting-and-replacing-requirements",
+                "accepted-requirement-input",
+                "requirements-for-a-cell",
+                "live-preparation",
+                "restarting-with-requirements",
+                "resolution-policy-admission",
+            ),
+            "RECORDING": ("storage-and-retention", "recording-failures"),
+            "RECORDING_REFERENCE": ("storage-and-retention", "recording-failures"),
+            "PYTHON-GUIDE": (
+                "results-and-lifetime",
+                "interrupt-a-wait-or-stop-execution",
+                "inspect-or-replace-requirements",
+            ),
             "python": (
                 "start-without-a-model",
                 "add-a-model-framework",
@@ -1033,7 +1052,7 @@ class WebsiteTests(unittest.TestCase):
                 )
         for name in (
             "RUNTIME_REFERENCE",
-            "REQUIREMENTS_API",
+            "API",
             "TOOL_CONFIGURATION",
             "WINDOWS_DEVELOPMENT",
         ):

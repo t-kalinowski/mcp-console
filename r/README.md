@@ -77,7 +77,7 @@ The [configuration workflow reference](https://t-kalinowski.github.io/mcp-consol
 The tool uses the connected server's public `send` schema.
 Requirement actions are `get`, `add`, `set`, and `reset`; use `character()` for an explicitly empty list.
 Changed live replacements normally require restart.
-Read [Requirements](https://t-kalinowski.github.io/mcp-console/requirements_api/) before replacing a declaration.
+Read [Requirements](https://t-kalinowski.github.io/mcp-console/api/#requirements) before replacing a declaration.
 
 By default, `console_tool()` discovers global and project configuration files.
 Pass `config = ConsoleConfig()` to skip them and use built-in defaults: workers can read host files, write private temporary storage, and cannot use the network.
