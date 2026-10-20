@@ -78,8 +78,10 @@ Encoding: UTF-8
                       dir.exists(library),
                       file.access(library, 2L) == 0L
                     )
-                    installer_output <- file.path(tempdir(), "mcpconsolelocalpkg.out")
-                    # keep_outputs ignores local files; capture the installer itself.
+                    installer_stdout <- file.path(tempdir(), "mcpconsolelocalpkg.out")
+                    installer_stderr <- file.path(tempdir(), "mcpconsolelocalpkg.err")
+                    # Local installs ignore keep_outputs. Record complete streams
+                    # separately because their interleaving is unspecified.
                     installer_status <- system2(
                       file.path(R.home("bin"), "R"),
                       c(
@@ -91,11 +93,19 @@ Encoding: UTF-8
                         shQuote(library),
                         "mcpconsolelocalpkg_0.0.1.tar.gz"
                       ),
-                      stdout = installer_output,
-                      stderr = installer_output
+                      stdout = installer_stdout,
+                      stderr = installer_stderr
                     )
-                    stopifnot(file.exists(installer_output))
-                    writeLines(readLines(installer_output))
+                    stopifnot(
+                      file.exists(installer_stdout),
+                      file.exists(installer_stderr)
+                    )
+                    writeLines(c(
+                      "installer stdout:",
+                      readLines(installer_stdout),
+                      "installer stderr:",
+                      readLines(installer_stderr)
+                    ))
                     stopifnot(
                       installer_status == 0L,
                       identical(dirname(find.package("mcpconsolelocalpkg")), library),
@@ -104,8 +114,14 @@ Encoding: UTF-8
                     """),
             )
             install_output = last_tool_text(client)
-            assert install_output.endswith("* DONE (mcpconsolelocalpkg)\n"), (
+            installer_stdout, separator, installer_stderr = install_output.partition(
+                "installer stderr:\n"
+            )
+            assert installer_stdout.startswith("installer stdout:\n") and separator, (
                 install_output
+            )
+            assert installer_stderr.endswith("* DONE (mcpconsolelocalpkg)\n"), (
+                installer_stderr
             )
             client.send(control="restart")
             restart_notices = (
