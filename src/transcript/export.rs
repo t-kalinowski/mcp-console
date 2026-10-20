@@ -239,8 +239,17 @@ fn reconstruct(directory: &Path, session: u64, events: &[Value]) -> Result<Sessi
                 super::markdown::push_fence(document, "text", text);
             } else if block["type"] == "image" {
                 let path = block["path"].as_str().ok_or("recorded image unavailable")?;
+                // PNG and JPEG use format extensions; other MIME types remain binary.
+                let extension = match block["mimeType"]
+                    .as_str()
+                    .ok_or("recorded image MIME type unavailable")?
+                {
+                    "image/png" => "png",
+                    "image/jpeg" => "jpg",
+                    _ => "bin",
+                };
                 let name = format!(
-                    "image-{:06}.png",
+                    "image-{:06}.{extension}",
                     block["artifactId"]
                         .as_u64()
                         .ok_or("image identity missing")?

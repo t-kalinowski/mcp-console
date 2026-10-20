@@ -1,0 +1,37 @@
+---
+!same-as custom MCP initialization for this execution mode
+---
+send:
+  r: emit image formats
+result:
+  content:
+    - type: image
+      data: <byte-identical image/png image>
+      mimeType: image/png
+    - type: image
+      data: <byte-identical image/jpeg image>
+      mimeType: image/jpeg
+  isError: false
+---
+send:
+  r: export session
+result:
+  content:
+    - type: text
+      text: |
+        {
+          "recording_directory": "<workspace>/.agents/console/sessions/<recording ID>",
+          "qmd": "---\n# Source recorded by MCP Console; review before executing.\ntitle: MCP Console session\nir:\n  isolated: true\n  packages: []\n  python-packages: []\nmcp-console:\n  original-working-directory: <workspace>\n  r-available: true\n  dynamic-resolution: true\n  duckdb-extensions: []\n  python-version: []\n---\n\nThis source includes failed or rejected submissions.\nIt is not a checkpoint or a guarantee of independent reproducibility.\n\n```{r}\nemit image formats\n```\n\n",
+          "markdown": "# MCP Console session 001\n\nResults below were assembled before the exporting cell began. A completed transport write is not confirmation that the client or model read it. Output previews and omission notices are preserved; supplementary raw logs are not expanded or copied.\n\n## Cell 001\n\n```r\nemit image formats\n```\n\n![Recorded image](<images/image-000001.png>)\n\n![Recorded image](<images/image-000002.jpg>)\n\n\n",
+          "images": [
+            {
+              "name": "image-000001.png",
+              "data": "<byte-identical image/png image>"
+            },
+            {
+              "name": "image-000002.jpg",
+              "data": "<byte-identical image/jpeg image>"
+            }
+          ]
+        }
+  isError: false

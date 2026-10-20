@@ -68,6 +68,8 @@ impl Client {
             control.is_some(),
             worker_revision,
         ));
+        // Controlled restart retires its worker before admitting this evaluation.
+        // Early ordinary cells also need association while awaiting startup.
         evaluation.associate_waiting_session();
         let wait_claim = evaluation
             .claim()

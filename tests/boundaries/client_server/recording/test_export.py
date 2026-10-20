@@ -171,6 +171,146 @@ def test_export_after_automatic_replacement(
         return normalized(transcript, workspace)
 
 
+@executions(DIRECT, SANDBOXED)
+def test_controlled_cells_belong_to_their_selected_session(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return controlled_cells_recording(binary, execution, "python")
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
+def test_controlled_r_cells_belong_to_their_selected_session(
+    binary: Path, execution: Execution
+) -> Transcript:
+    return controlled_cells_recording(binary, execution, "r")
+
+
+def controlled_cells_recording(
+    binary: Path, execution: Execution, language: str
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        if language == "python" and os.name != "nt":
+            (workspace / "python3").symlink_to(sys.executable)
+        cells = [
+            (None, "original worker source"),
+            ("restart", "replacement worker source"),
+            ("interrupt", "surviving worker source"),
+        ]
+        sources = [f"print({label!r})" for _, label in cells]
+        with McpClient(
+            binary,
+            execution.serve(
+                *(("--writable-root", str(workspace)) if execution == SANDBOXED else ())
+            ),
+            selected_environment(workspace)
+            if language == "python"
+            else dict(os.environ),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            for (control, label), source in zip(cells, sources, strict=True):
+                result = client.send(
+                    **{language: source}, **({"control": control} if control else {})
+                )
+                assert not result.get("isError"), result
+                assert label in last_result_text(client), result
+            client.send(
+                **{
+                    language: "paths = _console.export_session('report')"
+                    if language == "python"
+                    else "paths <- .console$export_session('report')"
+                }
+            )
+            assert not client.transcript[-1]["result"].get("isError"), (
+                client.transcript[-1]
+            )
+            transcript = client.finish()
+        (recording,) = (workspace / ".agents/console/sessions").iterdir()
+        documents = sorted((recording / "sessions").glob("*.qmd"))
+        assert len(documents) == 2, documents
+        original, replacement = [path.read_text() for path in documents]
+        assert sources[0] in original, original
+        assert all(source not in original for source in sources[1:]), original
+        assert sources[0] not in replacement, replacement
+        assert all(replacement.count(source) == 1 for source in sources[1:]), (
+            replacement
+        )
+        exported = (workspace / "report/session.qmd").read_text()
+        assert sources[0] not in exported, exported
+        assert all(exported.count(source) == 1 for source in sources[1:]), exported
+        capture = events(recording)
+        calls = {
+            event["request"]["arguments"].get(language): event["call_id"]
+            for event in capture
+            if event["event"] == "tool_call"
+        }
+        associations = [
+            event["session_id"]
+            for event in capture
+            if event["event"] == "source_associated"
+            and event["call_id"] == calls[sources[1]]
+        ]
+        assert associations == [2], associations
+        return normalized(transcript, workspace)
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_exports_recorded_image_formats(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        with McpClient(
+            binary,
+            execution.serve("--worker", str(worker)),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            result = client.send(r="emit image formats")
+            images = result["content"]
+            assert [image["mimeType"] for image in images] == [
+                "image/png",
+                "image/jpeg",
+            ], result
+            assert base64.b64decode(images[1]["data"]).startswith(b"\xff\xd8\xff")
+            assert base64.b64decode(images[1]["data"]).endswith(b"\xff\xd9")
+            client.send(r="export session")
+            bundle = json.loads(last_result_text(client))
+            assert [image["name"] for image in bundle["images"]] == [
+                "image-000001.png",
+                "image-000002.jpg",
+            ], bundle["images"]
+            for observed, exported in zip(images, bundle["images"], strict=True):
+                assert base64.b64decode(exported["data"]) == base64.b64decode(
+                    observed["data"]
+                )
+                assert f"images/{exported['name']}" in bundle["markdown"]
+            (recording,) = (workspace / ".agents/console/sessions").iterdir()
+            (jpeg,) = [
+                event
+                for event in events(recording)
+                if event["event"] == "artifact_created"
+                and event["mime_type"] == "image/jpeg"
+            ]
+            assert Path(jpeg["path"]).suffix == ".bin", jpeg
+            assert (recording / jpeg["path"]).read_bytes() == base64.b64decode(
+                images[1]["data"]
+            )
+            # Assert bytes and links before shortening their transcript display.
+            for observed, exported in zip(images, bundle["images"], strict=True):
+                observed["data"] = exported["data"] = (
+                    f"<byte-identical {observed['mimeType']} image>"
+                )
+            client.transcript[-1]["result"]["content"][0]["text"] = (
+                json.dumps(bundle, indent=2) + "\n"
+            )
+            return normalized(client.finish(), workspace)
+
+
 @requires(R)
 @executions(DIRECT, SANDBOXED)
 def test_replacement_exports_retained_r_requirements(

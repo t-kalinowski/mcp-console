@@ -130,7 +130,7 @@ Results collected by later polls remain associated with their actual cells.
 Startup and between-cell output remain distinguishable, and polling/control request wrappers are omitted.
 Output previews and omission notices are preserved; the export does not expand raw logs into results the model was never shown.
 Raw logs mentioned in those notices are supplementary and are not copied.
-Included images use portable relative links.
+Included images keep their encoded format and use portable relative links.
 
 Export does not run Quarto, execute source, repeat SQL, or recompute plots.
 The worker writes the files under the same filesystem and sandbox permissions as submitted code.
