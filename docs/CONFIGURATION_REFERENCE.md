@@ -26,6 +26,7 @@ Start with [Configuration files](CONFIGURATION.md) for file discovery, merging, 
 | <span id="destination-rules"></span> Destination rules                           | [Destination rules](SANDBOX_CONFIGURATION.md#destination-rules)                      |
 | <span id="local-sockets-and-binding"></span> Local sockets and binding           | [Local sockets and binding](SANDBOX_CONFIGURATION.md#unix-sockets-and-local-binding) |
 | <span id="package-preparation"></span> Package preparation                       | [Package preparation](RESOLVER.md#configuration)                                     |
+| <span id="languages"></span> Language visibility                                 | [Language visibility](TOOL_CONFIGURATION.md#model-visible-languages)                 |
 | <span id="tool-presentation"></span> Tool presentation                           | [Tool presentation](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters)          |
 | <span id="parameter-settings"></span> Parameter settings                         | [Parameter settings](TOOL_CONFIGURATION.md#parameter-settings)                       |
 | <span id="null-empty-values-and-merging"></span> Null, empty values, and merging | [Null, empty values, and merging](CONFIGURATION.md#merge-rules)                      |

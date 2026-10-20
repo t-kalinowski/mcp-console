@@ -150,12 +150,13 @@ The [user guides](README.md) offer two reading paths: [Learn Console](README.md#
 Keep Sessions and languages, Packages and environments, and Sandbox and trust readable as a sequence.
 Use examples to explain the concepts, then link to the reference for complete settings and edge cases.
 
-Each reference topic has one owner: [Configuration files](CONFIGURATION.md) for discovery, merging, paths, and export; [Interpreters and startup](RUNTIME_CONFIGURATION.md) for R/Python selection, startup packages, resolution policies, and database startup; [Sandbox permissions](SANDBOX_CONFIGURATION.md) for permission fields and enforcement limits; [Package sources and caches](RESOLVER.md) for preparation and cache settings; and [Environment variables](ENVIRONMENT.md) for environment settings and recognized variables.
+All settings accepted in `config.yaml` belong in the user reference.
+Each reference topic has one owner: [Configuration files](CONFIGURATION.md) for discovery, merging, paths, and export; [Interpreters and startup](RUNTIME_CONFIGURATION.md) for R/Python selection, startup packages, resolution policies, and database startup; [Tool configuration](TOOL_CONFIGURATION.md) for language visibility, descriptions, and accepted parameters; [Sandbox permissions](SANDBOX_CONFIGURATION.md) for permission fields and enforcement limits; [Package sources and caches](RESOLVER.md) for preparation and cache settings; and [Environment variables](ENVIRONMENT.md) for environment settings and recognized variables.
 The configuration settings index links to these owners instead of repeating their field tables.
 [Runtime behavior](RUNTIME_REFERENCE.md) and [Recordings and reports](RECORDING.md) also belong in the user reference.
 
 [Client integration](CLIENTS.md) is a separate path for applications that call Console.
-Exact MCP calls, requirement operations, and tool presentation belong in [MCP send reference](API.md), [Requirements API](REQUIREMENTS_API.md), and [Tool configuration](TOOL_CONFIGURATION.md).
+Exact MCP calls and requirement operations belong in [MCP send reference](API.md) and [Requirements API](REQUIREMENTS_API.md).
 Keep compatibility anchors when moving public sections and include every new page in the appropriate sidebar and search index.
 Architecture belongs in [Architecture](ARCHITECTURE.md); exact private message schemas belong with their source definitions.
 Prefer a cross-reference over another explanation of restart, preparation, or sandbox trust.

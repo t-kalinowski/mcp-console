@@ -1,6 +1,6 @@
 # Client integration
 
-Use these references when writing an application that connects to Console or configuring the tool definition a model receives.
+Use these references when writing an application that connects to Console.
 To connect an existing MCP client without writing integration code, use [Get started](getting-started.qmd).
 
 ## Connect from application code

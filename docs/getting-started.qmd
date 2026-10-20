@@ -60,7 +60,7 @@ See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
 The [R package, `mcp.console`](../r/README.md), adds Console to an ellmer chat.
 The [Python package, `mcp_console`](PYTHON.md), provides synchronous and asynchronous clients and adapters for chatlas, OpenAI, and Anthropic.
 
-See [Client integration](CLIENTS.md) for package APIs and tool configuration.
+See [Client integration](CLIENTS.md) for package APIs and [Tool configuration](TOOL_CONFIGURATION.md) for language visibility and tool descriptions.
 
 ## Try an analysis
 

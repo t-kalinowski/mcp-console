@@ -28,6 +28,7 @@ Each reference includes the relevant settings, accepted values, defaults, and pr
 | Use a Python environment or select an R installation                                              | [Interpreters and startup](RUNTIME_CONFIGURATION.md)                                       |
 | Choose startup packages or control when more may be prepared                                      | [Package declarations and policies](RUNTIME_CONFIGURATION.md#startup-package-declarations) |
 | Connect to a database before the first SQL call                                                   | [Database startup](RUNTIME_CONFIGURATION.md#session-startup-source)                        |
+| Choose what languages, parameters, or instructions the agent sees                                 | [Tool configuration](TOOL_CONFIGURATION.md)                                                |
 | Allow project writes, protect files, reach a service, or inherit Codex permissions                | [Sandbox permissions](SANDBOX_CONFIGURATION.md)                                            |
 | Use a package mirror or change cache locations                                                    | [Package sources and caches](RESOLVER.md)                                                  |
 | Set environment variables or look up how Console handles them                                     | [Environment variables](ENVIRONMENT.md)                                                    |
@@ -35,7 +36,6 @@ Each reference includes the relevant settings, accepted values, defaults, and pr
 | Find recorded output or turn an analysis into a report                                            | [Recordings and reports](RECORDING.md)                                                     |
 | Run a program with filesystem and network limits                                                  | [Run commands in a sandbox](SANDBOX_COMMAND.md)                                            |
 | Register a client, check an installation, or look up a command                                    | [Command-line reference](CLI.md) and [CLI help](cli-help.qmd)                              |
-| Choose what languages, parameters, or instructions the agent sees                                 | [Tool configuration](TOOL_CONFIGURATION.md)                                                |
 
 For a particular configuration key, use the [settings index](CONFIGURATION.md#settings-by-task).
 
@@ -49,7 +49,7 @@ The [glossary](GLOSSARY.md) defines terms used in these pages.
 
 <span id="public-reference"></span>
 
-[Client integration](CLIENTS.md) is for applications that call Console and configure its model-facing interface.
+[Client integration](CLIENTS.md) is for applications that call Console.
 It includes MCP arguments, result handling, polling, interactive input, and the R and Python client APIs.
 
 <span id="develop-console"></span>

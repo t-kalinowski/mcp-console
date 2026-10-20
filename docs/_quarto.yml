@@ -62,6 +62,7 @@ website:
         contents:
         - CONFIGURATION.md
         - RUNTIME_CONFIGURATION.md
+        - TOOL_CONFIGURATION.md
         - SANDBOX_CONFIGURATION.md
         - RESOLVER.md
         - ENVIRONMENT.md
@@ -88,7 +89,6 @@ website:
         - API.md
         - SEND_OPERATIONS.md
         - REQUIREMENTS_API.md
-        - TOOL_CONFIGURATION.md
       - href: python/reference/index.html
         text: Python API
       - href: r/reference/index.html
