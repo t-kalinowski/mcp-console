@@ -105,17 +105,17 @@ Command-line `-c` settings override matching file settings.
 
 ### Pass settings through an environment variable
 
-You can store the `sandbox` settings as a one-line YAML or JSON object and pass them through `-c`.
+You can store a complete configuration as a one-line YAML or JSON object and pass its variable name through `--config-env`.
 For example, in a POSIX shell, after creating `output`:
 
 ```sh
-export SANDBOX_SETTINGS='{profile: read_only, filesystem: {read_write: [output], deny: [secrets]}, network: restricted}'
-mcp-console sandbox --no-config -c "sandbox=$SANDBOX_SETTINGS" -- python analysis.py
+export SANDBOX_SETTINGS='{sandbox: {profile: read_only, filesystem: {read_write: [output], deny: [secrets]}, network: restricted}}'
+mcp-console sandbox --config-env SANDBOX_SETTINGS -- python analysis.py
 ```
 
-The variable contains the settings inside `sandbox:`, without the outer key.
-The shell expands it into one argument; Console does not read this variable automatically.
-`--no-config` skips global and project files while retaining Console's built-in defaults.
+The variable uses the same structure as a configuration file, including the outer `sandbox:` key.
+`--config-env` replaces global and project file discovery while retaining Console's built-in defaults.
+Command-line `-c` settings override matching values in the variable.
 
 ## Shell commands and redirection
 
@@ -142,3 +142,4 @@ Cleanup after a crashed or forcibly stopped runner has [platform-specific limits
 [Temporary storage](SANDBOX_CONFIGURATION.md#temporary-storage) describes the other storage options.
 
 For all command options, see [`sandbox` CLI help](cli-help.qmd#all-platforms-mcp-console-sandbox).
+Integrations can also [supply configuration through an environment variable](CONFIGURATION.md#configuration-environment).
