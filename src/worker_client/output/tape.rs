@@ -157,6 +157,9 @@ impl OutputTape {
         state.worker_revision += 1;
         state.flush_decoders();
         state.flush_terminal();
+        // Before the first send, startup images share this preview. Apply its
+        // budget before retaining artifacts, so omitted startup images never
+        // acquire receipts that could advertise unpublished paths.
         if state
             .current
             .response

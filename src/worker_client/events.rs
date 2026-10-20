@@ -109,6 +109,7 @@ fn dispatch_worker_events(
     let stdout = output.direct_stdout();
     let stderr = output.direct_stderr();
     let mut candidates = RuntimeCandidates::default();
+    let mut worker_acquired = false;
     let mut runtime_started = false;
     let mut semantic_failure = false;
     let mut stdout_closed = false;
@@ -171,7 +172,11 @@ fn dispatch_worker_events(
                     continue;
                 }
                 let result = match event {
+                    RelayEvent::WorkerStarted { .. } if worker_acquired => {
+                        Err("worker relay sent an unexpected worker start".to_string())
+                    }
                     RelayEvent::WorkerStarted { pid } => {
+                        worker_acquired = true;
                         let retained = callbacks.client.inspect_requirements();
                         if let Some(recording) = callbacks
                             .client
@@ -329,7 +334,7 @@ fn dispatch_worker_events(
                     _ if semantic_failure => Ok(()),
                     semantic if retiring && ignored_during_retirement(&semantic) => Ok(()),
                     RelayEvent::Ready => {
-                        if runtime_started || startup.is_none() {
+                        if !worker_acquired || runtime_started || startup.is_none() {
                             Err("worker sent an unexpected ready message".to_string())
                         } else {
                             if let Some(startup) = startup.take() {

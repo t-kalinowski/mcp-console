@@ -238,6 +238,9 @@ If 64 captures remain unfinished, the next send is retained in the bounded proto
 Protocol receipt is queued before the corresponding send capture starts.
 Response references carry the originating call's identity through handler completion; they do not infer it from a potentially reused JSON-RPC ID.
 EOF shutdown closes capture admission before settling its final tail, then publishes outstanding output receipts before recording finalization.
+Recording settlement has no abandonment deadline: every received send must finish capture before `recording_ended` and process exit.
+This assumes filesystem operations eventually return; an indefinitely blocked recording filesystem can keep the Console process alive after transport and worker retirement.
+Fail-open handling applies to reported recording errors and bounded queue overload, not cancellation of an operating-system filesystem call already in progress.
 Closing the delivery gate also settles failed or abandoned protocol writes, including discovery and ping responses, before recording ends.
 Markdown and QMD are projections, not interpreter checkpoints; a journaled result does not prove client receipt.
 See [Recordings](RECORDING.md).
@@ -342,6 +345,7 @@ Keep detailed compatibility handling there rather than reproducing it across gui
 
 One recording belongs to one Console process; numbered sessions identify actual worker lifetimes, including automatic replacements.
 The relay publishes `worker_started` only after acquiring its direct child.
+The server requires exactly one acquisition before readiness and rejects duplicate acquisition events as private-protocol failures.
 The server queues acquisition, readiness, and exit/signal evidence through the bounded recorder drain without changing generation ownership or retirement barriers.
 Journal writes do not run on the worker event dispatcher or delay its retirement join.
 Startup failure records carry a session number only when that startup acquired a worker.

@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import base64
 import os
 import sys
 import tempfile
@@ -125,6 +126,85 @@ def test_failed_publication_invalidates_startup_output_receipts(
                             "capture": "unpublished startup log is unavailable; computation survives"
                         },
                     ]
+
+
+@requires(NATIVE_FIXTURES, POSIX, R)
+def test_failed_publication_does_not_advertise_omitted_startup_images(
+    binary: Path,
+) -> Transcript:
+    from support.r import r_test_environment
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        with closing(FifoCheckpoint.create(root / "images-retained")) as retained:
+            # fmt: r
+            startup = code("""
+                options(
+                  console.plot.width_in = 12,
+                  console.plot.height_in = 12,
+                  console.plot.dpi = 100
+                )
+                set.seed(1)
+                for (i in 1:2) {
+                  par(mar = rep(0, 4), xaxs = "i", yaxs = "i")
+                  plot.new()
+                  rasterImage(
+                    matrix(rgb(runif(1200^2), runif(1200^2), runif(1200^2)), nrow = 1200),
+                    0,
+                    0,
+                    1,
+                    1,
+                    interpolate = FALSE
+                  )
+                }
+                dev.off()
+                cat("startup images observed\\n")
+                """)
+            environment, _ = r_test_environment()
+            config = root / ".agents/console/config.yaml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps({"startup": {"language": "r", "code": startup}})
+            )
+            environment.update(
+                {
+                    "RETICULATE_PYTHON": sys.executable,
+                    LOADER_VARIABLE: str(
+                        build_interposer(root, "recording_observation")
+                    ),
+                    "MCP_CONSOLE_TEST_OBSERVED_TEXT": "startup images observed\n",
+                    "MCP_CONSOLE_TEST_JOURNAL_OBSERVED": str(retained.path),
+                }
+            )
+            with McpClient(binary, DIRECT.serve(), environment, root) as client:
+                client.initialize_and_list_tools()
+                retained.wait(
+                    "startup images processed before publication",
+                    timeout=600,
+                    client=client,
+                )
+                (root / ".agents/console/sessions").write_text("not a directory")
+                result = client.send()
+                images = [c for c in result["content"] if c["type"] == "image"]
+                assert len(images) == 1, [c["type"] for c in result["content"]]
+                assert 4 * 1024 * 1024 < len(images[0]["data"]) <= 8 * 1024 * 1024
+                assert base64.b64decode(images[0]["data"]).startswith(
+                    b"\x89PNG\r\n\x1a\n"
+                )
+                text = "".join(
+                    c["text"] for c in result["content"] if c["type"] == "text"
+                )
+                assert "1 image not retained" in text, text
+                assert "artifacts/" not in text and "retained image:" not in text, text
+                assert not result["isError"], result
+                transcript, stderr = client.finish_with_standard_error()
+                assert stderr.count("transcript recording disabled:") == 1, stderr
+                return [
+                    *transcript[:3],
+                    {
+                        "capture": "unpublished startup images are not advertised as retained"
+                    },
+                ]
 
 
 @requires(NATIVE_FIXTURES, POSIX)
