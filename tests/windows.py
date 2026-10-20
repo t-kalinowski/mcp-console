@@ -1729,9 +1729,24 @@ class WindowsConsole(unittest.TestCase):
             python="import six; saved = 42; print(six.__version__)",
         )
         self.assertIn("1.", json.dumps(result))
-        result = completed(python="import sniffio; print(sniffio.__version__)")
-        self.assertIn("No module named 'sniffio'", json.dumps(result))
-        self.assertIn("resolution=explicit", json.dumps(result))
+        result = completed(
+            # fmt: python
+            python=code("""
+                try:
+                    import sniffio
+                except ModuleNotFoundError as error:
+                    assert type(error) is ModuleNotFoundError
+                    assert error.args == ("No module named 'sniffio'",), error.args
+                    assert error.name == "sniffio", error.name
+                    assert error.path is None, error.path
+                    print("undeclared import preserves native ModuleNotFoundError")
+                else:
+                    raise AssertionError("undeclared dependency imported")
+                """),
+        )
+        self.assertIn(
+            "undeclared import preserves native ModuleNotFoundError", json.dumps(result)
+        )
         inspection = session.send(requirements={"action": "get"})
         self.assertEqual(
             inspection["structuredContent"]["requirements"]["python"], ["six"]
