@@ -42,21 +42,26 @@ R and Python can each run without the other.
 
 See [Sessions and languages](BUILTIN_RUNTIME.md) for examples, database connections, and plots.
 
-## Review the agent's work
+## Use a full runtime in a sandbox {#status-and-trust}
 
-[Recordings](RECORDING.md) retain code, output, and plots so you can see what the agent ran in Console and inspect the results.
-They also provide a starting point for reproducible analyses and reports.
+Console runs native R and Python, with access to their package ecosystems, including packages with compiled code.
+An [OS-level sandbox](SANDBOX.md) enforces file and network permissions.
 
-## Run commands in a sandbox
+The default `read_only` profile restricts network access and filesystem writes.
+You can [customize permissions](SANDBOX_CONFIGURATION.md) for your workload.
 
-Use Console's sandbox directly from your terminal to run scripts and other programs with controlled file and network access.
-The permissions apply to the command and its child processes.
+<span id="run-commands-in-a-sandbox"></span>
+
+Use the same sandbox to [run standalone scripts and programs](SANDBOX_COMMAND.md):
 
 ```sh
 mcp-console sandbox -- python analysis.py
 ```
 
-[Run commands in a sandbox](SANDBOX_COMMAND.md) covers installation, workspace writes, network access, and reusable settings.
+## Review the agent's work
+
+[Recordings](RECORDING.md) retain code, output, and plots so you can see what the agent ran in Console and inspect the results.
+They also provide a starting point for reproducible analyses and reports.
 
 ## Build on Console
 
@@ -86,11 +91,3 @@ See [Packages and environments](REQUIREMENTS.md).
 - **Conversational analysis:** discuss questions and results while the agent works in its own session.
 - **Large datasets:** keep data and intermediate results in memory for follow-up questions.
 - **Debugging and package development:** pause execution and inspect live objects where a failure occurs.
-
-## Control access to files and networks {#status-and-trust}
-
-Console's default `read_only` sandbox profile restricts network access and filesystem writes.
-It does not restrict filesystem reads.
-
-You can allow writes to selected paths, block reads from selected paths, and control network access with domain allowlists or denylists.
-See [Sandbox permissions](SANDBOX_CONFIGURATION.md) for profiles, custom permissions, and inheriting permissions from Codex.
