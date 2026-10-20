@@ -103,6 +103,20 @@ For settings you want applied automatically, use Console's [global or project co
 Command-line `-c` settings override matching file settings.
 [Environment variables](ENVIRONMENT.md#where-to-set-variables) covers variables supplied to the program.
 
+### Pass settings through an environment variable
+
+You can store the `sandbox` settings as a one-line YAML or JSON object and pass them through `-c`.
+For example, in a POSIX shell, after creating `output`:
+
+```sh
+export SANDBOX_SETTINGS='{profile: read_only, filesystem: {read_write: [output], deny: [secrets]}, network: restricted}'
+mcp-console sandbox --no-config -c "sandbox=$SANDBOX_SETTINGS" -- python analysis.py
+```
+
+The variable contains the settings inside `sandbox:`, without the outer key.
+The shell expands it into one argument; Console does not read this variable automatically.
+`--no-config` skips global and project files while retaining Console's built-in defaults.
+
 ## Shell commands and redirection
 
 Console passes the command's arguments directly to the executable.
@@ -128,4 +142,3 @@ Cleanup after a crashed or forcibly stopped runner has [platform-specific limits
 [Temporary storage](SANDBOX_CONFIGURATION.md#temporary-storage) describes the other storage options.
 
 For all command options, see [`sandbox` CLI help](cli-help.qmd#all-platforms-mcp-console-sandbox).
-Advanced integrations can also [supply a complete native policy](SANDBOX_CONFIGURATION.md#explicit-complete-policy).
