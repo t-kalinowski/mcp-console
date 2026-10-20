@@ -611,7 +611,6 @@ pub async fn run(
                 let retirement = if runtime.worker.is_configured() {
                     runtime.worker.shutdown(deadline).await
                 } else {
-                    runtime.worker.finish_recording();
                     Ok(())
                 };
                 retirement.and_then(|()| startup.finish_failed_preparation(error))
@@ -622,8 +621,17 @@ pub async fn run(
             .await;
         // Cancellation releases response admission, not capture ownership.
         // Settle every received send before finalizing its journal and projections.
-        recordings.settle().await;
-        startup.runtime().transcript.finalize();
+        recordings.close_and_settle().await;
+        let runtime = startup.runtime();
+        let diagnostics = runtime.transcript.clone();
+        if let Err(error) = tokio::task::spawn_blocking(move || {
+            runtime.worker.finish_recording();
+            runtime.transcript.finalize();
+        })
+        .await
+        {
+            diagnostics.disable(format!("recording finalization task failed: {error}"));
+        }
         cancellation?;
         result?;
         Ok::<(), String>(())

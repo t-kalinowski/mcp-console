@@ -1570,7 +1570,6 @@ impl Client {
         })
         .await
         .map_err(|error| format!("process shutdown task failed: {error}"))?;
-        self.finish_recording();
         result
     }
 }

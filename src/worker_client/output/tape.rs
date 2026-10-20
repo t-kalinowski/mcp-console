@@ -61,6 +61,14 @@ impl OutputTape {
             state.recording_notice(output.finish());
             record.publish();
         }
+        // EOF need not poll completed output. Retained response receipts must
+        // reach the journal before its owner emits recording_ended.
+        for (_, response) in &state.sealed {
+            response.preview.publish_output_records();
+        }
+        if let Some(response) = &state.recovered {
+            response.preview.publish_output_records();
+        }
     }
 
     pub(in crate::worker_client) fn direct_stdout(&self) -> DirectOutput {

@@ -237,7 +237,7 @@ The bounded capture queue retains its ownership across handler and delivery canc
 If 64 captures remain unfinished, the next send is retained in the bounded protocol queue without a canonical call record, and the transport reports the overload on stderr before retiring the connection.
 Protocol receipt is queued before the corresponding send capture starts.
 Response references carry the originating call's identity through handler completion; they do not infer it from a potentially reused JSON-RPC ID.
-EOF shutdown settles response delivery and every queued capture before recording finalization.
+EOF shutdown closes capture admission before settling its final tail, then publishes outstanding output receipts before recording finalization.
 Closing the delivery gate also settles failed or abandoned protocol writes, including discovery and ping responses, before recording ends.
 Markdown and QMD are projections, not interpreter checkpoints; a journaled result does not prove client receipt.
 See [Recordings](RECORDING.md).
@@ -342,16 +342,18 @@ Keep detailed compatibility handling there rather than reproducing it across gui
 
 One recording belongs to one Console process; numbered sessions identify actual worker lifetimes, including automatic replacements.
 The relay publishes `worker_started` only after acquiring its direct child.
-The server records readiness and exit/signal evidence without changing generation ownership or retirement barriers.
+The server queues acquisition, readiness, and exit/signal evidence through the bounded recorder drain without changing generation ownership or retirement barriers.
+Journal writes do not run on the worker event dispatcher or delay its retirement join.
 Startup failure records carry a session number only when that startup acquired a worker.
 
 Before send, the recorder uses private temporary storage for the same journal, output logs, images, and projections.
 First-send publication relocates shared output writers while preserving producer ownership, sequence numbers, and observation timestamps.
+Output receipts resolve their public paths only after successful publication; failed publication leaves omitted text unavailable.
 It preserves the existing storage-root selection, identifier generation, permissions, and retention limits.
 `internal/events.jsonl` is the append-only journal underlying the Markdown and QMD projections.
 
 A journal or artifact failure disables further recording without stopping computation.
-Queued and in-flight protocol capture is bounded to 1,024 events or 8 MiB of serialized event data.
+Queued and in-flight protocol and worker lifecycle capture share a bound of 1,024 events or 8 MiB of serialized event data.
 Exceeding either limit discards pending protocol events and disables recording; it does not wait for the journal writer or close MCP input.
 The current write can finish before the recorder reports the failure, so the retained journal may end partway through the exchange.
 A raw-log failure affects that file.

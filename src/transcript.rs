@@ -38,12 +38,69 @@ pub(crate) struct Transcript(
 
 #[derive(Default)]
 struct ProtocolEvents {
-    pending: Vec<(Event<'static>, DateTime<Utc>, usize)>,
+    pending: Vec<(QueuedEvent, DateTime<Utc>, usize)>,
     // Include batches held by flush_protocol while journal I/O is blocked.
     retained_events: usize,
     retained_bytes: usize,
     failure: Option<String>,
     draining: bool,
+}
+
+// Lifecycle observations share the bounded, ordered drain with protocol events.
+// Session identity changes only when an actual acquisition is applied.
+#[derive(serde::Serialize)]
+enum QueuedEvent {
+    Event(Event<'static>),
+    WorkerStarting,
+    WorkerStarted { pid: u32, requirements: Value },
+    WorkerReady,
+    WorkerEnded { outcome: String },
+}
+
+impl QueuedEvent {
+    fn append(self, active: &mut ActiveTranscript, at: DateTime<Utc>) -> Result<(), String> {
+        match self {
+            Self::Event(event) => active.append(event, at),
+            Self::WorkerStarting => {
+                active.starting_session = None;
+                Ok(())
+            }
+            Self::WorkerStarted { pid, requirements } => {
+                active.next_session_id += 1;
+                let session_id = active.next_session_id;
+                active.live_session = Some(session_id);
+                active.starting_session = Some(session_id);
+                active.append(
+                    Event::WorkerStarted {
+                        session_id,
+                        pid,
+                        requirements: &requirements,
+                    },
+                    at,
+                )
+            }
+            Self::WorkerReady => {
+                let session_id = active
+                    .starting_session
+                    .take()
+                    .ok_or("worker ready without a started session")?;
+                active.append(Event::WorkerReady { session_id }, at)
+            }
+            Self::WorkerEnded { outcome } => {
+                let session_id = active
+                    .live_session
+                    .take()
+                    .ok_or("worker outcome without a started session")?;
+                active.append(
+                    Event::WorkerEnded {
+                        session_id,
+                        outcome: &outcome,
+                    },
+                    at,
+                )
+            }
+        }
+    }
 }
 
 const MAX_PROTOCOL_EVENTS: usize = 1024;
@@ -202,18 +259,18 @@ impl Transcript {
         });
     }
     pub(crate) fn protocol(&self, direction: &'static str, message: Value) {
-        self.queue_protocol(Event::Protocol { direction, message });
+        self.queue_event(QueuedEvent::Event(Event::Protocol { direction, message }));
     }
 
     pub(crate) fn delivery(&self, request_id: &Value, call_id: Option<u64>, delivered: bool) {
-        self.queue_protocol(Event::Delivery {
+        self.queue_event(QueuedEvent::Event(Event::Delivery {
             request_id: request_id.clone(),
             call_id,
             delivered,
-        });
+        }));
     }
 
-    fn queue_protocol(&self, event: Event<'static>) {
+    fn queue_event(&self, event: QueuedEvent) {
         if self
             .1
             .lock()
@@ -253,7 +310,7 @@ impl Transcript {
         let recorder = self.clone();
         // Neither journal I/O nor the recorder mutex runs on MCP frame receipt.
         // One retained drain owns this queue, including cancelled deliveries.
-        tokio::task::spawn_blocking(move || {
+        std::thread::spawn(move || {
             loop {
                 recorder.update(|_| Ok(()));
                 let mut events = recorder.1.lock().expect("protocol capture lock");
@@ -277,7 +334,7 @@ impl Transcript {
         let bytes = pending.iter().map(|(_, _, bytes)| bytes).sum::<usize>();
         let result = (|| {
             for (event, at, _) in pending {
-                state.capture()?.append(event, at)?;
+                event.append(state.capture()?, at)?;
             }
             Ok(())
         })();
@@ -335,55 +392,23 @@ impl Transcript {
     }
 
     pub(crate) fn worker_starting(&self) {
-        self.update(|state| {
-            state.capture()?.starting_session = None;
-            Ok(())
-        });
+        self.queue_event(QueuedEvent::WorkerStarting);
     }
 
     pub(crate) fn worker_started(&self, pid: u32, requirements: &Value) {
-        self.update(|state| {
-            let active = state.capture()?;
-            active.next_session_id += 1;
-            let session_id = active.next_session_id;
-            active.live_session = Some(session_id);
-            active.starting_session = Some(session_id);
-            active.append(
-                Event::WorkerStarted {
-                    session_id,
-                    pid,
-                    requirements,
-                },
-                Utc::now(),
-            )
+        self.queue_event(QueuedEvent::WorkerStarted {
+            pid,
+            requirements: requirements.clone(),
         });
     }
 
     pub(crate) fn worker_ready(&self) {
-        self.update(|state| {
-            let active = state.capture()?;
-            let session_id = active
-                .starting_session
-                .take()
-                .ok_or("worker ready without a started session")?;
-            active.append(Event::WorkerReady { session_id }, Utc::now())
-        });
+        self.queue_event(QueuedEvent::WorkerReady);
     }
 
     pub(crate) fn worker_ended(&self, outcome: &str) {
-        self.update(|state| {
-            let active = state.capture()?;
-            let session_id = active
-                .live_session
-                .take()
-                .ok_or("worker outcome without a started session")?;
-            active.append(
-                Event::WorkerEnded {
-                    session_id,
-                    outcome,
-                },
-                Utc::now(),
-            )
+        self.queue_event(QueuedEvent::WorkerEnded {
+            outcome: outcome.to_owned(),
         });
     }
 

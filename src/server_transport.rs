@@ -873,11 +873,21 @@ impl RecordingCall {
 
 /// The receive-order capture tail survives cancellation of individual deliveries.
 #[derive(Clone, Default)]
-pub(crate) struct RecordingQueue(Arc<Mutex<Option<RecordingCall>>>);
+pub(crate) struct RecordingQueue(Arc<Mutex<RecordingQueueState>>);
+
+#[derive(Default)]
+struct RecordingQueueState {
+    closed: bool,
+    tail: Option<RecordingCall>,
+}
 
 impl RecordingQueue {
-    pub(crate) async fn settle(&self) {
-        let tail = self.0.lock().expect("recording queue lock").clone();
+    pub(crate) async fn close_and_settle(&self) {
+        let tail = {
+            let mut queue = self.0.lock().expect("recording queue lock");
+            queue.closed = true;
+            queue.tail.take()
+        };
         if let Some(tail) = tail {
             tail.recorded().await;
         }
@@ -1019,7 +1029,17 @@ where
     }
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
-        let mut message = self.inner.receive().await;
+        let mut message = tokio::select! {
+            biased;
+            _ = self.deliveries.wait_for_close() => return None,
+            message = self.inner.receive() => message,
+        };
+        // Serialize receipt/capture enrollment with shutdown's final tail cut.
+        // This lock protects only queueing, never recorder locks or journal I/O.
+        let mut queue = self.recording_queue.0.lock().expect("recording queue lock");
+        if queue.closed {
+            return None;
+        }
         let mut received_call_id = None;
         let mut capture = None;
         if let (Some(recording), Some(JsonRpcMessage::Request(request))) =
@@ -1061,12 +1081,7 @@ where
                 .unwrap_or_default();
             let (completed, ready) = tokio::sync::watch::channel(None);
             let pending = RecordingCall { id: call_id, ready };
-            let predecessor = self
-                .recording_queue
-                .0
-                .lock()
-                .expect("recording queue lock")
-                .replace(pending.clone());
+            let predecessor = queue.tail.replace(pending.clone());
             call.extensions.insert(pending);
             received_call_id = Some(call_id);
             capture = Some(async move {
@@ -1105,6 +1120,7 @@ where
         if let Some(capture) = capture {
             self.recording_tasks.push_back(tokio::spawn(capture));
         }
+        drop(queue);
         if message.is_some() {
             self.deliveries.lock().bootstrap_response_delivered = false;
         }

@@ -34,7 +34,8 @@ struct CellOutputSummary {
 #[derive(Clone)]
 pub(crate) struct OutputRecord {
     state: Arc<Mutex<OutputRecordState>>,
-    public_path: Arc<str>,
+    public_directory: Arc<Mutex<PathBuf>>,
+    path: Arc<str>,
     accounted: Arc<AtomicU64>,
 }
 
@@ -64,8 +65,10 @@ impl Drop for OutputRecordState {
 }
 
 impl OutputRecord {
-    pub(crate) fn public_path(&self) -> &str {
-        &self.public_path
+    pub(crate) fn public_path(&self) -> Option<String> {
+        let directory = self.public_directory.lock().expect("recording path lock");
+        (!directory.as_os_str().is_empty())
+            .then(|| directory.join(self.path.as_ref()).display().to_string())
     }
 
     pub(crate) fn note_inline_omission(&self, bytes: u64) {
@@ -190,7 +193,8 @@ impl CellOutput {
     pub(crate) fn record(&self) -> OutputRecord {
         OutputRecord {
             state: self.record.clone(),
-            public_path: Arc::from(self.public_path()),
+            public_directory: self.public_directory.clone(),
+            path: Arc::from(self.path.as_str()),
             accounted: Arc::new(AtomicU64::new(0)),
         }
     }

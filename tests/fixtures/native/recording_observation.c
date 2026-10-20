@@ -10,6 +10,13 @@
 #include <unistd.h>
 
 static _Atomic int observed;
+static pid_t owner;
+
+__attribute__((constructor)) static void initialize(void) {
+    owner = getpid();
+    unsetenv("DYLD_INSERT_LIBRARIES");
+    unsetenv("LD_PRELOAD");
+}
 
 static ssize_t observed_write(int descriptor, const void *buffer, size_t length) {
 #ifdef __APPLE__
@@ -19,10 +26,12 @@ static ssize_t observed_write(int descriptor, const void *buffer, size_t length)
     ssize_t result = next_write(descriptor, buffer, length);
 #endif
     const char *event = getenv("MCP_CONSOLE_TEST_OBSERVED_EVENT");
+    const char *text = getenv("MCP_CONSOLE_TEST_OBSERVED_TEXT");
     const char *path = getenv("MCP_CONSOLE_TEST_JOURNAL_OBSERVED");
-    if (event != NULL && path != NULL && result == (ssize_t)length) {
+    if (getpid() == owner && (event != NULL || text != NULL) && path != NULL && result == (ssize_t)length) {
         char marker[128];
-        int size = snprintf(marker, sizeof(marker), "{\"event\":\"%s\",", event);
+        int size = text != NULL ? snprintf(marker, sizeof(marker), "%s", text)
+                               : snprintf(marker, sizeof(marker), "{\"event\":\"%s\",", event);
         if (size > 0 && (size_t)size < sizeof(marker) && length >= (size_t)size &&
             memcmp(buffer, marker, size) == 0 && !atomic_exchange(&observed, 1)) {
             int reached = open(path, O_WRONLY | O_NONBLOCK);
