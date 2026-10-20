@@ -222,10 +222,8 @@ class WebsiteTests(unittest.TestCase):
                 for pre in panel.select("pre.cli-help"):
                     self.assertEqual(pre.get("tabindex"), "0")
                     self.assertEqual(pre.get("role"), "region")
-                    label = soup.find(id=pre.get("aria-labelledby"))
-                    self.assertIsNotNone(label)
                     self.assertEqual(
-                        label.get_text().strip(),
+                        pre.get("aria-label"),
                         pre["data-command"].removesuffix(" --help"),
                     )
                 headings = [
