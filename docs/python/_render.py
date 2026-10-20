@@ -12,9 +12,9 @@ for page in project.rglob("*.qmd"):
     navigation = (
         '<nav aria-label="Console documentation">'
         f'<a href="{parent}index.html">MCP Console</a> · '
-        f'<a href="{parent}README.html">User guides</a> · '
-        f'<a href="{parent}PYTHON.html">Python guide</a> · '
-        f'<a href="{parent}r/index.html">R package</a></nav>\n\n'
+        f'<a href="{parent}getting-started.html">Get started</a> · '
+        f'<a href="{parent}README.html">Guides</a> · '
+        f'<a href="{parent}REFERENCE.html">Reference</a></nav>\n\n'
     )
     # Great Docs 0.17 links to symbol fragments but omits their target IDs.
     if page.parent == project / "reference" and page.stem != "index":

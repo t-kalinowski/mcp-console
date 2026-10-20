@@ -2,7 +2,7 @@
 
 Choose the languages and arguments your agent can use, describe the data available to it, and prepare a session with packages, data, connections, and helper functions.
 These settings work with an MCP client or with the R and Python packages.
-See [Connect to Console](CLIENTS.md) to choose how to connect.
+See [Get started](getting-started.qmd) to choose how to connect.
 
 ## Choose languages and arguments
 
@@ -164,7 +164,7 @@ with MCPConsole(args=["serve", "--config-file", "application.yaml"]) as console:
 `set_tools()` replaces the chat's tool list.
 Using `console.send_tool.input_schema` preserves configured languages and hidden arguments; inferring a schema from the Python method's signature would lose those settings.
 
-[Connect to Console](CLIENTS.md) links to MCP, Python, and R interfaces.
+[Get started](getting-started.qmd) links to MCP, Python, and R connection guides.
 The [Python](PYTHON.md#choose-a-model-integration) and [R](R.md) guides cover adding Console to a chat or model framework.
 Your application chooses the model and manages the conversation.
 

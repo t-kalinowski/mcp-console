@@ -15,10 +15,10 @@ Code runs in an [OS-level sandbox](SANDBOX.md) by default.
 Console prepares environments and packages automatically; no Console configuration file is required.
 
 Console works with MCP-compatible clients such as Codex and Claude Code and does not depend on a particular model provider.
-You can also [use Console from R or Python](CLIENTS.md).
+You can also use Console from [R](R.md) or [Python](PYTHON.md).
 
 ::: {.home-links}
-[Get started](getting-started.qmd){.btn .btn-primary} [User guides](README.md){.btn .btn-outline-primary}
+[Get started](getting-started.qmd){.btn .btn-primary} [Guides](README.md){.btn .btn-outline-primary}
 :::
 
 Console provides a unified API across macOS, Linux, and Windows x64.

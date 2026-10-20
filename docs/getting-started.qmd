@@ -2,65 +2,30 @@
 title: Get started
 ---
 
-Install uv, choose how to connect to Console, and try an analysis.
+Choose how to connect to Console, then try an analysis.
 No Console configuration file is required.
+
+## Choose how to connect {#connect-your-client}
+
+<span id="codex-and-claude-code"></span> <span id="other-mcp-clients"></span> <span id="r-and-python-packages"></span>
+
+| Use Console with…                    | Start here                                                                                 |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ |
+| A coding agent or another MCP client | [MCP client setup](CLIENTS.md) covers Codex, Claude Code, and manual MCP settings.         |
+| R                                    | [Use Console from R](R.md) adds a Console tool to an ellmer chat.                          |
+| Python                               | [Use Console from Python](PYTHON.md) covers direct calls and model framework integrations. |
+
+All three use the same persistent workbench for R, Python, and SQL.
+Once connected, continue with the analysis below or explore the [guides](README.md).
 
 ## Install
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
-The examples below use `uvx` to run Console without a separate installation.
+[Installation](INSTALLATION.md) covers uv, supported platforms, and the runtimes your agent can use.
+The R and Python guides above also cover installing their client packages.
 
-Prebuilt packages are available for macOS and Linux on ARM64 and x86-64, and for Windows x64.
-Sandboxed Windows sessions require Windows 11 with [Microsoft Execution Containers (MXC)](https://support.microsoft.com/en-us/servicing/os/windows-11/2026/08/kb5120998-windows-11-24h2-25h2-update#microsoft-execution-containers).
-
-If Console fails to start on Linux, see [Linux host compatibility](LINUX_COMPATIBILITY.md) for missing libraries or sandbox restrictions.
-
-To let your agent use R, install it separately, for example with [rig](https://github.com/r-lib/rig#id-installation) and `rig add release`.
-Python and SQL work without R.
-The first session may download Python and packages.
-
-To check your installation and prepare runtime and package caches before opening a client, run `uvx mcp-console warmup`.
-See [Check your installation](CLI.md#check-your-installation) for configuration and diagnostics.
-
-### Build from source
+<span id="build-from-source"></span>
 
 To install the development version, follow [Build from source](BUILD_FROM_SOURCE.md).
-
-## Connect to Console {#connect-your-client}
-
-Use Console with an MCP client, from R, or from Python.
-
-### Codex and Claude Code
-
-Connect Console to your clients:
-
-```sh
-uvx mcp-console configure-client codex
-uvx mcp-console configure-client claude
-```
-
-This registers Console globally, so it is available across projects, and loads its tools up front.
-It also adds Console's `send` tool to the client's allowlist so calls do not need individual approval, subject to explicit client restrictions.
-Setup starts runtime checks and cache warming in the background, printing a log path for the results.
-Use `--no-warmup` to skip that step.
-Restart the client after setup.
-Your client launches Console on the same host, usually in the workspace where the agent is working.
-
-To register Console for a specific project, run the command from the project directory and add `--directory .`.
-See [client configuration](CLI.md#configure-a-client) for project registration, version pinning, and launch options.
-
-### Other MCP clients
-
-Console supports MCP over standard input and output (stdio).
-In your client's MCP settings, use command `uvx` and arguments `["mcp-console", "serve"]`.
-See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
-
-### R and Python packages
-
-The [R guide](R.md) shows how to add Console to an ellmer chat with `mcp.console`.
-The [Python guide](PYTHON.md) covers synchronous and asynchronous calls and adapters for chatlas, OpenAI, and Anthropic through `mcp_console`.
-
-See [Connect to Console](CLIENTS.md) for all connection methods and [Customize Console](BUILD_ON_CONSOLE.md) for tool descriptions, language visibility, and prepared environments.
 
 ## Try an analysis
 
@@ -80,7 +45,7 @@ See [Sessions and languages](BUILTIN_RUNTIME.md) for an example of how your agen
 
 ## Choose permissions
 
-For Codex configured above, Console defaults to the client's sandbox permissions; configuration files can select another profile.
+For Codex registered through [client setup](CLIENTS.md#codex-and-claude-code), Console defaults to the client's sandbox permissions; configuration files can select another profile.
 Without inheritance or a configured profile, the default sandbox permits file reads and private temporary writes, but not ordinary workspace writes or direct network access.
 **It does not protect readable secrets.**
 

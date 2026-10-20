@@ -1,19 +1,7 @@
----
-sidebar: false
----
+# Guides
 
-# User guides
-
-Learn how Console works, connect a client, or look up the settings and behavior for a specific task.
-
-## Get connected
-
-[Get started](getting-started.qmd) walks through installation, client setup, and a first analysis.
-Choose how you want to use Console:
-
-- [With an MCP client](CLIENTS.md#mcp-clients).
-- [From R](R.md), through the `mcp.console` package and ellmer.
-- [From Python](PYTHON.md), through direct calls or a model framework.
+Learn how Console's persistent workbench handles code, packages, permissions, and recorded results.
+These guides apply whether you connect with an MCP client, from R, or from Python.
 
 ## Learn Console {#learn-console}
 
@@ -26,42 +14,24 @@ These pages introduce Console and show how its pieces fit together:
 3. [Sandbox and trust](SANDBOX.md) explains where code runs, what it can access, and how session permissions differ from package-preparation permissions.
 4. [Recordings and reports](RECORDING.md) explains how to inspect the agent's work and reuse its code, output, and plots.
 
-## Find a task {#reference}
-
-<span id="configure-a-project"></span>
-
-Choose the task you want to accomplish.
-These guides and references cover settings, defaults, examples, and detailed behavior.
-
-| I want to…                                                                                        | Reference                                                                                  |
-| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| Customize the agent's tools and prepare its environment                                           | [Customize Console](BUILD_ON_CONSOLE.md)                                                   |
-| Create a configuration file, understand which settings win, or inspect the resolved configuration | [Configuration files](CONFIGURATION.md)                                                    |
-| Use a Python environment or select an R installation                                              | [Interpreters and startup](RUNTIME_CONFIGURATION.md)                                       |
-| Choose startup packages or control when more may be prepared                                      | [Package declarations and policies](RUNTIME_CONFIGURATION.md#startup-package-declarations) |
-| Connect to a database before the first SQL call                                                   | [Database startup](RUNTIME_CONFIGURATION.md#session-startup-source)                        |
-| Choose what languages, parameters, or instructions the agent sees                                 | [Tool configuration](TOOL_CONFIGURATION.md)                                                |
-| Allow project writes, protect files, reach a service, or inherit Codex permissions                | [Sandbox permissions](SANDBOX_CONFIGURATION.md)                                            |
-| Use a package mirror or change cache locations                                                    | [Package sources and caches](RESOLVER.md)                                                  |
-| Set environment variables or look up how Console handles them                                     | [Environment variables](ENVIRONMENT.md)                                                    |
-| Look up language helpers, SQL connections, plotting, or output behavior                           | [Runtime behavior](RUNTIME_REFERENCE.md)                                                   |
-| Find recorded output or turn an analysis into a report                                            | [Recordings and reports](RECORDING.md)                                                     |
-| Run a program with filesystem and network limits                                                  | [Run commands in a sandbox](SANDBOX_COMMAND.md)                                            |
-| Register a client, check an installation, or look up a command                                    | [Command-line reference](CLI.md) and [CLI help](cli-help.qmd)                              |
-
-For a particular configuration key, use the [settings index](CONFIGURATION.md#settings-by-task).
-
-## Platform setup
-
-The shared [installation instructions](getting-started.qmd#install) cover macOS, Linux, and Windows.
-See [Linux host compatibility](LINUX_COMPATIBILITY.md) or [Build from source](BUILD_FROM_SOURCE.md) for additional setup.
 The [glossary](GLOSSARY.md) defines terms used in these pages.
+
+## Customize Console
+
+[Customize Console](BUILD_ON_CONSOLE.md) shows how to choose the languages and parameters your agent sees, describe available data, and prepare a session with packages, connections, and helper functions.
+These settings apply to all connection methods.
 
 ## Other documentation
 
-<span id="public-reference"></span>
+<span id="get-connected"></span> <span id="platform-setup"></span>
 
-The [Python API](https://t-kalinowski.github.io/mcp-console/python/reference/index.html), [R API](https://t-kalinowski.github.io/mcp-console/r/reference/index.html), and [MCP send reference](API.md) document calls and arguments.
+[Get started](getting-started.qmd) covers connecting a client and running a first analysis.
+[Installation](INSTALLATION.md) covers platform requirements and runtime setup.
+
+<span id="reference"></span> <span id="configure-a-project"></span> <span id="public-reference"></span>
+
+[Reference](REFERENCE.md) organizes settings, commands, and APIs by task.
+Use its "I want to…" table to find precise behavior and examples.
 
 <span id="develop-console"></span>
 

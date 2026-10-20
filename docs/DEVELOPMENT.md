@@ -146,8 +146,10 @@ A saved choice from a page's theme control takes precedence over the browser pre
 
 ### Documentation ownership
 
-The [user guides](README.md) bring together [connection methods](CLIENTS.md), [Learn Console](README.md#learn-console), and a [task index](README.md#reference).
-MCP, R, and Python users share the same guides and sidebar; the overview uses its own links instead of a sidebar.
+The top navigation has three documentation sections, each with its own landing page and sidebar.
+[Get started](getting-started.qmd) covers installation and MCP, R, and Python connections.
+[Guides](README.md) explains the shared workbench and workflows; [Reference](REFERENCE.md) provides a task index and exact settings, commands, and APIs.
+Give each page one primary sidebar and use contextual links between sections.
 Keep Sessions and languages, Packages and environments, Sandbox and trust, and Recordings and reports readable as a sequence.
 Use examples to explain the concepts, then link to the reference for complete settings and edge cases.
 
@@ -157,8 +159,8 @@ The configuration settings index links to these owners instead of repeating thei
 [Runtime behavior](RUNTIME_REFERENCE.md) owns language behavior; [Recordings and reports](RECORDING.md) owns recording behavior and report workflows.
 
 [Customize Console](BUILD_ON_CONSOLE.md) introduces tool descriptions, language and parameter visibility, and prepared sessions for any connection method.
-[Connect to Console](CLIENTS.md) introduces MCP clients and the [R](R.md) and [Python](PYTHON.md) guides.
-Generated package manuals provide exact signatures and package-specific examples.
+[MCP client setup](CLIENTS.md), [R](R.md), and [Python](PYTHON.md) belong under Get started.
+Generated package manuals provide exact signatures and package-specific examples, with links back to the three main sections.
 Exact MCP calls and requirement operations belong in [MCP send reference](API.md) and [Requirements API](REQUIREMENTS_API.md).
 Keep compatibility anchors when moving public sections and include every new page in the appropriate sidebar and search index.
 Architecture belongs in [Architecture](ARCHITECTURE.md); exact private message schemas belong with their source definitions.

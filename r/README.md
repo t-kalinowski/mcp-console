@@ -36,7 +36,7 @@ console_tool(path = Sys.which("mcp-console"))
 ```
 
 On Windows, `console_tool()` can resolve the Console x64 wheel through `reticulate::uv_run_tool()`.
-See [installation requirements](https://t-kalinowski.github.io/mcp-console/getting-started.html#install).
+See [installation requirements](https://t-kalinowski.github.io/mcp-console/INSTALLATION.html).
 
 ## Session configuration
 
@@ -89,7 +89,8 @@ Garbage collection requests shutdown by closing server input, waits up to 15 sec
 That fallback does not prove descendant cleanup.
 Keep the tool reachable while the chat is using it.
 
-[Console guides](https://t-kalinowski.github.io/mcp-console/README.html) cover runtime behavior, configuration, input, plots, and recordings.
+[Console guides](https://t-kalinowski.github.io/mcp-console/README.html) explain the shared workbench.
+[Reference](https://t-kalinowski.github.io/mcp-console/REFERENCE.html) covers runtime behavior, configuration, and MCP calls.
 The package reference documents the exact R signature.
 
 ## Give an agent an R session

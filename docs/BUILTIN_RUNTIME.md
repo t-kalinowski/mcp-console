@@ -63,7 +63,7 @@ For managed environments, you can [choose startup packages and control whether m
 
 R and Python can each run without the other.
 SQL uses a database connection supplied by one of them.
-To let your agent use R, [install it separately](getting-started.qmd#install).
+To let your agent use R, [install it separately](INSTALLATION.md#r-python-and-sql).
 
 ## Work with databases {#sql-and-duckdb}
 
@@ -119,6 +119,6 @@ Ask the agent for the recording's location.
 The recorded Quarto document provides a starting point for a report; review its code, inputs, and package requirements before rendering it.
 
 For precise language behavior, see the [runtime reference](RUNTIME_REFERENCE.md).
-[Connect to Console](CLIENTS.md) covers using Console with an MCP client, from R, or from Python.
+[Get started](getting-started.qmd) covers using Console with an MCP client, from R, or from Python.
 
 Continue with [Packages and environments](REQUIREMENTS.md) to learn how Console prepares the libraries your agent uses.

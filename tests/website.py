@@ -128,10 +128,7 @@ class WebsiteTests(unittest.TestCase):
                     .replace("`", "")
                 )
                 self.assertIn(heading, page.title)
-                if relative == Path("README.html"):
-                    self.assertNotIn("quarto-sidebar", page.ids)
-                else:
-                    self.assertIn("quarto-sidebar", page.ids)
+                self.assertIn("quarto-sidebar", page.ids)
                 self.assertIn(relative.as_posix(), indexed)
         for name in ("index.html", "getting-started.html"):
             self.assertIn((self.site / name).resolve(), self.pages)
@@ -248,12 +245,16 @@ class WebsiteTests(unittest.TestCase):
         }
         self.assertIn(path, destinations)
 
-    def test_user_guides_share_navigation_and_development_is_separate(self) -> None:
+    def test_documentation_sections_have_distinct_navigation(self) -> None:
         paths = (
-            ("CLIENTS.html", "CONFIGURATION.html", "ARCHITECTURE.html"),
-            ("R.html", "REQUIREMENTS.html", "WORKER_PROTOCOL.html"),
+            ("getting-started.html", "CLIENTS.html", "REQUIREMENTS.html"),
+            ("CLIENTS.html", "R.html", "CONFIGURATION.html"),
+            ("R.html", "PYTHON.html", "SANDBOX.html"),
             ("PYTHON.html", "R.html", "ARCHITECTURE.html"),
-            ("BUILD_ON_CONSOLE.html", "CLIENTS.html", "ARCHITECTURE.html"),
+            ("INSTALLATION.html", "CLIENTS.html", "CLI.html"),
+            ("README.html", "BUILTIN_RUNTIME.html", "CLIENTS.html"),
+            ("BUILD_ON_CONSOLE.html", "REQUIREMENTS.html", "CLIENTS.html"),
+            ("REFERENCE.html", "CONFIGURATION.html", "REQUIREMENTS.html"),
             ("CONFIGURATION.html", "SEND_OPERATIONS.html", "WORKER_PROTOCOL.html"),
             ("RUNTIME_CONFIGURATION.html", "API.html", "ARCHITECTURE.html"),
             ("RUNTIME_REFERENCE.html", "API.html", "ARCHITECTURE.html"),
@@ -273,8 +274,9 @@ class WebsiteTests(unittest.TestCase):
                 self.assertIn(included, links)
                 self.assertNotIn(excluded, links)
                 navbar = soup.select_one(".navbar")
-                for label in ("User guides", "Packages"):
+                for label in ("Get started", "Guides", "Reference"):
                     self.assertIn(label, navbar.get_text(" ", strip=True))
+                self.assertNotIn("Packages", navbar.get_text(" ", strip=True))
 
     def test_home_title_has_one_introduction_and_description_metadata(self) -> None:
         soup = BeautifulSoup((self.site / "index.html").read_text(), "html.parser")
@@ -327,15 +329,15 @@ class WebsiteTests(unittest.TestCase):
                 f"Single-page render changed unrelated output: {changed[:5]}",
             )
 
-    def test_get_started_belongs_to_the_guides_navigation(self) -> None:
+    def test_get_started_has_connection_navigation(self) -> None:
         soup = BeautifulSoup(
             (self.site / "getting-started.html").read_text(), "html.parser"
         )
         navbar = soup.select_one(".navbar")
         sidebar = soup.find(id="quarto-sidebar")
         for element, included, excluded in (
-            (navbar, "README.html", "getting-started.html"),
-            (sidebar, "getting-started.html", "WINDOWS.html"),
+            (navbar, "getting-started.html", "WINDOWS.html"),
+            (sidebar, "CLIENTS.html", "CONFIGURATION.html"),
         ):
             links = {
                 urlsplit(link["href"]).path.removeprefix("./")
@@ -344,10 +346,10 @@ class WebsiteTests(unittest.TestCase):
             self.assertIn(included, links)
             self.assertNotIn(excluded, links)
 
-    def test_get_started_client_setup_uses_uvx_and_global_scope(self) -> None:
+    def test_mcp_client_setup_uses_uvx_and_global_scope(self) -> None:
         commands = [
             line.strip()
-            for code in self.pages[self.site / "getting-started.html"].code_blocks
+            for code in self.pages[self.site / "CLIENTS.html"].code_blocks
             for line in code.splitlines()
             if "configure-client" in line
         ]
@@ -366,6 +368,30 @@ class WebsiteTests(unittest.TestCase):
 
     def test_moved_reference_pages_and_historical_fragments(self) -> None:
         fragments = {
+            "README": (
+                "get-connected",
+                "learn-console",
+                "reference",
+                "configure-a-project",
+                "platform-setup",
+                "public-reference",
+                "develop-console",
+            ),
+            "getting-started": (
+                "install",
+                "build-from-source",
+                "connect-your-client",
+                "codex-and-claude-code",
+                "other-mcp-clients",
+                "r-and-python-packages",
+            ),
+            "CLIENTS": (
+                "mcp-clients",
+                "connect-from-application-code",
+                "from-r",
+                "from-python",
+                "configure-the-models-interface",
+            ),
             "CONFIGURATION": (
                 "model-visible-languages",
                 "tool-descriptions-and-parameters",
@@ -433,7 +459,8 @@ class WebsiteTests(unittest.TestCase):
     def test_workspace_profile_is_available_in_setup_guides(self) -> None:
         commands = [
             line.strip()
-            for code in self.pages[self.site / "getting-started.html"].code_blocks
+            for name in ("getting-started.html", "CLIENTS.html")
+            for code in self.pages[self.site / name].code_blocks
             for line in code.splitlines()
         ]
         self.assertIn("uvx mcp-console config init", commands)
@@ -527,15 +554,17 @@ class WebsiteTests(unittest.TestCase):
         self.assertIn(reference_url, {entry["path"] for entry in search})
         self.assertIn("arguments", self.pages[reference].ids)
         self.assertIn("../../index.html", self.pages[reference].links)
+        for target in ("getting-started.html", "README.html", "REFERENCE.html"):
+            self.assertIn(f"../../{target}", self.pages[reference].links)
         self.assertIn(
             "https://github.com/t-kalinowski/mcp-console/blob/main/r/R/console-tool.R",
             self.pages[reference].links,
         )
         for name in (
-            "index.html",
-            "README.html",
-            "DEVELOPMENT.html",
-            "benchmarks/transcript-concurrency.html",
+            "REFERENCE.html",
+            "R.html",
+            "package-links.html",
+            "benchmarks/package-links.html",
         ):
             with self.subTest(page=name):
                 page = self.site / name
@@ -594,7 +623,12 @@ class WebsiteTests(unittest.TestCase):
                     for link in self.pages[page].links
                     if not urlsplit(link).scheme and not urlsplit(link).netloc
                 }
-                for target in ("index.html", "PYTHON.html", "r/index.html"):
+                for target in (
+                    "index.html",
+                    "getting-started.html",
+                    "README.html",
+                    "REFERENCE.html",
+                ):
                     self.assertIn(self.site / target, destinations)
         self.assertIn(
             "https://github.com/t-kalinowski/mcp-console/blob/main/python/mcp_console/_sync.py",
@@ -605,7 +639,7 @@ class WebsiteTests(unittest.TestCase):
                 ].links
             },
         )
-        for name in ("index.html", "README.html", "PYTHON.html"):
+        for name, target in (("REFERENCE.html", home), ("PYTHON.html", reference)):
             with self.subTest(page=name):
                 page = self.site / name
                 destinations = {
@@ -613,7 +647,7 @@ class WebsiteTests(unittest.TestCase):
                     for link in self.pages[page].links
                     if not urlsplit(link).scheme and not urlsplit(link).netloc
                 }
-                self.assertIn(home, destinations)
+                self.assertIn(target, destinations)
 
     def test_python_integrations_are_grouped_by_package(self) -> None:
         groups = {

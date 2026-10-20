@@ -1,5 +1,5 @@
 ---
-sidebar: guides
+sidebar: get-started
 ---
 
 # Windows
@@ -8,7 +8,7 @@ Windows uses the shared installation, configuration, and runtime guides.
 
 <span id="install-and-run"></span>
 
-See [Get started](getting-started.qmd#install) for installation and client setup, and [Interpreters and startup](RUNTIME_CONFIGURATION.md) for interpreter selection.
+See [Installation](INSTALLATION.md) for platform requirements, [Get started](getting-started.qmd) for client setup, and [Interpreters and startup](RUNTIME_CONFIGURATION.md) for interpreter selection.
 
 <span id="native-sandbox"></span> <span id="lifecycle-and-platform-differences"></span> <span id="troubleshooting"></span>
 

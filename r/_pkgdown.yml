@@ -17,15 +17,24 @@ repo:
 
 navbar:
   structure:
-    left: [console, guides, reference, articles]
+    left: [console, start, guides, console_reference, reference, articles]
     right: [search, github, lightswitch]
   components:
     console:
       text: MCP Console
       href: ../index.html
+    start:
+      text: Get started
+      href: ../getting-started.html
     guides:
-      text: User guides
+      text: Guides
       href: ../README.html
+    console_reference:
+      text: Reference
+      href: ../REFERENCE.html
+    reference:
+      text: R API
+      href: reference/index.html
     articles:
       text: Articles
       menu:

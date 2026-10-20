@@ -201,7 +201,7 @@ mcp-console serve
 
 Your MCP client normally launches this command.
 It communicates over standard input and output and waits for the client; it is not an interactive terminal.
-See [Connect your client](getting-started.qmd#connect-your-client).
+See [MCP client setup](CLIENTS.md).
 
 For ordinary project writes, create `.agents/console/config.yaml` in the launch directory:
 
@@ -299,7 +299,7 @@ By default, `config init` creates `.agents/console/config.yaml` in the current d
 `--global` creates `$MCP_CONSOLE_HOME/config.yaml`, or `~/.agents/console/config.yaml` when the variable is unset.
 The two options are mutually exclusive.
 These files are shared by clients that launch Console with the same configuration locations.
-Client registration remains a separate operation; see [Connect your client](getting-started.qmd#connect-your-client).
+Client registration remains a separate operation; see [MCP client setup](CLIENTS.md).
 
 The starter selects `sandbox.profile: workspace`: ordinary workspace writes are allowed, while the project's `.git`, `.agents`, `.codex`, and `.aws` paths stay read-only.
 Other readable host files remain readable.

@@ -1,34 +1,50 @@
-# Connect to Console
+# Use Console with an MCP client
 
-Use Console with an MCP client, from an R chat, or from Python.
-Each connects to the same persistent workbench for R, Python, and SQL.
+Connect Console to your coding agent or another client that supports MCP over standard input and output.
+Follow [Installation](INSTALLATION.md) to install uv and the runtimes you need.
 
-## With an MCP client {#mcp-clients}
+<span id="mcp-clients"></span>
 
-[Get started](getting-started.qmd#connect-your-client) covers setup for Codex, Claude Code, and other MCP clients.
-Console uses MCP over standard input and output.
-For a client with manual MCP settings, use command `uvx` and arguments `["mcp-console", "serve"]`.
+## Codex and Claude Code
+
+Connect Console to your clients:
+
+```sh
+uvx mcp-console configure-client codex
+uvx mcp-console configure-client claude
+```
+
+This registers Console globally, so it is available across projects, and loads its tools up front.
+It also adds Console's `send` tool to the client's allowlist so calls do not need individual approval, subject to explicit client restrictions.
+Setup starts runtime checks and cache warming in the background, printing a log path for the results.
+Use `--no-warmup` to skip that step.
+Restart the client after setup.
+Your client launches Console on the same host, usually in the workspace where the agent is working.
+
+To register Console for a specific project, run the command from the project directory and add `--directory .`.
+See [client configuration](CLI.md#configure-a-client) for project registration, version pinning, and launch options.
+
+## Other MCP clients
+
+In your client's MCP settings, use command `uvx` and arguments `["mcp-console", "serve"]`.
 See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
 
-<span id="connect-from-application-code"></span>
+## Try an analysis
 
-## From R
+Return to [Get started](getting-started.qmd#try-an-analysis) for a first analysis and permission settings.
+The [guides](README.md) explain sessions, packages, sandbox permissions, and recordings.
 
-The `mcp.console` package adds Console to an ellmer chat.
-[Use Console from R](R.md) shows installation, tool registration, and session configuration.
-The [R API](https://t-kalinowski.github.io/mcp-console/r/reference/index.html) documents exact signatures.
+## R and Python clients {#connect-from-application-code}
 
-## From Python
+<span id="from-r"></span> <span id="from-python"></span>
 
-The `mcp_console` package provides synchronous and asynchronous clients and adapters for model frameworks.
-[Use Console from Python](PYTHON.md) covers direct calls, adapters, results, and connection lifetime.
-The [Python API](https://t-kalinowski.github.io/mcp-console/python/reference/index.html) documents exact signatures and complete examples.
+To use Console from R or Python, follow [Use Console from R](R.md) or [Use Console from Python](PYTHON.md).
+These clients use the same workbench and settings.
 
 ## Learn and customize Console
 
 <span id="configure-the-models-interface"></span>
 
-The [user guides](README.md#learn-console) cover sessions, packages, sandbox permissions, and recordings for all three connection methods.
 [Customize Console](BUILD_ON_CONSOLE.md) shows how to change the tool descriptions, exposed languages and parameters, and prepared environment.
 [Tool configuration](TOOL_CONFIGURATION.md) documents the exact settings.
 
