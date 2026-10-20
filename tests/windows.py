@@ -442,6 +442,14 @@ def exercise_later_callbacks(session: Session) -> None:
 
 @unittest.skipUnless(os.name == "nt", "native Windows packaging")
 class WindowsPackaging(unittest.TestCase):
+    def test_relocated_distribution_preserves_sandbox_startup(self):
+        from support.installation import installed_console
+        from support.windows_mxc import mxc_requirement
+
+        original = mxc_requirement(BINARY)
+        relocated = mxc_requirement(installed_console(NATIVE_BINARY))
+        self.assertEqual(relocated.available, original.available)
+
     def test_native_distribution_has_no_redistributable_vc_runtime(self):
         paths = {NATIVE_BINARY} | {
             path
