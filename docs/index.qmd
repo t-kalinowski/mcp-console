@@ -49,8 +49,7 @@ Console uses native R and Python runtimes, with access to their package ecosyste
 An [OS-level sandbox](SANDBOX.md) enforces limits on file and network access.
 
 The default `read_only` sandbox profile restricts network access and filesystem writes.
-
-You can allow writes to selected paths, block reads from selected paths, and control network access with domain allowlists or denylists.
+You can customize these permissions to allow writes to selected paths, block reads from selected paths, and control network access with domain allowlists or denylists.
 See [Sandbox permissions](SANDBOX_CONFIGURATION.md) for profiles and custom permissions.
 
 <span id="run-commands-in-a-sandbox"></span>
