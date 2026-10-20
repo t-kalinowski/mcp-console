@@ -96,7 +96,7 @@ def test_failed_publication_invalidates_startup_output_receipts(
                         LOADER_VARIABLE: str(
                             build_interposer(root, "recording_observation")
                         ),
-                        "MCP_CONSOLE_TEST_OBSERVED_TEXT": "receipt startup\n",
+                        "MCP_CONSOLE_TEST_OBSERVED_TEXT": "\nreceipt tail\n",
                         "MCP_CONSOLE_TEST_JOURNAL_OBSERVED": str(retained.path),
                     }
                 )

@@ -141,7 +141,7 @@ def test_summarizes_empty_cell_after_oversized_startup_output(
                         LOADER_VARIABLE: str(
                             build_interposer(root, "recording_observation")
                         ),
-                        "MCP_CONSOLE_TEST_OBSERVED_EVENT": "worker_ready",
+                        "MCP_CONSOLE_TEST_OBSERVED_TEXT": "\nstartup tail\n",
                         "MCP_CONSOLE_TEST_JOURNAL_OBSERVED": str(ready.path),
                     }
                 )
@@ -156,13 +156,13 @@ def test_summarizes_empty_cell_after_oversized_startup_output(
                         reached.wait("startup output emitted", timeout=60)
                         sessions = root / ".agents/console/sessions"
                         assert not sessions.exists()
-                        release.release()
                         ready.wait(
                             "startup output drained before the first send",
                             timeout=60,
                             client=client,
                         )
                         assert not sessions.exists()
+                        release.release()
                         result = client.send(python="pass")
                         assert not result["isError"], result
                         log = wait_for_checkpoint(

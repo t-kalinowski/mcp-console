@@ -32,8 +32,17 @@ static ssize_t observed_write(int descriptor, const void *buffer, size_t length)
         char marker[128];
         int size = text != NULL ? snprintf(marker, sizeof(marker), "%s", text)
                                : snprintf(marker, sizeof(marker), "{\"event\":\"%s\",", event);
-        if (size > 0 && (size_t)size < sizeof(marker) && length >= (size_t)size &&
-            memcmp(buffer, marker, size) == 0 && !atomic_exchange(&observed, 1)) {
+        int matches = 0;
+        if (size > 0 && (size_t)size < sizeof(marker) && length >= (size_t)size) {
+            size_t last = text != NULL ? length - (size_t)size : 0;
+            for (size_t offset = 0; offset <= last; offset++) {
+                if (memcmp((const char *)buffer + offset, marker, size) == 0) {
+                    matches = 1;
+                    break;
+                }
+            }
+        }
+        if (matches && !atomic_exchange(&observed, 1)) {
             int reached = open(path, O_WRONLY | O_NONBLOCK);
             if (reached < 0 || write(reached, "1", 1) != 1) _exit(124);
             close(reached);

@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import json
+import base64
 import os
 import sys
 import tempfile
@@ -278,7 +279,7 @@ def test_retains_received_send_while_an_earlier_response_finishes(
                 assert second["result"] == {
                     "content": [{"type": "text", "text": "42\n"}],
                     "isError": False,
-                }
+                }, second
                 recorded = json.dumps(client.finish())
                 for path in (workspace, workspace.resolve()):
                     recorded = recorded.replace(
@@ -460,6 +461,11 @@ def test_first_rejected_send_publishes_the_observed_prelude(
             ] == [{"tool_result_call_id": i} for i in range(1, 4)]
             assert events[-1]["event"] == "recording_ended"
             assert all(e["delivered"] for e in events if e["event"] == "delivery")
+            for entry in transcript:
+                for block in entry.get("result", {}).get("content", []):
+                    if block["type"] == "image":
+                        assert base64.b64decode(block["data"]) == expected_image
+                        block["data"] = "<verified startup PNG>"
             return transcript
 
 

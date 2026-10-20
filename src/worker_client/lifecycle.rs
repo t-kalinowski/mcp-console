@@ -1520,7 +1520,7 @@ impl Client {
     pub(crate) async fn shutdown(&self, deadline: Instant) -> Result<(), String> {
         let stop_handles = self.close_lifecycle(deadline)?.unwrap_or_default();
         let client = self.clone();
-        let result = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let preparation = client
                 .0
                 .resolver_preparation
@@ -1569,8 +1569,7 @@ impl Client {
             }
         })
         .await
-        .map_err(|error| format!("process shutdown task failed: {error}"))?;
-        result
+        .map_err(|error| format!("process shutdown task failed: {error}"))?
     }
 }
 
