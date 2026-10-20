@@ -164,11 +164,13 @@ A saved choice from a page's theme control takes precedence over the browser pre
 
 ### Documentation ownership
 
-The top navigation links to [Get started](getting-started.qmd), [Guides](README.md), and [Reference](REFERENCE.md).
+The top navigation links to [Get started](getting-started.qmd), [Guides](README.md), [Build](BUILD.md), and [Reference](REFERENCE.md).
 Guides opens a compact reading list followed by the "I want to…" table.
 Get started is a walkthrough of connecting an agent, running a first analysis, following up, and reviewing the work.
 Both use one shared sidebar, beginning with an expanded Learn Console category: Get started, Sessions and languages, Packages and environments, Sandbox and trust, and Recordings and reports.
-The Set up group covers installation and connection methods; Tasks contains Customize Console and Run commands in a sandbox.
+The Set up group covers installation and MCP client connections; Other tasks contains Run commands in a sandbox.
+Build has its own sidebar for the data assistant walkthrough, R and Python integration, and driving `send` directly.
+Its Builder reference links use published routes so the linked sources remain owned by the Reference sidebar.
 Reference has one sidebar for configuration, language behavior, the command line, MCP, package APIs, and the glossary.
 Development has its own sidebar and a footer link.
 Quarto's previous/next links follow sidebar order so readers can walk through the learning chapters.
@@ -184,7 +186,8 @@ The configuration settings index links to these owners instead of repeating thei
 [Language behavior](RUNTIME_REFERENCE.md) owns code execution, language helpers, SQL results, and output; [Recordings and reports](RECORDING.md) owns recording behavior and report workflows.
 
 [Customize Console](BUILD_ON_CONSOLE.md) introduces tool descriptions, language and parameter visibility, and prepared sessions for any connection method.
-[MCP client setup](CLIENTS.md), [R](R.md), and [Python](PYTHON.md) belong in the shared Guides sidebar under Set up.
+[MCP client setup](CLIENTS.md) belongs in Guides under Set up.
+[R](R.md) and [Python](PYTHON.md) belong in Build, with direct links from Get started and the Guides task table.
 Generated package manuals provide exact signatures and package-specific examples, with links back to the main documentation.
 Exact MCP calls and requirement operations belong in [MCP send reference](API.md) and [Requirements API](REQUIREMENTS_API.md).
 Keep compatibility anchors when moving public sections and include every new page in the appropriate sidebar and search index.

@@ -42,6 +42,8 @@ website:
         text: Get started
       - href: README.md
         text: Guides
+      - href: BUILD.md
+        text: Build
       - href: REFERENCE.md
         text: Reference
     right:
@@ -68,12 +70,37 @@ website:
         - INSTALLATION.md
         - href: CLIENTS.md
           text: MCP clients
-        - R.md
-        - PYTHON.md
-      - section: Tasks
+      - section: Other tasks
         contents:
-        - BUILD_ON_CONSOLE.md
         - SANDBOX_COMMAND.md
+    - id: build
+      title: Build
+      style: docked
+      collapse-level: 2
+      contents:
+      - href: BUILD.md
+        text: Overview
+      - href: BUILD_ON_CONSOLE.md
+        text: Build a data assistant
+      - section: Integrate
+        contents:
+        - href: R.md
+          text: From R (ellmer)
+        - href: PYTHON.md
+          text: From Python
+        - href: SEND_OPERATIONS.md
+          text: Drive send directly
+      - section: Builder reference
+        contents:
+        # Published routes link out without assigning these sources to two sidebars.
+        - href: tool_configuration/
+          text: Tool settings
+        - href: api/
+          text: Send tool
+        - href: r/reference/
+          text: R API
+        - href: python/reference/
+          text: Python API
     - id: reference
       title: Reference
       style: docked
@@ -99,7 +126,6 @@ website:
         contents:
         - href: API.md
           text: MCP send
-        - SEND_OPERATIONS.md
         - REQUIREMENTS_API.md
       - section: Packages
         contents:

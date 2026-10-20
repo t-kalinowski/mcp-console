@@ -329,8 +329,6 @@ class WebsiteTests(unittest.TestCase):
             "readme/index.html",
             "getting-started/index.html",
             "clients/index.html",
-            "r-guide/index.html",
-            "python-guide/index.html",
             "installation/index.html",
             "build_from_source/index.html",
             "linux_compatibility/index.html",
@@ -339,7 +337,6 @@ class WebsiteTests(unittest.TestCase):
             "requirements/index.html",
             "sandbox/index.html",
             "recording/index.html",
-            "build_on_console/index.html",
             "sandbox_command/index.html",
         )
         navigation = []
@@ -368,7 +365,7 @@ class WebsiteTests(unittest.TestCase):
                         section.select_one(".sidebar-item-text").get_text(strip=True)
                         for section in sections
                     ],
-                    ["Learn Console", "Set up", "Tasks"],
+                    ["Learn Console", "Set up", "Other tasks"],
                 )
                 learning = sections[0]
                 heading = learning.select_one(".sidebar-item-text")
@@ -396,7 +393,59 @@ class WebsiteTests(unittest.TestCase):
                     for link in soup.select(".navbar-nav .nav-link")
                     if link.get_text(strip=True)
                 ]
-                self.assertEqual(labels, ["Get started", "Guides", "Reference"])
+                self.assertEqual(
+                    labels, ["Get started", "Guides", "Build", "Reference"]
+                )
+
+    def test_build_has_its_own_navigation_and_links_to_reference(self) -> None:
+        navigation = []
+        for route in (
+            "build",
+            "build_on_console",
+            "r-guide",
+            "python-guide",
+            "send_operations",
+        ):
+            with self.subTest(page=route):
+                path = self.site / route / "index.html"
+                page = BeautifulSoup(path.read_text(), "html.parser")
+                links = [
+                    linked_file(path, link["href"]).relative_to(self.site).as_posix()
+                    for link in page.select("#quarto-sidebar a[href]")
+                    if urlsplit(link["href"]).path
+                ]
+                navigation.append(links)
+                self.assertEqual(links, navigation[0])
+                for target in (
+                    "build",
+                    "build_on_console",
+                    "r-guide",
+                    "python-guide",
+                    "send_operations",
+                    "tool_configuration",
+                    "api",
+                    "r/reference",
+                    "python/reference",
+                ):
+                    self.assertIn(f"{target}/index.html", links)
+                self.assertNotIn("getting-started/index.html", links)
+                self.assertNotIn("requirements/index.html", links)
+
+        home = BeautifulSoup((self.site / "index.html").read_text(), "html.parser")
+        self.assertEqual(
+            [link.get_text(strip=True) for link in home.select(".home-links a")],
+            ["Get started", "Build on Console", "Reference"],
+        )
+        start = self.site / "getting-started/index.html"
+        connections = {
+            linked_file(start, link["href"])
+            for link in BeautifulSoup(start.read_text(), "html.parser").select(
+                "main a[href]"
+            )
+            if not urlsplit(link["href"]).scheme
+        }
+        for target in ("r-guide", "python-guide"):
+            self.assertIn(self.site / target / "index.html", connections)
 
     def test_learning_chapters_have_previous_and_next_links(self) -> None:
         chapters = [
@@ -427,8 +476,15 @@ class WebsiteTests(unittest.TestCase):
             ("readme", "Guides", "page"),
             ("builtin_runtime", "Guides", "true"),
             ("clients", "Guides", "true"),
+            ("build", "Build", "page"),
+            ("build_on_console", "Build", "true"),
+            ("r-guide", "Build", "true"),
+            ("python-guide", "Build", "true"),
+            ("send_operations", "Build", "true"),
             ("reference", "Reference", "page"),
             ("configuration", "Reference", "true"),
+            ("tool_configuration", "Reference", "true"),
+            ("api", "Reference", "true"),
             ("python/reference/mcpconsole", "Reference", "true"),
         ):
             with self.subTest(page=route):
@@ -455,7 +511,6 @@ class WebsiteTests(unittest.TestCase):
             "cli",
             "cli-help",
             "api",
-            "send_operations",
             "requirements_api",
             "glossary",
             "python/reference/mcpconsole",
@@ -1035,10 +1090,10 @@ class WebsiteTests(unittest.TestCase):
                 for link in navbar.select(".nav-link")
                 if link.get_text(strip=True)
             ],
-            ["MCP Console", "Get started", "Guides", "Reference"],
+            ["MCP Console", "Get started", "Guides", "Build", "Reference"],
         )
         self.assertIn("../../../", self.pages[reference].links)
-        for target in ("getting-started/", "readme/", "reference/"):
+        for target in ("getting-started/", "readme/", "build/", "reference/"):
             self.assertIn(f"../../../{target}", self.pages[reference].links)
         self.assertIn(
             "https://github.com/t-kalinowski/mcp-console/blob/main/r/R/console-tool.R",

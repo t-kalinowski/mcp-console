@@ -21,6 +21,7 @@ navbar:
       - console
       - start
       - documentation
+      - build
       - console_reference
     right: [search, github, lightswitch]
   components:
@@ -33,6 +34,9 @@ navbar:
     documentation:
       text: Guides
       href: ../README.html
+    build:
+      text: Build
+      href: ../BUILD.html
     console_reference:
       text: Reference
       href: ../REFERENCE.html

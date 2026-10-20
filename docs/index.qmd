@@ -18,7 +18,7 @@ Console works with MCP-compatible clients such as Codex and Claude Code and does
 You can also use Console from [R](R.md) or [Python](PYTHON.md).
 
 ::: {.home-links}
-[Get started](getting-started.qmd){.btn .btn-primary} [Guides](README.md){.btn .btn-outline-primary}
+[Get started](getting-started.qmd){.btn .btn-primary} [Build on Console](BUILD.md){.btn .btn-outline-primary} [Reference](REFERENCE.md){.btn .btn-outline-primary}
 :::
 
 Console provides a unified API across macOS, Linux, and Windows x64.
@@ -87,7 +87,7 @@ Set sandbox permissions to control access to files and networks.
 
 For example, build a data chat with only SQL and a selected database connection, or a reporting assistant with a prepared R or Python environment.
 
-[Customize Console](BUILD_ON_CONSOLE.md) shows how to customize the tool interface, describe available data, and prepare the session.
+[Build on Console](BUILD.md) introduces tool customization, prepared sessions, and the R and Python clients.
 
 ## Where Console fits
 
