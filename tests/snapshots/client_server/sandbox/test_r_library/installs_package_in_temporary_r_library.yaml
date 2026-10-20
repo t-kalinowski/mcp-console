@@ -13,16 +13,26 @@ send:
       dir.exists(library),
       file.access(library, 2L) == 0L
     )
-    install.packages(
-      "mcpconsolelocalpkg_0.0.1.tar.gz",
-      repos = NULL,
-      type = "source",
-      # Request the same help output across R installations.
-      INSTALL_opts = "--html",
-      # Merge installer stdout/stderr before replaying their output.
-      keep_outputs = TRUE
+    installer_output <- file.path(tempdir(), "mcpconsolelocalpkg.out")
+    # keep_outputs ignores local files; capture the installer itself.
+    installer_status <- system2(
+      file.path(R.home("bin"), "R"),
+      c(
+        "CMD",
+        "INSTALL",
+        # Request the same help output across R installations.
+        "--html",
+        "-l",
+        shQuote(library),
+        "mcpconsolelocalpkg_0.0.1.tar.gz"
+      ),
+      stdout = installer_output,
+      stderr = installer_output
     )
+    stopifnot(file.exists(installer_output))
+    writeLines(readLines(installer_output))
     stopifnot(
+      installer_status == 0L,
       identical(dirname(find.package("mcpconsolelocalpkg")), library),
       identical(mcpconsolelocalpkg::answer(), 42L)
     )
@@ -30,8 +40,6 @@ result:
   content:
     - type: text
       text: |
-        Installing package into ‘<sandbox R library>’
-        (as ‘lib’ is unspecified)
         * installing *source* package ‘mcpconsolelocalpkg’ ...
         ** this is package ‘mcpconsolelocalpkg’ version ‘0.0.1’
         ** using staged installation

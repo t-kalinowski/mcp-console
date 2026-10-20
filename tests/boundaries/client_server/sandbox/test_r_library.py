@@ -1,6 +1,5 @@
 #!/usr/bin/env -S uv run --script
 
-import re
 import sys
 import tarfile
 from pathlib import Path
@@ -79,45 +78,40 @@ Encoding: UTF-8
                       dir.exists(library),
                       file.access(library, 2L) == 0L
                     )
-                    install.packages(
-                      "mcpconsolelocalpkg_0.0.1.tar.gz",
-                      repos = NULL,
-                      type = "source",
-                      # Request the same help output across R installations.
-                      INSTALL_opts = "--html",
-                      # Merge installer stdout/stderr before replaying their output.
-                      keep_outputs = TRUE
+                    installer_output <- file.path(tempdir(), "mcpconsolelocalpkg.out")
+                    # keep_outputs ignores local files; capture the installer itself.
+                    installer_status <- system2(
+                      file.path(R.home("bin"), "R"),
+                      c(
+                        "CMD",
+                        "INSTALL",
+                        # Request the same help output across R installations.
+                        "--html",
+                        "-l",
+                        shQuote(library),
+                        "mcpconsolelocalpkg_0.0.1.tar.gz"
+                      ),
+                      stdout = installer_output,
+                      stderr = installer_output
                     )
+                    stopifnot(file.exists(installer_output))
+                    writeLines(readLines(installer_output))
                     stopifnot(
+                      installer_status == 0L,
                       identical(dirname(find.package("mcpconsolelocalpkg")), library),
                       identical(mcpconsolelocalpkg::answer(), 42L)
                     )
                     """),
             )
             install_output = last_tool_text(client)
+            assert install_output.endswith("* DONE (mcpconsolelocalpkg)\n"), (
+                install_output
+            )
             client.send(control="restart")
-            restart_output = last_tool_text(client)
             restart_notices = (
                 "[worker stopped: in-memory state lost]\n[starting new worker]\n[idle]"
             )
-            assert restart_output.endswith(restart_notices), restart_output
-
-            # Restart collects inherited installer bytes that missed the
-            # completed evaluation cut.
-            output = install_output + restart_output.removesuffix(restart_notices)
-            notice = re.search(
-                r"Installing package into .(/[^\n]+).\n\(as .lib. is unspecified\)\n",
-                output,
-            )
-            assert notice is not None, output
-            installer = output[: notice.start()] + output[notice.end() :]
-            assert installer.endswith("* DONE (mcpconsolelocalpkg)\n"), installer
-            # The R notice uses sideband; installer status uses inherited streams.
-            client.transcript[-2]["result"]["content"][0]["text"] = (
-                notice.group(0).replace(notice.group(1), "<sandbox R library>")
-                + installer
-            )
-            client.transcript[-1]["result"]["content"][0]["text"] = restart_notices
+            assert last_tool_text(client) == restart_notices
             client.expect(
                 "new sandbox library ready\n",
                 # fmt: r
