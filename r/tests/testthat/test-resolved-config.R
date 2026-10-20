@@ -32,14 +32,22 @@ test_that("materialization and pruning retain a custom cache directory", {
   project <- normalizePath(project, winslash = "/")
   on.exit(unlink(project, recursive = TRUE), add = TRUE)
   cache <- file.path(project, "cache")
+  expected_cache <- cache
+  if (.Platform$OS.type == "windows") {
+    # Materialization uses native separators without creating the path.
+    expected_cache <- chartr("/", "\\", cache)
+  }
   config <- materialize_console_config(
     ConsoleConfig(cache = list(directory = cache)),
     path = binary,
     project = project
   )
-  expect_identical(config@cache, list(directory = cache))
+  expect_identical(config@cache, list(directory = expected_cache))
   pruned <- prune_console_config(config, path = binary, project = project)
-  expect_identical(as.list(pruned), list(cache = list(directory = cache)))
+  expect_identical(
+    as.list(pruned),
+    list(cache = list(directory = expected_cache))
+  )
   expect_false(dir.exists(cache))
 })
 
