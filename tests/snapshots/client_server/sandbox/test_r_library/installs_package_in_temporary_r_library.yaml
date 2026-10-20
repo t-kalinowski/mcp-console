@@ -18,7 +18,9 @@ send:
       repos = NULL,
       type = "source",
       # Request the same help output across R installations.
-      INSTALL_opts = "--html"
+      INSTALL_opts = "--html",
+      # Merge installer stdout/stderr before replaying their output.
+      keep_outputs = TRUE
     )
     stopifnot(
       identical(dirname(find.package("mcpconsolelocalpkg")), library),

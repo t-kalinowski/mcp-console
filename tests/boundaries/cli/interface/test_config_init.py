@@ -289,7 +289,7 @@ def test_template_examples_can_be_uncommented_and_loaded(binary: Path) -> Transc
         ]
         assert value["r"]["packages"] == ["dplyr", "ggplot2"]
         assert value["environment"] == {"OMP_NUM_THREADS": "4"}
-        assert value["cache"] == {"directory": (root / "cache").as_posix()}
+        assert value["cache"] == {"directory": str(root / "cache")}, value["cache"]
         assert not (root / "cache").exists()
     return [{"template_examples": "uncommented and accepted by config resolve"}]
 
