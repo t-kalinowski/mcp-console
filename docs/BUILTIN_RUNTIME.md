@@ -5,6 +5,8 @@ You can ask it to explore data, refine an analysis, or try another approach whil
 Your client connects to Console and gives the agent a tool for running code in that session.
 The same session model applies whether you use an MCP client, the R package, or the Python package.
 
+For exact helper names and execution behavior, see [Language behavior](RUNTIME_REFERENCE.md).
+
 ## Work iteratively {#build-on-earlier-work}
 
 Your agent can inspect or modify what's already in memory without repeating the setup.
@@ -51,7 +53,8 @@ r.penguins.plot.scatter(x="flipper_length_mm", y="body_mass_g")
 
 Here, SQL queries the R data frame through the default R-owned DuckDB connection, and Python accesses it through reticulate as `r.penguins`.
 Conversions follow reticulate's rules; some conversions need additional Python packages, such as pandas for data frames.
-[Language behavior](RUNTIME_REFERENCE.md#r-and-python-interoperability) describes the language bridge and its helpers.
+
+Reference: [R and Python interoperability](RUNTIME_REFERENCE.md#r-and-python-interoperability).
 
 ## Use the languages you need {#runtime-selection}
 
@@ -63,7 +66,9 @@ Console can prepare Python for you; to let your agent use R, [install it separat
 
 Console prepares packages in its own environments and libraries by default.
 The [Packages and environments](REQUIREMENTS.md) guide explains how those packages become available during an analysis.
-You can also [use an existing Python environment](RUNTIME_CONFIGURATION.md#python-environment-selection), select an [R installation](RUNTIME_CONFIGURATION.md#r-executable-selection), or [limit the languages exposed to the agent](TOOL_CONFIGURATION.md#model-visible-languages).
+You can also use an existing Python environment, select an R installation, or limit the languages exposed to the agent.
+
+Exact settings: [Python environments](RUNTIME_CONFIGURATION.md#python-environment-selection), [R installations](RUNTIME_CONFIGURATION.md#r-executable-selection), and [model-visible languages](TOOL_CONFIGURATION.md#model-visible-languages).
 
 ## Work with databases {#sql-and-duckdb}
 
@@ -77,8 +82,7 @@ To work with another database, your agent can create a connection object in R or
 The selected connection determines the SQL dialect and transaction behavior.
 Access to database files and servers depends on the session's [filesystem and network permissions](SANDBOX.md).
 
-The [SQL connection reference](RUNTIME_REFERENCE.md#select-a-native-connection) shows how to select a connection from either language.
-You can also [configure a database connection at startup](RUNTIME_CONFIGURATION.md#session-startup-source).
+Reference: [SQL connection helpers](RUNTIME_REFERENCE.md#select-a-native-connection) and [database startup settings](RUNTIME_CONFIGURATION.md#session-startup-source).
 
 ## Inspect help, plots, and results
 
@@ -89,7 +93,8 @@ Console returns text and images while limiting how much text reaches the model a
 
 Your agent can consult installed R help and package vignettes while it works.
 Help pages, search results, and installed HTML vignettes are presented as text, including code examples and evaluated results from the vignettes.
-The [documentation reference](RUNTIME_REFERENCE.md#installed-documentation) explains supported formats and access to the original files.
+
+Reference: [Supported documentation formats and original files](RUNTIME_REFERENCE.md#installed-documentation).
 
 ### Plots and images
 
@@ -108,8 +113,10 @@ The agent can use its client's file tools to inspect that log without rerunning 
 <span id="result-previews"></span>
 
 SQL previews show a limited number of rows and columns, and the log records that preview.
-Your agent can [retrieve the last SQL result](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result) in R or Python without rerunning the query, then analyze the data or save it to a file.
+Your agent can retrieve the last SQL result in R or Python without rerunning the query, then analyze the data or save it to a file.
 It can retrieve all rows at once or work through the result in chunks.
+
+Reference: [Retrieve the last SQL result](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result).
 
 ## Review and reuse the work
 
@@ -117,4 +124,4 @@ It can retrieve all rows at once or work through the result in chunks.
 Ask the agent for the recording's location.
 The recorded Quarto document provides a starting point for a report; review its code, inputs, and package requirements before rendering it.
 
-Continue with [Get started](getting-started.qmd) to connect an agent and try a first session.
+Continue with [Packages and environments](REQUIREMENTS.md) to learn how the agent gets the libraries it uses.

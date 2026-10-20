@@ -6,6 +6,10 @@ These permissions also apply to programs the code starts.
 
 For example, you can let an agent read a dataset and calculate results while limiting where it can save files or which services it can contact.
 The sandbox limits access; it does not establish that a project, dependency, or piece of code is trustworthy.
+Console reports sandbox setup failures without automatically retrying with weaker permissions.
+
+For standalone programs, see [Run commands in a sandbox](SANDBOX_COMMAND.md).
+For exact settings and platform limits, see [Sandbox permissions](SANDBOX_CONFIGURATION.md).
 
 ## What code can do by default {#default-permissions}
 
@@ -17,7 +21,7 @@ For example, an agent can load a local CSV, calculate results, and make a plot w
 You can deny access to specific paths when the agent should not be able to read them.
 
 Your client setup and configuration can select a different profile.
-In particular, [`mcp-console configure-client codex`](CLI.md#configure-a-client) sets up Console to inherit Codex's permissions unless a configuration file overrides that choice.
+In particular, [MCP client setup for Codex](CLIENTS.md#codex-and-claude-code) configures Console to inherit Codex's permissions unless a configuration file overrides that choice.
 
 ## Give a session the access it needs
 
@@ -47,34 +51,32 @@ Package preparation therefore has its own permissions: by default, it can read h
 Your session can use prepared packages while its own networking remains restricted.
 
 Installation and build steps can execute code, so the packages and package sources you choose still need to be trusted.
-[Package sources and caches](RESOLVER.md) explains how to change preparation permissions and download sources.
-The installation check, [`warmup`](CLI.md#check-your-installation), can also prepare dependencies ahead of a session; that preparation uses host permissions.
+The installation check, `warmup`, can also prepare dependencies ahead of a session; that preparation uses host permissions.
+
+Reference: [Package-preparation permissions](RESOLVER.md) and [installation checks](CLI.md#check-your-installation).
 
 ## Configuration is part of the trust decision
 
 Console loads global and project configuration when it starts.
 A project configuration can select executables, supply credentials, and widen permissions; global settings are not an upper limit.
 Use `--no-project-config` for an unfamiliar project until you have reviewed and authorized its configuration.
-[Configuration files](CONFIGURATION.md#files-and-precedence) explains which files Console reads.
 
-When Console [inherits permissions from Codex](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex), it trusts the client to set its permissions.
+When Console inherits permissions from Codex, it trusts the client to set its permissions.
 This includes disabling both the session and package-preparation sandboxes when the client supplies full access.
+
+Exact settings: [Configuration precedence](CONFIGURATION.md#files-and-precedence) and [inherited permissions](SANDBOX_CONFIGURATION.md#inherit-permissions-from-codex).
 
 ## What remains after a session
 
 Files saved to writable project paths are your data and remain after the session ends.
 With the default managed temporary storage, Console removes its private temporary files after the sandboxed processes have stopped.
-Crashes, cleanup failures, and other temporary-storage settings can leave files behind; [Temporary storage](SANDBOX_CONFIGURATION.md#temporary-storage) and [Process cleanup](SANDBOX_CONFIGURATION.md#supported-hosts-and-lifetime-limits) cover those limits.
+Crashes, cleanup failures, and other temporary-storage settings can leave files behind.
 
 Recordings also remain after the session ends.
 They can contain code, data, and output from the session; review them before sharing or executing recorded code.
 
-## Further details
+Reference: [Temporary storage](SANDBOX_CONFIGURATION.md#temporary-storage) and [process cleanup](SANDBOX_CONFIGURATION.md#supported-hosts-and-lifetime-limits).
 
 <span id="supported-hosts-and-lifetime-limits"></span> <span id="application-policy-and-launch"></span> <span id="policy-extensions-and-compatibility"></span>
-
-The [permissions reference](SANDBOX_CONFIGURATION.md) covers exact settings, platform support, and enforcement limits.
-Console reports sandbox setup failures without automatically retrying with weaker permissions.
-You can also [run commands directly](SANDBOX_COMMAND.md) using the same sandbox.
 
 Continue with [Recordings and reports](RECORDING.md) to learn how to inspect and reuse the agent's code, output, and plots.

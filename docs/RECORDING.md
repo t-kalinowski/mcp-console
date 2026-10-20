@@ -28,7 +28,9 @@ Reading it does not remove output from later responses.
 Logs contain the text that R, Python, or SQL displayed.
 For example, if a table's display includes only a few rows, the log contains that abbreviated display.
 To get the complete data, ask the agent to fetch it or save it to a file.
-For SQL, your agent can [retrieve the last result](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result) in R or Python without running the query again.
+For SQL, your agent can retrieve the last result in R or Python without running the query again.
+
+Reference: [Retrieve the last SQL result](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result).
 
 ## Turn the code into a report {#render-a-reviewed-copy}
 

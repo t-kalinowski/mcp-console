@@ -36,7 +36,7 @@ Restart your client after setup so it loads the new tool.
 ### Other MCP clients
 
 In your client's MCP settings, use command `uvx` and arguments `["mcp-console", "serve"]`.
-See [Other MCP clients](CLI.md#other-mcp-clients) for a configuration example.
+See [MCP client setup](CLIENTS.md#other-mcp-clients) for other clients.
 
 ### R and Python packages
 
@@ -83,4 +83,4 @@ The recording does not preserve live objects for a later session.
 Restarting Console clears the simulated rolls and other objects in memory.
 [Recordings and reports](RECORDING.md) explains how to inspect saved output and reuse the code.
 
-Continue with [Packages and environments](REQUIREMENTS.md) to learn how the agent gets the libraries it uses.
+Continue with [Sessions and languages](BUILTIN_RUNTIME.md) to learn how the agent builds on earlier work and combines R, Python, and SQL.

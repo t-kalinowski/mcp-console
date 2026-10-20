@@ -172,6 +172,10 @@ Reference has one sidebar for configuration, language behavior, the command line
 Development has its own sidebar and a footer link.
 Quarto's previous/next links follow sidebar order so readers can walk through the learning chapters.
 Keep the chapter continuations in the same order.
+Each concept has one explanatory chapter, task guide, and reference topic where those roles are needed.
+Link between those counterparts near the top of each page.
+The home page and learning chapters link inline to guides; put exact-setting and behavior references at the end of a section so they do not interrupt the explanation.
+The "I want to…" table connects tasks directly to either kind of page.
 
 All settings accepted in `config.yaml` belong in the user reference.
 Each reference topic has one owner: [Configuration files](CONFIGURATION.md) for discovery, merging, paths, and export; [Interpreters and startup](RUNTIME_CONFIGURATION.md) for R/Python selection, startup packages, resolution policies, and database startup; [Tool configuration](TOOL_CONFIGURATION.md) for language visibility, descriptions, and accepted parameters; [Sandbox permissions](SANDBOX_CONFIGURATION.md) for permission fields and enforcement limits; [Package sources and caches](RESOLVER.md) for preparation and cache settings; and [Environment variables](ENVIRONMENT.md) for environment settings and recognized variables.

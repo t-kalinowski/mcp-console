@@ -4,6 +4,8 @@ Choose the languages and arguments your agent can use, describe the data availab
 These settings work with an MCP client or with the R and Python packages.
 See [Get started](getting-started.qmd) to choose how to connect.
 
+For the complete tool settings, see [Tool configuration](TOOL_CONFIGURATION.md).
+
 ## Choose languages and arguments
 
 Create a [configuration file](CONFIGURATION.md#create-a-configuration-file) for your project, then select the interface you want to expose.

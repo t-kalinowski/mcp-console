@@ -18,7 +18,7 @@ Console works with MCP-compatible clients such as Codex and Claude Code and does
 You can also use Console from [R](R.md) or [Python](PYTHON.md).
 
 ::: {.home-links}
-[Get started](getting-started.qmd){.btn .btn-primary} [Documentation](README.md){.btn .btn-outline-primary}
+[Get started](getting-started.qmd){.btn .btn-primary} [Guides](README.md){.btn .btn-outline-primary}
 :::
 
 Console provides a unified API across macOS, Linux, and Windows x64.
@@ -49,11 +49,11 @@ See [Sessions and languages](BUILTIN_RUNTIME.md) for examples, database connecti
 ## Use a full runtime in a sandbox {#status-and-trust}
 
 Console uses native R and Python runtimes, with access to their package ecosystems, including packages with compiled code.
-An [OS-level sandbox](SANDBOX.md) enforces limits on file and network access.
+An OS-level sandbox enforces limits on file and network access.
 
 The default `read_only` sandbox profile restricts network access and filesystem writes.
 You can customize these permissions to allow writes to selected paths, block reads from selected paths, and control network access with domain allowlists or denylists.
-See [Sandbox permissions](SANDBOX_CONFIGURATION.md) for profiles and custom permissions.
+See [Sandbox and trust](SANDBOX.md) for the defaults and how to adapt them to your work.
 
 <span id="run-commands-in-a-sandbox"></span>
 
@@ -82,8 +82,8 @@ They also provide a starting point for reproducible analyses and reports.
 
 ## Build on Console {#build-on-console}
 
-Replace the complete [tool description and instructions](TOOL_CONFIGURATION.md#tool-descriptions-and-parameters), choose which language interfaces and parameters the model can use, and [preconfigure the runtime](RUNTIME_CONFIGURATION.md).
-Set [sandbox permissions](SANDBOX_CONFIGURATION.md) to control access to files and networks.
+Replace the complete tool description and instructions, choose which language interfaces and parameters the model can use, and preconfigure the runtime.
+Set sandbox permissions to control access to files and networks.
 
 For example, build a data chat with only SQL and a selected database connection, or a reporting assistant with a prepared R or Python environment.
 

@@ -3,6 +3,8 @@
 Use `mcp-console sandbox` to run a program and its child processes with limits on file and network access.
 You can use it directly from your terminal, scripts, or build jobs, independently of the MCP server.
 
+Read [Sandbox and trust](SANDBOX.md) for the permission model, or [Sandbox permissions](SANDBOX_CONFIGURATION.md) for exact settings and platform limits.
+
 ## Install
 
 Install Console with [uv](https://docs.astral.sh/uv/getting-started/installation/):

@@ -114,7 +114,7 @@ See [Command-line reference](CLI.md), [Configuration files](CONFIGURATION.md), a
 
 ## Client packages
 
-The [Python](PYTHON.md) and [R](R.md) guides cover the client packages; [API reference](REFERENCE.md#apis-and-package-manuals) links their API documentation.
+The [Python](PYTHON.md) and [R](R.md) guides cover the client packages; [Reference](REFERENCE.md#apis-and-package-manuals) links their API documentation.
 Register tools through the supplied adapters so the model receives the connected server's schema; inferring it from Python method annotations loses configured capabilities.
 
 ## What is not a public compatibility contract
