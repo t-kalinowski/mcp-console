@@ -8,7 +8,7 @@ Review them before sharing.
 
 ## Read the recording {#location-and-files}
 
-Ask the agent for the recorded session's path, then open `transcript.md` in that directory.
+Ask the agent for the recording's path, then open `transcript.md` in that directory.
 It shows calls and results with links to retained plots and other artifacts.
 For the dice example in [Get started](getting-started.qmd), you can inspect both the simulation and the later comparison that reused its results.
 
