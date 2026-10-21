@@ -15,11 +15,12 @@ fn main() -> io::Result<()> {
             .write(true)
             .open(root.join("lifetime"))?;
         lifetime.write_all(&std::process::id().to_be_bytes())?;
-        let mut release = [0];
         #[cfg(windows)]
-        lifetime.read_exact(&mut release)?;
+        let mut gate = &lifetime;
         #[cfg(unix)]
-        std::fs::File::open(root.join("release"))?.read_exact(&mut release)?;
+        let mut gate = std::fs::File::open(root.join("release"))?;
+        let mut release = [0];
+        gate.read_exact(&mut release)?;
         assert_eq!(release, [b'1']);
         return Ok(());
     }

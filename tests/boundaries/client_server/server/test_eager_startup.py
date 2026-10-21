@@ -698,9 +698,6 @@ def early_requirements_with_pending_poll(
         ),
     ):
         root = discovery.root
-        # Linux's LD_PRELOAD splits paths on whitespace. Keep the discovery
-        # executable's spaced path, but compile the loader fixture separately.
-        native = Path(resources.enter_context(tempfile.TemporaryDirectory()))
         environment, record = recording_ir_environment(
             root, fail_requirement="tidyverse"
         )
@@ -719,13 +716,16 @@ def early_requirements_with_pending_poll(
             closing(FifoCheckpoint.create(root / "write-release"))
         )
         evaluated = root / "evaluated"
+        # Linux LD_PRELOAD splits on spaces, while the discovery executable
+        # deliberately lives in a path containing spaces.
+        interposers = Path(resources.enter_context(tempfile.TemporaryDirectory()))
         environment.update(
             {
                 "MCP_CONSOLE_TEST_IR_BLOCK_REQUIREMENT": "DBI",
                 "MCP_CONSOLE_TEST_IR_STARTED": str(prepared.path),
                 "MCP_CONSOLE_TEST_IR_RELEASE": str(proceed.path),
                 LOADER_VARIABLE: str(
-                    build_interposer(native, "response_write_interposer")
+                    build_interposer(interposers, "response_write_interposer")
                 ),
                 "MCP_CONSOLE_TEST_RESPONSE_WRITE_REACHED": str(write_reached.path),
                 "MCP_CONSOLE_TEST_RESPONSE_WRITE_RELEASE": str(write_release.path),
@@ -775,7 +775,7 @@ def early_requirements_with_pending_poll(
                     # launch default preparation and consume the DBI gate.
                     client.receive(submitted)
                     assert without_elapsed(last_result_text(client)) == RUNNING, (
-                        client.transcript[-1]
+                        submitted
                     )
                     assert phase_progress(last_result_text(client)) == "startup"
                     submitted = client.start_send(timeout_ms=600_000)
@@ -786,6 +786,7 @@ def early_requirements_with_pending_poll(
                     proceed.release()
                 write_reached.wait(
                     "cell response is visible before its write settles",
+                    client=client,
                     timeout=(
                         max(0, client.response_deadline() - time.monotonic())
                         if completed_response
@@ -823,9 +824,7 @@ def early_requirements_with_pending_poll(
                     )
                     assert "result" not in pending and "error" not in pending, pending
                 else:
-                    assert without_elapsed(last_result_text(client)) == RUNNING, (
-                        client.transcript[-1]
-                    )
+                    assert without_elapsed(last_result_text(client)) == RUNNING
                     assert phase_progress(last_result_text(client)) == "startup"
                     discovery.release()
                     prepared.wait(
