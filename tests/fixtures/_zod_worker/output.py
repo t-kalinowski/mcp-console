@@ -186,6 +186,9 @@ def preview_large_output(context: WorkerContext, source: str) -> None:
 
 
 def emit_stdout(context: WorkerContext, source: str) -> None:
+    # Native stdout must follow observed cell entry before the test can expect
+    # its entire payload in that cell's log. The streams have no shared order.
+    wait_for_server_to_process_sideband(context.reader, context.writer)
     release = context.root / "zod-release-stdout-completion"
     os.mkfifo(release)
     write_all(1, b"zod stdout ")

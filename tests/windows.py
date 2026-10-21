@@ -1877,6 +1877,10 @@ class WindowsConsole(unittest.TestCase):
         (recording,) = (
             Path(session.directory.name) / ".agents/console/sessions"
         ).iterdir()
+        for name in ("capture/events.jsonl", "transcript.md", "transcript.qmd"):
+            self.assertTrue((recording / name).stat().st_mode & 0o222, name)
+        session.process.stdin.close()
+        self.assertEqual(session.process.wait(timeout=15), 0)
         events = [
             json.loads(line)
             for line in (recording / "capture/events.jsonl")
