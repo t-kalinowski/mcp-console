@@ -238,7 +238,8 @@ If 64 captures remain unfinished, the next send is retained in the bounded proto
 Protocol receipt is queued before the corresponding send capture starts.
 Response references carry the originating call's identity through handler completion; they do not infer it from a potentially reused JSON-RPC ID.
 EOF shutdown closes capture admission before settling its final tail, then publishes outstanding output receipts before recording finalization.
-Recording settlement has no abandonment deadline: every received send must finish capture before `recording_ended` and process exit.
+Recording settlement has no abandonment deadline: every received send must finish its initial capture and any result-writer task before `recording_ended` and process exit.
+Handler and blocking-writer completion owners survive cancellation and the delivery deadline; completed owners are released from the bounded queue.
 This assumes filesystem operations eventually return; an indefinitely blocked recording filesystem can keep the Console process alive after transport and worker retirement.
 Fail-open handling applies to reported recording errors and bounded queue overload, not cancellation of an operating-system filesystem call already in progress.
 Closing the delivery gate also settles failed or abandoned protocol writes, including discovery and ping responses, before recording ends.

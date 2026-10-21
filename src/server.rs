@@ -434,7 +434,9 @@ impl ServerHandler for ConsoleServer {
             Err(error) => {
                 let recorder = transcript.clone();
                 let recorded_error = error.clone();
+                let completion = recording.clone();
                 if let Err(error) = tokio::task::spawn_blocking(move || {
+                    let _completion = completion;
                     recorder.finish(call, &Err(recorded_error));
                 })
                 .await
@@ -521,7 +523,9 @@ impl ServerHandler for ConsoleServer {
         let result = Arc::new(result);
         let recorder = transcript.clone();
         let recording_result = Arc::clone(&result);
+        let completion = recording.clone();
         if let Err(error) = tokio::task::spawn_blocking(move || {
+            let _completion = completion;
             recorder.finish(call, recording_result.as_ref());
         })
         .await
