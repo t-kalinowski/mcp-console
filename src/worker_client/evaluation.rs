@@ -331,9 +331,9 @@ impl Evaluation {
         self.transcript.source_attached(self.call_id);
     }
 
-    pub(super) fn start_cell_capture(&self) {
+    pub(super) fn start_cell_capture(&self) -> Result<(), String> {
         self.output
-            .begin_cell_output(&self.transcript, self.call_id);
+            .begin_cell_output(&self.transcript, self.call_id)
     }
 
     /// Queues text and briefly defers any outstanding input report for its receipt.

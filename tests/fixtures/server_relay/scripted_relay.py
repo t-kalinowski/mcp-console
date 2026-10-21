@@ -1258,6 +1258,18 @@ def run_duplicate_worker_started(relay: ScriptedRelay) -> None:
         relay.retire(command)
 
 
+def run_duplicate_cell_started(relay: ScriptedRelay) -> None:
+    relay.ready()
+    command = relay.receive()
+    if command.get("kind") == "shutdown":
+        relay.retire(command)
+        return
+    assert command == EVALUATION, command
+    relay.wait_for_release()
+    relay.send({"kind": "cell_started"})
+    relay.retire()
+
+
 def run_fatal_exit(relay: ScriptedRelay) -> None:
     relay.ready()
     command = relay.receive()
@@ -1586,6 +1598,7 @@ def main() -> None:
         "cancelled_waiting_send": run_cancelled_waiting_send,
         "fatal": run_fatal,
         "duplicate_worker_started": run_duplicate_worker_started,
+        "duplicate_cell_started": run_duplicate_cell_started,
         "worker_started_after_ready": run_duplicate_worker_started,
         "fatal_status_137": run_fatal_exit,
         "fatal_sigterm": run_fatal_exit,

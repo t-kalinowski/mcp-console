@@ -527,10 +527,7 @@ fn handle_semantic_event(
 
     match event {
         RelayEvent::CellStarted => operation.with_route(|route| match route {
-            Route::Cell(evaluation) => {
-                evaluation.start_cell_capture();
-                Ok(())
-            }
+            Route::Cell(evaluation) => evaluation.start_cell_capture(),
             _ => Err("worker started a cell without an admitted source".into()),
         }),
         RelayEvent::ConsoleOutput { data } => operation.with_route(|route| match route {

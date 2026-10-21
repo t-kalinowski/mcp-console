@@ -296,12 +296,11 @@ impl OutputTape {
         &self,
         transcript: &crate::transcript::Transcript,
         call_id: Option<u64>,
-    ) {
+    ) -> Result<(), String> {
         let mut state = self.lock();
-        assert!(
-            !state.cell_active,
-            "only one cell output file can be active"
-        );
+        if state.cell_active {
+            return Err("worker sent a duplicate cell start".into());
+        }
         // Idle response ownership was captured when the operation attached.
         // Cell entry only changes raw capture ownership; startup/preparation
         // output arriving in that gap stays in the call's ordinary response.
@@ -313,6 +312,7 @@ impl OutputTape {
             Err(error) => state.recording_notice(Some(format!("cell output file was not created: {error}; text omitted from inline responses will be permanently discarded"))),
         }
         state.owner = transcript.owner();
+        Ok(())
     }
 
     pub(in crate::worker_client) fn finish_cell_output(
