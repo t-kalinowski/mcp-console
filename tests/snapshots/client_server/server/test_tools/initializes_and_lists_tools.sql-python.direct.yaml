@@ -39,7 +39,7 @@ result:
         automatically; supported plots return as images.
 
 
-        Choose the language that expresses each step most clearly, even when
+        Choose whichever language makes each step easiest to express, even when
         earlier steps used another language. For databases and structured files,
         consider DuckDB SQL first for inspection, joins, and aggregation. Use
         Python when its libraries or format-specific parsing simplify the task.

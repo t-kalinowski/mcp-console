@@ -1,7 +1,7 @@
 ---
 languages: r,python,sql
 language_guidance: >-
-  Choose the language that expresses each step most clearly, even when
+  Choose whichever language makes each step easiest to express, even when
   earlier steps used another language. Switch between R, Python, and SQL
   cells, reusing results through the language bridges, or use reticulate
   within an R cell to combine R expressions with Python objects and
@@ -35,7 +35,7 @@ language_guidance: >-
 ---
 languages: r,python
 language_guidance: >-
-  Choose the language that expresses each step most clearly, even when
+  Choose whichever language makes each step easiest to express, even when
   earlier steps used another language. Switch between R and Python cells,
   reusing results through the language bridges, or use reticulate within
   an R cell to combine R expressions with Python objects and function
@@ -45,14 +45,14 @@ language_guidance: >-
 ---
 languages: r,sql
 language_guidance: >-
-  Choose the language that expresses each step most clearly, even when
+  Choose whichever language makes each step easiest to express, even when
   earlier steps used another language. For databases and structured files,
   consider DuckDB SQL first for inspection, joins, and aggregation. Use R
   for vectorized data and string operations, statistics, and plots.
 ---
 languages: python,sql
 language_guidance: >-
-  Choose the language that expresses each step most clearly, even when
+  Choose whichever language makes each step easiest to express, even when
   earlier steps used another language. For databases and structured files,
   consider DuckDB SQL first for inspection, joins, and aggregation. Use
   Python when its libraries or format-specific parsing simplify the task.

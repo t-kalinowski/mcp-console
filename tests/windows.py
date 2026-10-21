@@ -1430,7 +1430,7 @@ class WindowsConsole(unittest.TestCase):
                                 "sql" in fields and not {"r", "python"} <= fields,
                             )
                             self.assertEqual(
-                                "Choose the language that expresses each step"
+                                "Choose whichever language makes each step"
                                 in tool["description"],
                                 len(fields) > 1,
                             )

@@ -57,7 +57,7 @@ Follow with complete-cell and automatic-display guidance.
 Language-selection guidance encourages choosing a language for each step, including continuing in R after Python and combining R expressions with Python calls through reticulate.
 When R, Python, and SQL are exposed, use:
 
-> Choose the language that expresses each step most clearly, even when earlier steps used another language.
+> Choose whichever language makes each step easiest to express, even when earlier steps used another language.
 > Switch between R, Python, and SQL cells, reusing results through the language bridges, or use reticulate within an R cell to combine R expressions with Python objects and function calls.
 > For example, read a specialized format with a Python library, then continue with an R data frame to transform or summarize the data, fit a statistical model, or make a plot.
 

@@ -38,7 +38,7 @@ pub(super) const R_SCRIPT: &str = r#"For a reusable R script, include imports, d
 pub(super) const PYTHON_SELECTION: &str =
     "Use Python when its libraries or format-specific parsing simplify the task. ";
 
-pub(super) const SWITCHING: &str = "Choose the language that expresses each step most clearly, even when earlier steps used another language.";
+pub(super) const SWITCHING: &str = "Choose whichever language makes each step easiest to express, even when earlier steps used another language.";
 
 pub(super) const R_PYTHON_CELLS: &str = " Switch between R and Python cells";
 

@@ -411,7 +411,7 @@ def _initializes_and_lists_tools(
             description = send["description"]
             if not custom and {"r", "python", "sql"} <= properties.keys():
                 assert (
-                    "Choose the language that expresses each step most clearly, "
+                    "Choose whichever language makes each step easiest to express, "
                     "even when earlier steps used another language. "
                     "Switch between R, Python, and SQL cells, reusing results "
                     "through the language bridges, or use reticulate within an "

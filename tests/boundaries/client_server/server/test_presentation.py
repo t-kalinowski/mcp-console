@@ -261,9 +261,9 @@ def _configured_language_matrix(binary: Path) -> Transcript:
                 assert (
                     R_SCRIPT_GUIDANCE in properties.get("r", {}).get("description", "")
                 ) == ("r" in fields)
-                assert (
-                    "Choose the language that expresses each step" in description
-                ) == (len(fields) > 1)
+                assert ("Choose whichever language makes each step" in description) == (
+                    len(fields) > 1
+                )
                 for field, guidance in (
                     ("r", "Use R for vectorized data"),
                     ("python", "Use Python when its libraries"),

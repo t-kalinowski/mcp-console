@@ -39,7 +39,7 @@ result:
         automatically; supported plots return as images.
 
 
-        Choose the language that expresses each step most clearly, even when
+        Choose whichever language makes each step easiest to express, even when
         earlier steps used another language. Switch between R and Python cells,
         reusing results through the language bridges, or use reticulate within
         an R cell to combine R expressions with Python objects and function

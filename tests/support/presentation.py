@@ -51,7 +51,7 @@ def assert_tool_guidance(tool: dict, languages: set[str], *, custom: bool) -> No
     switching = (
         "Switch languages when useful"
         if custom
-        else "Choose the language that expresses each step"
+        else "Choose whichever language makes each step"
     )
     assert (switching in description) == (len(languages) > 1)
     assert ("reticulate within an R cell" in description) == (
