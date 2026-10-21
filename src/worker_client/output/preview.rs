@@ -209,20 +209,24 @@ impl Preview {
         self.parts.push(Part::Image(content));
     }
 
-    pub(super) fn source(&mut self, source: Source) {
-        let has_text = self
-            .parts
-            .iter()
-            .rev()
-            .take_while(|part| !matches!(part, Part::Source(_)))
+    pub(super) fn source(&mut self, mut source: Source) {
+        let interval = || {
+            self.parts
+                .iter()
+                .rev()
+                .take_while(|part| !matches!(part, Part::Source(_)))
+        };
+        let has_text = interval()
             .any(|part| matches!(part, Part::Text(_) | Part::Gap(_) | Part::Information(_)));
-        // Publish empty files, but retain no receipt when there is no rendered
-        // text to attribute. Raw terminal edits can also render no text.
         if !has_text {
-            if let Some(file) = source.file {
+            // Notices need ownership, but no raw-file receipt. Release empty
+            // logs so completion can publish without another poll.
+            if let Some(file) = source.file.take() {
                 file.publish();
             }
-            return;
+            if !interval().any(|part| matches!(part, Part::Notice(_))) {
+                return;
+            }
         }
         self.parts.push(Part::Source(source));
         self.summarize_sources();
@@ -387,7 +391,7 @@ impl Preview {
             let parts = &self.parts[start..end];
             if !parts
                 .iter()
-                .any(|part| matches!(part, Part::Text(_) | Part::Information(_)))
+                .any(|part| matches!(part, Part::Text(_) | Part::Information(_) | Part::Notice(_)))
             {
                 let mut gap = Gap::default();
                 for part in parts {

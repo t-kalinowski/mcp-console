@@ -464,7 +464,6 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
     matches!(
         event,
         RelayEvent::Ready
-            | RelayEvent::CellStarted
             | RelayEvent::RuntimeInitialized { .. }
             | RelayEvent::RInitialization { .. }
             | RelayEvent::InputRequested { .. }
@@ -749,10 +748,7 @@ fn handle_semantic_event(
         | RelayEvent::PythonPrepared
         | RelayEvent::PythonPreparationFailed { .. }
         | RelayEvent::PythonPreparationRejected { .. }) => {
-            if matches!(event, RelayEvent::Completed) {
-                output.finish_cell_output(true);
-            }
-            operation.complete(event, &mut candidates.r, &mut candidates.python)
+            operation.complete(event, &mut candidates.r, &mut candidates.python, output)
         }
         RelayEvent::Ready
         | RelayEvent::WorkerStarted { .. }

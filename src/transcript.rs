@@ -27,6 +27,12 @@ mod markdown;
 mod output;
 pub(crate) use output::{CellOutput, OutputRecord};
 
+/// Retained process diagnostics have no worker interval or raw text file.
+pub(crate) struct ProcessOutput {
+    pub public_directory: Arc<Mutex<PathBuf>>,
+    pub retained_bytes: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct Owner {
     pub session_id: u64,
@@ -129,6 +135,7 @@ impl QueuedEvent {
             Self::WorkerEnded { outcome } => {
                 let session_id = active
                     .owner
+                    .take()
                     .ok_or("worker outcome without a started session")?
                     .session_id;
                 active.append(
@@ -551,7 +558,7 @@ impl Transcript {
         let bytes = decode_image_data(data)?;
         Ok(self.persist_decoded_image(None, &bytes, mime_type))
     }
-    pub(crate) fn unowned_text(&self, bytes: &[u8]) {
+    pub(crate) fn unowned_text(&self, bytes: &[u8]) -> Option<ProcessOutput> {
         self.update(|state| {
             let active = state.capture()?;
             let retained = bytes.len().min(
@@ -564,8 +571,12 @@ impl Transcript {
                     discarded_bytes: bytes.len() - retained,
                 },
                 Utc::now(),
-            )
-        });
+            )?;
+            Ok(ProcessOutput {
+                public_directory: active.public_directory.clone(),
+                retained_bytes: retained,
+            })
+        })
     }
     pub(crate) fn finalize(&self) {
         self.update(|state| {

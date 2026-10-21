@@ -108,14 +108,15 @@ PNG_1X1 = (
 
 
 class ScriptedRelay:
-    def __init__(self) -> None:
+    def __init__(self, *, acquired: bool = True) -> None:
         self.temporary = tempfile.TemporaryDirectory(
             prefix="scripted-relay-", dir=os.environ["TMPDIR"]
         )
         self.root = Path(self.temporary.name)
         self.capture = (self.root / CAPTURE_NAME).open("w", encoding="utf-8")
         self.checkpoints: dict[str, int] = {}
-        self.send({"kind": "worker_started", "pid": 42})
+        if acquired:
+            self.send({"kind": "worker_started", "pid": 42})
 
     def close(self) -> None:
         for checkpoint in self.checkpoints.values():
@@ -127,14 +128,14 @@ class ScriptedRelay:
         self.capture.write(json.dumps(entry, separators=(",", ":")) + "\n")
         self.capture.flush()
 
-    def receive(self) -> dict[str, Any]:
+    def receive(self, *, cell_started: bool = True) -> dict[str, Any]:
         line = sys.stdin.buffer.readline()
         assert line, "server closed relay stdin before sending the expected command"
         assert line.endswith(b"\n"), "server command ended midway through a frame"
         message = json.loads(line)
         assert isinstance(message, dict), message
         self.record({"server": message})
-        if message.get("kind") == "evaluate":
+        if cell_started and message.get("kind") == "evaluate":
             self.send({"kind": "cell_started"})
         return message
 

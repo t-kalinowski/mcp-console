@@ -33,6 +33,7 @@ fn recording_location(path: &Path, session: &Path, directory: bool) -> String {
 pub(in crate::worker_client::output) struct Source {
     pub(in crate::worker_client::output) owner: Option<crate::transcript::Owner>,
     pub(in crate::worker_client::output) file: Option<crate::transcript::OutputRecord>,
+    pub(in crate::worker_client::output) journal: Option<Arc<Mutex<PathBuf>>>,
     pub(in crate::worker_client::output) raw_bytes: u64,
     pub(in crate::worker_client::output) retained_bytes: u64,
     pub(in crate::worker_client::output) discarded_bytes: u64,
@@ -158,6 +159,10 @@ pub(in crate::worker_client::output) struct Summary {
     pub(super) owner: Option<crate::transcript::Owner>,
     has_source: bool,
     logs: Location,
+    // Keep the uncommon process-output location off the inline Part size;
+    // every retained control and text fragment shares that enum's allocation.
+    journal: Option<Box<Location>>,
+    journal_partial: bool,
     partial: bool,
     unavailable: bool,
 }
@@ -191,6 +196,13 @@ impl Summary {
                 self.logs.add(&file.path, false);
             }
             self.partial |= source.discarded_bytes != 0;
+        } else if let Some(directory) = &source.journal {
+            if source.retained_bytes != 0 {
+                let journal = self.journal.get_or_insert_default();
+                journal.public_directory = Some(directory.clone());
+                journal.add("capture/events.jsonl", false);
+            }
+            self.journal_partial |= source.discarded_bytes != 0;
         } else {
             self.unavailable |= source.raw_bytes != 0;
         }
@@ -210,6 +222,10 @@ impl Summary {
         self.partial |= other.partial;
         self.unavailable |= other.unavailable;
         self.logs.extend(other.logs);
+        if let Some(journal) = other.journal {
+            self.journal.get_or_insert_default().extend(*journal);
+        }
+        self.journal_partial |= other.journal_partial;
     }
 
     pub(super) fn notice(
@@ -237,14 +253,26 @@ impl Summary {
             details.push(location);
         }
         if self.gap.bytes != 0 {
+            let journal = self
+                .journal
+                .as_ref()
+                .and_then(|journal| journal.describe("capture journal", "capture journals"));
             if !shared_location {
-                details.push(
-                    self.logs
-                        .describe("raw log", "retained logs")
-                        .unwrap_or_else(|| "no retained log; omitted text unavailable".to_owned()),
-                );
+                if let Some(logs) = self.logs.describe("raw log", "retained logs") {
+                    details.push(logs);
+                } else if journal.is_none() {
+                    details.push("no retained log; omitted text unavailable".to_owned());
+                }
             }
-            if self.logs.path.is_some() {
+            if let Some(journal) = journal {
+                details.push(journal);
+                if self.journal_partial {
+                    details.push(
+                        "journal contains prefixes; later process text unavailable".to_owned(),
+                    );
+                }
+            }
+            if self.logs.path.is_some() || self.journal.is_some() {
                 if self.partial {
                     details.push("logs contain prefixes; later raw text unavailable".to_owned());
                 }

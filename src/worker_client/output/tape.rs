@@ -23,6 +23,7 @@ pub(super) struct OutputTapeState {
     idle_recording_attempted: bool,
     session_recording: Option<crate::transcript::Transcript>,
     raw_bytes: u64,
+    process_output: Source,
     /// Worker publications before decoding, projection, or image admission.
     /// Native diagnostics and server notices do not advance this revision.
     worker_revision: u64,
@@ -103,12 +104,12 @@ impl OutputTape {
             record.publish();
         }
         state.cell_active = false;
-        state.owner = state.session_recording.as_ref().and_then(|transcript| {
+        state.finish_idle_interval();
+        state.owner = None;
+        if let Some(transcript) = &state.session_recording {
             transcript.end_cell(false);
-            let owner = transcript.owner();
             transcript.worker_ended(outcome);
-            owner
-        });
+        }
     }
 
     pub(in crate::worker_client) fn direct_stdout(&self) -> DirectOutput {
@@ -411,7 +412,14 @@ impl OutputTapeState {
             && let Some(transcript) = &self.session_recording
         {
             if self.owner.is_none() {
-                transcript.unowned_text(bytes);
+                if let Some(retained) = transcript.unowned_text(bytes) {
+                    self.process_output.journal = Some(retained.public_directory);
+                    self.process_output.retained_bytes += retained.retained_bytes as u64;
+                    self.process_output.discarded_bytes +=
+                        (bytes.len() - retained.retained_bytes) as u64;
+                } else {
+                    self.process_output.discarded_bytes += bytes.len() as u64;
+                }
                 return None;
             }
             self.idle_recording_attempted = true;
@@ -492,13 +500,14 @@ impl OutputTapeState {
             Some(output) => Source {
                 owner: None,
                 file: Some(output.record()),
+                journal: None,
                 raw_bytes,
                 retained_bytes: output.retained_bytes(),
                 discarded_bytes: output.discarded_bytes(),
             },
             None => Source {
                 raw_bytes,
-                ..Source::default()
+                ..std::mem::take(&mut self.process_output)
             },
         };
         let owner = self.owner;
@@ -509,7 +518,7 @@ impl OutputTapeState {
         let response = std::mem::take(&mut self.current).finish();
         let cut = self.next_cut;
         self.next_cut += 1;
-        // Only intervals with rendered text need a receipt for later accounting.
+        // Visible text, notices, and images retain their observed interval.
         self.sealed.push_back((cut, response));
         self.raw_bytes = 0;
         OutputCut {

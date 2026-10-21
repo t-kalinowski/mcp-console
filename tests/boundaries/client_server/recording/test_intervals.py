@@ -12,7 +12,7 @@ from support.client import McpClient
 from support.checkpoints import release_fixture_checkpoint, wait_for_checkpoint
 from support.progress import normalize_elapsed
 from boundaries.client_server._harness import wait_for_marker
-from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.requirements import POSIX, requires
 from support.records import Transcript
 from support.suites import run_this_suite
@@ -41,6 +41,46 @@ def normalized(transcript: Transcript, workspace: Path) -> Transcript:
     ):
         data = data.replace(json.dumps(str(path))[1:-1], "<workspace>")
     return json.loads(data)
+
+
+@executions(RUNTIME)
+def test_prompt_only_fragments_keep_cell_ownership(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        with McpClient(
+            binary,
+            execution.serve(
+                "-c", "r=null", "-c", f"python={json.dumps(sys.executable)}"
+            ),
+            {**os.environ, "RETICULATE_PYTHON": sys.executable},
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            for source in (
+                'answer = input("x> ")',
+                'print("before"); answer = input("x> ")',
+            ):
+                result = client.send(python=source, timeout_ms=60000)
+                assert "x> " in result["content"][0]["text"], result
+                client.send(stdin="answer\n")
+            transcript = client.finish()
+        (recording,) = (workspace / ".agents/console/sessions").iterdir()
+        prompts = []
+        for event in events(recording):
+            if event["event"] != "tool_result":
+                continue
+            for part in event["parts"]:
+                block = event["result"]["content"][part["block"]]
+                if block["type"] == "text":
+                    text = block["text"].encode()[part["start"] : part["end"]].decode()
+                    if "x> " in text:
+                        prompts.append(part["owner"])
+        assert prompts == [
+            {"session_id": 1, "cell_id": cell, "interval": "cell"} for cell in (1, 2)
+        ], prompts
+        return normalized(transcript, workspace)
 
 
 @requires(POSIX)
