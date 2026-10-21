@@ -642,7 +642,8 @@ impl WorkerOperationState {
         if result.is_none() && kind.matches_result(&event) {
             // Retirement suppresses callback delivery, but a matching worker
             // completion still closes any observed execution interval.
-            if matches!(kind, OperationKind::Cell(_)) {
+            if let OperationKind::Cell(evaluation) = &kind {
+                evaluation.require_cell_entry()?;
                 output.finish_cell_output(true);
             }
             r_candidates.clear();
@@ -659,7 +660,10 @@ impl WorkerOperationState {
         );
         let committed = match (kind, event) {
             (OperationKind::Cell(evaluation), RelayEvent::Completed) => {
-                match evaluation.input_complete() {
+                match evaluation
+                    .require_cell_entry()
+                    .and_then(|()| evaluation.input_complete())
+                {
                     Ok(()) => {
                         output.finish_cell_output(true);
                         r_candidates.clear();

@@ -18,6 +18,15 @@ def notify(name: str) -> None:
 
 
 mode = os.environ["CAPTURE_SCENARIO"]
+lost_owner = mode in {"lost_startup_owner", "lost_post_owner"}
+if lost_owner:
+    marker = Path(os.environ["CAPTURE_GATES"]) / "relay-launched"
+    replacement = marker.exists()
+    marker.touch()
+    if replacement:
+        write_all(2, b"replacement launch diagnostic\n")
+        notify("launch_sent")
+        gate("acquire")
 relay = ScriptedRelay(acquired=mode != "process_output")
 try:
     if mode == "process_output":
@@ -25,9 +34,26 @@ try:
         gate("release")
         relay.send({"kind": "worker_started", "pid": 42})
     relay.ready()
-    command = relay.receive(cell_started=mode != "late_entry")
+    command = relay.receive(
+        cell_started=mode not in {"late_entry", "missing_entry", "lost_startup_owner"}
+    )
     if command["kind"] == "shutdown":
         relay.retire(command)
+    elif mode == "missing_entry":
+        gate("release")
+        relay.send({"kind": "completed"})
+        relay.retire()
+    elif lost_owner:
+        assert not replacement
+        if mode == "lost_post_owner":
+            relay.send({"kind": "console_output", "data": "executed cell\n"})
+            relay.send({"kind": "completed"})
+            command = relay.receive(cell_started=False)
+            assert command["kind"] == "evaluate", command
+        relay.send({"kind": "console_output", "data": "before relay loss\n"})
+        notify("post_sent")
+        gate("release")
+        # A vanished relay supplies no worker-exit or signal receipt.
     elif mode == "invalid_completion":
         relay.send({"kind": "input_requested", "prompt": "pending> "})
         gate("release")

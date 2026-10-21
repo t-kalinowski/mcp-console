@@ -368,6 +368,7 @@ The `cell_started` capture event records the call and interval owner; withheld s
 Completion closes the cell interval, and the final startup or post-cell interval includes shutdown output.
 Confirmed completion follows protocol validation; cell entry observed during retirement still starts its capture interval.
 Worker termination closes the final interval and clears its owner before later process diagnostics arrive.
+If the relay omits a worker outcome, launcher retirement and joined output producers close that interval before replacement preparation or launch; no worker-outcome event is fabricated.
 The `image_retained` capture event records each saved image's owner, artifact ID, and file path.
 Capture events carry explicit owners and raw text byte ranges; preview receipts carry the same owners into assembled response fragments, including later polls and replacement responses.
 Response assembly uses those receipts without waiting for the journal to rediscover ownership.

@@ -1,6 +1,7 @@
 """Recording boundaries exercised through MCP with a gated relay fixture."""
 
 import base64
+import json
 import os
 import sys
 import tempfile
@@ -32,6 +33,8 @@ def capture_relay(binary: Path, mode: str):
                 "evaluating",
                 "shutdown",
                 "post_sent",
+                "launch_sent",
+                "acquire",
                 "kill-reached-1",
                 "kill-release-1",
             )
@@ -70,6 +73,7 @@ def capture_relay(binary: Path, mode: str):
                 yield client, root, gates
             finally:
                 gates["release"].release()
+                gates["acquire"].release()
                 gates["drained"].release()
                 gates["kill-release-1"].release()
 
@@ -86,10 +90,13 @@ def await_event(
         paths = list((root / ".agents/console/sessions").glob("*/capture/events.jsonl"))
         if not paths:
             return None
+        # Appends can be observed midway through their final JSONL frame.
+        lines = paths[0].read_bytes().splitlines(keepends=True)
+        recorded = (json.loads(line) for line in lines if line.endswith(b"\n"))
         return next(
             (
                 event
-                for event in events(paths[0].parents[1])
+                for event in recorded
                 if event["event"] == kind and predicate(event)
             ),
             None,
@@ -122,6 +129,99 @@ def test_invalid_completion_does_not_confirm_cell_end(binary: Path) -> Transcrip
         assert len(ended) == 1, ended
         assert ended[0]["completion_confirmed"] is False, ended
         return normalized(transcript, root)
+
+
+@requires(POSIX)
+def test_completion_requires_cell_entry(binary: Path) -> Transcript:
+    with capture_relay(binary, "missing_entry") as (client, root, gates):
+        failed = client.start_send(r="complete without entry", timeout_ms=60000)
+        gates["release"].release()
+        client.receive(failed)
+        result = failed["result"]
+        assert result["isError"], result
+        assert (
+            "worker completed a cell before reporting its start"
+            in result["content"][0]["text"]
+        )
+        transcript = client.finish()
+        retained = recording(root)
+        capture = events(retained)
+        assert not any(e["event"] in {"cell_started", "cell_ended"} for e in capture)
+        assert not list((retained / "capture/sessions").glob("*/cell-*.txt"))
+        assert [e["session_id"] for e in capture if e["event"] == "worker_started"] == [
+            1,
+            2,
+        ]
+        return normalized(transcript, root)
+
+
+def outcome_less_retirement(binary: Path, *, interval: str) -> Transcript:
+    with capture_relay(binary, f"lost_{interval}_owner") as (client, root, gates):
+        if interval == "post":
+            assert tool_text(client.send(r="finish a cell")) == "executed cell\n"
+        failed = client.start_send(r="lose relay", timeout_ms=60000)
+        gates["post_sent"].wait("last old-worker output sent", client=client)
+        relative = (
+            "capture/sessions/001/cell-001-post.txt"
+            if interval == "post"
+            else "capture/sessions/001/startup.txt"
+        )
+        await_event(client, root, "output_text", lambda e: e["path"] == relative)
+        log = recording(root) / relative
+        assert log.read_text() == "before relay loss\n"
+        assert log.stat().st_mode & 0o200
+        gates["release"].release()
+        gates["launch_sent"].wait(
+            "replacement launch after old I/O retired", client=client
+        )
+        assert log.stat().st_mode & 0o222 == 0
+        await_event(
+            client,
+            root,
+            "process_output",
+            lambda e: base64.b64decode(e["data"]).endswith(b"\n"),
+        )
+        diagnostic = b"".join(
+            base64.b64decode(e["data"])
+            for e in events(recording(root))
+            if e["event"] == "process_output"
+        )
+        assert diagnostic == b"replacement launch diagnostic\n", diagnostic
+        gates["acquire"].release()
+        client.receive(failed)
+        assert failed["result"]["isError"], failed
+        assert (
+            "replacement launch diagnostic\n" in failed["result"]["content"][0]["text"]
+        )
+        transcript = client.finish()
+        retained = recording(root)
+        capture = events(retained)
+        assert log.read_text() == "before relay loss\n"
+        assert not any(
+            e["event"] == "worker_ended" and e["session_id"] == 1 for e in capture
+        )
+        owners = []
+        for event in capture:
+            if event["event"] != "tool_result":
+                continue
+            for part in event["parts"]:
+                block = event["result"]["content"][part["block"]]
+                if block["type"] == "text":
+                    text = block["text"].encode()[part["start"] : part["end"]].decode()
+                    if "replacement launch diagnostic" in text:
+                        owners.append(part["owner"])
+        assert owners == [None], owners
+        return normalized(transcript, root)
+
+
+@requires(POSIX)
+def test_relay_loss_finalizes_startup_before_replacement(binary: Path) -> Transcript:
+    return outcome_less_retirement(binary, interval="startup")
+
+
+@requires(POSIX)
+def test_relay_loss_finalizes_post_cell_before_replacement(binary: Path) -> Transcript:
+    return outcome_less_retirement(binary, interval="post")
 
 
 @requires(NATIVE_FIXTURES, POSIX)

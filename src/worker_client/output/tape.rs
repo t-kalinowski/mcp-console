@@ -65,12 +65,14 @@ impl OutputTape {
             let record = output.record();
             state.recording_notice(output.finish());
             record.publish();
-            if let Some(transcript) = &state.session_recording {
-                transcript.end_cell(false);
-            }
         }
         state.cell_active = false;
         state.finish_idle_interval();
+        state.owner = None;
+        if let Some(transcript) = &state.session_recording {
+            transcript.end_cell(false);
+            transcript.worker_retired();
+        }
         // EOF need not poll completed output. Retained response receipts must
         // reach the journal before its owner emits recording_ended.
         for (_, response) in &state.sealed {

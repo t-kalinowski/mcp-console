@@ -38,6 +38,8 @@ struct EvaluationState {
     /// Whether successful cell completion must end with an explicit final marker.
     controlled_completion: bool,
     input_request: Option<InputRequest>,
+    /// Worker entry remains observed after restart closes response capture.
+    cell_entered: bool,
     /// Whether one `send` currently owns the right to drain this evaluation's response.
     waiting: bool,
     /// Restart or controlled handoff permanently retires this evaluation.
@@ -145,6 +147,7 @@ impl Evaluation {
                 completion_collected: false,
                 controlled_completion,
                 input_request: None,
+                cell_entered: false,
                 waiting: false,
                 retired: false,
                 restart_handoff: None,
@@ -328,8 +331,28 @@ impl Evaluation {
     }
 
     pub(super) fn start_cell_capture(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if state.cell_entered {
+            return Err("worker sent a duplicate cell start".into());
+        }
         self.output
-            .begin_cell_output(&self.transcript, self.call_id)
+            .begin_cell_output(&self.transcript, self.call_id)?;
+        state.cell_entered = true;
+        Ok(())
+    }
+
+    pub(super) fn require_cell_entry(&self) -> Result<(), String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if !state.cell_entered {
+            return Err("worker completed a cell before reporting its start".into());
+        }
+        Ok(())
     }
 
     /// Queues text and briefly defers any outstanding input report for its receipt.

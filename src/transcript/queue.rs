@@ -447,6 +447,11 @@ impl Transcript {
             ))
         });
     }
+    pub(crate) fn worker_retired(&self) {
+        let mut events = self.1.lock().expect("protocol capture lock");
+        events.owner = None;
+        events.cell_call = None;
+    }
     pub(super) fn start_cell(&self, call_id: Option<u64>) -> Option<Owner> {
         let call_id = call_id?;
         self.observe(|events| {
