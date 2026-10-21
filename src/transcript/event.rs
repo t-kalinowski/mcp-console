@@ -66,7 +66,7 @@ pub(super) enum Event<'a> {
         bytes: usize,
         discarded_bytes: usize,
     },
-    /// Rejected before image retention: no artifact or image file was created.
+    /// Rejected by raw image retention limits: no image file was created.
     /// Retained images have an ArtifactCreated event with their file path.
     ImageOmitted {
         owner: Option<super::Owner>,
@@ -168,8 +168,12 @@ pub(super) enum RecordedContent<'a> {
         #[serde(skip_serializing_if = "Option::is_none")]
         annotations: Option<&'a Annotations>,
         #[serde(rename = "artifactId")]
-        artifact_id: u64,
-        path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        artifact_id: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        retained: Option<bool>,
     },
     #[serde(untagged)]
     Other(&'a ContentBlock),

@@ -64,6 +64,9 @@ Every executed cell has a text file, including silent cells.
 Startup and post-cell text files are created only when text arrives.
 One file retains each interval's raw text, up to 1 GiB, even when text and images alternate.
 Each retained image has its own numbered file in that interval; PNGs use `.png`, and other emitted image formats use `.bin`.
+Raw images have a separate budget per startup, cell, or post-cell interval: 64 MiB of decoded image data, 4,096 files, and 64 KiB of MIME metadata.
+An image is saved whole only if it fits the remaining raw budget.
+The response preview has its own limits: images omitted from a preview can still be saved, and images that exceed the raw budget can still appear in a response.
 Console retains emitted text and images, not arbitrary files written by submitted code.
 Output observed before worker acquisition or after worker termination is retained in process-output events rather than assigned to a worker session.
 Omission notices for that output reference the capture journal.
@@ -75,7 +78,8 @@ Protocol events reference the canonical send call/result records instead of dupl
 Events preserve observation timestamps and sequence numbers and identify the session, cell, and interval explicitly.
 Text events give byte ranges in the interval log so text/image ordering can be reconstructed.
 Each retained image has an `artifact_created` event with its owner, artifact ID, and file path relative to the recording directory.
-An `image_omitted` event records an image rejected by the preview image budget before retention; it has no file to locate.
+An `image_omitted` event records an image rejected by the raw retention budget; it has no file to locate.
+For an image returned without raw retention, the result record has `retained: false` and no file reference; it does not duplicate the image data in the journal.
 Result records associate fragments of the assembled response with their observed intervals, preserving previews, prompts, errors, omission notices, and image references.
 A response assembly event and a completed local transport write are separate observations.
 Neither proves that the client acknowledged the response or that a model read it.

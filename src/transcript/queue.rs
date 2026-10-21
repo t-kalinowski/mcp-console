@@ -19,6 +19,8 @@ pub(super) struct ProtocolEvents {
     cell_call: Option<u64>,
     starting_session: Option<u64>,
     image_number: u64,
+    image_bytes: usize,
+    image_metadata_bytes: usize,
     next_artifact_id: u64,
     process_output_bytes: u64,
 }
@@ -245,6 +247,10 @@ impl QueuedEvent {
 
 const MAX_PROTOCOL_EVENTS: usize = 1024;
 const MAX_PROTOCOL_BYTES: usize = 8 * 1024 * 1024;
+// Raw image files are bounded per observed interval, independently of previews.
+const MAX_INTERVAL_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_INTERVAL_IMAGES: u64 = 4096;
+const MAX_INTERVAL_IMAGE_METADATA_BYTES: usize = 64 * 1024;
 
 impl ProtocolEvents {
     fn push(&mut self, event: QueuedEvent, at: DateTime<Utc>) -> bool {
@@ -418,6 +424,8 @@ impl Transcript {
                 interval: Interval::Startup,
             });
             events.image_number = 0;
+            events.image_bytes = 0;
+            events.image_metadata_bytes = 0;
             events.starting_session = Some(session_id);
             Some((
                 QueuedEvent::WorkerStarted {
@@ -462,6 +470,8 @@ impl Transcript {
             events.cell_call = Some(call_id);
             events.owner = Some(owner);
             events.image_number = 0;
+            events.image_bytes = 0;
+            events.image_metadata_bytes = 0;
             Some((QueuedEvent::CellStarted { call_id, owner }, owner))
         })
     }
@@ -474,6 +484,8 @@ impl Transcript {
                 ..owner
             });
             events.image_number = 0;
+            events.image_bytes = 0;
+            events.image_metadata_bytes = 0;
             Some((
                 QueuedEvent::CellEnded {
                     call_id,
@@ -496,24 +508,34 @@ impl Transcript {
             ))
         });
     }
-    pub(crate) fn image_omitted(&self, encoded_bytes: usize, mime_type: &str) {
-        self.observe(|events| {
-            Some((
-                QueuedEvent::ImageOmitted {
-                    owner: events.owner,
-                    encoded_bytes,
-                    mime_type: mime_type.to_owned(),
-                },
-                (),
-            ))
-        });
-    }
-    pub(super) fn reserve_image(&self) -> Option<(u64, Owner, String)> {
+    pub(super) fn reserve_image(
+        &self,
+        bytes: usize,
+        encoded_bytes: usize,
+        mime_type: &str,
+    ) -> Option<(u64, Owner, String)> {
         let mut events = self.1.lock().expect("protocol capture lock");
         if events.failure.is_some() {
             return None;
         }
         let owner = events.owner?;
+        if events.image_number == MAX_INTERVAL_IMAGES
+            || bytes > MAX_INTERVAL_IMAGE_BYTES - events.image_bytes
+            || mime_type.len() > MAX_INTERVAL_IMAGE_METADATA_BYTES - events.image_metadata_bytes
+        {
+            events.push(
+                QueuedEvent::ImageOmitted {
+                    owner: Some(owner),
+                    encoded_bytes,
+                    mime_type: mime_type.to_owned(),
+                },
+                Utc::now(),
+            );
+            self.start_drain(events);
+            return None;
+        }
+        events.image_bytes += bytes;
+        events.image_metadata_bytes += mime_type.len();
         events.next_artifact_id += 1;
         events.image_number += 1;
         Some((

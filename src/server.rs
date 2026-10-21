@@ -342,7 +342,7 @@ fn response_to_tool_result(
                 mime_type,
                 artifact,
             } => {
-                result_images.extend(artifact);
+                result_images.push(artifact);
                 ContentBlock::image(data, mime_type)
             }
         })

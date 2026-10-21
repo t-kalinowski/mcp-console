@@ -718,11 +718,14 @@ fn render_result(
         match block {
             RecordedContent::Text(text) => push_fence(document, "text", &text.text),
             RecordedContent::Image {
-                artifact_id, path, ..
+                artifact_id: Some(artifact_id),
+                path: Some(path),
+                ..
             } => {
                 writeln!(document, "![Artifact {artifact_id}](<{path}>)\n")
                     .expect("writing to a String cannot fail");
             }
+            RecordedContent::Image { .. } => document.push_str("_Image not retained._\n\n"),
             RecordedContent::Other(content) => {
                 let kind = match content {
                     ContentBlock::Text(_) => "text",

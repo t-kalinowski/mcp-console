@@ -198,23 +198,10 @@ impl OutputTape {
         state.worker_revision += 1;
         state.flush_decoders();
         state.flush_terminal();
-        // Before the first send, startup images share this preview. Apply its
-        // budget before retaining artifacts, so omitted startup images never
-        // acquire receipts that could advertise unpublished paths.
-        if state
-            .current
-            .response
-            .preview
-            .admits_image(&data, &mime_type)
-        {
-            let artifact = make_artifact(&data, &mime_type)?;
-            state.current.image(data, mime_type, artifact);
-        } else {
-            if let Some(transcript) = &state.session_recording {
-                transcript.image_omitted(data.len(), &mime_type);
-            }
-            state.current.response.preview.omit_image(data.len());
-        }
+        // Raw capture has its own interval budget. Preview admission may drop
+        // the payload while keeping its file receipt and omission accounting.
+        let artifact = make_artifact(&data, &mime_type)?;
+        state.current.image(data, mime_type, artifact);
         Ok(())
     }
 

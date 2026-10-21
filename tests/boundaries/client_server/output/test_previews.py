@@ -502,24 +502,27 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
         client.send(r="preview image limit")
         content = client.transcript[-1]["result"]["content"]
         assert [block["type"] for block in content] == ["text", "image", "text"]
+        session = session_directory(client)
+        capture = recording_events(session)
+        omitted, artifact = [e for e in capture if e["event"] == "artifact_created"]
+        path = Path(".agents/console/sessions") / session.name / omitted["path"]
         assert content[0]["text"] == (
             "before oversized image\n\n"
-            "[output omitted: 1 image (8388612 encoded bytes); 1 image not retained]\n"
+            f"[output omitted: 1 image (8388612 encoded bytes); retained image: {path}]\n"
             "before accepted image\n"
         )
         assert content[-1]["text"] == "after accepted image\n"
-        session = session_directory(client)
-        capture = recording_events(session)
-        (omitted,) = [e for e in capture if e["event"] == "image_omitted"]
-        (artifact,) = [e for e in capture if e["event"] == "artifact_created"]
         owner = {"session_id": 1, "cell_id": 1, "interval": "cell"}
         assert omitted["owner"] == artifact["owner"] == owner
-        assert omitted["encoded_bytes"] == 8388612
+        assert omitted["bytes"] == 6 * 1024 * 1024 + 3
         assert omitted["mime_type"] == artifact["mime_type"] == "image/png"
-        assert "path" not in omitted and "artifact_id" not in omitted
         assert omitted["sequence"] < artifact["sequence"]
+        assert not any(e["event"] == "image_omitted" for e in capture)
         image = session / artifact["path"]
-        assert list((session / "capture/sessions").glob("*/*.png")) == [image]
+        assert sorted((session / "capture/sessions").glob("*/*.png")) == [
+            session / omitted["path"],
+            image,
+        ]
         assert image.read_bytes() == base64.b64decode(content[1]["data"])
         (recorded_image,) = [
             block
@@ -530,6 +533,7 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
         ]
         assert recorded_image["path"] == artifact["path"]
         assert recorded_image["artifactId"] == artifact["artifact_id"]
+        normalize_preview_paths(client)
         return client.finish()
 
 

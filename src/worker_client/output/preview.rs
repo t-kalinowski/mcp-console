@@ -219,12 +219,14 @@ impl Preview {
         let has_text = interval()
             .any(|part| matches!(part, Part::Text(_) | Part::Gap(_) | Part::Information(_)));
         if !has_text {
-            // Notices need ownership, but no raw-file receipt. Release empty
+            // Notices and images need ownership, but no raw-text receipt. Release empty
             // logs so completion can publish without another poll.
             if let Some(file) = source.file.take() {
                 file.publish();
             }
-            if !interval().any(|part| matches!(part, Part::Notice(_))) {
+            if !interval()
+                .any(|part| matches!(part, Part::Notice(_) | Part::Image(_) | Part::ImageGap))
+            {
                 return;
             }
         }
@@ -389,10 +391,12 @@ impl Preview {
                 continue;
             };
             let parts = &self.parts[start..end];
-            if !parts
-                .iter()
-                .any(|part| matches!(part, Part::Text(_) | Part::Information(_) | Part::Notice(_)))
-            {
+            if !parts.iter().any(|part| {
+                matches!(
+                    part,
+                    Part::Text(_) | Part::Information(_) | Part::Notice(_) | Part::Image(_)
+                )
+            }) {
                 let mut gap = Gap::default();
                 for part in parts {
                     if let Part::Gap(omitted) = part {

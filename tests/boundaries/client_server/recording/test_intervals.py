@@ -1,5 +1,6 @@
 """Observed capture intervals and managed file completion through MCP."""
 
+import base64
 import json
 import os
 import sys
@@ -80,6 +81,115 @@ def test_prompt_only_fragments_keep_cell_ownership(
         assert prompts == [
             {"session_id": 1, "cell_id": cell, "interval": "cell"} for cell in (1, 2)
         ], prompts
+        return normalized(transcript, workspace)
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_preview_omission_preserves_raw_images(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        with McpClient(
+            binary,
+            execution.serve("--worker", str(worker)),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            result = client.send(r="preview image limit")
+            assert not result["isError"], result
+            (image,) = [b for b in result["content"] if b["type"] == "image"]
+            (recording,) = (workspace / ".agents/console/sessions").iterdir()
+            capture = events(recording)
+            artifacts = [e for e in capture if e["event"] == "artifact_created"]
+            assert len(artifacts) == 2, artifacts
+            omitted, returned = artifacts
+            assert (recording / omitted["path"]).read_bytes() == b"\0" * (
+                6 * 1024 * 1024 + 3
+            )
+            assert (recording / returned["path"]).read_bytes() == base64.b64decode(
+                image["data"]
+            )
+            text = "".join(b["text"] for b in result["content"] if b["type"] == "text")
+            assert "retained image:" in text and omitted["path"] in text, text
+            assert "not retained" not in text, text
+            assert not any(e["event"] == "image_omitted" for e in capture)
+            client.send()
+            assert (recording / omitted["path"]).read_bytes() == b"\0" * (
+                6 * 1024 * 1024 + 3
+            )
+            transcript = client.finish()
+        assert all(
+            (recording / a["path"]).stat().st_mode & 0o222 == 0 for a in artifacts
+        )
+        return normalized(transcript, workspace)
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_raw_image_limit_preserves_inline_output_and_resets_at_cell_boundary(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        with McpClient(
+            binary,
+            execution.serve("--worker", str(worker)),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            result = client.send(r="overflow image retention")
+            assert not result["isError"], result
+            (image,) = [b for b in result["content"] if b["type"] == "image"]
+            assert base64.b64decode(image["data"]) == b"\0" * (4 * 1024 * 1024)
+            image["data"] = "<4 MiB of zero bytes, verified byte-for-byte>"
+            (recording,) = (workspace / ".agents/console/sessions").iterdir()
+            capture = events(recording)
+            artifacts = [e for e in capture if e["event"] == "artifact_created"]
+            assert len(artifacts) == 10, len(artifacts)
+            assert sum(
+                (recording / a["path"]).stat().st_size for a in artifacts
+            ) == 10 * (6 * 1024 * 1024 + 3)
+            (omitted,) = [e for e in capture if e["event"] == "image_omitted"]
+            owner = {"session_id": 1, "cell_id": 1, "interval": "cell"}
+            assert omitted["owner"] == owner
+            assert omitted["encoded_bytes"] == 5592408
+            (recorded,) = [e for e in capture if e["event"] == "tool_result"]
+            (block,) = [
+                b for b in recorded["result"]["content"] if b["type"] == "image"
+            ]
+            assert block == {
+                "type": "image",
+                "mimeType": "image/png",
+                "retained": False,
+            }, block
+            assert (
+                next(
+                    p
+                    for p in recorded["parts"]
+                    if recorded["result"]["content"][p["block"]]["type"] == "image"
+                )["owner"]
+                == owner
+            )
+            client.send(r="preview image limit")
+            transcript = client.finish()
+        capture = events(recording)
+        assert capture[-1]["event"] == "recording_ended"
+        assert "_Image not retained._" in (recording / "transcript.md").read_text()
+        assert len([e for e in capture if e["event"] == "image_omitted"]) == 1
+        assert (
+            len(
+                [
+                    e
+                    for e in capture
+                    if e["event"] == "artifact_created" and e["owner"]["cell_id"] == 2
+                ]
+            )
+            == 2
+        )
         return normalized(transcript, workspace)
 
 

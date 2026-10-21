@@ -268,8 +268,9 @@ impl super::Transcript {
         call_id: Option<u64>,
         bytes: &[u8],
         mime_type: &str,
+        encoded_bytes: usize,
     ) -> Option<super::Artifact> {
-        let (id, owner, stem) = self.reserve_image()?;
+        let (id, owner, stem) = self.reserve_image(bytes.len(), encoded_bytes, mime_type)?;
         let extension = if mime_type == "image/png" {
             "png"
         } else {
@@ -312,6 +313,6 @@ impl super::Transcript {
         mime_type: &str,
     ) -> Result<Option<super::Artifact>, String> {
         let bytes = super::decode_image_data(data)?;
-        Ok(self.persist_decoded_image(None, &bytes, mime_type))
+        Ok(self.persist_decoded_image(None, &bytes, mime_type, data.len()))
     }
 }

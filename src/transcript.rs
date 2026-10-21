@@ -105,10 +105,14 @@ struct ActiveTranscript {
     sequence: u64,
     finished: bool,
 }
+// One slot per assembled image; None preserves its position when raw capture
+// did not retain it. No image payload is copied into the journal.
+type ResultImages = Vec<Option<Artifact>>;
+
 #[derive(Clone)]
 pub(crate) struct Call {
     id: Option<u64>,
-    result_images: Arc<Mutex<Option<Vec<Artifact>>>>,
+    result_images: Arc<Mutex<Option<ResultImages>>>,
     parts: Arc<Mutex<Vec<ResultPart>>>,
 }
 #[derive(Clone)]
@@ -541,7 +545,7 @@ impl ActiveTranscript {
     fn finish(
         &mut self,
         call_id: u64,
-        result_images: Vec<Artifact>,
+        result_images: ResultImages,
         parts: &[ResultPart],
         response: &Result<CallToolResponse, ErrorData>,
         at: DateTime<Utc>,
@@ -583,7 +587,7 @@ impl ActiveTranscript {
     }
     fn project_result(
         call_id: u64,
-        result_images: Vec<Artifact>,
+        result_images: ResultImages,
         result: &CallToolResult,
     ) -> Result<RecordedResult<'_>, String> {
         let mut result_images = result_images.into_iter();
@@ -593,9 +597,11 @@ impl ActiveTranscript {
                 ContentBlock::Text(text) => RecordedContent::Text(text),
                 ContentBlock::Image(image) => {
                     let artifact = result_images.next().ok_or_else(|| {
-                        format!("tool call {call_id} returned an image without a retained artifact")
+                        format!("tool call {call_id} returned an image without a capture association")
                     })?;
-                    if image.mime_type != artifact.mime_type {
+                    if let Some(artifact) = &artifact
+                        && image.mime_type != artifact.mime_type
+                    {
                         return Err(format!(
                             "tool call {call_id} returned an image with a different MIME type than its artifact"
                         ));
@@ -604,8 +610,9 @@ impl ActiveTranscript {
                         mime_type: &image.mime_type,
                         meta: image.meta.as_ref(),
                         annotations: image.annotations.as_ref(),
-                        artifact_id: artifact.id,
-                        path: artifact.path,
+                        artifact_id: artifact.as_ref().map(|a| a.id),
+                        retained: artifact.is_none().then_some(false),
+                        path: artifact.map(|a| a.path),
                     }
                 }
                 other => RecordedContent::Other(other),
@@ -638,7 +645,7 @@ impl Call {
         self.id
     }
 
-    pub(crate) fn record_result_images(&self, images: Vec<Artifact>) -> Result<(), String> {
+    pub(crate) fn record_result_images(&self, images: ResultImages) -> Result<(), String> {
         let mut result_images = self
             .result_images
             .lock()
@@ -653,7 +660,7 @@ impl Call {
         Ok(())
     }
 
-    fn take_result_images(&self) -> Result<Vec<Artifact>, String> {
+    fn take_result_images(&self) -> Result<ResultImages, String> {
         Ok(self
             .result_images
             .lock()

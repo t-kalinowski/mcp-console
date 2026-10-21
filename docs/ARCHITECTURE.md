@@ -352,6 +352,8 @@ Observed session, cell, and image identities are reserved when events enter the 
 Consecutive pending text ranges in the same interval can share an event with the first observation timestamp; images and other events preserve their intervening boundaries.
 The output tape caches interval ownership, so collecting retained restart output does not query the journal.
 Raw capture handles and their publication registry use a separate lock from journal state; creating, appending, and closing interval files do not acquire the journal mutex.
+Image capture reserves bytes, file count, and MIME metadata against its own interval budget before preview admission; preview omission retains the saved file receipt.
+Assembled results can also contain images rejected from raw capture, recorded without image data or a fabricated file reference.
 Startup failure records carry a session number only when that startup acquired a worker.
 
 Before send, the recorder uses private temporary storage for the same journal, output logs, images, and projections.
