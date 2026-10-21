@@ -21,17 +21,59 @@ The recording retains the process start time separately from publication time.
 Restarts and automatic worker replacement create numbered sessions within that same recording.
 Each cell gets a log file when execution starts, even if it produces no text output.
 
-| File                      | Use                                                |
-| ------------------------- | -------------------------------------------------- |
-| `transcript.md`           | Read calls, results, and links to artifacts.       |
-| `transcript.qmd`          | Review submitted source and edit it into a report. |
-| `internal/events.jsonl`   | Inspect recording events as JSON.                  |
-| `outputs/call-NNNNNN.log` | Read raw text from a code cell, up to 1 GiB.       |
-| `outputs/session.log`     | Read startup and idle text, up to 1 GiB.           |
-| `artifacts/`              | Find retained images.                              |
+```text
+recording/
+├── capture/
+│   ├── events.jsonl
+│   └── sessions/
+│       ├── 001/
+│       │   ├── startup.txt
+│       │   ├── startup-001.png
+│       │   ├── cell-001.txt
+│       │   ├── cell-001-001.png
+│       │   ├── cell-001-post.txt
+│       │   ├── cell-001-post-001.png
+│       │   └── cell-002.txt
+│       └── 002/
+│           └── startup.txt
+├── transcript.md
+└── transcript.qmd
+```
 
-`internal/events.jsonl` records one JSON object per event, including MCP requests, responses, and notifications, canonical tool calls/results, worker lifetimes, dependency selections, and references to output logs and images.
+`transcript.md` records calls and results with links to retained output.
+The recording-wide `transcript.qmd` contains submitted source for review, including failed and rejected calls; it omits output and images.
+Existing recordings are not migrated or rewritten.
+
+### Output intervals
+
+Each actual worker session numbers executed cells from `001`.
+Polls, input, controls, and rejected source do not create cells.
+Source remains in the journal and documents even when it does not execute.
+
+Output belongs to the interval in which Console observes it:
+
+- `startup`: before the first cell begins, including the entire lifetime of a worker that executes no cells.
+- `cell-NNN`: while that cell executes.
+- `cell-NNN-post`: after the cell ends and before the next begins.
+
+The final interval includes shutdown output.
+A later poll can return output from several intervals or sessions without changing its ownership.
+Console does not infer which computation caused background output or impose chronology across independent streams.
+
+Every executed cell has a text file, including silent cells.
+Startup and post-cell text files are created only when text arrives.
+One file retains each interval's raw text, up to 1 GiB, even when text and images alternate.
+Each retained image has its own numbered file in that interval; PNGs use `.png`, and other emitted image formats use `.bin`.
+Console retains emitted text and images, not arbitrary files written by submitted code.
+Output observed before any worker exists is retained in process-output events rather than assigned to a worker session.
+
+### Capture events and completion
+
+`capture/events.jsonl` records one JSON object per event, including MCP requests, responses, and notifications, canonical tool calls/results, worker lifetimes, dependency selections, and references to output logs and images.
 Protocol events reference the canonical send call/result records instead of duplicating their payloads.
+Events preserve observation timestamps and sequence numbers and identify the session, cell, and interval explicitly.
+Text events give byte ranges in the interval log so text/image ordering can be reconstructed.
+Result records associate fragments of the assembled response with their observed intervals, preserving previews, errors, omission notices, and image references.
 A response assembly event and a completed local transport write are separate observations.
 Neither proves that the client acknowledged the response or that a model read it.
 
@@ -40,6 +82,13 @@ A restart request does not itself establish a session; a failed preparation or l
 Interrupting a surviving worker stays in its session.
 The journal can help inspect a recording with scripts or investigate a failed call.
 Its format may change between Console releases.
+
+Completed managed files become read-only while retaining their existing privacy permissions.
+Cell logs close at their cell boundary; startup and post-cell logs stay writable until their next boundary.
+Images become read-only after writing.
+The journal and recording-wide documents remain writable until worker output, queued capture, result writers, and transport settlement can no longer update them.
+Directories remain writable while Console needs them.
+These permissions protect against accidental edits; abrupt termination can leave files writable.
 
 Returned paths refer to the Console host.
 Project paths are normally relative to the launch directory; fallback paths are absolute.

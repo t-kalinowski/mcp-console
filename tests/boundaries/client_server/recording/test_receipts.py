@@ -65,7 +65,7 @@ def test_eof_publishes_unpolled_output_receipts(binary: Path) -> Transcript:
                     release.release()
             (recording,) = (root / ".agents/console/sessions").iterdir()
             assert (
-                recording / "outputs/call-000001.log"
+                recording / "capture/sessions/001/cell-001.txt"
             ).read_text() == "unpolled retained text\n"
             events = recording_events(recording)
             output = [e for e in events if e["event"] == "cell_output"]

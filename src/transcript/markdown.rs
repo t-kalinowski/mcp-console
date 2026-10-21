@@ -213,6 +213,12 @@ impl QuartoWriter {
             | Event::WorkerStarted { .. }
             | Event::WorkerReady { .. }
             | Event::WorkerEnded { .. }
+            | Event::SourceAttached { .. }
+            | Event::CellStarted { .. }
+            | Event::CellEnded { .. }
+            | Event::OutputText { .. }
+            | Event::ImageOmitted { .. }
+            | Event::ProcessOutput { .. }
             | Event::RequirementsAccepted { .. }
             | Event::ArtifactCreated { .. }
             | Event::CellOutput { .. }
@@ -272,7 +278,7 @@ ir:
             document.push_str(
                 r#"Recreate the environments at the recorded boundaries before enabling execution.
 Cells may require incompatible declarations; the header is not a replay manifest.
-See transcript.md and internal/events.jsonl for requests, committed selections, and failures.
+See transcript.md and capture/events.jsonl for requests, committed selections, and failures.
 
 "#,
             );
@@ -437,6 +443,12 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
         | Event::WorkerStarted { .. }
         | Event::WorkerReady { .. }
         | Event::WorkerEnded { .. }
+        | Event::SourceAttached { .. }
+        | Event::CellStarted { .. }
+        | Event::CellEnded { .. }
+        | Event::OutputText { .. }
+        | Event::ImageOmitted { .. }
+        | Event::ProcessOutput { .. }
         | Event::RequirementsAccepted { .. } => Ok(()),
         Event::EnvironmentDiscovered { .. } => Ok(()),
         Event::PythonEnvironmentAccepted { packages } => {
@@ -524,7 +536,9 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
             }
             Ok(())
         }
-        Event::ToolResult { call_id, outcome } => render_tool_result(document, *call_id, outcome),
+        Event::ToolResult {
+            call_id, outcome, ..
+        } => render_tool_result(document, *call_id, outcome),
     }
 }
 

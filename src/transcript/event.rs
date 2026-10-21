@@ -46,8 +46,34 @@ pub(super) enum Event<'a> {
         session_id: u64,
         outcome: &'a str,
     },
-    RequirementsAccepted {
-        requirements: &'a Value,
+    SourceAttached {
+        call_id: u64,
+        session_id: u64,
+    },
+    CellStarted {
+        call_id: u64,
+        owner: super::Owner,
+    },
+    CellEnded {
+        call_id: u64,
+        owner: super::Owner,
+        completion_confirmed: bool,
+    },
+    OutputText {
+        owner: super::Owner,
+        path: &'a str,
+        offset: u64,
+        bytes: usize,
+        discarded_bytes: usize,
+    },
+    ImageOmitted {
+        owner: Option<super::Owner>,
+        encoded_bytes: usize,
+        mime_type: &'a str,
+    },
+    ProcessOutput {
+        data: &'a str,
+        discarded_bytes: usize,
     },
     EnvironmentDiscovered {
         dynamic_resolution: bool,
@@ -62,6 +88,9 @@ pub(super) enum Event<'a> {
     PythonEnvironmentAccepted {
         packages: &'a [String],
     },
+    RequirementsAccepted {
+        requirements: &'a Value,
+    },
     RequirementsSelected {
         call_id: Option<u64>,
         action: &'a str,
@@ -73,6 +102,7 @@ pub(super) enum Event<'a> {
         request: &'a CallToolRequestParams,
     },
     ArtifactCreated {
+        owner: super::Owner,
         artifact_id: u64,
         call_id: Option<u64>,
         path: &'a str,
@@ -80,6 +110,7 @@ pub(super) enum Event<'a> {
         bytes: usize,
     },
     CellOutput {
+        owner: super::Owner,
         call_id: u64,
         path: &'a str,
         retained_bytes: u64,
@@ -88,6 +119,7 @@ pub(super) enum Event<'a> {
         retention_limit_bytes: u64,
     },
     SessionOutput {
+        owner: super::Owner,
         path: &'a str,
         retained_bytes: u64,
         inline_omitted_bytes: u64,
@@ -96,6 +128,7 @@ pub(super) enum Event<'a> {
     },
     ToolResult {
         call_id: u64,
+        parts: &'a [super::ResultPart],
         #[serde(flatten)]
         outcome: Outcome<'a>,
     },

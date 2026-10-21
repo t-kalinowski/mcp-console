@@ -48,7 +48,7 @@ def test_records_existing_python_startup_declaration(
         assert "    - jsonlite\n" in quarto, quarto
         events = [
             json.loads(line)
-            for line in (session / "internal/events.jsonl").read_text().splitlines()
+            for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
         (startup,) = [
             event["startup_requirements"]
@@ -139,7 +139,7 @@ def test_records_real_mixed_language_session(
         session = next((workspace / ".agents/console" / "sessions").iterdir())
         events = [
             json.loads(line)
-            for line in (session / "internal" / "events.jsonl")
+            for line in (session / "capture" / "events.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
         ]

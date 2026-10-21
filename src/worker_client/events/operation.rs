@@ -312,6 +312,7 @@ impl WorkerOperationState {
         evaluation.capture_prelude_before(capture_idle_prelude, || {
             state.operation = operation.take();
         })?;
+        evaluation.record_attachment();
         Ok(receiver)
     }
 
@@ -885,7 +886,7 @@ mod tests {
             panic!("cell did not complete")
         };
         let response = render_response(SendResponse::Completed(response));
-        let (content, is_error, delivery) = response.into_parts();
+        let (content, is_error, delivery, _) = response.into_parts();
         assert!(!is_error);
         assert!(matches!(
             content.as_slice(),

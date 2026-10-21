@@ -134,6 +134,8 @@ class ScriptedRelay:
         message = json.loads(line)
         assert isinstance(message, dict), message
         self.record({"server": message})
+        if message.get("kind") == "evaluate":
+            self.send({"kind": "cell_started"})
         return message
 
     def expect(self, expected: dict[str, Any]) -> None:

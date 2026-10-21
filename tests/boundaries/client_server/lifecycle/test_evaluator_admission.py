@@ -1,5 +1,6 @@
 #!/usr/bin/env -S uv run --script
 
+import json
 import sys
 import tempfile
 from contextlib import ExitStack, closing
@@ -105,6 +106,20 @@ def interrupt_held_evaluator(
                 checkpoints["evaluator-release"].release()
                 settled = client.send()
                 assert tool_text(settled) == "[done]", settled
+                (recording,) = (root / ".agents/console/sessions").iterdir()
+                events = [
+                    json.loads(line)
+                    for line in (recording / "capture/events.jsonl")
+                    .read_text()
+                    .splitlines()
+                ]
+                assert any(event["event"] == "source_attached" for event in events)
+                assert not any(event["event"] == "cell_started" for event in events)
+                assert not list((recording / "capture/sessions").glob("*/cell-*.txt"))
+                assert (
+                    "discarded_cell = True"
+                    in (recording / "transcript.qmd").read_text()
+                )
                 fresh = client.send(
                     python="assert 'discarded_cell' not in globals(); 42"
                 )

@@ -347,14 +347,28 @@ One recording belongs to one Console process; numbered sessions identify actual 
 The relay publishes `worker_started` only after acquiring its direct child.
 The server requires exactly one acquisition before readiness and rejects duplicate acquisition events as private-protocol failures.
 The server queues acquisition, readiness, and exit/signal evidence through the bounded recorder drain without changing generation ownership or retirement barriers.
-Journal writes do not run on the worker event dispatcher or delay its retirement join.
+The output tape caches interval ownership, so collecting retained restart output does not query the journal.
 Startup failure records carry a session number only when that startup acquired a worker.
 
 Before send, the recorder uses private temporary storage for the same journal, output logs, images, and projections.
 First-send publication relocates shared output writers while preserving producer ownership, sequence numbers, and observation timestamps.
 Output receipts resolve their public paths only after successful publication; failed publication leaves omitted text unavailable.
 It preserves the existing storage-root selection, identifier generation, permissions, and retention limits.
-`internal/events.jsonl` is the append-only journal underlying the Markdown and QMD projections.
+`capture/events.jsonl` is the append-only journal underlying the Markdown and QMD projections.
+
+The output tape owns observed startup, cell, and post-cell boundaries within each worker lifetime.
+The worker's `cell_started` receipt begins execution capture at evaluator entry, after admission; a withheld source gets no executed-cell log.
+An attachment event records the selected worker without creating a cell or retaining a historical request.
+Completion closes the cell interval, and the final startup or post-cell interval includes shutdown output.
+Capture events carry explicit owners and raw text byte ranges; preview receipts carry the same owners into assembled response fragments, including later polls and replacement responses.
+Response assembly uses those receipts without waiting for the journal to rediscover ownership.
+
+Raw files live under `capture/sessions/NNN/`; the existing recording-wide Markdown and source-only QMD remain projections of the journal.
+Completed interval files and images become read-only after their writers retire.
+The temporary-publication registry keeps weak references to active file handles and releases completed entries; publication copies completed files while relocating live producers.
+Process-wide files finalize only after retirement, delivery settlement, queued initial capture, and blocking result writers settle.
+Capture completion ownership survives handler cancellation and delivery deadlines, including after a result writer releases the journal mutex.
+Finalization completes permissions on retained files even after recording or projection failure, without inventing a successful `recording_ended` event for disabled capture.
 
 A journal or artifact failure disables further recording without stopping computation.
 Queued and in-flight protocol and worker lifecycle capture share a bound of 1,024 events or 8 MiB of serialized event data.

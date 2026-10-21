@@ -39,7 +39,7 @@ result:
   content:
     - type: text
       text:
-        text_bytes: 8048
+        text_bytes: 8057
         concat:
           - |
             [worker stopped: in-memory state lost]
@@ -49,7 +49,7 @@ result:
             count: 2868
           - |-
 
-            [output omitted: 1043660 UTF-8 bytes; retained logs: .agents/console/sessions/<run ID>/outputs/]
+            [output omitted: 1043660 UTF-8 bytes; retained logs: .agents/console/sessions/<run ID>/capture/sessions/]
 
             [done]
             [worker stopped: in-memory state lost]
