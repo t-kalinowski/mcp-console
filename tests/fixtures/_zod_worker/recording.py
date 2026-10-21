@@ -1,6 +1,8 @@
 """Image formats and capture snapshots requested over the worker sideband."""
 
 import json
+import base64
+from collections.abc import Iterator
 
 from .output import PNG_1X1
 from .protocol import send, send_output
@@ -35,17 +37,27 @@ def export_session(context: WorkerContext, source: str) -> None:
     assert response["kind"] == "session_exported", response
     assert set(response["result"]) == {"Ok"}, response
     bundle = response["result"]["Ok"]
-    for image in bundle["images"]:
-        send(context.writer, {"kind": "export_image"})
-        response = json.loads(context.reader.readline())
-        assert response["kind"] == "session_image_exported", response
-        image["data"] = response["result"]["Ok"]
-    send_output(context.writer, json.dumps(bundle) + "\n")
+    result = {"recording_directory": bundle["recording_directory"]}
+    images = []
+    for name in bundle["files"]:
+        data = b"".join(export_chunks(context))
+        if name == "session.qmd":
+            result["qmd"] = data.decode()
+        elif name == "session.md":
+            result["markdown"] = data.decode()
+        else:
+            images.append(
+                {
+                    "name": name.removeprefix("images/"),
+                    "data": base64.b64encode(data).decode(),
+                }
+            )
+    result["images"] = images
+    send_output(context.writer, json.dumps(result) + "\n")
     send(context.writer, {"kind": "completed"})
 
 
 def emit_export_image(context: WorkerContext, source: str) -> None:
-    import base64
     import struct
     import zlib
 
@@ -71,7 +83,6 @@ def emit_export_image(context: WorkerContext, source: str) -> None:
 
 
 def export_image_summary(context: WorkerContext, source: str) -> None:
-    import base64
     import hashlib
 
     send(context.writer, {"kind": "export_session"})
@@ -80,18 +91,19 @@ def export_image_summary(context: WorkerContext, source: str) -> None:
     bundle = response["result"]["Ok"]
     digest = hashlib.sha256()
     total = 0
-    for image in bundle["images"]:
-        send(context.writer, {"kind": "export_image"})
-        response = json.loads(context.reader.readline())
-        assert response["kind"] == "session_image_exported", response
-        data = base64.b64decode(response["result"]["Ok"], validate=True)
-        digest.update(data)
-        total += len(data)
+    count = 0
+    for name in bundle["files"]:
+        image = name.startswith("images/")
+        count += image
+        for data in export_chunks(context):
+            if image:
+                digest.update(data)
+                total += len(data)
     send_output(
         context.writer,
         json.dumps(
             {
-                "images": len(bundle["images"]),
+                "images": count,
                 "bytes": total,
                 "sha256": digest.hexdigest(),
             }
@@ -99,3 +111,17 @@ def export_image_summary(context: WorkerContext, source: str) -> None:
         + "\n",
     )
     send(context.writer, {"kind": "completed"})
+
+
+def export_chunks(context: WorkerContext) -> Iterator[bytes]:
+    while True:
+        send(context.writer, {"kind": "export_chunk"})
+        response = json.loads(context.reader.readline())
+        assert response["kind"] == "session_chunk_exported", response
+        assert set(response["result"]) == {"Ok"}, response
+        data = response["result"]["Ok"]
+        if data is None:
+            return
+        decoded = base64.b64decode(data, validate=True)
+        assert 0 < len(decoded) <= 65536, len(decoded)
+        yield decoded

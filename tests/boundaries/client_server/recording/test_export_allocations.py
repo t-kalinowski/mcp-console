@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from support.allocations import RetentionProfile
 from support.assertions import last_result_text, wait_for_evaluation_output
 from support.client import McpClient
+from support.checkpoints import FifoCheckpoint
 from support.execution import DIRECT, Execution, executions
 from support.normalization import code
 from support.records import Transcript
@@ -171,6 +172,72 @@ def test_bounds_export_of_fragmented_output(
                 {
                     "export memory": "fragmented capture streamed; observed preview retained"
                 },
+            ]
+
+
+@requires(NATIVE_FIXTURES)
+@executions(DIRECT)
+def test_bounds_export_of_large_documents(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        (workspace / "python3").symlink_to(sys.executable)
+        with (
+            closing(RetentionProfile(workspace)) as profile,
+            closing(FifoCheckpoint.create(workspace / "export-entered")) as entered,
+            closing(FifoCheckpoint.create(workspace / "export-release")) as release,
+            McpClient(
+                binary,
+                execution.serve(),
+                {**selected_environment(workspace), **profile.environment},
+                current_directory=workspace,
+            ) as client,
+        ):
+            client.initialize_and_list_tools()
+            sources = []
+            for index in range(48):
+                source = (
+                    f"# source {index:03} "
+                    + "s" * (128 * 1024)
+                    + f"\nprint('result {index:03}')"
+                )
+                sources.append(source)
+                client.expect(f"result {index:03}\n", python=source)
+            exporting = client.start_send(
+                # fmt: python
+                python=code("""
+                    from pathlib import Path
+
+                    with Path("export-entered").open("wb", buffering=0) as gate:
+                        gate.write(b"1")
+                    with Path("export-release").open("rb", buffering=0) as gate:
+                        assert gate.read(1) == b"1"
+                    paths = _console.export_session("report")
+                    print("export complete")
+                    """),
+            )
+            try:
+                entered.wait("export cell source has been projected", client=client)
+                profile.start()
+            finally:
+                release.release()
+            client.receive(exporting)
+            assert not exporting["result"]["isError"], exporting["result"]
+            client.request("ping")
+            peak = profile.stop()
+            qmd = (workspace / "report/session.qmd").read_text()
+            report = (workspace / "report/session.md").read_text()
+            assert len(qmd) > 6 * 1024 * 1024 and len(report) > 6 * 1024 * 1024
+            for index, source in enumerate(sources):
+                assert source in qmd and source in report, index
+                assert f"result {index:03}\n" in report, index
+            assert "export_session" not in qmd and "export_session" not in report
+            assert peak <= 4 * 1024 * 1024, peak
+            client.finish()
+            return [
+                *client.transcript[:3],
+                {"export memory": "source and reports spooled; transfer bounded"},
             ]
 
 

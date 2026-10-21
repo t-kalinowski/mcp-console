@@ -1,0 +1,4 @@
+---
+!same-as python-only MCP initialization for this execution mode
+---
+export memory: source and reports spooled; transfer bounded

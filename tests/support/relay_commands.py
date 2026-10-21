@@ -59,7 +59,18 @@ WORKER_COMMANDS = [
     {"kind": "python_version_resolved", "version": ">=3.13,<3.14"},
     {"kind": "python_version_resolution_failed", "message": "version 🦀\nfailed"},
     {"kind": "session_exported", "result": {"Err": "capture unavailable"}},
-    {"kind": "session_image_exported", "result": {"Err": "image unavailable"}},
+    {
+        "kind": "session_exported",
+        "result": {
+            "Ok": {
+                "recording_directory": "/recordings/session",
+                "files": ["session.qmd", "session.md", "images/image-000001.png"],
+            }
+        },
+    },
+    {"kind": "session_chunk_exported", "result": {"Err": "file unavailable"}},
+    {"kind": "session_chunk_exported", "result": {"Ok": "Y2h1bms="}},
+    {"kind": "session_chunk_exported", "result": {"Ok": None}},
 ]
 
 

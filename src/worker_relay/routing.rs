@@ -15,8 +15,8 @@ impl From<RelayCommand> for Operation {
     fn from(command: RelayCommand) -> Self {
         let message = match command {
             RelayCommand::SessionExported { result } => ServerMessage::SessionExported { result },
-            RelayCommand::SessionImageExported { result } => {
-                ServerMessage::SessionImageExported { result }
+            RelayCommand::SessionChunkExported { result } => {
+                ServerMessage::SessionChunkExported { result }
             }
             RelayCommand::Evaluate { language, source } => {
                 ServerMessage::Evaluate { language, source }

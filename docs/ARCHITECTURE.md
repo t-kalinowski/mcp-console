@@ -378,11 +378,13 @@ Permission errors use recording diagnostics, not computation errors.
 
 Runtime export uses the existing worker sideband to request a snapshot ending before the current cell began.
 The server reconstructs source and report content in two streaming passes over capture, excluding the exporting call.
-The first retains source, dependency metadata, and cell/session/delivery associations; the second assembles the displayed results.
-Each event is discarded after processing, so raw output chunk counts and historical stdin do not accumulate in reconstruction memory.
+The first spools source and retains dependency metadata, journal offsets, and cell/session/delivery associations; the second spools the displayed results by interval.
+Each event is discarded after processing, so raw output chunk counts, historical stdin, and complete document contents do not accumulate in reconstruction memory.
+Memory covers one journal record plus association and file indexes; temporary storage holds the reconstructed documents until the callback completes or retires.
 It receives no destination path.
 The worker writes the returned content under its existing sandbox and filesystem permissions.
-Image payloads cross the sideband one at a time, requested after the preceding image has been written; the server retains their snapshot paths rather than buffering every image.
+Documents and images cross the sideband in at most 64 KiB decoded chunks, requested after the worker writes the preceding chunk.
+The server supplies an ordered file list and retains only its selected spool and image paths between requests.
 No interpreter, SQL query, plot replay, or Quarto process participates in reconstruction.
 
 A journal or artifact failure disables further recording without stopping computation.

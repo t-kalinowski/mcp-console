@@ -43,8 +43,8 @@ The source enums are the complete schema; these are the principal message famili
 | From worker | Readiness/lifecycle  | `ready`, `runtime_initialized`, `r_initialization`, `cell_started`, `completed`                                                                   |
 | From worker | Output/input         | `console_output`, `console_diagnostic`, `image`, `input_requested`, `input_received`, `input_cancelled`                                           |
 | From worker | Preparation results  | `r_prepared`, `r_preparation_failed`, `python_prepared`, `python_preparation_failed`, `python_preparation_rejected`                               |
-| To worker   | Session export       | `session_exported`, `session_image_exported`                                                                                                      |
-| From worker | Session export       | `export_session`, `export_image`                                                                                                                  |
+| To worker   | Session export       | `session_exported`, `session_chunk_exported`                                                                                                      |
+| From worker | Session export       | `export_session`, `export_chunk`                                                                                                                  |
 | From worker | Resolver requests    | `resolve_r`, `resolve_python`, `resolve_python_version`                                                                                           |
 | From worker | Activation receipts  | `r_activated`, `r_activation_failed`, `python_activated`, `python_activation_failed`                                                              |
 
@@ -196,11 +196,14 @@ It establishes the observed execution interval; receipt of `evaluate` alone does
 `completed` ends that interval, while later observed text belongs to the post-cell interval.
 
 An executing runtime helper sends payload-free `export_session`.
-The server replies with `session_exported`, carrying `result` as source, report text, and an ordered list of image names, or an error string.
-The worker requests each image with payload-free `export_image` and receives one base64 payload or error in `session_image_exported.result`.
-It writes that image before requesting the next; the server retains only the snapshot's ordered image paths between requests.
+The server replies with `session_exported`, carrying `result` as the managed recording location and an ordered list of relative output filenames, or an error string.
+The worker requests each file with payload-free `export_chunk` calls and receives base64 payloads of at most 64 KiB decoded data in `session_chunk_exported.result`.
+A successful `null` result ends the current file; the next request begins the next file.
+The worker writes each chunk before requesting another; documents and images are never bundled as complete payloads.
+The server spools reconstructed documents in private temporary storage and retains the snapshot's image paths.
+Callback completion, replacement, or shutdown releases those temporary files and open readers.
 The worker supplies neither capture paths nor export destinations to the server.
-The bundle contains reconstructed QMD, Markdown, image names, and the managed recording location used to reject export destinations inside it.
+The managed recording location lets the worker reject export destinations inside it.
 No destination path crosses to the server.
 The worker writes a new writable directory using its ordinary filesystem authority.
 Export shares the generation-owned command and callback lifetime; it does not initialize another runtime or replay source.

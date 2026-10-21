@@ -186,7 +186,7 @@ fn resolve_python_candidate(
         | ServerMessage::PythonVersionResolutionFailed { .. } => Err(infrastructure_failure(
             "worker received a Python version response while resolving Python".to_string(),
         )),
-        ServerMessage::SessionExported { .. } | ServerMessage::SessionImageExported { .. } => Err(
+        ServerMessage::SessionExported { .. } | ServerMessage::SessionChunkExported { .. } => Err(
             infrastructure_failure("unexpected session export response".into()),
         ),
         ServerMessage::Shutdown => {
@@ -240,7 +240,7 @@ pub(crate) fn resolve_r(
             };
             Ok(ResolutionOutcome::Failed { failure, message })
         }
-        ServerMessage::SessionExported { .. } | ServerMessage::SessionImageExported { .. } => Err(
+        ServerMessage::SessionExported { .. } | ServerMessage::SessionChunkExported { .. } => Err(
             infrastructure_failure("unexpected session export response".into()),
         ),
         ServerMessage::Shutdown => {
@@ -276,7 +276,7 @@ pub(crate) fn resolve_python_version(
     match receive_resolver_message().map_err(infrastructure_failure)? {
         ServerMessage::PythonVersionResolved { version } => Ok(version),
         ServerMessage::PythonVersionResolutionFailed { message } => Err(message),
-        ServerMessage::SessionExported { .. } | ServerMessage::SessionImageExported { .. } => Err(
+        ServerMessage::SessionExported { .. } | ServerMessage::SessionChunkExported { .. } => Err(
             infrastructure_failure("unexpected session export response".into()),
         ),
         ServerMessage::Shutdown => {
@@ -393,15 +393,15 @@ pub(crate) fn export_session(
     send_worker_message(&WorkerMessage::ExportSession)?;
     match receive_resolver_message()? {
         ServerMessage::SessionExported { result } => result?.write(directory, || {
-            send_worker_message(&WorkerMessage::ExportImage)?;
+            send_worker_message(&WorkerMessage::ExportChunk)?;
             match receive_resolver_message()? {
-                ServerMessage::SessionImageExported { result } => result,
+                ServerMessage::SessionChunkExported { result } => result,
                 ServerMessage::Shutdown => {
                     mark_shutting_down();
                     Err("session export interrupted by shutdown".into())
                 }
                 _ => Err(infrastructure_failure(
-                    "unexpected response while exporting an image".into(),
+                    "unexpected response while exporting a file".into(),
                 )),
             }
         }),

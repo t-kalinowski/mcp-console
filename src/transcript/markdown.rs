@@ -322,6 +322,18 @@ impl QuartoWriter {
     fn has_source(&self) -> bool {
         self.sources.iter().any(|s| !s.language.is_empty())
     }
+    pub(super) fn take_source(&mut self) -> String {
+        let mut document = String::new();
+        for source in self.sources.drain(..) {
+            push_quarto_fence(
+                &mut document,
+                &format!("{{{}}}", source.language),
+                source.language,
+                &source.contents,
+            );
+        }
+        document
+    }
     pub(super) fn render(&self, filename: &str) -> String {
         let mut document = String::from(
             "---\n# Source recorded by MCP Console; review before executing.\ntitle: MCP Console session\n",
