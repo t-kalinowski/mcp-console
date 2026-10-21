@@ -47,7 +47,7 @@ CACHE_VARIABLES = (
 
 
 @requires(LINUX_SANDBOX, command("uv"), command("rustc"))
-def test_overlapping_resolvers_preserve_shared_cache_metadata(
+def test_overlapping_resolvers_share_writable_cache(
     binary: Path,
 ) -> Transcript:
     for host in (True, False):
@@ -62,7 +62,6 @@ def test_overlapping_resolvers_preserve_shared_cache_metadata(
                 python,
                 # fmt: python
                 code("""
-                    import errno
                     import os
                     from pathlib import Path
 
@@ -75,13 +74,10 @@ def test_overlapping_resolvers_preserve_shared_cache_metadata(
                             with (state / "release").open("rb", buffering=0) as release:
                                 assert release.read(1) == b"1"
                         cache = Path(os.environ["CACHE_TEST_SHARED"])
-                        for name in (".git", ".agents", ".codex"):
-                            try:
-                                (cache / name / "created").mkdir(parents=True)
-                            except OSError as error:
-                                assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
-                            else:
-                                raise AssertionError("shared cache metadata became writable")
+                        for name in (".git", ".agents", ".codex", ".aws"):
+                            directory = cache / name
+                            directory.mkdir(exist_ok=True)
+                            directory.joinpath(state.name).write_text("prepared")
                         cache.joinpath("ordinary-cache-file").write_text("prepared")
                         temporary = Path(os.environ["TMPDIR"])
                         assert temporary.is_relative_to(os.environ["CACHE_TEST_TEMP"])
@@ -133,24 +129,24 @@ def test_overlapping_resolvers_preserve_shared_cache_metadata(
                 client.initialize_and_list_tools()
                 started.wait("resolver reached shared cache", timeout=60, client=client)
                 clients.append((client, release))
+            for name in (".git", ".agents", ".codex", ".aws"):
+                assert not (cache / name).exists(), f"sandbox created {name}"
             first, first_release = clients[0]
             second, second_release = clients[1]
             first_release.release()
             first.expect("ready\n", python="print('ready')")
             first.finish()
-            # The second resolver is still inside the native sandbox. First
-            # retirement must preserve its mounts and their write denials.
-            for name in (".git", ".agents", ".codex"):
-                assert (cache / name).is_dir(), f"first retirement removed {name}"
+            # The second resolver is still inside the native sandbox. Retiring
+            # the first must preserve its data and the survivor's full grant.
+            for name in (".git", ".agents", ".codex", ".aws"):
+                assert (cache / name / "first").read_text() == "prepared"
             second_release.release()
             second.expect("ready\n", python="print('ready')")
             second.finish()
-            for name in (".git", ".agents", ".codex"):
-                assert (cache / name).is_dir(), (
-                    f"cache metadata did not survive: {name}"
-                )
-                assert not list((cache / name).iterdir())
-    return [{"host_and_managed_cache_metadata_survives_overlapping_resolvers": True}]
+            for name in (".git", ".agents", ".codex", ".aws"):
+                for owner in ("first", "second"):
+                    assert (cache / name / owner).read_text() == "prepared"
+    return [{"overlapping_resolvers_retain_full_host_and_managed_cache_writes": True}]
 
 
 @requires(SANDBOX, command("uv"), command("rustc"))
@@ -452,10 +448,10 @@ def test_managed_python_and_duckdb_stay_in_console_cache(binary: Path) -> Transc
 
 
 @requires(SANDBOX, command("uv"), command("rustc"))
-def test_resolver_cache_roots_keep_metadata_read_only(binary: Path) -> Transcript:
+def test_resolver_cache_roots_allow_metadata_writes(binary: Path) -> Transcript:
     for host, source in ((False, "environment"), (True, "config")):
         cache_locations(binary, host=host, sources=(source,), metadata=True)
-    return [{"resolver_cache_root_metadata_read_only": True}]
+    return [{"resolver_cache_root_metadata_writable": True}]
 
 
 @requires(SANDBOX, command("git"), command("uv"), command("rustc"))
@@ -628,7 +624,7 @@ def cache_locations(
                 for name in (".git", ".agents", ".codex", ".aws"):
                     directory = metadata_root / name
                     directory.mkdir(parents=True)
-                    (directory / "keep").write_text("protected metadata")
+                    (directory / "keep").write_text("cache contents")
             if source in ("isolated", "path_isolated"):
                 settings["environment"]["CACHE_TEST_EXPECTED"] = env[
                     "CACHE_TEST_EXPECTED"
@@ -677,13 +673,14 @@ def cache_locations(
                     if {metadata!r}:
                         for name in (".git", ".agents", ".codex", ".aws"):
                             file = Path(os.environ["CACHE_TEST_METADATA_ROOT"]) / name / "keep"
-                            assert file.read_text() == "protected metadata"
-                            try:
-                                file.write_text("overwritten")
-                            except OSError as error:
-                                assert error.errno in (errno.EACCES, errno.EPERM, errno.EROFS), error
-                            else:
-                                raise AssertionError("resolver wrote to cache root metadata")
+                            assert file.read_text() == "cache contents"
+                            file.write_text("updated")
+                            assert file.read_text() == "updated"
+                            file.write_text("cache contents")
+                            nested = file.parent / ".git"
+                            nested.mkdir(exist_ok=True)
+                            nested.joinpath("new").write_text("created")
+                            nested.joinpath("new").unlink()
                         cache.joinpath("metadata-check-passed").write_text("checked")
                     if {git_dependency is not None!r}:
                         result = subprocess.run(
@@ -750,7 +747,7 @@ def cache_locations(
                 for name in (".git", ".agents", ".codex", ".aws"):
                     assert (
                         metadata_root / name / "keep"
-                    ).read_text() == "protected metadata"
+                    ).read_text() == "cache contents"
             if host and source == "platform":
                 assert (
                     Path(env["CACHE_TEST_MATPLOTLIB"])
