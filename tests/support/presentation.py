@@ -38,14 +38,25 @@ def assert_tool_guidance(tool: dict, languages: set[str], *, custom: bool) -> No
         "imports, data inputs",
         "without live Console objects",
     ):
-        assert (instruction in description) == (not custom and "r" in languages)
+        r_description = (
+            tool["inputSchema"]["properties"].get("r", {}).get("description", "")
+        )
+        assert (instruction in r_description) == (not custom and "r" in languages)
     for instruction in (
         "An error can leave earlier changes in place",
         "do not resubmit the cell",
         "use only trusted dependencies",
     ):
         assert instruction in description, description
-    assert ("Switch languages when useful" in description) == (len(languages) > 1)
+    switching = (
+        "Switch languages when useful"
+        if custom
+        else "Choose the language that expresses each step"
+    )
+    assert (switching in description) == (len(languages) > 1)
+    assert ("reticulate within an R cell" in description) == (
+        not custom and {"r", "python"} <= languages
+    )
     properties = tool["inputSchema"]["properties"]
     assert "discards" in properties["control"]["description"]
     assert "not rolled back" in " ".join(

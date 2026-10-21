@@ -258,16 +258,20 @@ def _configured_language_matrix(binary: Path) -> Transcript:
                 cell_guidance = paragraphs[1].split(" cell per call", 1)[0]
                 assert set(re.findall(r"`(r|python|sql)`", cell_guidance)) == fields
                 assert "on Windows" not in description
-                assert (R_SCRIPT_GUIDANCE in description) == ("r" in fields)
-                assert ("Switch languages when useful" in description) == (
-                    len(fields) > 1
-                )
+                assert (
+                    R_SCRIPT_GUIDANCE in properties.get("r", {}).get("description", "")
+                ) == ("r" in fields)
+                assert (
+                    "Choose the language that expresses each step" in description
+                ) == (len(fields) > 1)
                 for field, guidance in (
                     ("r", "Use R for vectorized data"),
                     ("python", "Use Python when its libraries"),
                     ("sql", "consider DuckDB SQL first"),
                 ):
-                    assert (guidance in description) == (field in fields)
+                    assert (guidance in description) == (
+                        field in fields and not {"r", "python"} <= fields
+                    )
                 if enabled == languages[0]:
                     baseline = tool
                 else:

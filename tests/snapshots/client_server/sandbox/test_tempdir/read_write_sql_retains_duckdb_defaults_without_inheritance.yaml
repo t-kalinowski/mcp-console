@@ -39,9 +39,10 @@ result:
         automatically; supported plots return as images.
 
 
-        For databases and structured files, consider DuckDB SQL first for
-        inspection, joins, and aggregation. Use Python when its libraries or
-        format-specific parsing simplify the task. Switch languages when useful.
+        Choose the language that expresses each step most clearly, even when
+        earlier steps used another language. For databases and structured files,
+        consider DuckDB SQL first for inspection, joins, and aggregation. Use
+        Python when its libraries or format-specific parsing simplify the task.
 
 
         DuckDB can query CSV, Parquet, JSON, and JSONL directly, including

@@ -38,7 +38,13 @@ pub(super) const R_SCRIPT: &str = r#"For a reusable R script, include imports, d
 pub(super) const PYTHON_SELECTION: &str =
     "Use Python when its libraries or format-specific parsing simplify the task. ";
 
-pub(super) const SWITCHING: &str = "Switch languages when useful.";
+pub(super) const SWITCHING: &str = "Choose the language that expresses each step most clearly, even when earlier steps used another language.";
+
+pub(super) const R_PYTHON_CELLS: &str = " Switch between R and Python cells";
+
+pub(super) const R_PYTHON_SQL_CELLS: &str = " Switch between R, Python, and SQL cells";
+
+pub(super) const R_PYTHON_WORKFLOW: &str = ", reusing results through the language bridges, or use reticulate within an R cell to combine R expressions with Python objects and function calls. For example, read a specialized format with a Python library, then continue with an R data frame to transform or summarize the data, fit a statistical model, or make a plot.";
 
 pub(super) const SQL_FILES: &str =
     "DuckDB can query CSV, Parquet, JSON, and JSONL directly, including nested JSON. ";
