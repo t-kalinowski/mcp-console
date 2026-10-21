@@ -1,12 +1,13 @@
 """Gate public runtime discovery and observe its descendant's retirement."""
 
 import os
+import select
 import shutil
 import socket
 import subprocess
 import tempfile
 from collections.abc import Iterator
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from pathlib import Path
 
 from support.resolvers import bare_runtime_environment
@@ -16,16 +17,31 @@ if os.name == "nt":
 
 
 class DiscoveryGate:
-    def __init__(self, root: Path, listener: socket.socket) -> None:
+    def __init__(self, root: Path, listener: socket.socket | None) -> None:
         self.root = root
         self.executable = root / ("R.exe" if os.name == "nt" else "R")
         self.listener = listener
         self.connection: socket.socket | None = None
         self.process: int | None = None
         self.released = False
+        self.lifetime: int | None = None
+        self.proceed: int | None = None
+        if os.name != "nt":
+            # The sandbox has its own loopback namespace. Filesystem FIFOs keep
+            # this control gate independent of its network permissions.
+            os.mkfifo(root / "lifetime")
+            os.mkfifo(root / "release")
+            self.lifetime = os.open(root / "lifetime", os.O_RDONLY | os.O_NONBLOCK)
+            self.proceed = os.open(root / "release", os.O_RDWR | os.O_NONBLOCK)
 
     def wait(self, description: str) -> None:
         assert self.connection is None, description
+        if os.name != "nt":
+            readable, _, _ = select.select([self.lifetime], [], [], 10)
+            assert readable, description
+            assert len(os.read(self.lifetime, 4)) == 4, description
+            return
+        assert self.listener is not None
         self.connection, _ = self.listener.accept()
         self.connection.settimeout(5)
         identity = b""
@@ -42,8 +58,11 @@ class DiscoveryGate:
 
     def release(self) -> None:
         if not self.released:
-            assert self.connection is not None
-            self.connection.sendall(b"1")
+            if os.name == "nt":
+                assert self.connection is not None
+                self.connection.sendall(b"1")
+            else:
+                assert os.write(self.proceed, b"1") == 1
             self.released = True
 
     def assert_retired(self) -> None:
@@ -53,10 +72,14 @@ class DiscoveryGate:
                 _winapi.WaitForSingleObject(self.process, 5000) == _winapi.WAIT_OBJECT_0
             ), "discovery survived MCP closure"
         else:
-            assert self.connection is not None
-            assert self.connection.recv(1) == b"", "discovery survived MCP closure"
+            readable, _, _ = select.select([self.lifetime], [], [], 5)
+            assert readable, "discovery survived MCP closure"
+            assert os.read(self.lifetime, 1) == b"", "discovery survived MCP closure"
 
     def close(self) -> None:
+        for descriptor in (self.lifetime, self.proceed):
+            if descriptor is not None:
+                os.close(descriptor)
         if self.connection is not None:
             self.connection.close()
         if self.process is not None:
@@ -69,13 +92,14 @@ def discovery_environment(
 ) -> Iterator[tuple[dict[str, str], DiscoveryGate]]:
     with (
         tempfile.TemporaryDirectory(prefix="console discovery ") as temporary,
-        closing(socket.socket()) as listener,
+        closing(socket.socket()) if os.name == "nt" else nullcontext() as listener,
     ):
         root = Path(temporary)
-        listener.bind(("127.0.0.1", 0))
-        listener.listen(1)
-        listener.settimeout(10)
-        (root / "address").write_text(f"127.0.0.1:{listener.getsockname()[1]}")
+        if listener is not None:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            listener.settimeout(10)
+            (root / "address").write_text(f"127.0.0.1:{listener.getsockname()[1]}")
         (root / "failure").write_text("fixture R discovery failed")
         if r_home is not None:
             (root / "r-home").write_text(str(r_home), encoding="utf-8")
