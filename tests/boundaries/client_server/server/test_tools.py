@@ -444,10 +444,13 @@ def _initializes_and_lists_tools(
                         "consider DuckDB SQL first"
                     )
                 assert "Results display automatically" in description
-                assert "CSV, Parquet, JSON, and JSONL directly" in description
+                assert "CSV, Parquet, JSON/JSONL file globs" in description
+                assert "databases via extensions" in description
                 sql_description = send["inputSchema"]["properties"]["sql"][
                     "description"
                 ]
+                assert "read_json('data/*.json*')" in sql_description
+                assert "as tables, including nested fields" in sql_description
                 assert (
                     "bounded table previews that abbreviate long text cells"
                     in sql_description

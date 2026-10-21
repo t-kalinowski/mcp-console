@@ -66,9 +66,12 @@ def assert_tool_guidance(tool: dict, languages: set[str], *, custom: bool) -> No
         assert "does not supply built-in runtime packages" in description
         assert "Managed requirements need" in description
     elif "sql" in languages:
-        assert "CSV, Parquet, JSON, and JSONL directly" in description
+        assert "CSV, Parquet, JSON/JSONL file globs" in description
+        assert "databases via extensions" in description
         assert "provider" not in description.lower()
         sql = properties["sql"]["description"]
+        assert "read_json('data/*.json*')" in sql
+        assert "as tables, including nested fields" in sql
         assert "selected driver supplies its own SQL" in sql
         assert "CLI dot commands are not supported" in sql
         assert ("With R-owned managed DuckDB" in sql) == ("r" in languages)

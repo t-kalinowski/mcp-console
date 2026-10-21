@@ -67,6 +67,13 @@ Custom workers describe switching through their own capabilities without promisi
 The paragraph replaces the separate R/Python/SQL selection advice when both R and Python are exposed.
 Reusable R script instructions belong in the R parameter description.
 
+When SQL is exposed, follow with a short reminder of DuckDB's file and database access:
+
+> DuckDB can query CSV, Parquet, JSON/JSONL file globs, and databases via extensions.
+
+The SQL field illustrates reading file sets as tables, including nested fields, with `read_json('data/*.json*')`.
+Keep the result-retrieval helpers and connection ownership rules in the language fields.
+
 Give each fact one primary home:
 
 | Location        | Information                                                                                            |

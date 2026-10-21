@@ -48,8 +48,8 @@ result:
         the data, fit a statistical model, or make a plot.
 
 
-        DuckDB can query CSV, Parquet, JSON, and JSONL directly, including
-        nested JSON.
+        DuckDB can query CSV, Parquet, JSON/JSONL file globs, and databases via
+        extensions.
 
 
         Run one cell at a time. Wait for its `send` to return before another
@@ -152,11 +152,12 @@ result:
               its own SQL dialect and types. With R-owned managed DuckDB, query R data
               frames by name; DuckDB tables/views take precedence. Use DBI from an R
               cell for commands requiring the statement interface. Managed
-              conveniences/extensions apply only to DuckDB. Read SQLite with `ATTACH
-              'path' AS name (TYPE sqlite, READ_ONLY)`. With a sandbox, attach
-              existing DuckDB databases outside writable paths using `ATTACH 'path' AS
-              name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`, `SUMMARIZE`, or
-              `EXPLAIN`; CLI dot commands are not supported.
+              conveniences/extensions apply only to DuckDB. Read JSON/JSONL file globs
+              as tables, including nested fields, with `read_json('data/*.json*')`.
+              Read SQLite with `ATTACH 'path' AS name (TYPE sqlite, READ_ONLY)`. With
+              a sandbox, attach existing DuckDB databases outside writable paths using
+              `ATTACH 'path' AS name (READ_ONLY)`. Use `SHOW TABLES`, `DESCRIBE`,
+              `SUMMARIZE`, or `EXPLAIN`; CLI dot commands are not supported.
             type:
               - string
               - "null"
