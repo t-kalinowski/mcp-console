@@ -66,6 +66,8 @@ pub(super) enum Event<'a> {
         bytes: usize,
         discarded_bytes: usize,
     },
+    /// Rejected before image retention: no artifact or image file was created.
+    /// Retained images have an ArtifactCreated event with their file path.
     ImageOmitted {
         owner: Option<super::Owner>,
         encoded_bytes: usize,
