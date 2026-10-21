@@ -30,6 +30,7 @@ try:
         relay.retire(command)
     elif mode == "invalid_completion":
         relay.send({"kind": "input_requested", "prompt": "pending> "})
+        gate("release")
         relay.send({"kind": "completed"})
         relay.retire()
     elif mode == "late_entry":

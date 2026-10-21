@@ -102,8 +102,16 @@ def await_event(
 
 @requires(POSIX)
 def test_invalid_completion_does_not_confirm_cell_end(binary: Path) -> Transcript:
-    with capture_relay(binary, "invalid_completion") as (client, root, _):
-        result = client.send(r="invalid completion", timeout_ms=60000)
+    with capture_relay(binary, "invalid_completion") as (client, root, gates):
+        prompt = client.send(r="invalid completion", timeout_ms=60000)
+        assert (
+            tool_text(prompt) == '[input requested: "pending> "]\n[waiting for stdin]'
+        ), prompt
+        gates["release"].release()
+        await_event(
+            client, root, "worker_started", lambda event: event["session_id"] == 2
+        )
+        result = client.send(timeout_ms=60000)
         text = result["content"][0]["text"]
         assert result["isError"], result
         assert "worker completed with an outstanding input request" in text, text
