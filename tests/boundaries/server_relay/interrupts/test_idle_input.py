@@ -44,6 +44,7 @@ def test_withholding_attached_cell_preserves_idle_input(
                     build_interposer(root, "cell_attachment_checkpoint")
                 ),
                 "MCP_CONSOLE_TEST_CELL_ATTACHED": str(attached.path),
+                "MCP_CONSOLE_TEST_ADMISSION_SOURCE": "withheld cell",
                 "MCP_CONSOLE_TEST_CELL_RELEASE": str(release.path),
             }
         )

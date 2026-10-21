@@ -50,6 +50,9 @@ impl ExportContents {
 
 impl Transcript {
     pub(crate) fn export_session(&self) -> Result<(SessionExport, ExportContents), String> {
+        // Cell entry is queued before this callback. Flush it through the
+        // recorder's normal failure owner before selecting the snapshot.
+        self.update(|_| Ok(()));
         let (state, poisoned) = self.lock();
         if poisoned {
             return Err("session capture lock poisoned".into());
@@ -58,22 +61,13 @@ impl Transcript {
             return Err(format!("session capture unavailable: {error}"));
         }
         let active = state.active.as_ref().ok_or("session capture unavailable")?;
-        let owner = active
-            .owner
-            .filter(|o| o.interval == Interval::Cell)
+        let (call, owner, snapshot_sequence) = active
+            .cell_snapshot
             .ok_or("session export requires an executing cell")?;
-        let call = active
-            .cell_call
-            .ok_or("session export has no calling cell")?;
-        if active.temporary.is_some() {
+        if !active.published {
             return Err("session recording has not been activated".into());
         }
-        reconstruct(
-            &active.directory,
-            owner.session_id,
-            active.snapshot_sequence,
-            call,
-        )
+        reconstruct(&active.directory, owner.session_id, snapshot_sequence, call)
     }
 }
 
@@ -194,7 +188,7 @@ fn reconstruct(
         let call_id = event["call_id"].as_u64();
         if matches!(
             event["event"].as_str(),
-            Some("output_text" | "artifact_created")
+            Some("output_text" | "image_retained")
         ) {
             let owner: Owner =
                 serde_json::from_value(event["owner"].clone()).map_err(|e| e.to_string())?;

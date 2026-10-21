@@ -40,7 +40,7 @@ live journal:
     - cell_output
     - tool_result
   unpolled image:
-    event: artifact_created
+    event: image_retained
     path: capture/sessions/001/cell-002-001.png
     data: <byte-identical decoded PNG>
   later poll result:

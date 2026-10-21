@@ -12,7 +12,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.checkpoints import FifoCheckpoint, wait_for_worker_file
+from support.checkpoints import (
+    FifoCheckpoint,
+    wait_for_worker_file,
+    wait_for_checkpoint,
+)
 from support.client import McpClient
 from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -279,6 +283,25 @@ def test_retains_received_send_while_an_earlier_response_finishes(
                     "content": [{"type": "text", "text": "first response\n"}],
                     "isError": False,
                 }
+                # A received frame can precede completion of its local write.
+                # Establish delivery before releasing the second handler.
+                (recording,) = (workspace / ".agents/console/sessions").iterdir()
+                wait_for_checkpoint(
+                    lambda: (
+                        recording
+                        if any(
+                            event["event"] == "delivery"
+                            and event["call_id"] == 1
+                            and event["delivered"]
+                            for event in recording_events(recording)
+                        )
+                        else None
+                    ),
+                    "first response transport write settled",
+                    root=recording,
+                    recursive=True,
+                    client=client,
+                )
                 gates["recording-release"].release()
                 client.receive(second)
                 assert second["result"] == {
@@ -388,7 +411,7 @@ def test_first_rejected_send_publishes_the_observed_prelude(
                     LOADER_VARIABLE: str(
                         build_interposer(root, "recording_observation")
                     ),
-                    "MCP_CONSOLE_TEST_OBSERVED_EVENT": "artifact_created",
+                    "MCP_CONSOLE_TEST_OBSERVED_EVENT": "image_retained",
                     "MCP_CONSOLE_TEST_JOURNAL_OBSERVED": str(observed.path),
                 }
             )
@@ -414,14 +437,14 @@ def test_first_rejected_send_publishes_the_observed_prelude(
                         "recording_started",
                         "worker_started",
                         "worker_ready",
-                        "artifact_created",
+                        "image_retained",
                     }
                 ]
                 assert [e["event"] for e in prelude] == [
                     "recording_started",
                     "worker_started",
                     "worker_ready",
-                    "artifact_created",
+                    "image_retained",
                 ]
                 assert all(
                     datetime.fromisoformat(e["at"]) < before_send for e in prelude
@@ -433,7 +456,7 @@ def test_first_rejected_send_publishes_the_observed_prelude(
                 assert (
                     recording / "capture/sessions/001/startup.txt"
                 ).read_text() == "retained startup text\n"
-                image = next(e for e in prelude if e["event"] == "artifact_created")
+                image = next(e for e in prelude if e["event"] == "image_retained")
                 assert (recording / image["path"]).read_bytes() == expected_image
                 assert not client.send()["isError"]
                 assert not client.send(stdin="unused input")["isError"]

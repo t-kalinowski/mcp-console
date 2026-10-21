@@ -2,8 +2,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use super::{CaptureFile, Event, Interval, Owner, Transcript};
-use chrono::Utc;
+use super::{CaptureFile, Owner, Transcript, queue::QueuedEvent};
 
 pub(super) const MAX_CELL_OUTPUT_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -25,11 +24,11 @@ pub(crate) struct CellOutput {
     retention_limit_reported: bool,
 }
 
-#[derive(Clone, Copy, Default, PartialEq)]
-struct CellOutputSummary {
-    retained_bytes: u64,
-    inline_omitted_bytes: u64,
-    discarded_bytes: u64,
+#[derive(Clone, Copy, Default, PartialEq, serde::Serialize)]
+pub(super) struct CellOutputSummary {
+    pub(super) retained_bytes: u64,
+    pub(super) inline_omitted_bytes: u64,
+    pub(super) discarded_bytes: u64,
 }
 
 /// One response interval's accounting receipt, shared with delivery recovery.
@@ -95,70 +94,21 @@ impl Transcript {
         &self,
         call_id: Option<u64>,
     ) -> Result<Option<CellOutput>, String> {
-        let Some(call_id) = call_id else {
+        if self.start_cell(call_id).is_none() {
             return Ok(None);
-        };
-        self.update(|state| {
-            let active = state.capture()?;
-            let Some(previous) = active.owner else {
-                return Ok(());
-            };
-            let owner = Owner {
-                session_id: previous.session_id,
-                cell_id: Some(previous.cell_id.unwrap_or(0) + 1),
-                interval: Interval::Cell,
-            };
-            active.snapshot_sequence = active.sequence;
-            active.cell_call = Some(call_id);
-            active.owner = Some(owner);
-            active.image_number = 0;
-            active.associate(call_id, owner.session_id)?;
-            active.append(Event::CellStarted { call_id, owner }, Utc::now())
-        });
-        self.create_output(Some(call_id))
-    }
-    pub(crate) fn end_cell(&self, completion_confirmed: bool) {
-        self.update(|state| {
-            let active = state.capture()?;
-            if let Some(owner) = active.owner.filter(|o| o.interval == Interval::Cell) {
-                if let Some(call_id) = active.cell_call.take() {
-                    active.append(
-                        Event::CellEnded {
-                            call_id,
-                            owner,
-                            completion_confirmed,
-                        },
-                        Utc::now(),
-                    )?;
-                }
-                active.owner = Some(Owner {
-                    interval: Interval::Post,
-                    ..owner
-                });
-                active.image_number = 0;
-            }
-            Ok(())
-        });
+        }
+        self.create_output(call_id)
     }
     fn create_output(&self, call_id: Option<u64>) -> Result<Option<CellOutput>, String> {
-        let (mut state, poisoned) = self.lock();
-        if poisoned {
-            return Err("transcript lock poisoned while creating cell output".into());
-        }
-        if state.failure.is_some() {
-            return Ok(None);
-        }
-        self.flush_protocol(&mut state)?;
-        let active = state.capture()?;
-        let Some(owner) = active.owner else {
+        let Some(owner) = self.owner() else {
             return Ok(None);
         };
         let path = owner.path(".txt");
-        let file = active.capture_file(&path)?;
+        let file = self.3.create_file(&path)?;
         Ok(Some(CellOutput {
             file,
             path: path.clone(),
-            public_directory: active.public_directory.clone(),
+            public_directory: self.3.public_directory.clone(),
             owner,
             transcript: self.clone(),
             failed: false,
@@ -176,7 +126,6 @@ impl Transcript {
             retention_limit_reported: false,
         }))
     }
-
     fn record_cell_output(
         &self,
         call_id: Option<u64>,
@@ -184,27 +133,11 @@ impl Transcript {
         path: &str,
         summary: CellOutputSummary,
     ) {
-        self.update(|state| {
-            let event = match call_id {
-                Some(call_id) => Event::CellOutput {
-                    owner,
-                    call_id,
-                    path,
-                    retained_bytes: summary.retained_bytes,
-                    inline_omitted_bytes: summary.inline_omitted_bytes,
-                    discarded_bytes: summary.discarded_bytes,
-                    retention_limit_bytes: MAX_CELL_OUTPUT_BYTES,
-                },
-                None => Event::SessionOutput {
-                    owner,
-                    path,
-                    retained_bytes: summary.retained_bytes,
-                    inline_omitted_bytes: summary.inline_omitted_bytes,
-                    discarded_bytes: summary.discarded_bytes,
-                    retention_limit_bytes: MAX_CELL_OUTPUT_BYTES,
-                },
-            };
-            state.capture()?.append(event, Utc::now())
+        self.queue_event(QueuedEvent::OutputSummary {
+            call_id,
+            owner,
+            path: path.to_owned(),
+            summary,
         });
     }
 }
@@ -289,17 +222,12 @@ impl CellOutput {
     }
 
     fn text_event(&self, offset: u64, bytes: usize, discarded_bytes: usize) {
-        self.transcript.update(|state| {
-            state.capture()?.append(
-                Event::OutputText {
-                    owner: self.owner,
-                    path: &self.path,
-                    offset,
-                    bytes,
-                    discarded_bytes,
-                },
-                Utc::now(),
-            )
+        self.transcript.queue_event(QueuedEvent::OutputText {
+            owner: self.owner,
+            path: self.path.clone(),
+            offset,
+            bytes,
+            discarded_bytes,
         });
     }
     pub(crate) fn flush(&mut self) -> Option<String> {

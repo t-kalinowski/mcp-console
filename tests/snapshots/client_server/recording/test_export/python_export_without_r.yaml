@@ -47,7 +47,7 @@ result:
       text: |
         startup result
         Traceback (most recent call last):
-          File "<string>", line 496, in initialize_connection
+          File "<string>", line 499, in initialize_connection
         RuntimeError: startup must select a native connection with _console.sql_connection(connection)
         Error: configured startup did not complete; SQL withheld; explicit restart required
         original result
@@ -92,7 +92,7 @@ result:
       text: |
         Traceback (most recent call last):
           File "<mcp-console:python:e5>", line 1, in <module>
-          File "<string>", line 373, in export_session
+          File "<string>", line 376, in export_session
         RuntimeError: cannot create export destination report (it must not already exist): File exists (os error 17)
   isError: false
 ---
@@ -107,7 +107,7 @@ result:
         [starting new worker]
         startup result
         Traceback (most recent call last):
-          File "<string>", line 496, in initialize_connection
+          File "<string>", line 499, in initialize_connection
         RuntimeError: startup must select a native connection with _console.sql_connection(connection)
         Error: configured startup did not complete; SQL withheld; explicit restart required
         replacement result

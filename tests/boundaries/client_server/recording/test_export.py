@@ -11,10 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
-from support.checkpoints import release_fixture_checkpoint
 from support.normalization import code
 from support.progress import normalize_elapsed
-from boundaries.client_server._harness import wait_for_marker
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.assertions import last_result_text
 from support.requirements import POSIX, R, SQL, requires
@@ -335,7 +333,7 @@ def test_exports_recorded_image_formats(
             (jpeg,) = [
                 event
                 for event in events(recording)
-                if event["event"] == "artifact_created"
+                if event["event"] == "image_retained"
                 and event["mime_type"] == "image/jpeg"
             ]
             assert Path(jpeg["path"]).suffix == ".bin", jpeg
@@ -442,89 +440,6 @@ def test_r_export_without_python_initialization(
             assert "counter <- 1L" in qmd and "export_session" not in qmd
             assert "original R result" in md
             return normalized(client.finish(), workspace)
-
-
-@requires(POSIX)
-@executions(DIRECT, SANDBOXED)
-def test_cell_intervals_and_empty_cells(
-    binary: Path, execution: Execution
-) -> Transcript:
-    zod = Path(__file__).resolve().parents[3] / "fixtures/zod"
-    with tempfile.TemporaryDirectory() as directory:
-        workspace = Path(directory)
-        with McpClient(
-            binary,
-            execution.serve("--worker", str(zod)),
-            {**os.environ, "TMPDIR": directory, "ZOD_RECORDING_INTERVALS": "1"},
-            current_directory=workspace,
-        ) as client:
-            client.initialize_and_list_tools()
-            client.send(r="record intervals")
-            post = wait_for_marker(workspace, "zod-recording-post-release", client)
-            release_fixture_checkpoint(post, client=client)
-            wait_for_marker(workspace, "zod-recording-post-observed", client)
-            client.send()
-            (active_recording,) = (workspace / ".agents/console/sessions").iterdir()
-            active_capture = active_recording / "capture/sessions/001"
-            assert (active_capture / "cell-001.txt").stat().st_mode & 0o222 == 0
-            assert (active_capture / "cell-001-post.txt").stat().st_mode & 0o200
-            assert (active_recording / "capture/events.jsonl").stat().st_mode & 0o200
-            client.send(r="complete silently")
-            assert (active_capture / "cell-001-post.txt").stat().st_mode & 0o222 == 0
-            client.request(
-                "tools/call",
-                name="send",
-                arguments={"r": "rejected source", "typo": True},
-            )
-            client.send(control="restart", r="complete silently")
-            restart = [
-                event
-                for event in events(active_recording)
-                if event["event"] == "tool_result"
-            ][-1]
-            assert {
-                part["owner"]["session_id"]
-                for part in restart["parts"]
-                if part["owner"] is not None
-            } == {1, 2}, restart
-            assert (
-                active_recording / "sessions/session-001.qmd"
-            ).stat().st_mode & 0o222 == 0
-            transcript = client.finish()
-        (recording,) = (workspace / ".agents/console/sessions").iterdir()
-        capture = recording / "capture/sessions/001"
-        assert (capture / "startup.txt").read_text() == "startup text\n"
-        assert (capture / "cell-001.txt").read_text() == "before image\nafter image\n"
-        assert (capture / "cell-001-post.txt").read_text() == "between cells\n"
-        assert (capture / "cell-002-post.txt").read_text() == "shutdown text\n"
-        for name in [
-            "startup-001.png",
-            "cell-001-002.png",
-            "cell-001-post-001.png",
-            "cell-002-post-001.png",
-        ]:
-            assert (capture / name).is_file()
-        interleaving = []
-        for event in events(recording):
-            if event["event"] not in {"output_text", "artifact_created"} or event[
-                "owner"
-            ] != {"session_id": 1, "cell_id": 1, "interval": "cell"}:
-                continue
-            if event["event"] == "output_text":
-                raw = (recording / event["path"]).read_bytes()
-                interleaving.append(
-                    raw[event["offset"] : event["offset"] + event["bytes"]].decode()
-                )
-            else:
-                interleaving.append("image")
-        assert interleaving == ["before image\n", "image", "after image\n", "image"]
-        assert (capture / "cell-001-001.png").is_file()
-        assert (capture / "cell-002.txt").read_bytes() == b""
-        assert not (capture / "cell-003.txt").exists()
-        assert (recording / "capture/sessions/002/cell-001.txt").read_bytes() == b""
-        assert "rejected source" in (recording / "sessions/session-001.qmd").read_text()
-        assert all(e["sequence"] == i + 1 for i, e in enumerate(events(recording)))
-        return normalized(transcript, workspace)
 
 
 @requires(R, SQL)

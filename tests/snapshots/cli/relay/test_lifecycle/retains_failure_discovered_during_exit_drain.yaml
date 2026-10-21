@@ -12,7 +12,7 @@ tail:
   - kind: fatal
     message: >-
       worker sideband read failed: unknown variant `broken`, expected one of
-      `cell_started`, `export_session`, `export_image`, `ready`,
+      `cell_started`, `export_session`, `export_chunk`, `ready`,
       `runtime_initialized`, `r_initialization`, `console_output`,
       `console_diagnostic`, `image`, `input_requested`, `input_received`,
       `input_cancelled`, `r_prepared`, `r_preparation_failed`, `resolve_r`,

@@ -92,6 +92,11 @@ These transitions enqueue commands without waiting for pipe I/O or signal acknow
 Native R startup reports its admission and successful completion through `r_initialization`; failed or interrupted R initialization requires explicit restart rather than in-place or automatic retry.
 Test worker fixtures need not send built-in bootstrap events.
 
+`cell_started` marks entry into an evaluated cell and must appear exactly once before its `completed` receipt, including during retirement.
+Completion without entry or duplicate entry fails the protocol.
+The controller uses this receipt to start its numbered output interval; admission alone does not create a cell log.
+`completed` closes the interval, while output observed afterward belongs to the post-cell interval.
+
 Each admitted ordinary operation has one matching terminal result:
 
 | Operation        | Success                                          | Ordinary failure                                              |

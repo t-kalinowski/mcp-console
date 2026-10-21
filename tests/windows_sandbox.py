@@ -37,29 +37,31 @@ def workspace(parent: Path | None = None):
         parent or Path(tempfile.gettempdir())
     ) / f"console sandbox {uuid.uuid4().hex}"
     root.mkdir()
+
+    def remove_completed_file(function, path, error):
+        # Completed recording files are deliberately read-only. Clear that
+        # attribute only when deleting a regular file in this owned fixture.
+        mode = os.lstat(path).st_mode
+        if (
+            isinstance(error, PermissionError)
+            and function is os.unlink
+            and stat.S_ISREG(mode)
+            and not mode & stat.S_IWRITE
+        ):
+            os.chmod(path, mode | stat.S_IWRITE)
+            function(path)
+        else:
+            raise error
+
     try:
         yield root
     finally:
-
-        def remove_readonly_file(function, path, error):
-            failure = error[1]
-            if (
-                function is not os.unlink
-                or failure.winerror != 5
-                or not os.stat(path).st_file_attributes & stat.FILE_ATTRIBUTE_READONLY
-            ):
-                raise failure
-            # Completed recordings are read-only. The fixture owns their
-            # removal after its Console processes have exited.
-            os.chmod(path, stat.S_IWRITE)
-            function(path)
-
         # Windows can retain an executable's image mapping briefly after its
         # waited-for process exits. Retry only that sharing violation.
         deadline = time.monotonic() + 5
         while True:
             try:
-                shutil.rmtree(root, onerror=remove_readonly_file)
+                shutil.rmtree(root, onexc=remove_completed_file)
                 break
             except OSError as error:
                 if error.winerror != 32 or time.monotonic() >= deadline:
@@ -666,11 +668,10 @@ class WindowsSandbox(unittest.TestCase):
             # Keep the failed cold startup's journal before fixture cleanup.
             recordings = Path(session.directory.name) / ".agents/console/sessions"
             for recording in sorted(recordings.glob("*")):
-                for relative in (
-                    "capture/events.jsonl",
-                    "capture/sessions/001/startup.txt",
-                ):
-                    path = recording / relative
+                for path in [
+                    recording / "capture/events.jsonl",
+                    *sorted(recording.glob("capture/sessions/*/*.txt")),
+                ]:
                     if path.is_file():
                         sys.stderr.write(
                             f"\n{path}\n{path.read_text(encoding='utf-8')}\n"

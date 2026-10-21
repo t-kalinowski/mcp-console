@@ -21,7 +21,6 @@ from support.requirements import (
     NATIVE_FIXTURES,
     POSIX,
     PROCESS_EVENTS,
-    PTHREAD_MUTEX_INTERPOSITION,
     R,
     SQL,
     command,
@@ -30,10 +29,6 @@ from support.requirements import (
 from support.assertions import last_result_text, last_tool_text
 from support.checkpoints import FifoCheckpoint, wait_for_checkpoint
 from support.native import LOADER_VARIABLE, build_interposer
-from support.allocations import RetentionProfile
-from support.events import Events
-from support.processes import host_process_id
-from support.checkpoints import wait_for_worker_file
 from support.normalization import code
 from support.client import McpClient, stop_client
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -41,7 +36,23 @@ from support.r import r_test_environment, reference_plots, startup_r_package
 from support.records import Transcript, TranscriptWithCompanions
 from support.resolvers import bare_runtime_environment, record_resolved_r_library
 from support.suites import run_this_suite
-from boundaries.client_server.server.test_startup import discovery_environment
+from support.discovery import discovery_environment
+
+
+def call_events(events: list[dict]) -> list[dict]:
+    """The canonical call/output records, excluding protocol and lifecycle evidence."""
+    return [
+        event
+        for event in events
+        if event["event"]
+        in {
+            "recording_started",
+            "tool_call",
+            "tool_result",
+            "image_retained",
+            "cell_output",
+        }
+    ]
 
 
 CELL_OUTPUT_RETENTION_LIMIT = 1024 * 1024 * 1024
@@ -126,18 +137,7 @@ def test_materializes_records_only_for_console_use(
             .read_text(encoding="utf-8")
             .splitlines()
         ]
-        semantic_events = [
-            event
-            for event in events
-            if event["event"]
-            in {
-                "recording_started",
-                "tool_call",
-                "artifact_created",
-                "cell_output",
-                "tool_result",
-            }
-        ]
+        semantic_events = call_events(events)
         assert [event["event"] for event in semantic_events] == [
             "recording_started",
             "tool_call",
@@ -207,7 +207,7 @@ def test_selects_existing_project_or_home_recording_directory(
                 client.send(r="preview huge line")
                 recording_root = project_console if in_project else console_home
                 (session,) = (recording_root / "sessions").iterdir()
-                log = cell_output_path(session, 1)
+                log = session / "capture/sessions/001/cell-001.txt"
                 assert log.is_file(), log
                 public_path = (
                     Path(
@@ -421,32 +421,26 @@ def test_records_tool_calls_and_images(
         sessions = list((workspace / ".agents/console" / "sessions").iterdir())
         assert len(sessions) == 1, sessions
         session = sessions[0]
+        markdown_path = session / "transcript.md"
+        for path in (session / "capture/events.jsonl", markdown_path, quarto_path):
+            assert path.stat().st_mode & 0o777 == 0o600, path
+        # Protocol capture continues after responses are sent. Finalize before
+        # reading the complete journal instead of racing its next append.
+        transcript = client.finish()
         journal_text = (session / "capture" / "events.jsonl").read_text(
             encoding="utf-8"
         )
-        markdown_path = session / "transcript.md"
         markdown_text = markdown_path.read_text(encoding="utf-8")
         quarto_text = quarto_path.read_text(encoding="utf-8")
         assert PNG_1X1 not in journal_text, journal_text
         assert PNG_1X1 not in markdown_text, markdown_text
         assert PNG_1X1 not in quarto_text, quarto_text
         events = [json.loads(line) for line in journal_text.splitlines()]
-        semantic_events = [
-            event
-            for event in events
-            if event["event"]
-            in {
-                "recording_started",
-                "tool_call",
-                "artifact_created",
-                "cell_output",
-                "tool_result",
-            }
-        ]
+        semantic_events = call_events(events)
         assert [event["event"] for event in semantic_events] == [
             "recording_started",
             "tool_call",
-            "artifact_created",
+            "image_retained",
             "cell_output",
             "tool_result",
             "tool_call",
@@ -588,11 +582,7 @@ def test_records_tool_calls_and_images(
         }
         assert image_path.stat().st_mode & 0o777 == 0o400
         assert output_path.stat().st_mode & 0o777 == 0o400
-        assert all(
-            path.stat().st_mode & 0o777 == 0o600
-            for path in (session / "capture/events.jsonl", markdown_path, quarto_path)
-        ), file_modes
-        transcript = client.finish()
+        assert set(file_modes.values()) == {0o400}, file_modes
 
         for event in events:
             assert event["at"].endswith("Z"), event
@@ -677,18 +667,7 @@ def test_disables_recording_after_transcript_failure(
         journal = session / "capture" / "events.jsonl"
         journal_after_failure = journal.read_text(encoding="utf-8")
         events = [json.loads(line) for line in journal_after_failure.splitlines()]
-        semantic_events = [
-            event
-            for event in events
-            if event["event"]
-            in {
-                "recording_started",
-                "tool_call",
-                "artifact_created",
-                "cell_output",
-                "tool_result",
-            }
-        ]
+        semantic_events = call_events(events)
         assert [event["event"] for event in semantic_events] == [
             "recording_started",
             "tool_call",
@@ -780,18 +759,7 @@ def test_keeps_recording_after_cell_output_failure(
             .read_text(encoding="utf-8")
             .splitlines()
         ]
-        semantic_events = [
-            event
-            for event in events
-            if event["event"]
-            in {
-                "recording_started",
-                "tool_call",
-                "artifact_created",
-                "cell_output",
-                "tool_result",
-            }
-        ]
+        semantic_events = call_events(events)
         assert [event["event"] for event in semantic_events] == [
             "recording_started",
             "tool_call",
@@ -846,18 +814,7 @@ def test_flushes_calls_and_keeps_unpolled_images(
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
         ]
-        assert [
-            event["event"]
-            for event in before_release
-            if event["event"]
-            in {
-                "recording_started",
-                "tool_call",
-                "artifact_created",
-                "cell_output",
-                "tool_result",
-            }
-        ] == [
+        assert [event["event"] for event in call_events(before_release)] == [
             "recording_started",
             "tool_call",
         ], before_release
@@ -879,18 +836,7 @@ def test_flushes_calls_and_keeps_unpolled_images(
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
         ]
-        assert [
-            event["event"]
-            for event in after_release
-            if event["event"]
-            in {
-                "recording_started",
-                "tool_call",
-                "artifact_created",
-                "cell_output",
-                "tool_result",
-            }
-        ] == [
+        assert [event["event"] for event in call_events(after_release)] == [
             "recording_started",
             "tool_call",
             "cell_output",
@@ -931,28 +877,17 @@ def test_flushes_calls_and_keeps_unpolled_images(
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
         ]
-        assert [
-            event["event"]
-            for event in final_events
-            if event["event"]
-            in {
-                "recording_started",
-                "tool_call",
-                "artifact_created",
-                "cell_output",
-                "tool_result",
-            }
-        ] == [
+        assert [event["event"] for event in call_events(final_events)] == [
             "recording_started",
             "tool_call",
             "cell_output",
             "tool_result",
             "tool_call",
             "tool_result",
-            "artifact_created",
+            "image_retained",
         ], final_events
         (artifact,) = [
-            event for event in final_events if event["event"] == "artifact_created"
+            event for event in final_events if event["event"] == "image_retained"
         ]
         assert {
             key: artifact[key]
@@ -1003,31 +938,9 @@ def test_flushes_calls_and_keeps_unpolled_images(
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
         ]
-        completed_semantic = [
-            event
-            for event in completed_events
-            if event["event"]
-            in {
-                "recording_started",
-                "tool_call",
-                "artifact_created",
-                "cell_output",
-                "tool_result",
-            }
-        ]
+        completed_semantic = call_events(completed_events)
         assert [event["event"] for event in completed_semantic] == [
-            *[
-                event["event"]
-                for event in final_events
-                if event["event"]
-                in {
-                    "recording_started",
-                    "tool_call",
-                    "artifact_created",
-                    "cell_output",
-                    "tool_result",
-                }
-            ],
+            *[event["event"] for event in call_events(final_events)],
             "cell_output",
         ], completed_events
         assert completed_semantic[-1]["call_id"] == 2, completed_semantic[-1]
@@ -1041,18 +954,7 @@ def test_flushes_calls_and_keeps_unpolled_images(
             json.loads(line)
             for line in journal.read_text(encoding="utf-8").splitlines()
         ]
-        polled_semantic = [
-            event
-            for event in polled_events
-            if event["event"]
-            in {
-                "recording_started",
-                "tool_call",
-                "artifact_created",
-                "cell_output",
-                "tool_result",
-            }
-        ]
+        polled_semantic = call_events(polled_events)
         assert [event["event"] for event in polled_semantic] == [
             *[event["event"] for event in completed_semantic],
             "tool_call",
@@ -1084,28 +986,10 @@ def test_flushes_calls_and_keeps_unpolled_images(
             {
                 "live journal": {
                     "while first call was running": [
-                        event["event"]
-                        for event in before_release
-                        if event["event"]
-                        in {
-                            "recording_started",
-                            "tool_call",
-                            "artifact_created",
-                            "cell_output",
-                            "tool_result",
-                        }
+                        event["event"] for event in call_events(before_release)
                     ],
                     "after first call completed": [
-                        event["event"]
-                        for event in after_release
-                        if event["event"]
-                        in {
-                            "recording_started",
-                            "tool_call",
-                            "artifact_created",
-                            "cell_output",
-                            "tool_result",
-                        }
+                        event["event"] for event in call_events(after_release)
                     ],
                     "unpolled image": {
                         "event": artifact["event"],
@@ -1170,26 +1054,27 @@ def local_discovery(root: Path, *, image: bool = False, fail: bool = False):
     with ExitStack() as resources:
         if image:
             configure_r_startup(root, environment, rscript, STARTUP_PLOT)
-        discovery, reached, release, alive = resources.enter_context(
+        probe_environment, discovery = resources.enter_context(
             discovery_environment(r_home=None if fail else home)
         )
         environment.pop("R_HOME", None)
         # Keep the gated R probe first without hiding host dependency tools.
-        environment["PATH"] = os.pathsep.join((discovery["PATH"], environment["PATH"]))
+        environment["PATH"] = os.pathsep.join(
+            (probe_environment["PATH"], environment["PATH"])
+        )
         environment["RETICULATE_PYTHON"] = sys.executable
         environment[LOADER_VARIABLE] = str(
             build_interposer(root, "discovery_diagnostic")
         )
-        yield environment, reached, release, alive
+        yield environment, discovery
 
 
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS, R)
+@requires(command("rustc"))
 def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)
-        environment, reached, release, alive = resources.enter_context(
-            local_discovery(root)
-        )
+        environment, discovery = resources.enter_context(local_discovery(root))
         try:
             with McpClient(
                 binary,
@@ -1198,8 +1083,8 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
                 root,
             ) as client:
                 client.initialize_and_list_tools()
-                reached.wait("discovery diagnostic emitted")
-                assert os.read(alive, 1) == b"1"
+                discovery.wait("discovery diagnostic emitted")
+
                 sessions = root / ".agents/console/sessions"
                 assert not sessions.exists(), sessions
                 client.expect(
@@ -1207,7 +1092,7 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
                     requirements={"action": "get"},
                     timeout_ms=0,
                 )
-                release.release()
+                discovery.release()
                 client.send(requirements={"action": "get"})
                 client.send(r="42L")
                 client.finish()
@@ -1244,10 +1129,11 @@ def test_records_early_calls_before_discovery(binary: Path) -> Transcript:
             assert "eval: false" not in quarto, quarto
             return [{"early_call_and_result_precede_discovery": True}]
         finally:
-            release.release()
+            discovery.release()
 
 
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS, R, SQL, command("ir"))
+@requires(command("rustc"))
 def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcript:
     reference_environment, rscript = r_test_environment()
     (expected_image,) = reference_plots(
@@ -1261,7 +1147,7 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
     )
     with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)
-        environment, reached, release, alive = resources.enter_context(
+        environment, discovery = resources.enter_context(
             local_discovery(root, image=True)
         )
         try:
@@ -1272,8 +1158,8 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
                 root,
             ) as client:
                 client.initialize_and_list_tools()
-                reached.wait("discovery awaiting release")
-                assert os.read(alive, 1) == b"1"
+                discovery.wait("discovery awaiting release")
+
                 client.expect(
                     "\n[phase: startup]\n[worker starting]",
                     requirements={"action": "get"},
@@ -1281,7 +1167,7 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
                 )
                 sessions = root / ".agents/console/sessions"
                 assert not list(sessions.glob("*/capture/sessions/*/*.png"))
-                release.release()
+                discovery.release()
                 # Discovery release still leaves host dependency preparation
                 # before startup can render its image.
                 image = wait_for_checkpoint(
@@ -1299,7 +1185,7 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
                 for line in (session / "capture/events.jsonl").read_text().splitlines()
             ]
             (artifact,) = [
-                event for event in events if event["event"] == "artifact_created"
+                event for event in events if event["event"] == "image_retained"
             ]
             early = [
                 event
@@ -1325,14 +1211,15 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
             ), markdown
             return [{"early_call_and_result_precede_startup_artifact": True}]
         finally:
-            release.release()
+            discovery.release()
 
 
 @requires(NATIVE_FIXTURES, R)
+@requires(command("rustc"))
 def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)
-        environment, reached, release, alive = resources.enter_context(
+        environment, discovery = resources.enter_context(
             local_discovery(root, fail=True)
         )
         try:
@@ -1343,15 +1230,15 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
                 root,
             ) as client:
                 client.initialize_and_list_tools()
-                reached.wait("discovery awaiting failure release")
-                assert os.read(alive, 1) == b"1"
+                discovery.wait("discovery awaiting failure release")
+
                 client.expect(
                     "\n[phase: startup]\n[worker starting]",
                     requirements={"action": "get"},
                     timeout_ms=0,
                 )
                 client.send(r="stop('failed discovery ran the cell')", timeout_ms=0)
-                release.release()
+                discovery.release()
                 response = client.send()
                 assert response["isError"], response
                 assert "fixture R discovery failed" in last_result_text(client)
@@ -1378,6 +1265,11 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
                 if event["event"] == "process_output"
             )
             assert raw == b"preparation detail\n"
+            assert all(
+                event["discarded_bytes"] == 0
+                for event in events
+                if event["event"] == "process_output"
+            )
             assert not any(event["event"] == "worker_started" for event in events)
             assert not list((session / "sessions").glob("*.qmd"))
             assert (
@@ -1389,7 +1281,7 @@ def test_records_early_calls_when_discovery_fails(binary: Path) -> Transcript:
             assert events[0]["startup_requirements"] is None, events[0]
             return [{"early_calls_recorded": 3, "startup_failure_recorded": True}]
         finally:
-            release.release()
+            discovery.release()
 
 
 @requires(POSIX)
@@ -1507,17 +1399,16 @@ def test_discards_startup_capture_without_a_tool_call(
 
 
 @requires(NATIVE_FIXTURES, PROCESS_EVENTS, R, command("ir"))
+@requires(command("rustc"))
 def test_preserves_early_requirements_in_published_quarto(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)
-        environment, reached, release, alive = resources.enter_context(
-            local_discovery(root)
-        )
+        environment, discovery = resources.enter_context(local_discovery(root))
         try:
             with McpClient(binary, DIRECT.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
-                reached.wait("discovery is held before recording metadata is known")
-                assert os.read(alive, 1) == b"1"
+                discovery.wait("discovery is held before recording metadata is known")
+
                 admitted = client.send(
                     r="42L", requirements={"r": ["praise"]}, timeout_ms=0
                 )
@@ -1525,7 +1416,7 @@ def test_preserves_early_requirements_in_published_quarto(binary: Path) -> Trans
                 assert last_tool_text(client).endswith(
                     "[running; poll with an empty send]"
                 ), admitted
-                release.release()
+                discovery.release()
                 result = client.send()
                 assert not result["isError"], result
                 assert last_tool_text(client).endswith("[1] 42\n")
@@ -1537,14 +1428,15 @@ def test_preserves_early_requirements_in_published_quarto(binary: Path) -> Trans
             assert "eval: false" not in quarto, quarto
             return transcript
         finally:
-            release.release()
+            discovery.release()
 
 
 @requires(NATIVE_FIXTURES, R)
+@requires(command("rustc"))
 def test_discards_startup_failure_without_send(binary: Path) -> Transcript:
     with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
         root = Path(directory)
-        environment, reached, release, alive = resources.enter_context(
+        environment, discovery = resources.enter_context(
             local_discovery(root, fail=True)
         )
         recorded = resources.enter_context(
@@ -1554,10 +1446,10 @@ def test_discards_startup_failure_without_send(binary: Path) -> Transcript:
         try:
             with McpClient(binary, DIRECT.serve(), environment, root) as client:
                 client.initialize_and_list_tools()
-                reached.wait("discovery ready to fail without send")
-                assert os.read(alive, 1) == b"1"
+                discovery.wait("discovery ready to fail without send")
+
                 client.request("ping")
-                release.release()
+                discovery.release()
                 # The discovery process has emitted its failure before shutdown;
                 # no send is used to observe or activate the recording.
                 recorded.wait(
@@ -1571,7 +1463,7 @@ def test_discards_startup_failure_without_send(binary: Path) -> Transcript:
                 )
             return [{"startup_failure_without_send": "capture discarded"}]
         finally:
-            release.release()
+            discovery.release()
 
 
 if __name__ == "__main__":

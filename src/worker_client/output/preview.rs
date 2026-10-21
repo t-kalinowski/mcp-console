@@ -43,6 +43,8 @@ pub(super) struct Preview {
     image_events: usize,
     omitted_images: u64,
     omitted_image_bytes: u64,
+    attributed_omitted_images: u64,
+    omitted_image_owner: Option<crate::transcript::Owner>,
     recorded_omitted_images: u64,
     omitted_artifacts: Location,
     omitted_controls: u64,
@@ -209,23 +211,46 @@ impl Preview {
         self.parts.push(Part::Image(content));
     }
 
-    pub(super) fn source(&mut self, source: Source) {
-        let has_text = self
-            .parts
-            .iter()
-            .rev()
-            .take_while(|part| !matches!(part, Part::Source(_)))
+    pub(super) fn source(&mut self, mut source: Source) {
+        // Attribute image omissions before empty image-only receipts retire.
+        self.attribute_image_omissions(
+            self.omitted_images - self.attributed_omitted_images,
+            source.owner,
+        );
+        let interval = || {
+            self.parts
+                .iter()
+                .rev()
+                .take_while(|part| !matches!(part, Part::Source(_)))
+        };
+        let has_text = interval()
             .any(|part| matches!(part, Part::Text(_) | Part::Gap(_) | Part::Information(_)));
-        // Publish empty files, but retain no receipt when there is no rendered
-        // text to attribute. Raw terminal edits can also render no text.
         if !has_text {
-            if let Some(file) = source.file {
+            // Notices and images need ownership, but no raw-text receipt. Release empty
+            // logs so completion can publish without another poll.
+            if let Some(file) = source.file.take() {
                 file.publish();
             }
-            return;
+            if !interval()
+                .any(|part| matches!(part, Part::Notice(_) | Part::Image(_) | Part::ImageGap))
+            {
+                return;
+            }
         }
         self.parts.push(Part::Source(source));
         self.summarize_sources();
+    }
+
+    fn attribute_image_omissions(&mut self, count: u64, owner: Option<crate::transcript::Owner>) {
+        if count == 0 {
+            return;
+        }
+        if self.attributed_omitted_images == 0 {
+            self.omitted_image_owner = owner;
+        } else if self.omitted_image_owner != owner {
+            self.omitted_image_owner = None;
+        }
+        self.attributed_omitted_images += count;
     }
 
     pub(super) fn extend(&mut self, other: Self) {
@@ -236,6 +261,10 @@ impl Preview {
                 Part::Notice(control) => self.control(control),
                 Part::Information(text) => self.information(text),
                 Part::ImageGap => {
+                    self.attribute_image_omissions(
+                        other.attributed_omitted_images,
+                        other.omitted_image_owner,
+                    );
                     if self.omitted_images == 0 {
                         self.parts.push(Part::ImageGap);
                     }
@@ -385,10 +414,12 @@ impl Preview {
                 continue;
             };
             let parts = &self.parts[start..end];
-            if !parts
-                .iter()
-                .any(|part| matches!(part, Part::Text(_) | Part::Information(_)))
-            {
+            if !parts.iter().any(|part| {
+                matches!(
+                    part,
+                    Part::Text(_) | Part::Information(_) | Part::Notice(_) | Part::Image(_)
+                )
+            }) {
                 let mut gap = Gap::default();
                 for part in parts {
                     if let Part::Gap(omitted) = part {
@@ -515,11 +546,17 @@ impl Preview {
         });
         // A combined omission can span cells or workers. Preserve one owner only
         // when the retained receipts establish it; never borrow a later source.
-        let marker_owner = if self.omitted_images == 0 {
-            summary.owner
-        } else {
-            None
-        };
+        if self.omitted_images != 0 {
+            summary.source(&Source {
+                owner: if self.attributed_omitted_images == self.omitted_images {
+                    self.omitted_image_owner
+                } else {
+                    None
+                },
+                ..Source::default()
+            });
+        }
+        let marker_owner = summary.owner;
         let mut image_marker = true;
         // Capture boundaries can split one interval into several receipts.
         // Coalesce adjacent gaps only when their interval ownership agrees.

@@ -30,7 +30,8 @@ with_mcp_console_environment <- function(fixture, code) {
   }
   old <- Sys.getenv(
     c(names(fixture$environment), fixture$unset),
-    unset = NA_character_
+    unset = NA_character_,
+    names = TRUE
   )
   on.exit(
     {

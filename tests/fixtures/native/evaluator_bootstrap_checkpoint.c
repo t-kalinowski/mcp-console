@@ -8,7 +8,7 @@
 #include <string.h>
 #include <unistd.h>
 
-static _Thread_local bool evaluator;
+#include "capture_admission_checkpoint.h"
 static _Atomic(pthread_cond_t *) bootstrap_condition;
 static atomic_bool receipt_processed;
 static bool before_wait;
@@ -31,7 +31,7 @@ static void hold_evaluator(pthread_mutex_t *mutex) {
     // A scheduler delay must not retain the operation mutex needed by receipt
     // processing and interrupt admission. Condvar waits permit spurious wakes.
     if (pthread_mutex_unlock(mutex) != 0) _exit(122);
-    evaluator = false;
+    attachment = NULL;
     notify("MCP_CONSOLE_TEST_EVALUATOR_REACHED");
     int descriptor = open(getenv("MCP_CONSOLE_TEST_EVALUATOR_RELEASE"), O_RDONLY);
     if (descriptor < 0) _exit(123);
@@ -43,20 +43,14 @@ static void hold_evaluator(pthread_mutex_t *mutex) {
     if (pthread_mutex_lock(mutex) != 0) _exit(125);
 }
 
-static ssize_t observed_write(int descriptor, const void *buffer, size_t length) {
-    ssize_t result = write(descriptor, buffer, length);
-    const char marker[] = "{\"event\":\"source_attached\",";
-    if (result == (ssize_t)length && length >= sizeof(marker) - 1 &&
-        memcmp(buffer, marker, sizeof(marker) - 1) == 0) {
-        // Admission is recorded on the evaluator before its bootstrap wait.
-        // A withheld source never creates an executed-cell output file.
-        evaluator = true;
-    }
+static int observed_unlock(pthread_mutex_t *mutex) {
+    int result = pthread_mutex_unlock(mutex);
+    if (result == 0) unlocked(mutex);
     return result;
 }
 
 static int observed_wait(pthread_cond_t *condition, pthread_mutex_t *mutex) {
-    if (evaluator) {
+    if (attachment != NULL) {
         atomic_store(&bootstrap_condition, condition);
         if (before_wait) {
             hold_evaluator(mutex);
@@ -67,7 +61,7 @@ static int observed_wait(pthread_cond_t *condition, pthread_mutex_t *mutex) {
         notify("MCP_CONSOLE_TEST_EVALUATOR_WAITING");
     }
     int result = pthread_cond_wait(condition, mutex);
-    if (result == 0 && evaluator && atomic_load(&receipt_processed))
+    if (result == 0 && attachment != NULL && atomic_load(&receipt_processed))
         hold_evaluator(mutex);
     return result;
 }
@@ -82,14 +76,6 @@ static int observed_broadcast(pthread_cond_t *condition) {
     return result;
 }
 
-#define INTERPOSE(replacement, original)                                      \
-    __attribute__((used)) static struct {                                     \
-        const void *replacement;                                              \
-        const void *original;                                                 \
-    } interpose_##original __attribute__((section("__DATA,__interpose"))) = { \
-        (const void *)(uintptr_t)&replacement,                                \
-        (const void *)(uintptr_t)&original,                                   \
-    };
-INTERPOSE(observed_write, write)
+INTERPOSE(observed_unlock, pthread_mutex_unlock)
 INTERPOSE(observed_wait, pthread_cond_wait)
 INTERPOSE(observed_broadcast, pthread_cond_broadcast)

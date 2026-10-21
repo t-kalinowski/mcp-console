@@ -44,6 +44,7 @@ def interrupt_held_evaluator(
                     build_interposer(root, "evaluator_bootstrap_checkpoint")
                 ),
                 "MCP_CONSOLE_LANGUAGES": "python",
+                "MCP_CONSOLE_TEST_ADMISSION_SOURCE": "discarded_cell = True",
                 "MCP_CONSOLE_TEST_BOOTSTRAP_INTERPOSER": str(
                     build_interposer(root, "bootstrap_completion_checkpoint")
                 ),
@@ -114,6 +115,12 @@ def interrupt_held_evaluator(
                     .splitlines()
                 ]
                 assert any(event["event"] == "source_attached" for event in events)
+                assert any(
+                    event["event"] == "tool_call"
+                    and event["request"]["arguments"].get("python")
+                    == "discarded_cell = True"
+                    for event in events
+                )
                 assert not any(event["event"] == "cell_started" for event in events)
                 assert not list((recording / "capture/sessions").glob("*/cell-*.txt"))
                 assert (

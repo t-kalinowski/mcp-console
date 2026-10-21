@@ -46,6 +46,9 @@ def main() -> None:
     if not startup_ready_sent:
         send(context.writer, {"kind": "ready"})
     context.recording_startup_pending = os.environ.get("ZOD_RECORDING_INTERVALS") == "1"
+    if os.environ.get("ZOD_RECORDING_STARTUP") == "1":
+        send_output(context.writer, "startup text\n")
+        context.recording_startup_pending = False
     if startup_callback:
         send(
             context.writer,

@@ -442,6 +442,14 @@ def exercise_later_callbacks(session: Session) -> None:
 
 @unittest.skipUnless(os.name == "nt", "native Windows packaging")
 class WindowsPackaging(unittest.TestCase):
+    def test_relocated_distribution_preserves_sandbox_startup(self):
+        from support.installation import installed_console
+        from support.windows_mxc import mxc_requirement
+
+        original = mxc_requirement(BINARY)
+        relocated = mxc_requirement(installed_console(NATIVE_BINARY))
+        self.assertEqual(relocated.available, original.available)
+
     def test_native_distribution_has_no_redistributable_vc_runtime(self):
         paths = {NATIVE_BINARY} | {
             path
@@ -626,6 +634,31 @@ class WindowsPackaging(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
 class WindowsConsole(unittest.TestCase):
+    def test_completed_recording_in_inherited_acl_workspace(self):
+        from support.client import McpClient
+        from support.execution import DIRECT
+        from windows_sandbox import workspace
+
+        with workspace() as root:
+            with McpClient(
+                BINARY,
+                DIRECT.serve(
+                    "-c", "r=null", "-c", "python=" + json.dumps(sys.executable)
+                ),
+                os.environ.copy(),
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                client.expect("42\n", python="print(42)")
+                client.finish()
+            (recording,) = (root / ".agents/console/sessions").iterdir()
+            self.assertEqual(
+                (recording / "capture/sessions/001/cell-001.txt").read_text(), "42\n"
+            )
+            for path in recording.rglob("*"):
+                if path.is_file():
+                    self.assertFalse(path.stat().st_mode & 0o222, path)
+
     def test_tilde_paths_use_profile_and_explicit_home(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -1389,14 +1422,10 @@ class WindowsConsole(unittest.TestCase):
                         )
                         self.assertNotIn("SIGINT", properties["control"]["description"])
                         self.assertEqual(
-                            script_guidance in tool["description"],
+                            script_guidance
+                            in properties.get("r", {}).get("description", ""),
                             not custom and "r" in fields,
                         )
-                        if script_guidance in tool["description"]:
-                            self.assertLess(
-                                tool["description"].index("Send one complete"),
-                                tool["description"].index(script_guidance),
-                            )
                         if custom:
                             self.assertIn(
                                 "Persistent custom-worker",
@@ -1423,10 +1452,11 @@ class WindowsConsole(unittest.TestCase):
                             )
                             self.assertEqual(
                                 "consider DuckDB SQL first" in tool["description"],
-                                "sql" in fields,
+                                "sql" in fields and not {"r", "python"} <= fields,
                             )
                             self.assertEqual(
-                                "Switch languages when useful" in tool["description"],
+                                "Choose whichever language makes each step"
+                                in tool["description"],
                                 len(fields) > 1,
                             )
                         self.assertEqual(
@@ -1729,9 +1759,23 @@ class WindowsConsole(unittest.TestCase):
             python="import six; saved = 42; print(six.__version__)",
         )
         self.assertIn("1.", json.dumps(result))
-        result = completed(python="import sniffio; print(sniffio.__version__)")
+        result = completed(
+            # fmt: python
+            python=code("""
+                try:
+                    import sniffio
+                except ModuleNotFoundError as error:
+                    assert type(error) is ModuleNotFoundError
+                    assert error.args == ("No module named 'sniffio'",), error.args
+                    assert error.name == "sniffio", error.name
+                    assert error.path is None, error.path
+                    print("undeclared import preserves native ModuleNotFoundError")
+                else:
+                    raise AssertionError("undeclared dependency imported")
+                """),
+        )
         self.assertIn(
-            "ModuleNotFoundError: No module named 'sniffio'", json.dumps(result)
+            "undeclared import preserves native ModuleNotFoundError", json.dumps(result)
         )
         inspection = session.send(requirements={"action": "get"})
         self.assertEqual(
@@ -1852,6 +1896,14 @@ class WindowsConsole(unittest.TestCase):
         (recording,) = (
             Path(session.directory.name) / ".agents/console/sessions"
         ).iterdir()
+        for name in (
+            "capture/events.jsonl",
+            "transcript.md",
+            "sessions/session-013.qmd",
+        ):
+            self.assertTrue((recording / name).stat().st_mode & 0o222, name)
+        session.process.stdin.close()
+        self.assertEqual(session.process.wait(timeout=15), 0)
         events = [
             json.loads(line)
             for line in (recording / "capture/events.jsonl")
@@ -1872,6 +1924,10 @@ class WindowsConsole(unittest.TestCase):
                 ).read_text(),
                 "42\n",
             )
+
+        for path in recording.rglob("*"):
+            if path.is_file():
+                self.assertFalse(path.stat().st_mode & 0o222, path)
 
         for transition in ("worker_started", "worker_ready"):
             self.assertEqual(

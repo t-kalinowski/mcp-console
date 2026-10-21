@@ -18,7 +18,7 @@ result:
       text: |
         Traceback (most recent call last):
           File "<mcp-console:python:e2>", line 1, in <module>
-          File "<string>", line 373, in export_session
+          File "<string>", line 376, in export_session
         RuntimeError: cannot create export destination denied (it must not already exist): Read-only file system (os error 30)
   isError: false
 ---
@@ -40,6 +40,6 @@ result:
       text: |
         Traceback (most recent call last):
           File "<mcp-console:python:e4>", line 1, in <module>
-          File "<string>", line 373, in export_session
+          File "<string>", line 376, in export_session
         RuntimeError: export destination must be outside the managed recording
   isError: false

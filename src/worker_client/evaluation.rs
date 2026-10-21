@@ -38,6 +38,8 @@ struct EvaluationState {
     /// Whether successful cell completion must end with an explicit final marker.
     controlled_completion: bool,
     input_request: Option<InputRequest>,
+    /// Worker entry remains observed after restart closes response capture.
+    cell_entered: bool,
     /// Whether one `send` currently owns the right to drain this evaluation's response.
     waiting: bool,
     /// Restart or controlled handoff permanently retires this evaluation.
@@ -146,6 +148,7 @@ impl Evaluation {
                 completion_collected: false,
                 controlled_completion,
                 input_request: None,
+                cell_entered: false,
                 waiting: false,
                 retired: false,
                 restart_handoff: None,
@@ -328,6 +331,31 @@ impl Evaluation {
         Ok(())
     }
 
+    pub(super) fn start_cell_capture(&self) -> Result<(), String> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if state.cell_entered {
+            return Err("worker sent a duplicate cell start".into());
+        }
+        self.output
+            .begin_cell_output(&self.transcript, self.call_id)?;
+        state.cell_entered = true;
+        Ok(())
+    }
+
+    pub(super) fn require_cell_entry(&self) -> Result<(), String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| "worker evaluation state lock poisoned".to_string())?;
+        if !state.cell_entered {
+            return Err("worker completed a cell before reporting its start".into());
+        }
+        Ok(())
+    }
+
     pub(super) fn associate_waiting_session(&self) {
         self.transcript.associate_waiting_call(self.call_id);
     }
@@ -338,11 +366,6 @@ impl Evaluation {
 
     pub(super) fn record_attachment(&self) {
         self.transcript.source_attached(self.call_id);
-    }
-
-    pub(super) fn start_cell_capture(&self) {
-        self.output
-            .begin_cell_output(&self.transcript, self.call_id);
     }
 
     /// Queues text and briefly defers any outstanding input report for its receipt.
@@ -400,10 +423,13 @@ impl Evaluation {
     pub(super) fn image(&self, data: String, mime_type: String) -> Result<(), String> {
         let bytes = crate::transcript::decode_image_data(&data)?;
         self.output
-            .push_image_with_artifact(data, mime_type, |_, mime_type| {
-                Ok(self
-                    .transcript
-                    .persist_decoded_image(self.call_id, &bytes, mime_type))
+            .push_image_with_artifact(data, mime_type, |data, mime_type| {
+                Ok(self.transcript.persist_decoded_image(
+                    self.call_id,
+                    &bytes,
+                    mime_type,
+                    data.len(),
+                ))
             })
     }
 

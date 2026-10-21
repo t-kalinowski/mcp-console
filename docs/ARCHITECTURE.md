@@ -109,7 +109,9 @@ Successive calls advance the result; repeatedly returning a prefix would require
 Native DBI/DB-API queries remain available when callers want to own their result lifecycle directly.
 R DBI connections use `dbSendQuery()` and bounded `dbFetch(n)` calls and retain the driver's data frames unchanged, apart from the managed DuckDB workaround below.
 Python returns driver rows with ordered column names and closes only result objects distinct from the selected connection.
-When a DB-API connection is itself the cursor, Console can release its references but cannot independently clear the driver's result without affecting the connection.
+When a DB-API connection is itself the cursor, generic cleanup releases Console's references without closing the connection.
+For Python DuckDB, an empty `execute("")` also supersedes the native result on both 1.x and 2.x: the driver releases unfinished reads and completes pending writes without returning their rows or committing the transaction.
+This keeps DuckDB 2.x connection operations usable after Console discards a result; `abort()` would instead invalidate an open transaction whose unfinished statement writes.
 Each provider initially fetches at most 21 preview/lookahead rows and requests only the remaining row allowance on later bounded fetches.
 Console does not eagerly fetch, copy, count, or spool the complete result; engines and drivers still own their internal buffering.
 An empty fetch or `fetchall()` establishes DB-API exhaustion; a short nonempty batch does not.
@@ -344,38 +346,52 @@ Keep detailed compatibility handling there rather than reproducing it across gui
 
 ## Recording ownership and failures
 
-`capture/events.jsonl` is the append-only journal underlying the process-wide Markdown transcript and per-worker-session QMDs.
-The recorder stages capture privately in temporary storage until the transport receives the first `send` call.
-Publication preserves event sequence, timestamps, and the original process start time; processes without `send` discard temporary capture.
-Storage selection and recording identifiers retain their existing owners.
-
-The relay reports actual worker launch separately from readiness and exit.
+One recording belongs to one Console process; numbered sessions identify actual worker lifetimes, including automatic replacements.
+The relay publishes `worker_started` only after acquiring its direct child.
 The server requires exactly one acquisition before readiness and rejects duplicate acquisition events as private-protocol failures.
-Lifecycle observations use the bounded recorder drain, so journal writes do not delay the dispatcher's retirement join.
-Recording session IDs count these launches independently of lifecycle generations.
-Each launch event carries the committed requirements declaration; live projections and capture reconstruction seed the new session from that declaration, including R additions retained across replacement.
-Changes to the committed declaration also update session metadata, including extensions added to a live DuckDB environment.
-Replacement selections remain journal and transcript events; they do not rewrite the retiring session's QMD or insert a control operation into its source.
-The source projection retains only source and relevant dependency declarations awaiting association, then moves them into their session document; complete requests remain in the journal.
-Source admission and settlement are recorded separately from response assembly, so an early response does not discard source still awaiting its worker.
-Source attachment records admission to a worker separately from execution; an interrupted pending source can have an attachment without a cell log.
-The worker reports cell entry; the tape switches text/image intervals at observed entry and completion, and retains the final interval through producer retirement.
-A tool call can collect several intervals or sessions.
-Recorded result byte ranges preserve the association after bounded preview assembly, including output claimed by later polls.
-Transport envelopes reference recorded tool payloads instead of duplicating them, and the delivery owner supplies write evidence without asserting client receipt.
-The transport reserves call identities at receipt and schedules recording activation in wire order.
-Handlers await their recorded calls while MCP receipt remains available for later sends, cancellation, and ping.
-Pending activation tasks share the transport backlog bound.
-EOF shutdown settles the receive-order capture tail before recording finalization, independently of response-delivery cancellation and transport closure.
-Protocol envelopes, lifecycle observations, and delivery evidence use a bounded background drain, so cancellation and ping remain available while a journal writer is stalled.
-The recorder flushes them in observation order with their original timestamps before its next event and at finalization.
+The server queues acquisition, readiness, and exit/signal evidence through the bounded recorder drain without changing generation ownership or retirement barriers.
+Journal writes do not run on the worker event dispatcher or delay its retirement join.
+Observed session, cell, and image identities are reserved when events enter the bounded recorder queue, independently of the journal writer.
+Consecutive pending text ranges in the same interval can share an event with the first observation timestamp; images and other events preserve their intervening boundaries.
+The output tape caches interval ownership, so collecting retained restart output does not query the journal.
+Raw capture handles and their publication registry use a separate lock from journal state; creating, appending, and closing interval files do not acquire the journal mutex.
+Image capture reserves bytes, file count, and MIME metadata against its own interval budget before preview admission; preview omission retains the saved file receipt.
+Assembled results can also contain images rejected from raw capture, recorded without image data or a fabricated file reference.
+Startup failure records carry a session number only when that startup acquired a worker.
 
-The recorder owns capture files and read-only completion; the output tape retains each open interval's producer ownership.
-Publication relocates shared file handles without changing that ownership.
+Before send, the recorder uses private temporary storage for the same journal, output logs, images, and projections.
+First-send publication relocates shared output writers while preserving producer ownership, sequence numbers, and observation timestamps.
 Output receipts resolve their public paths only after successful publication; failed publication leaves omitted text unavailable.
-Images finish after writing, cell logs at completion, and idle intervals at the next cell or confirmed producer retirement.
-Session projections finish after session updates; process projections and events finish after worker retirement, response-delivery settlement, and queued capture.
-Permission errors use recording diagnostics, not computation errors.
+It preserves the existing storage-root selection, identifier generation, permissions, and retention limits.
+`capture/events.jsonl` is the append-only journal underlying the Markdown transcript and per-session source-only QMD projections.
+
+The output tape owns observed startup, cell, and post-cell boundaries within each worker lifetime.
+The worker's `cell_started` receipt begins execution capture at evaluator entry, after admission; a withheld source gets no executed-cell log.
+The `cell_started` capture event records the call and interval owner; withheld source remains in `tool_call` without an executed-cell association.
+Completion closes the cell interval, and the final startup or post-cell interval includes shutdown output.
+Confirmed completion follows protocol validation; cell entry observed during retirement still starts its capture interval.
+Worker termination closes the final interval and clears its owner before later process diagnostics arrive.
+If the relay omits a worker outcome, launcher retirement and joined output producers close that interval before replacement preparation or launch; no worker-outcome event is fabricated.
+The `image_retained` capture event records each saved image's owner, artifact ID, and file path.
+Capture events carry explicit owners and raw text byte ranges; preview receipts carry the same owners into assembled response fragments, including later polls and replacement responses.
+Combined text/image omission notices retain their common observed interval owner; mixed or unknown ownership is recorded as null.
+Image omission ownership is aggregated before per-interval receipts retire, with bounded state independent of the number of omitted images.
+Response assembly uses those receipts without waiting for the journal to rediscover ownership.
+
+Raw files live under `capture/sessions/NNN/`; the recording-wide Markdown and per-session source-only QMDs remain projections of the journal.
+Completed interval files and images become read-only after their writers retire.
+The temporary-publication registry keeps weak references to active file handles and releases completed entries; publication copies completed files while relocating live producers.
+Process-wide files finalize only after retirement, delivery settlement, queued initial capture, and blocking result writers settle.
+Capture completion ownership survives handler cancellation and delivery deadlines, including after a result writer releases the journal mutex.
+Finalization completes permissions on retained files even after recording or projection failure, without inventing a successful `recording_ended` event for disabled capture.
+
+Each launch event carries the committed requirements declaration; live projections and capture reconstruction seed the new session from it, including R additions retained across replacement.
+Accepted live requirements update that session's metadata, including added DuckDB extensions; replacement selections do not rewrite the retiring session's QMD.
+The source projection retains only source and relevant dependency declarations awaiting association; complete requests remain in the journal.
+Admission and settlement events keep source available after an early response while it awaits its worker.
+Attachment records admission separately from execution, so interrupted pending source can have an attachment without a cell log.
+Source associations use the bounded recorder queue, preserving the dispatcher's independence from journal writes.
+Session QMDs become read-only after their session-related updates finish.
 
 Runtime export uses the existing worker sideband to request a snapshot ending before the current cell began.
 The server reconstructs source and report content in two streaming passes over capture, excluding the exporting call.
@@ -389,16 +405,17 @@ The server supplies an ordered file list and retains only its selected spool and
 No interpreter, SQL query, plot replay, or Quarto process participates in reconstruction.
 
 A journal or artifact failure disables further recording without stopping computation.
-Queued and in-flight protocol and worker lifecycle capture share a bound of 1,024 events or 8 MiB of serialized event data.
-Exceeding either limit discards pending protocol events and disables recording; it does not wait for the journal writer or close MCP input.
+Queued and in-flight protocol, worker lifecycle, and output capture events share a bound of 1,024 events or 8 MiB of serialized event data.
+Exceeding either limit discards pending capture events and disables recording; it does not wait for the journal writer or close MCP input.
 The current write can finish before the recorder reports the failure, so the retained journal may end partway through the exchange.
 A raw-log failure affects that file.
 Failure of a derived projection disables the projections but can leave the journal and artifacts available.
 Diagnostics and notices report unavailable or partial retention.
 
 Journal events and generated projections are internal formats, not independently versioned public APIs.
-A journaled result records response assembly, not confirmed client receipt.
-See [Output and delivery](#output-and-delivery) for ownership and [Open work](TODO.md) for remaining retention work.
+A journaled result records response assembly.
+Separate delivery events record whether a local transport write completed successfully, without claiming client acknowledgment or model observation.
+See [Output and delivery](#output-and-delivery) for ownership and [Open work](TODO.md) for retention and export gaps.
 
 ## Developer terms
 

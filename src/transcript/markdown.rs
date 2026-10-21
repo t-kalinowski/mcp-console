@@ -545,7 +545,7 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
         Event::ToolCall {
             call_id, request, ..
         } => render_tool_call(document, *call_id, request),
-        Event::ArtifactCreated {
+        Event::ImageRetained {
             artifact_id,
             call_id,
             path,
@@ -778,8 +778,12 @@ fn render_result(
             RecordedContent::Image {
                 artifact_id, path, ..
             } => {
-                writeln!(document, "![Artifact {artifact_id}](<{path}>)\n")
-                    .expect("writing to a String cannot fail");
+                if let (Some(artifact_id), Some(path)) = (artifact_id, path) {
+                    writeln!(document, "![Artifact {artifact_id}](<{path}>)\n")
+                        .expect("writing to a String cannot fail");
+                } else {
+                    document.push_str("_Image not retained._\n\n");
+                }
             }
             RecordedContent::Other(content) => {
                 let kind = match content {

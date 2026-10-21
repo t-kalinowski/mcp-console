@@ -142,10 +142,16 @@ def test_bounds_export_of_fragmented_output(
             )
             (recording,) = (workspace / ".agents/console/sessions").iterdir()
             with (recording / "capture/events.jsonl").open() as journal:
-                chunks = sum(
-                    json.loads(line)["event"] == "output_text" for line in journal
-                )
-            assert chunks >= 131072, chunks
+                offset = 0
+                for line in journal:
+                    event = json.loads(line)
+                    if event["event"] == "output_text":
+                        assert event["offset"] == offset, event
+                        assert event["discarded_bytes"] == 0, event
+                        offset += event["bytes"]
+            # The bounded recorder may coalesce adjacent observations. Every
+            # byte still belongs to one contiguous retained range.
+            assert offset == 131073, offset
             assert (recording / "capture/sessions/001/cell-001.txt").read_text() == (
                 "x" * 131072 + "\n"
             )
@@ -218,7 +224,16 @@ def test_bounds_export_of_large_documents(
                     """),
             )
             try:
-                entered.wait("export cell source has been projected", client=client)
+                entered.wait("exporting cell reached its gate", client=client)
+                # Cell entry no longer waits for journal projections. A later
+                # recorded send settles that work before profiling export alone.
+                inspection = client.send(requirements={"action": "get"})
+                assert not inspection.get("isError"), inspection
+                (recording,) = (workspace / ".agents/console/sessions").iterdir()
+                assert (
+                    'export_session("report")'
+                    in (recording / "sessions/session-001.qmd").read_text()
+                )
                 profile.start()
             finally:
                 release.release()

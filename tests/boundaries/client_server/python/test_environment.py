@@ -12,7 +12,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.previews import cell_output_path
 from support.progress import without_elapsed
 from support.assertions import last_result_text
 from support.checkpoints import FifoCheckpoint
@@ -465,7 +464,7 @@ def test_compacts_native_duckdb_progress_bar(
 
                 progress = (root / "progress.bin").read_bytes()
                 session = next((root / ".agents/console/sessions").iterdir())
-                raw = cell_output_path(session, 2)
+                raw = session / "capture/sessions/001/cell-002.txt"
                 events.watch_file(raw)
                 response = client.start_send(timeout_ms=220_000)
                 release.release()

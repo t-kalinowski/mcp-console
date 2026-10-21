@@ -7,7 +7,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.previews import cell_output_path
 from support.requirements import POSIX, R, SQL, requires
 from support.assertions import last_result_text
 from support.previews import (
@@ -172,7 +171,9 @@ def test_distinguishes_omitted_resolution_notice_from_retained_raw_text(
                 Path(client.temporary_directory.name) / ".agents/console/sessions"
             ).iterdir()
         )
-        assert (cell_output_path(session, 1)).read_text() == head + tail
+        assert (
+            session / "capture/sessions/001/cell-001.txt"
+        ).read_text() == head + tail
         public_output = f".agents/console/sessions{os.sep}{session.name}{os.sep}capture/sessions/001/cell-001.txt"
         assert f"raw log: {public_output}" in output
         client.transcript[-1]["result"]["content"][0]["text"] = output.replace(

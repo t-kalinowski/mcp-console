@@ -27,8 +27,8 @@ def _installed_console(binary: Path) -> tuple[tempfile.TemporaryDirectory, Path]
             prefix / "bin" / ("mcp-console.exe" if os.name == "nt" else "mcp-console")
         )
         shutil.copy2(binary, installed)
-        # Windows development bundles contain their licenses inside libexec;
-        # flat wheel installations keep them under the installation prefix.
+        # Windows builds keep licenses inside the immutable libexec bundle;
+        # installed wheels use the flat license directory on every platform.
         licenses = "share/licenses/mcp-console"
         directories = (
             ("libexec",)

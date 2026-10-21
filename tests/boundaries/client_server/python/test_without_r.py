@@ -16,7 +16,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.previews import cell_output_path
 from support.requirements import NATIVE_FIXTURES, POSIX, SQL, requires
 from support.assertions import (
     assert_exact_interleaving,
@@ -2625,7 +2624,7 @@ False
                 in quarto
             )
             assert "ValueError: recorded failure" in markdown
-            assert (cell_output_path(session, 1)).read_text() == "42\n"
+            assert (session / "capture/sessions/001/cell-001.txt").read_text() == "42\n"
             events = [
                 json.loads(line)
                 for line in (session / "capture/events.jsonl").read_text().splitlines()
