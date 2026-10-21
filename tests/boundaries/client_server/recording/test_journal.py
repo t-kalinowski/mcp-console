@@ -48,7 +48,7 @@ def call_events(events: list[dict]) -> list[dict]:
             "recording_started",
             "tool_call",
             "tool_result",
-            "artifact_created",
+            "image_retained",
             "cell_output",
         }
     ]
@@ -433,7 +433,7 @@ def test_records_tool_calls_and_images(
         assert [event["event"] for event in events] == [
             "recording_started",
             "tool_call",
-            "artifact_created",
+            "image_retained",
             "cell_output",
             "tool_result",
             "tool_call",
@@ -880,7 +880,7 @@ def test_flushes_calls_and_keeps_unpolled_images(
             "tool_result",
             "tool_call",
             "tool_result",
-            "artifact_created",
+            "image_retained",
         ], final_events
         artifact = final_events[-1]
         assert {
@@ -1172,7 +1172,7 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
                 for line in (session / "capture/events.jsonl").read_text().splitlines()
             ]
             (artifact,) = [
-                event for event in events if event["event"] == "artifact_created"
+                event for event in events if event["event"] == "image_retained"
             ]
             early = [
                 event

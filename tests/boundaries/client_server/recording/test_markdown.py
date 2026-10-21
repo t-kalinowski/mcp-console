@@ -143,7 +143,7 @@ def test_records_real_mixed_language_session(
             .read_text(encoding="utf-8")
             .splitlines()
         ]
-        artifacts = [event for event in events if event["event"] == "artifact_created"]
+        artifacts = [event for event in events if event["event"] == "image_retained"]
         assert len(artifacts) == 1, artifacts
         artifact = artifacts[0]
         assert (session / artifact["path"]).read_bytes() == expected_plot[0]

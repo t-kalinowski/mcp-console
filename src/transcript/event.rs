@@ -46,10 +46,6 @@ pub(super) enum Event<'a> {
         session_id: u64,
         outcome: &'a str,
     },
-    SourceAttached {
-        call_id: u64,
-        session_id: u64,
-    },
     CellStarted {
         call_id: u64,
         owner: super::Owner,
@@ -67,7 +63,7 @@ pub(super) enum Event<'a> {
         discarded_bytes: usize,
     },
     /// Rejected by raw image retention limits: no image file was created.
-    /// Retained images have an ArtifactCreated event with their file path.
+    /// Retained images have an ImageRetained event with their file path.
     ImageOmitted {
         owner: Option<super::Owner>,
         encoded_bytes: usize,
@@ -103,7 +99,7 @@ pub(super) enum Event<'a> {
         request_id: &'a RequestId,
         request: &'a CallToolRequestParams,
     },
-    ArtifactCreated {
+    ImageRetained {
         owner: super::Owner,
         artifact_id: u64,
         call_id: Option<u64>,

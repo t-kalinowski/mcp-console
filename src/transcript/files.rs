@@ -291,7 +291,7 @@ impl super::Transcript {
             self.disable(error);
             return None;
         }
-        self.queue_event(super::queue::QueuedEvent::ArtifactCreated {
+        self.queue_event(super::queue::QueuedEvent::ImageRetained {
             owner,
             artifact_id: id,
             call_id,

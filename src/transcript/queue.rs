@@ -41,10 +41,6 @@ pub(super) enum QueuedEvent {
         session_id: u64,
         outcome: String,
     },
-    SourceAttached {
-        call_id: u64,
-        session_id: u64,
-    },
     CellStarted {
         call_id: u64,
         owner: Owner,
@@ -66,7 +62,7 @@ pub(super) enum QueuedEvent {
         encoded_bytes: usize,
         mime_type: String,
     },
-    ArtifactCreated {
+    ImageRetained {
         owner: Owner,
         artifact_id: u64,
         call_id: Option<u64>,
@@ -130,13 +126,6 @@ impl QueuedEvent {
                 session_id: *session_id,
                 outcome,
             },
-            Self::SourceAttached {
-                call_id,
-                session_id,
-            } => Event::SourceAttached {
-                call_id: *call_id,
-                session_id: *session_id,
-            },
             Self::CellStarted { call_id, owner } => Event::CellStarted {
                 call_id: *call_id,
                 owner: *owner,
@@ -172,14 +161,14 @@ impl QueuedEvent {
                 encoded_bytes: *encoded_bytes,
                 mime_type,
             },
-            Self::ArtifactCreated {
+            Self::ImageRetained {
                 owner,
                 artifact_id,
                 call_id,
                 path,
                 mime_type,
                 bytes,
-            } => Event::ArtifactCreated {
+            } => Event::ImageRetained {
                 owner: *owner,
                 artifact_id: *artifact_id,
                 call_id: *call_id,
@@ -491,18 +480,6 @@ impl Transcript {
                     call_id,
                     owner,
                     completion_confirmed,
-                },
-                (),
-            ))
-        });
-    }
-    /// Attachment records the selected worker before any execution receipt.
-    pub(crate) fn source_attached(&self, call_id: Option<u64>) {
-        self.observe(|events| {
-            Some((
-                QueuedEvent::SourceAttached {
-                    call_id: call_id?,
-                    session_id: events.owner?.session_id,
                 },
                 (),
             ))

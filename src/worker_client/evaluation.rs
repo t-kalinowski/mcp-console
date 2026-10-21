@@ -327,10 +327,6 @@ impl Evaluation {
         Ok(())
     }
 
-    pub(super) fn record_attachment(&self) {
-        self.transcript.source_attached(self.call_id);
-    }
-
     pub(super) fn start_cell_capture(&self) -> Result<(), String> {
         self.output
             .begin_cell_output(&self.transcript, self.call_id)

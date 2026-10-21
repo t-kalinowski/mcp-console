@@ -77,7 +77,7 @@ Omission notices for that output reference the capture journal.
 Protocol events reference the canonical send call/result records instead of duplicating their payloads.
 Events preserve observation timestamps and sequence numbers and identify the session, cell, and interval explicitly.
 Text events give byte ranges in the interval log so text/image ordering can be reconstructed.
-Each retained image has an `artifact_created` event with its owner, artifact ID, and file path relative to the recording directory.
+Each retained image has an `image_retained` event with its owner, artifact ID, and file path relative to the recording directory.
 An `image_omitted` event records an image rejected by the raw retention budget; it has no file to locate.
 For an image returned without raw retention, the result record has `retained: false` and no file reference; it does not duplicate the image data in the journal.
 Result records associate fragments of the assembled response with their observed intervals, preserving previews, prompts, errors, omission notices, and image references.
@@ -85,6 +85,7 @@ A response assembly event and a completed local transport write are separate obs
 Neither proves that the client acknowledged the response or that a model read it.
 
 Worker events record actual start, readiness, and termination.
+The `cell_started` event associates a call with its executed cell; accepted source that is withheld before execution remains in `tool_call` without a cell event or log.
 A restart request does not itself establish a session; a failed preparation or launch that never acquires a worker has no session number.
 Interrupting a surviving worker stays in its session.
 The journal can help inspect a recording with scripts or investigate a failed call.

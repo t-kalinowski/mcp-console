@@ -22,7 +22,7 @@
   run_id: <run ID>
   sequence: <capture sequence>
   at: <UTC timestamp>
-- event: artifact_created
+- event: image_retained
   owner:
     session_id: 1
     cell_id: 1

@@ -312,7 +312,6 @@ impl WorkerOperationState {
         evaluation.capture_prelude_before(capture_idle_prelude, || {
             state.operation = operation.take();
         })?;
-        evaluation.record_attachment();
         Ok(receiver)
     }
 

@@ -364,10 +364,11 @@ It preserves the existing storage-root selection, identifier generation, permiss
 
 The output tape owns observed startup, cell, and post-cell boundaries within each worker lifetime.
 The worker's `cell_started` receipt begins execution capture at evaluator entry, after admission; a withheld source gets no executed-cell log.
-An attachment event records the selected worker without creating a cell or retaining a historical request.
+The `cell_started` capture event records the call and interval owner; withheld source remains in `tool_call` without an executed-cell association.
 Completion closes the cell interval, and the final startup or post-cell interval includes shutdown output.
 Confirmed completion follows protocol validation; cell entry observed during retirement still starts its capture interval.
 Worker termination closes the final interval and clears its owner before later process diagnostics arrive.
+The `image_retained` capture event records each saved image's owner, artifact ID, and file path.
 Capture events carry explicit owners and raw text byte ranges; preview receipts carry the same owners into assembled response fragments, including later polls and replacement responses.
 Response assembly uses those receipts without waiting for the journal to rediscover ownership.
 

@@ -213,14 +213,13 @@ impl QuartoWriter {
             | Event::WorkerStarted { .. }
             | Event::WorkerReady { .. }
             | Event::WorkerEnded { .. }
-            | Event::SourceAttached { .. }
             | Event::CellStarted { .. }
             | Event::CellEnded { .. }
             | Event::OutputText { .. }
             | Event::ImageOmitted { .. }
             | Event::ProcessOutput { .. }
             | Event::RequirementsAccepted { .. }
-            | Event::ArtifactCreated { .. }
+            | Event::ImageRetained { .. }
             | Event::CellOutput { .. }
             | Event::SessionOutput { .. }
             | Event::StartupFailed { .. }
@@ -443,7 +442,6 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
         | Event::WorkerStarted { .. }
         | Event::WorkerReady { .. }
         | Event::WorkerEnded { .. }
-        | Event::SourceAttached { .. }
         | Event::CellStarted { .. }
         | Event::CellEnded { .. }
         | Event::OutputText { .. }
@@ -480,7 +478,7 @@ fn render_event(document: &mut String, envelope: &Envelope<'_>) -> Result<(), St
         Event::ToolCall {
             call_id, request, ..
         } => render_tool_call(document, *call_id, request),
-        Event::ArtifactCreated {
+        Event::ImageRetained {
             artifact_id,
             call_id,
             path,

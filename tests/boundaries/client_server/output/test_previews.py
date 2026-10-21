@@ -504,7 +504,7 @@ def test_image_overflow_preserves_later_text_and_fitting_image(
         assert [block["type"] for block in content] == ["text", "image", "text"]
         session = session_directory(client)
         capture = recording_events(session)
-        omitted, artifact = [e for e in capture if e["event"] == "artifact_created"]
+        omitted, artifact = [e for e in capture if e["event"] == "image_retained"]
         path = Path(".agents/console/sessions") / session.name / omitted["path"]
         assert content[0]["text"] == (
             "before oversized image\n\n"

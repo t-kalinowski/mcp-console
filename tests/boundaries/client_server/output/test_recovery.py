@@ -479,7 +479,7 @@ def test_image_recovery_moves_the_retained_preview(binary: Path) -> Transcript:
             json.loads(line)
             for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
-        artifacts = [event for event in events if event["event"] == "artifact_created"]
+        artifacts = [event for event in events if event["event"] == "image_retained"]
         assert len(artifacts) == 1, artifacts
         artifact = artifacts[0]
         assert artifact["mime_type"] == "image/png"

@@ -114,7 +114,13 @@ def interrupt_held_evaluator(
                     .read_text()
                     .splitlines()
                 ]
-                assert any(event["event"] == "source_attached" for event in events)
+                assert not any(event["event"] == "source_attached" for event in events)
+                assert any(
+                    event["event"] == "tool_call"
+                    and event["request"]["arguments"].get("python")
+                    == "discarded_cell = True"
+                    for event in events
+                )
                 assert not any(event["event"] == "cell_started" for event in events)
                 assert not list((recording / "capture/sessions").glob("*/cell-*.txt"))
                 assert (
