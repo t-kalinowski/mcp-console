@@ -373,6 +373,8 @@ Worker termination closes the final interval and clears its owner before later p
 If the relay omits a worker outcome, launcher retirement and joined output producers close that interval before replacement preparation or launch; no worker-outcome event is fabricated.
 The `image_retained` capture event records each saved image's owner, artifact ID, and file path.
 Capture events carry explicit owners and raw text byte ranges; preview receipts carry the same owners into assembled response fragments, including later polls and replacement responses.
+Combined text/image omission notices retain their common observed interval owner; mixed or unknown ownership is recorded as null.
+Image omission ownership is aggregated before per-interval receipts retire, with bounded state independent of the number of omitted images.
 Response assembly uses those receipts without waiting for the journal to rediscover ownership.
 
 Raw files live under `capture/sessions/NNN/`; the existing recording-wide Markdown and source-only QMD remain projections of the journal.

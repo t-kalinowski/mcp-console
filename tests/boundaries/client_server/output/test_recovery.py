@@ -607,6 +607,7 @@ def test_composed_image_omission_names_existing_artifact(binary: Path) -> Transc
                 == "preview head\n" + "x" * 32768 + "\npreview tail\n"
             )
         assert sum(block["type"] == "image" for block in result["content"]) == 1
+        assert recorded_omission_owners(client) == [None]
         client.send()
         assert last_tool_text(client) == "\n[idle]"
         client.finish()
@@ -617,6 +618,64 @@ def test_composed_image_omission_names_existing_artifact(binary: Path) -> Transc
             "poll_consumed_notice": True,
         }
     ]
+
+
+def recorded_omission_owners(client: McpClient) -> list[dict | None]:
+    result = next(
+        event
+        for event in reversed(recording_events(session_directory(client)))
+        if event["event"] == "tool_result"
+    )
+    return [
+        part["owner"]
+        for part in result["parts"]
+        if "output omitted:"
+        in result["result"]["content"][part["block"]]
+        .get("text", "")
+        .encode()[part["start"] : part["end"]]
+        .decode()
+    ]
+
+
+def composed_image_omission_ownership(
+    binary: Path, *, count: int, text: bool = False
+) -> Transcript:
+    with recovery_client(binary) as (client, profile, reached, release):
+        for index in range(count):
+            pending = client.start_send(
+                control="interrupt",
+                r="preview allocation image and text"
+                if text and index
+                else "preview allocation image",
+            )
+            cancel_result(client, pending, reached, release)
+        profile.pause_results(False)
+        result = client.send(control="interrupt")
+        assert not result["isError"], result
+        assert sum(block["type"] == "image" for block in result["content"]) == 1
+        expected = (
+            {"session_id": 1, "cell_id": 3, "interval": "cell"} if count == 2 else None
+        )
+        assert recorded_omission_owners(client) == [expected]
+        client.finish()
+    return [{"omitted_images": count - 1, "owner": expected}]
+
+
+@requires(NATIVE_FIXTURES)
+def test_composed_image_omission_preserves_single_interval(binary: Path) -> Transcript:
+    return composed_image_omission_ownership(binary, count=2)
+
+
+@requires(NATIVE_FIXTURES)
+def test_composed_text_and_image_omission_preserves_single_interval(
+    binary: Path,
+) -> Transcript:
+    return composed_image_omission_ownership(binary, count=2, text=True)
+
+
+@requires(NATIVE_FIXTURES)
+def test_composed_image_omission_clears_mixed_intervals(binary: Path) -> Transcript:
+    return composed_image_omission_ownership(binary, count=3)
 
 
 @requires(NATIVE_FIXTURES)
@@ -687,6 +746,11 @@ def test_long_recording_paths_keep_image_omissions_readable(binary: Path) -> Tra
 
 
 @requires(NATIVE_FIXTURES)
+def test_unretained_image_omission_preserves_interval(binary: Path) -> Transcript:
+    return recovered_image_omissions(binary, count=1)
+
+
+@requires(NATIVE_FIXTURES)
 def test_recovered_image_omissions_are_aggregated(binary: Path) -> Transcript:
     return recovered_image_omissions(binary, count=4)
 
@@ -709,7 +773,8 @@ def recovered_image_omissions(
             # reusing the worker, preserving all image-admission cycles.
             pending = client.start_send(control="interrupt", r="preview rejected image")
             cancel_result(client, pending, reached, release)
-        compact_cancelled_exchanges(client, start, count=count - 1)
+        if count > 1:
+            compact_cancelled_exchanges(client, start, count=count - 1)
         profile.pause_results(False)
         # Measure recovery after image parsing and admission have completed.
         profile.start()
@@ -721,10 +786,15 @@ def recovered_image_omissions(
         assert not result["isError"], result
         text = result["content"][0]["text"]
         assert text.count("[output omitted:") == 1
+        noun = "image" if count == 1 else "images"
         assert (
-            f"output omitted: {count} images ({4 * count} encoded bytes); "
-            f"{count} images not retained"
+            f"output omitted: {count} {noun} ({4 * count} encoded bytes); "
+            f"{count} {noun} not retained"
         ) in text
+        expected = (
+            {"session_id": 1, "cell_id": 2, "interval": "cell"} if count == 1 else None
+        )
+        assert recorded_omission_owners(client) == [expected]
         client.send()
         assert last_tool_text(client) == "\n[idle]"
         compact_previews(client, "\n[done]")

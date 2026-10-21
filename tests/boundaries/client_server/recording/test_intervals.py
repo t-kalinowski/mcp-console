@@ -116,6 +116,19 @@ def test_preview_omission_preserves_raw_images(
             assert "retained image:" in text and omitted["path"] in text, text
             assert "not retained" not in text, text
             assert not any(e["event"] == "image_omitted" for e in capture)
+            recorded = next(e for e in reversed(capture) if e["event"] == "tool_result")
+            owners = [
+                part["owner"]
+                for part in recorded["parts"]
+                if "output omitted:"
+                in recorded["result"]["content"][part["block"]]
+                .get("text", "")
+                .encode()[part["start"] : part["end"]]
+                .decode()
+            ]
+            assert owners == [{"session_id": 1, "cell_id": 1, "interval": "cell"}], (
+                owners
+            )
             client.send()
             assert (recording / omitted["path"]).read_bytes() == b"\0" * (
                 6 * 1024 * 1024 + 3
