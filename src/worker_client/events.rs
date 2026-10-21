@@ -1,4 +1,5 @@
 mod deferred;
+mod export;
 mod operation;
 
 pub(super) use operation::{
@@ -48,7 +49,7 @@ struct PendingPythonCandidate {
 struct RuntimeCandidates {
     r: Vec<crate::resolver::ManagedR>,
     python: Vec<PendingPythonCandidate>,
-    export: Option<crate::transcript::export::ExportContents>,
+    export: Option<export::ExportTask>,
 }
 
 impl RuntimeCandidates {
@@ -546,29 +547,22 @@ fn handle_semantic_event(
         }),
         RelayEvent::ExportSession => {
             candidates.export = None;
-            let result = callbacks
+            let recording = callbacks
                 .client
                 .0
                 .recording
                 .lock()
                 .map_err(|_| "recording lock poisoned")?
-                .as_ref()
-                .ok_or_else(|| "session capture unavailable".to_string())
-                .and_then(|recording| recording.export_session());
-            let result = result.map(|(description, contents)| {
-                candidates.export = Some(contents);
-                description
-            });
-            commands.send(RelayCommand::SessionExported { result })
+                .clone()
+                .ok_or_else(|| "session capture unavailable".to_string());
+            candidates.export = Some(export::ExportTask::start(recording, commands.clone()));
+            Ok(())
         }
-        RelayEvent::ExportChunk => {
-            let result = candidates
-                .export
-                .as_mut()
-                .ok_or_else(|| "no pending session export".to_string())
-                .and_then(|export| export.next_chunk());
-            commands.send(RelayCommand::SessionChunkExported { result })
-        }
+        RelayEvent::ExportChunk => candidates
+            .export
+            .as_ref()
+            .ok_or_else(|| "no pending session export".to_string())
+            .and_then(|export| export.request_chunk()),
         RelayEvent::ConsoleOutput { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Output, data),
             Route::Bootstrap | Route::Preparation | Route::Idle => {

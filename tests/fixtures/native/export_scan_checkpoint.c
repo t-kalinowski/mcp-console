@@ -26,11 +26,13 @@ static ssize_t gated_read(int descriptor, void *buffer, size_t length) {
     read_function read_next = (read_function)dlsym(RTLD_NEXT, "read");
 #endif
     ssize_t result = read_next(descriptor, buffer, length);
-    const char marker[] = "{\"event\":\"recording_started\",";
+    const char *marker = getenv("MCP_CONSOLE_TEST_EXPORT_SCAN_MARKER");
+    if (marker == NULL) marker = "{\"event\":\"recording_started\",";
+    size_t marker_length = strlen(marker);
     const char *armed = getenv("MCP_CONSOLE_TEST_EXPORT_SCAN_ARMED");
     if (getpid() != owner || armed == NULL || access(armed, F_OK) != 0 ||
-        result < (ssize_t)(sizeof(marker) - 1) ||
-        memcmp(buffer, marker, sizeof(marker) - 1) != 0 ||
+        result < (ssize_t)marker_length ||
+        memcmp(buffer, marker, marker_length) != 0 ||
         atomic_exchange(&claimed, true)) return result;
 
     int reached = open(getenv("MCP_CONSOLE_TEST_EXPORT_SCAN_REACHED"), O_WRONLY);

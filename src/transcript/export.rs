@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::io::{BufRead as _, BufReader, Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct SessionExport {
@@ -18,17 +19,15 @@ pub(crate) struct SessionExport {
 /// Spools belong to this runtime callback and are removed on completion, error,
 /// replacement, or shutdown. Only server-selected files can cross the sideband.
 pub(crate) struct ExportContents {
-    current: Option<File>,
-    files: VecDeque<PathBuf>,
+    current: Option<std::io::Take<File>>,
+    files: VecDeque<std::io::Take<File>>,
     // Drop open files before removing the spool directory on Windows.
     _temporary: tempfile::TempDir,
 }
 impl ExportContents {
     pub(crate) fn next_chunk(&mut self) -> Result<Option<String>, String> {
         if self.current.is_none() {
-            let path = self.files.pop_front().ok_or("no pending export file")?;
-            self.current =
-                Some(File::open(path).map_err(|e| format!("export file unavailable: {e}"))?);
+            self.current = Some(self.files.pop_front().ok_or("no pending export file")?);
         }
         let mut bytes = [0; 64 * 1024];
         let count = self
@@ -49,12 +48,18 @@ impl ExportContents {
 }
 
 impl Transcript {
-    pub(crate) fn export_session(&self) -> Result<(SessionExport, ExportContents), String> {
+    pub(crate) fn export_session(
+        &self,
+        cancelled: &AtomicBool,
+    ) -> Result<(SessionExport, ExportContents), String> {
         // Cell entry is queued before this callback. Flush it through the
         // recorder's normal failure owner before selecting the snapshot.
         self.update(|_| Ok(()));
         let (directory, session, snapshot_sequence, call) = {
             let (state, poisoned) = self.lock();
+            if cancelled.load(Ordering::Acquire) {
+                return Err("session export cancelled".into());
+            }
             if poisoned {
                 return Err("session capture lock poisoned".into());
             }
@@ -75,7 +80,7 @@ impl Transcript {
                 call,
             )
         };
-        reconstruct(&directory, session, snapshot_sequence, call)
+        reconstruct(&directory, session, snapshot_sequence, call, cancelled)
     }
 }
 
@@ -86,6 +91,7 @@ fn scan_capture(
     directory: &Path,
     sequence: u64,
     exporting_call: u64,
+    cancelled: &AtomicBool,
     mut visit: impl FnMut(u64, Value) -> Result<(), String>,
 ) -> Result<(), String> {
     let journal = std::fs::File::open(directory.join("capture/events.jsonl"))
@@ -93,6 +99,9 @@ fn scan_capture(
     let mut journal = BufReader::new(journal);
     let mut offset = 0;
     loop {
+        if cancelled.load(Ordering::Acquire) {
+            return Err("session export cancelled".into());
+        }
         let mut line = String::new();
         let count = journal.read_line(&mut line).map_err(|e| e.to_string())?;
         if count == 0 {
@@ -120,6 +129,7 @@ fn reconstruct(
     session: u64,
     snapshot_sequence: u64,
     exporting_call: u64,
+    cancelled: &AtomicBool,
 ) -> Result<(SessionExport, ExportContents), String> {
     let temporary = tempfile::tempdir().map_err(|e| e.to_string())?;
     let mut source =
@@ -131,11 +141,12 @@ fn reconstruct(
     let mut deliveries = BTreeMap::new();
     let mut sections = Sections::new(temporary.path());
     let mut positions = BTreeMap::<String, u64>::new();
-    let mut images = BTreeMap::<String, (String, PathBuf)>::new();
+    let mut images = BTreeMap::<String, (String, std::io::Take<File>)>::new();
     scan_capture(
         directory,
         snapshot_sequence,
         exporting_call,
+        cancelled,
         |offset, event| {
             for id in documents.observe(&event)? {
                 let fragment = documents.sessions.get_mut(&id).unwrap().take_source();
@@ -189,159 +200,156 @@ fn reconstruct(
     let mut journal = BufReader::new(
         File::open(directory.join("capture/events.jsonl")).map_err(|e| e.to_string())?,
     );
-    scan_capture(directory, snapshot_sequence, exporting_call, |_, event| {
-        let sequence = event["sequence"]
-            .as_u64()
-            .ok_or("capture sequence missing")?;
-        let call_id = event["call_id"].as_u64();
-        if matches!(
-            event["event"].as_str(),
-            Some("output_text" | "image_retained")
-        ) {
-            let owner: Owner =
-                serde_json::from_value(event["owner"].clone()).map_err(|e| e.to_string())?;
-            if owner.session_id == session && owner.interval != Interval::Cell {
-                let key = interval_key(owner);
-                positions.entry(key.clone()).or_insert(sequence);
+    scan_capture(
+        directory,
+        snapshot_sequence,
+        exporting_call,
+        cancelled,
+        |_, event| {
+            let sequence = event["sequence"]
+                .as_u64()
+                .ok_or("capture sequence missing")?;
+            let call_id = event["call_id"].as_u64();
+            if matches!(
+                event["event"].as_str(),
+                Some("output_text" | "image_retained")
+            ) {
+                let owner: Owner =
+                    serde_json::from_value(event["owner"].clone()).map_err(|e| e.to_string())?;
+                if owner.session_id == session && owner.interval != Interval::Cell {
+                    let key = interval_key(owner);
+                    positions.entry(key.clone()).or_insert(sequence);
+                }
             }
-        }
-        if event["event"] == "source_associated" && event["session_id"] == session {
-            let Some(offset) = calls.get(&call_id.ok_or("call ID missing")?) else {
+            if event["event"] == "source_associated" && event["session_id"] == session {
+                let Some(offset) = calls.get(&call_id.ok_or("call ID missing")?) else {
+                    return Ok(());
+                };
+                journal
+                    .seek(SeekFrom::Start(*offset))
+                    .map_err(|e| e.to_string())?;
+                let mut line = String::new();
+                journal.read_line(&mut line).map_err(|e| e.to_string())?;
+                let call: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
+                let owner = cells.get(&call_id.unwrap()).copied();
+                let key = owner
+                    .map(interval_key)
+                    .unwrap_or_else(|| format!("Submission {}", call_id.unwrap()));
+                positions.entry(key.clone()).or_insert(sequence);
+                let mut document = sections.section(key)?;
+                for language in ["r", "python", "sql"] {
+                    if let Some(source) = call["request"]["arguments"][language].as_str() {
+                        write_fence(&mut document, language, source)?;
+                    }
+                }
+            }
+            if event["event"] != "tool_result" {
+                return Ok(());
+            }
+            let call_id = call_id.ok_or("result call ID missing")?;
+            let call_session = associations.get(&call_id).copied();
+            let parts: Vec<ResultPart> = serde_json::from_value(event["parts"].clone())
+                .map_err(|e| format!("result associations unavailable: {e}"))?;
+            let owns_response = call_session == Some(session)
+                || parts
+                    .iter()
+                    .any(|p| p.owner.is_some_and(|o| o.session_id == session));
+            if !owns_response {
+                return Ok(());
+            }
+            let delivered = deliveries.get(&call_id).copied().unwrap_or(false);
+            let notice_key = format!("Response notices {call_id}");
+            positions.insert(notice_key.clone(), sequence);
+            let response_key = if calls.contains_key(&call_id) {
+                cells
+                    .get(&call_id)
+                    .copied()
+                    .map(interval_key)
+                    .unwrap_or_else(|| format!("Submission {call_id}"))
+            } else {
+                notice_key.clone()
+            };
+            positions.entry(response_key.clone()).or_insert(sequence);
+            if let Some(error) = event.get("error") {
+                let mut document = sections.section(response_key.clone())?;
+                if !delivered {
+                    document
+                        .write_all(b"_Response assembled; transport write not confirmed._\n\n")
+                        .map_err(|e| e.to_string())?;
+                }
+                write_fence(
+                    &mut document,
+                    "text",
+                    error["message"].as_str().unwrap_or("Tool error"),
+                )?;
+            }
+            let Some(content) = event["result"]["content"].as_array() else {
                 return Ok(());
             };
-            journal
-                .seek(SeekFrom::Start(*offset))
-                .map_err(|e| e.to_string())?;
-            let mut line = String::new();
-            journal.read_line(&mut line).map_err(|e| e.to_string())?;
-            let call: Value = serde_json::from_str(&line).map_err(|e| e.to_string())?;
-            let owner = cells.get(&call_id.unwrap()).copied();
-            let key = owner
-                .map(interval_key)
-                .unwrap_or_else(|| format!("Submission {}", call_id.unwrap()));
-            positions.entry(key.clone()).or_insert(sequence);
-            let mut document = sections.section(key)?;
-            for language in ["r", "python", "sql"] {
-                if let Some(source) = call["request"]["arguments"][language].as_str() {
-                    write_fence(&mut document, language, source)?;
+            if parts.is_empty() {
+                // Requirement-only and protocol error responses have no output tape.
+                let mut document = sections.section(response_key)?;
+                if !delivered {
+                    document
+                        .write_all(b"_Response assembled; transport write not confirmed._\n\n")
+                        .map_err(|e| e.to_string())?;
                 }
-            }
-        }
-        if event["event"] != "tool_result" {
-            return Ok(());
-        }
-        let call_id = call_id.ok_or("result call ID missing")?;
-        let call_session = associations.get(&call_id).copied();
-        let parts: Vec<ResultPart> = serde_json::from_value(event["parts"].clone())
-            .map_err(|e| format!("result associations unavailable: {e}"))?;
-        let owns_response = call_session == Some(session)
-            || parts
-                .iter()
-                .any(|p| p.owner.is_some_and(|o| o.session_id == session));
-        if !owns_response {
-            return Ok(());
-        }
-        let delivered = deliveries.get(&call_id).copied().unwrap_or(false);
-        let notice_key = format!("Response notices {call_id}");
-        positions.insert(notice_key.clone(), sequence);
-        let response_key = if calls.contains_key(&call_id) {
-            cells
-                .get(&call_id)
-                .copied()
-                .map(interval_key)
-                .unwrap_or_else(|| format!("Submission {call_id}"))
-        } else {
-            notice_key.clone()
-        };
-        positions.entry(response_key.clone()).or_insert(sequence);
-        if let Some(error) = event.get("error") {
-            let mut document = sections.section(response_key.clone())?;
-            if !delivered {
-                document
-                    .write_all(b"_Response assembled; transport write not confirmed._\n\n")
-                    .map_err(|e| e.to_string())?;
-            }
-            write_fence(
-                &mut document,
-                "text",
-                error["message"].as_str().unwrap_or("Tool error"),
-            )?;
-        }
-        let Some(content) = event["result"]["content"].as_array() else {
-            return Ok(());
-        };
-        if parts.is_empty() {
-            // Requirement-only and protocol error responses have no output tape.
-            let mut document = sections.section(response_key)?;
-            if !delivered {
-                document
-                    .write_all(b"_Response assembled; transport write not confirmed._\n\n")
-                    .map_err(|e| e.to_string())?;
-            }
-            for block in content {
-                if let Some(text) = block["text"].as_str() {
-                    write_fence(&mut document, "text", text)?;
-                }
-            }
-        }
-        for part in &parts {
-            if part.owner.is_some_and(|o| o.session_id != session) {
-                continue;
-            }
-            let key = part
-                .owner
-                .map(interval_key)
-                .unwrap_or_else(|| notice_key.clone());
-            positions.entry(key.clone()).or_insert(sequence);
-            let mut document = sections.section(key)?;
-            if !delivered {
-                document
-                    .write_all(b"_Response assembled; transport write not confirmed._\n\n")
-                    .map_err(|e| e.to_string())?;
-            }
-            let block = content.get(part.block).ok_or("result block unavailable")?;
-            if let Some(text) = block["text"].as_str() {
-                let text = text
-                    .get(part.start..part.end)
-                    .ok_or("result text range unavailable")?;
-                write_fence(&mut document, "text", text)?;
-            } else if block["type"] == "image" {
-                let path = block["path"].as_str().ok_or("recorded image unavailable")?;
-                // PNG and JPEG use format extensions; other MIME types remain binary.
-                let extension = match block["mimeType"]
-                    .as_str()
-                    .ok_or("recorded image MIME type unavailable")?
-                {
-                    "image/png" => "png",
-                    "image/jpeg" => "jpg",
-                    _ => "bin",
-                };
-                let name = format!(
-                    "image-{:06}.{extension}",
-                    block["artifactId"]
-                        .as_u64()
-                        .ok_or("image identity missing")?
-                );
-                if !images.contains_key(path) {
-                    let capture = directory
-                        .join("capture/sessions")
-                        .canonicalize()
-                        .map_err(|e| format!("image capture unavailable: {e}"))?;
-                    let image = directory
-                        .join(path)
-                        .canonicalize()
-                        .map_err(|e| format!("recorded image {path} unavailable: {e}"))?;
-                    if !image.starts_with(&capture) {
-                        return Err("recorded image is outside this recording's capture".into());
+                for block in content {
+                    if let Some(text) = block["text"].as_str() {
+                        write_fence(&mut document, "text", text)?;
                     }
-                    images.insert(path.into(), (name.clone(), image));
                 }
-                writeln!(document, "![Recorded image](<images/{name}>)\n")
-                    .map_err(|e| e.to_string())?;
             }
-        }
-        Ok(())
-    })?;
+            for part in &parts {
+                if part.owner.is_some_and(|o| o.session_id != session) {
+                    continue;
+                }
+                let key = part
+                    .owner
+                    .map(interval_key)
+                    .unwrap_or_else(|| notice_key.clone());
+                positions.entry(key.clone()).or_insert(sequence);
+                let mut document = sections.section(key)?;
+                if !delivered {
+                    document
+                        .write_all(b"_Response assembled; transport write not confirmed._\n\n")
+                        .map_err(|e| e.to_string())?;
+                }
+                let block = content.get(part.block).ok_or("result block unavailable")?;
+                if let Some(text) = block["text"].as_str() {
+                    let text = text
+                        .get(part.start..part.end)
+                        .ok_or("result text range unavailable")?;
+                    write_fence(&mut document, "text", text)?;
+                } else if block["type"] == "image" {
+                    let path = block["path"].as_str().ok_or("recorded image unavailable")?;
+                    // PNG and JPEG use format extensions; other MIME types remain binary.
+                    let extension = match block["mimeType"]
+                        .as_str()
+                        .ok_or("recorded image MIME type unavailable")?
+                    {
+                        "image/png" => "png",
+                        "image/jpeg" => "jpg",
+                        _ => "bin",
+                    };
+                    let name = format!(
+                        "image-{:06}.{extension}",
+                        block["artifactId"]
+                            .as_u64()
+                            .ok_or("image identity missing")?
+                    );
+                    if !images.contains_key(path) {
+                        let image = super::files::open_capture_image(directory, path)?;
+                        let length = image.metadata().map_err(|e| e.to_string())?.len();
+                        images.insert(path.into(), (name.clone(), image.take(length)));
+                    }
+                    writeln!(document, "![Recorded image](<images/{name}>)\n")
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            Ok(())
+        },
+    )?;
     let header = documents
         .sessions
         .get(&session)
@@ -373,10 +381,15 @@ fn reconstruct(
         writeln!(markdown).map_err(|e| e.to_string())?;
     }
     let mut files = vec!["session.qmd".into(), "session.md".into()];
-    let mut paths = VecDeque::from([qmd_path, markdown_path]);
-    for (name, path) in images.into_values() {
+    let mut contents = VecDeque::new();
+    for path in [qmd_path, markdown_path] {
+        let file = File::open(path).map_err(|e| format!("export file unavailable: {e}"))?;
+        let length = file.metadata().map_err(|e| e.to_string())?.len();
+        contents.push_back(file.take(length));
+    }
+    for (name, image) in images.into_values() {
         files.push(format!("images/{name}"));
-        paths.push_back(path);
+        contents.push_back(image);
     }
     Ok((
         SessionExport {
@@ -390,7 +403,7 @@ fn reconstruct(
         },
         ExportContents {
             _temporary: temporary,
-            files: paths,
+            files: contents,
             current: None,
         },
     ))

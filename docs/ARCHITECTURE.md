@@ -391,6 +391,7 @@ The source projection retains only source awaiting association; complete request
 Dependency metadata follows accepted declarations, never additions inferred from a submitted request.
 Admission and settlement events keep source available after an early response while it awaits its worker.
 In-memory call associations retire once both the source and its result settle; historical associations remain in capture.
+Validation-rejected source falls back to its addressed worker only while that same worker still owns output, including when a rejected request asked for restart without retiring it.
 Attachment records admission separately from execution, so interrupted pending source can have an attachment without a cell log.
 Source associations use the bounded recorder queue, preserving the dispatcher's independence from journal writes.
 Session QMDs become read-only after their session-related updates finish.
@@ -398,13 +399,18 @@ Session QMDs become read-only after their session-related updates finish.
 Runtime export uses the existing worker sideband to request a snapshot ending before the current cell began.
 The server reconstructs source and report content in two streaming passes over capture, excluding the exporting call.
 It copies the snapshot boundary and recording path under the recorder lock, then releases the lock before scanning the completed prefix so live capture can continue.
+Reconstruction and chunk reads run on a callback-owned thread, leaving worker event dispatch free to process output, interrupts, and retirement.
+The dispatcher admits at most one pending chunk request; completion or retirement cancels the callback and closes its request channel.
+Cancellation is checked between filesystem operations and before replies through that worker's command owner; retirement never joins a stalled export read.
+A blocked operating-system read can finish later, after which cancellation releases its handles and temporary storage.
 The first spools source and retains dependency metadata, journal offsets, and cell/session/delivery associations; the second spools the displayed results by interval.
 Each event is discarded after processing, so raw output chunk counts, historical stdin, and complete document contents do not accumulate in reconstruction memory.
 Memory covers one journal record plus association and file indexes; temporary storage holds the reconstructed documents until the callback completes or retires.
 It receives no destination path.
 The worker writes the returned content under its existing sandbox and filesystem permissions.
 Documents and images cross the sideband in at most 64 KiB decoded chunks, requested after the worker writes the preceding chunk.
-The server supplies an ordered file list and retains only its selected spool and image paths between requests.
+The server supplies an ordered file list and retains opened spool and image handles between requests, with reads bounded by their selected lengths.
+Image validation rejects non-files and links outside capture, checks the opened handle's actual location, and retains that handle so later path replacement cannot redirect transfer.
 No interpreter, SQL query, plot replay, or Quarto process participates in reconstruction.
 
 A journal or artifact failure disables further recording without stopping computation.
