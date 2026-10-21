@@ -626,6 +626,31 @@ class WindowsPackaging(unittest.TestCase):
 
 @unittest.skipUnless(os.name == "nt", "native Windows acceptance")
 class WindowsConsole(unittest.TestCase):
+    def test_completed_recording_in_inherited_acl_workspace(self):
+        from support.client import McpClient
+        from support.execution import DIRECT
+        from windows_sandbox import workspace
+
+        with workspace() as root:
+            with McpClient(
+                BINARY,
+                DIRECT.serve(
+                    "-c", "r=null", "-c", "python=" + json.dumps(sys.executable)
+                ),
+                os.environ.copy(),
+                root,
+            ) as client:
+                client.initialize_and_list_tools()
+                client.expect("42\n", python="print(42)")
+                client.finish()
+            (recording,) = (root / ".agents/console/sessions").iterdir()
+            self.assertEqual(
+                (recording / "capture/sessions/001/cell-001.txt").read_text(), "42\n"
+            )
+            for path in recording.rglob("*"):
+                if path.is_file():
+                    self.assertFalse(path.stat().st_mode & 0o222, path)
+
     def test_tilde_paths_use_profile_and_explicit_home(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
