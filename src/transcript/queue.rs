@@ -115,7 +115,13 @@ impl QueuedEvent {
                 call_id,
                 session_id,
             } => {
-                if active.call_sessions.contains_key(call_id) {
+                // Replacement readiness can arrive after a failed source and
+                // its result have both settled. Never associate that retired
+                // call with the replacement worker.
+                let Some(call) = active.call_sessions.get(call_id) else {
+                    return Ok(());
+                };
+                if call.session_id.is_some() {
                     return Ok(());
                 }
                 Event::SourceAssociated {

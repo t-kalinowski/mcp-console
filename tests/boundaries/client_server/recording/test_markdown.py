@@ -389,16 +389,20 @@ echo SELECT 42
             in quarto
         )
         assert "execute:" not in quarto
-        assert '    - "foo:"' in quarto
-        assert "    - foo#bar" in quarto
-        assert '    - "delete\\x7Fcontrol"' in quarto
-        assert '    - "c1-start\\x80control"' in quarto
-        assert '    - "c1-end\\x9Fcontrol"' in quarto
-        assert '    - "bom\\uFEFFvalue"' in quarto
-        assert '    - "noncharacter\\uFFFEvalue"' in quarto
-        assert '    - "noncharacter\\uFFFFvalue"' in quarto
-        assert '    - "line\\Lseparator"' in quarto
-        assert '    - "paragraph\\Pseparator"' in quarto
+        for value in (
+            "foo:",
+            "foo#bar",
+            "delete\u007fcontrol",
+            "c1-start\u0080control",
+            "c1-end\u009fcontrol",
+            "bom\ufeffvalue",
+            "noncharacter\ufffevalue",
+            "noncharacter\uffffvalue",
+            "line\u2028separator",
+            "paragraph\u2029separator",
+        ):
+            assert value not in quarto, (value, quarto)
+            assert value in markdown, (value, markdown)
         formatting = subprocess.run(
             [
                 "yamark",

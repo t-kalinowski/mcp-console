@@ -30,8 +30,6 @@ pub(super) struct Documents {
 struct PendingSource {
     admitted: bool,
     sources: Vec<QuartoSource>,
-    r_requirements: Vec<String>,
-    python_requirements: Vec<String>,
 }
 #[derive(Clone, Default)]
 struct Metadata {
@@ -193,32 +191,12 @@ impl Documents {
                         });
                     }
                 }
-                let requirements = &event["request"]["arguments"]["requirements"];
-                let additions = !matches!(
-                    requirements["action"].as_str(),
-                    Some("get" | "set" | "reset")
-                );
-                let r_requirements = if additions {
-                    strings(&requirements["r"])
-                } else {
-                    Vec::new()
-                };
-                let python_requirements = if additions {
-                    strings(&requirements["python"])
-                } else {
-                    Vec::new()
-                };
-                if !sources.is_empty()
-                    || !r_requirements.is_empty()
-                    || !python_requirements.is_empty()
-                {
+                if !sources.is_empty() {
                     self.calls.insert(
                         id,
                         PendingSource {
                             admitted: false,
                             sources,
-                            r_requirements,
-                            python_requirements,
                         },
                     );
                 }
@@ -245,24 +223,6 @@ impl Documents {
                         .sessions
                         .get_mut(&id)
                         .ok_or("associated source has no session")?;
-                    if document.metadata.dynamic_resolution {
-                        for (retained, additions) in [
-                            (
-                                &mut document.metadata.r_requirements,
-                                pending.r_requirements,
-                            ),
-                            (
-                                &mut document.metadata.python_requirements,
-                                pending.python_requirements,
-                            ),
-                        ] {
-                            for addition in additions {
-                                if !retained.contains(&addition) {
-                                    retained.push(addition);
-                                }
-                            }
-                        }
-                    }
                     document.sources.extend(pending.sources);
                     changed.push(id);
                 }

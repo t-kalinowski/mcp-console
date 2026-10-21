@@ -387,14 +387,17 @@ Finalization completes permissions on retained files even after recording or pro
 
 Each launch event carries the committed requirements declaration; live projections and capture reconstruction seed the new session from it, including R additions retained across replacement.
 Accepted live requirements update that session's metadata, including added DuckDB extensions; replacement selections do not rewrite the retiring session's QMD.
-The source projection retains only source and relevant dependency declarations awaiting association; complete requests remain in the journal.
+The source projection retains only source awaiting association; complete requests remain in the journal.
+Dependency metadata follows accepted declarations, never additions inferred from a submitted request.
 Admission and settlement events keep source available after an early response while it awaits its worker.
+In-memory call associations retire once both the source and its result settle; historical associations remain in capture.
 Attachment records admission separately from execution, so interrupted pending source can have an attachment without a cell log.
 Source associations use the bounded recorder queue, preserving the dispatcher's independence from journal writes.
 Session QMDs become read-only after their session-related updates finish.
 
 Runtime export uses the existing worker sideband to request a snapshot ending before the current cell began.
 The server reconstructs source and report content in two streaming passes over capture, excluding the exporting call.
+It copies the snapshot boundary and recording path under the recorder lock, then releases the lock before scanning the completed prefix so live capture can continue.
 The first spools source and retains dependency metadata, journal offsets, and cell/session/delivery associations; the second spools the displayed results by interval.
 Each event is discarded after processing, so raw output chunk counts, historical stdin, and complete document contents do not accumulate in reconstruction memory.
 Memory covers one journal record plus association and file indexes; temporary storage holds the reconstructed documents until the callback completes or retires.

@@ -42,6 +42,7 @@ The recorded process start time remains separate from recording activation time.
 
 `transcript.md` covers the whole recording: calls, source, results, polls, input, controls, failures, session boundaries, and links to retained files.
 Each session QMD contains its submitted source and relevant dependency metadata, including failed and rejected source associated with that worker.
+Dependency metadata includes accepted requirements; rejected additions do not change it.
 It contains no captured results, images, polls, or controls.
 A session without source need not have a QMD.
 Both document types can be reconstructed from capture without executing recorded code.
@@ -156,7 +157,8 @@ Included images keep their encoded format and use portable relative links.
 Export does not run Quarto, execute source, repeat SQL, or recompute plots.
 The worker writes the files under the same filesystem and sandbox permissions as submitted code.
 Destination collisions, permission denial, and unavailable capture produce runtime errors.
-Export requires a UTF-8 recording path; an unsupported path produces a runtime error without retiring the worker.
+Export requires UTF-8 recording and resolved destination paths; an unsupported destination is rejected before creating directories or files.
+An unsupported path produces a runtime error without retiring the worker.
 Exported files are writable and do not depend on the original recording for their included content or images.
 
 A recorded result proves response assembly.

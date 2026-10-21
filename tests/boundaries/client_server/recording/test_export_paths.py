@@ -11,6 +11,7 @@ from boundaries.client_server.recording.test_export import events, normalized
 from support.assertions import last_result_text
 from support.client import McpClient
 from support.execution import DIRECT, SANDBOXED, Execution, executions
+from support.normalization import code
 from support.records import Transcript
 from support.r import r_test_environment
 from support.resolvers import bare_runtime_environment
@@ -91,6 +92,50 @@ def test_non_utf8_capture_returns_runtime_error(
             )
             assert "transcript projections disabled" in stderr, stderr
             return normalized(transcript, workspace)
+
+
+@requires(NON_UTF8_FILENAMES, R)
+@executions(DIRECT, SANDBOXED)
+def test_non_utf8_destination_is_rejected_before_writing(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        destination = workspace / os.fsdecode(b"destination-\xff")
+        with McpClient(
+            binary,
+            execution.serve(
+                *(("--writable-root", str(workspace)) if execution == SANDBOXED else ())
+            ),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("ready\n", r='token <- new.env(); cat("ready\\n")')
+            client.expect(
+                # fmt: python
+                python=code(r"""
+                    import os
+
+                    os.mkdir(b"destination-\xff")
+                    os.chdir(b"destination-\xff")
+                    """),
+            )
+            for arguments in (
+                {"r": '.console$export_session("reports/r")'},
+                {"python": '_console.export_session("reports/python")'},
+            ):
+                client.send(**arguments)
+                assert "export destination requires a UTF-8 path" in last_result_text(
+                    client
+                )
+                assert not (destination / "reports").exists()
+            client.expect(python='os.chdir("..")')
+            client.expect(
+                r='stopifnot(is.environment(token)); paths <- .console$export_session("report")'
+            )
+            assert (workspace / "report/session.qmd").is_file()
+            assert (workspace / "report/session.md").is_file()
+            return normalized(client.finish(), workspace)
 
 
 if __name__ == "__main__":

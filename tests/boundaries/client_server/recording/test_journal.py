@@ -382,7 +382,7 @@ def test_records_tool_calls_and_images(
     binary: Path, execution: Execution
 ) -> TranscriptWithCompanions:
     zod = Path(__file__).resolve().parents[3] / "fixtures" / "zod"
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory() as temporary_directory, ExitStack() as resources:
         workspace = Path(temporary_directory)
         environment, _ = r_test_environment()
         environment["RETICULATE_PYTHON"] = ""
@@ -402,10 +402,13 @@ def test_records_tool_calls_and_images(
         )
         session = next((workspace / ".agents/console" / "sessions").iterdir())
         quarto_path = session / "sessions/session-001.qmd"
-        quarto_before_python_requirement = quarto_path.read_text(encoding="utf-8")
-        quarto_before_inode = quarto_path.stat().st_ino
-        assert "    - praise" in quarto_before_python_requirement
-        assert "transcript-fixture" not in quarto_before_python_requirement
+        initial_quarto = quarto_path.read_text(encoding="utf-8")
+        # Retain the old inode while checking atomic replacement. An unlinked
+        # inode can otherwise be reused immediately on Linux filesystems.
+        previous_quarto = resources.enter_context(quarto_path.open("rb"))
+        quarto_before_inode = os.fstat(previous_quarto.fileno()).st_ino
+        assert "    - praise" in initial_quarto
+        assert "transcript-fixture" not in initial_quarto
         image_request_id = client.transcript[-1]["id"]
         invalid = client.request(
             "tools/call",
@@ -413,9 +416,17 @@ def test_records_tool_calls_and_images(
             arguments={"r": "1", "python": "1"},
             _meta={"progressToken": "record-me"},
         )
+        quarto_before_python_requirement = quarto_path.read_text(encoding="utf-8")
         client.send(requirements={"python": ["transcript-fixture"]})
         preparation_request_id = client.transcript[-1]["id"]
         preparation_result = client.transcript[-1]["result"]
+        assert preparation_result["isError"], preparation_result
+        assert (
+            quarto_path.read_text(encoding="utf-8") == quarto_before_python_requirement
+        )
+        accepted = client.send(requirements={"r": ["glue"]})
+        assert not accepted.get("isError"), accepted
+        accepted_request_id = client.transcript[-1]["id"]
         client.request("tools/call", name="missing", arguments={})
 
         sessions = list((workspace / ".agents/console" / "sessions").iterdir())
@@ -442,6 +453,8 @@ def test_records_tool_calls_and_images(
             "tool_call",
             "image_retained",
             "cell_output",
+            "tool_result",
+            "tool_call",
             "tool_result",
             "tool_call",
             "tool_result",
@@ -542,7 +555,15 @@ def test_records_tool_calls_and_images(
             },
         }, events[7]
         assert events[8]["result"] == preparation_result, events[8]
+        assert events[9]["call_id"] == events[10]["call_id"] == 4, events
+        assert events[9]["request_id"] == accepted_request_id, events[9]
+        assert events[9]["request"] == {
+            "name": "send",
+            "arguments": {"requirements": {"r": ["glue"]}},
+        }, events[9]
+        assert events[10]["result"] == accepted, events[10]
         assert [event["request"]["name"] for event in events if "request" in event] == [
+            "send",
             "send",
             "send",
             "send",
@@ -601,7 +622,8 @@ def test_records_tool_calls_and_images(
         assert "```{r}\n#| error: true\nemit image\n```" in quarto_text
         assert quarto_path.stat().st_ino != quarto_before_inode
         assert "    - praise" in quarto_text
-        assert "    - transcript-fixture" in quarto_text
+        assert "    - glue" in quarto_text
+        assert "transcript-fixture" not in quarto_text
         assert "  python-version: []" in quarto_text
         assert all(
             excluded not in quarto_text

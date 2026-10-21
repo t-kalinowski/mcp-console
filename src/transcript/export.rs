@@ -53,25 +53,33 @@ impl Transcript {
         // Cell entry is queued before this callback. Flush it through the
         // recorder's normal failure owner before selecting the snapshot.
         self.update(|_| Ok(()));
-        let (state, poisoned) = self.lock();
-        if poisoned {
-            return Err("session capture lock poisoned".into());
-        }
-        if let Some(error) = &state.failure {
-            return Err(format!("session capture unavailable: {error}"));
-        }
-        let active = state.active.as_ref().ok_or("session capture unavailable")?;
-        let (call, owner, snapshot_sequence) = active
-            .cell_snapshot
-            .ok_or("session export requires an executing cell")?;
-        if !active.published {
-            return Err("session recording has not been activated".into());
-        }
-        reconstruct(&active.directory, owner.session_id, snapshot_sequence, call)
+        let (directory, session, snapshot_sequence, call) = {
+            let (state, poisoned) = self.lock();
+            if poisoned {
+                return Err("session capture lock poisoned".into());
+            }
+            if let Some(error) = &state.failure {
+                return Err(format!("session capture unavailable: {error}"));
+            }
+            let active = state.active.as_ref().ok_or("session capture unavailable")?;
+            let (call, owner, snapshot_sequence) = active
+                .cell_snapshot
+                .ok_or("session export requires an executing cell")?;
+            if !active.published {
+                return Err("session recording has not been activated".into());
+            }
+            (
+                active.directory.clone(),
+                owner.session_id,
+                snapshot_sequence,
+                call,
+            )
+        };
+        reconstruct(&directory, session, snapshot_sequence, call)
     }
 }
 
-/// Both reconstruction passes use the same boundary under the recorder lock.
+/// Both passes read the same completed prefix while later capture can append.
 /// Drop each event after visiting it: output chunk counts must not determine
 /// export memory, and historical stdin belongs only to the journal.
 fn scan_capture(
@@ -458,6 +466,9 @@ impl SessionExport {
         let mut resolved = ancestor.canonicalize().map_err(|e| e.to_string())?;
         for component in suffix.into_iter().rev() {
             resolved.push(component);
+        }
+        if resolved.to_str().is_none() {
+            return Err("export destination requires a UTF-8 path".into());
         }
         if resolved.starts_with(Path::new(&self.recording_directory)) {
             return Err("export destination must be outside the managed recording".into());

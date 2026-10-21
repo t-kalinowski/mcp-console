@@ -107,8 +107,14 @@ struct ActiveTranscript {
     sequence: u64,
     // Call, observed owner, and the journal boundary before cell entry.
     cell_snapshot: Option<(u64, Owner, u64)>,
-    call_sessions: BTreeMap<u64, u64>,
+    call_sessions: BTreeMap<u64, CallAssociation>,
     finished: bool,
+}
+#[derive(Default)]
+struct CallAssociation {
+    session_id: Option<u64>,
+    source_pending: bool,
+    result_finished: bool,
 }
 // One slot per assembled image; None preserves its position when raw capture
 // did not retain it. No image payload is copied into the journal.
@@ -268,7 +274,11 @@ impl Transcript {
                 .lock()
                 .map_err(|_| "tool result association lock poisoned")?;
             let active = state.capture()?;
-            if !active.call_sessions.contains_key(&call_id)
+            if active
+                .call_sessions
+                .get(&call_id)
+                .and_then(|call| call.session_id)
+                .is_none()
                 && let Some(session_id) = call.addressed_session
                 && self.owner().is_some_and(|o| o.session_id == session_id)
             {
@@ -534,6 +544,36 @@ impl ActiveTranscript {
             return Ok(());
         }
         match &event {
+            Event::ToolCall { call_id, .. } => {
+                self.call_sessions
+                    .insert(*call_id, CallAssociation::default());
+            }
+            Event::SourceAdmitted { call_id } => {
+                self.call_sessions
+                    .get_mut(call_id)
+                    .ok_or("source admission has no recorded call")?
+                    .source_pending = true;
+            }
+            Event::SourceFinished { call_id } => {
+                let call = self
+                    .call_sessions
+                    .get_mut(call_id)
+                    .ok_or("source settlement has no recorded call")?;
+                call.source_pending = false;
+                if call.result_finished {
+                    self.call_sessions.remove(call_id);
+                }
+            }
+            Event::ToolResult { call_id, .. } => {
+                let call = self
+                    .call_sessions
+                    .get_mut(call_id)
+                    .ok_or("result settlement has no recorded call")?;
+                call.result_finished = true;
+                if !call.source_pending {
+                    self.call_sessions.remove(call_id);
+                }
+            }
             Event::WorkerStarted { .. } | Event::WorkerEnded { .. } => {
                 self.cell_snapshot = None;
             }
@@ -547,9 +587,14 @@ impl ActiveTranscript {
                 call_id,
                 session_id,
             } => {
-                if self.call_sessions.insert(*call_id, *session_id) == Some(*session_id) {
+                let call = self
+                    .call_sessions
+                    .get_mut(call_id)
+                    .ok_or("source association has no recorded call")?;
+                if call.session_id == Some(*session_id) {
                     return Ok(());
                 }
+                call.session_id = Some(*session_id);
             }
             Event::SourceAttached {
                 call_id,
