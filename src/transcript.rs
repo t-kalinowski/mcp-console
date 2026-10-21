@@ -246,14 +246,10 @@ impl Transcript {
                 },
                 at,
             )?;
-            let addressed_session = (request
-                .arguments
-                .as_ref()
-                .and_then(|a| a.get("control"))
-                .and_then(Value::as_str)
-                != Some("restart"))
-            .then(|| self.owner().map(|o| o.session_id))
-            .flatten();
+            // Validation can reject a restart-shaped request before retirement.
+            // finish() associates otherwise unclaimed source only if this same
+            // worker still owns output; actual replacement changes that owner.
+            let addressed_session = self.owner().map(|o| o.session_id);
             Ok(Call {
                 id: Some(call_id),
                 result_images: Arc::new(Mutex::new(None)),

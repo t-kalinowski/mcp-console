@@ -623,6 +623,51 @@ def test_restart_requirements_leave_retired_source_unchanged(
 
 @requires(R)
 @executions(DIRECT, SANDBOXED)
+def test_rejected_restart_source_stays_with_the_surviving_session(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        workspace = Path(directory)
+        with McpClient(
+            binary,
+            execution.serve(
+                *(("--writable-root", str(workspace)) if execution == SANDBOXED else ())
+            ),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("ready\n", r='token <- new.env(); cat("ready\\n")')
+            sources = {
+                "r": "rejected_restart_r <- TRUE",
+                "python": "rejected_restart_python = True",
+            }
+            for language, source in sources.items():
+                rejected = client.send(
+                    control="restart", requirements={}, **{language: source}
+                )
+                assert rejected["isError"], rejected
+            client.expect(
+                r='stopifnot(is.environment(token), !exists("rejected_restart_r"))'
+            )
+            client.expect(
+                python="assert 'rejected_restart_python' not in globals(); paths = _console.export_session('report')"
+            )
+            (recording,) = (workspace / ".agents/console/sessions").iterdir()
+            managed = (recording / "sessions/session-001.qmd").read_text()
+            exported = (workspace / "report/session.qmd").read_text()
+            report = (workspace / "report/session.md").read_text()
+            for language, source in sources.items():
+                assert f"```{{{language}}}\n#| error: true\n{source}\n```" in managed, (
+                    managed
+                )
+                assert source in exported and source in report, (exported, report)
+            capture = events(recording)
+            assert len([e for e in capture if e["event"] == "worker_started"]) == 1
+            return normalized(client.finish(), workspace)
+
+
+@requires(R)
+@executions(DIRECT, SANDBOXED)
 def test_rejected_additions_leave_session_metadata_unchanged(
     binary: Path, execution: Execution
 ) -> Transcript:
