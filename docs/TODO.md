@@ -53,6 +53,9 @@ A schema accepting a native option is not proof of usable routing.
 See [native capabilities](SANDBOX_CONFIGURATION.md#native-capabilities).
 
 **SP-3 — Reduce Windows fixture-only exclusions.** Port shell/shebang, FIFO, and Unix-layout fixtures for otherwise supported admission, resolver, client, and lifecycle behavior.
+The CLI resolver inventory/manifest fixture now uses a native executable, and CLI configuration-conflict and startup-validation cases no longer require POSIX.
+Warmup cases for missing or unusable R and interactive input also run on Windows.
+Other fixture exclusions remain.
 Keep genuinely OS-specific contracts on their owning platform.
 Native Windows acceptance does not cover every skipped shared case.
 Audit through full-suite capability diagnostics; see [Windows parity](WINDOWS_DEVELOPMENT.md#testing-parity-and-remaining-gaps).
@@ -75,11 +78,6 @@ A later pass should compare discovery, language choice, correct polling/input, d
 Smaller prose alone is not evidence of better behavior.
 See [Tool descriptions](TOOL_DESCRIPTIONS.md).
 
-**DX-2 — Keep defaults and reference links tied to their owners.** This pass found stale Python-default prose and companion-pin references.
-A lightweight regression/check for important defaults and pin-specific links is a possible follow-up.
-Do not build a general documentation-generation framework without a demonstrated need.
-
-DX-2 is an editorial follow-up proposed by this pass; it is not a previously committed implementation task.
 Delete completed entries and empty sections as part of the change that resolves them, and update related links.
 
 ## Unselected proposals, not release blockers
