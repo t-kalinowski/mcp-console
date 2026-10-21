@@ -12,7 +12,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.checkpoints import FifoCheckpoint, wait_for_worker_file
+from support.checkpoints import (
+    FifoCheckpoint,
+    wait_for_worker_file,
+    wait_for_checkpoint,
+)
 from support.client import McpClient
 from support.events import Events
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -279,6 +283,25 @@ def test_retains_received_send_while_an_earlier_response_finishes(
                     "content": [{"type": "text", "text": "first response\n"}],
                     "isError": False,
                 }
+                # A received frame can precede completion of its local write.
+                # Establish delivery before releasing the second handler.
+                (recording,) = (workspace / ".agents/console/sessions").iterdir()
+                wait_for_checkpoint(
+                    lambda: (
+                        recording
+                        if any(
+                            event["event"] == "delivery"
+                            and event["call_id"] == 1
+                            and event["delivered"]
+                            for event in recording_events(recording)
+                        )
+                        else None
+                    ),
+                    "first response transport write settled",
+                    root=recording,
+                    recursive=True,
+                    client=client,
+                )
                 gates["recording-release"].release()
                 client.receive(second)
                 assert second["result"] == {

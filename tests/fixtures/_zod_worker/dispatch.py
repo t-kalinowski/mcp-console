@@ -58,6 +58,7 @@ EXACT_HANDLERS: dict[str, Callable[[WorkerContext, str], LoopAction | None]] = {
     "stall": lifecycle.stall,
     "close sideband with unread shutdown": lifecycle.close_sideband_with_unread_shutdown,
     "exit unexpectedly": lifecycle.exit_unexpectedly,
+    "exit after output": lifecycle.exit_unexpectedly,
     "exit zero": lifecycle.exit_zero,
     "wait for stdin close": lifecycle.wait_for_stdin_close,
     "set controlled restart state": lifecycle.set_controlled_restart_state,

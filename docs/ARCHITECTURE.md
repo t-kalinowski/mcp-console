@@ -347,7 +347,11 @@ One recording belongs to one Console process; numbered sessions identify actual 
 The relay publishes `worker_started` only after acquiring its direct child.
 The server requires exactly one acquisition before readiness and rejects duplicate acquisition events as private-protocol failures.
 The server queues acquisition, readiness, and exit/signal evidence through the bounded recorder drain without changing generation ownership or retirement barriers.
+Journal writes do not run on the worker event dispatcher or delay its retirement join.
+Observed session, cell, and image identities are reserved when events enter the bounded recorder queue, independently of the journal writer.
+Consecutive pending text ranges in the same interval can share an event with the first observation timestamp; images and other events preserve their intervening boundaries.
 The output tape caches interval ownership, so collecting retained restart output does not query the journal.
+Raw capture handles and their publication registry use a separate lock from journal state; creating, appending, and closing interval files do not acquire the journal mutex.
 Startup failure records carry a session number only when that startup acquired a worker.
 
 Before send, the recorder uses private temporary storage for the same journal, output logs, images, and projections.
@@ -373,8 +377,8 @@ Capture completion ownership survives handler cancellation and delivery deadline
 Finalization completes permissions on retained files even after recording or projection failure, without inventing a successful `recording_ended` event for disabled capture.
 
 A journal or artifact failure disables further recording without stopping computation.
-Queued and in-flight protocol and worker lifecycle capture share a bound of 1,024 events or 8 MiB of serialized event data.
-Exceeding either limit discards pending protocol events and disables recording; it does not wait for the journal writer or close MCP input.
+Queued and in-flight protocol, worker lifecycle, and output capture events share a bound of 1,024 events or 8 MiB of serialized event data.
+Exceeding either limit discards pending capture events and disables recording; it does not wait for the journal writer or close MCP input.
 The current write can finish before the recorder reports the failure, so the retained journal may end partway through the exchange.
 A raw-log failure affects that file.
 Failure of a derived projection disables the projections but can leave the journal and artifacts available.

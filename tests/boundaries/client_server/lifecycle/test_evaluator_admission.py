@@ -44,6 +44,7 @@ def interrupt_held_evaluator(
                     build_interposer(root, "evaluator_bootstrap_checkpoint")
                 ),
                 "MCP_CONSOLE_LANGUAGES": "python",
+                "MCP_CONSOLE_TEST_ADMISSION_SOURCE": "discarded_cell = True",
                 "MCP_CONSOLE_TEST_BOOTSTRAP_INTERPOSER": str(
                     build_interposer(root, "bootstrap_completion_checkpoint")
                 ),
