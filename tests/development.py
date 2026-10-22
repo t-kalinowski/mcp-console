@@ -3,6 +3,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -91,7 +92,11 @@ edition = "2021"
             program = (
                 step.split("\n      - ", 1)[0].split("        run: ", 1)[1].strip()
             )
-            subprocess.run(program, shell=True, cwd=self.root, check=True, timeout=60)
+            arguments = shlex.split(program)
+            arguments[0] = str(Path(arguments[0]))
+            subprocess.run(
+                arguments, shell=os.name == "nt", cwd=self.root, check=True, timeout=60
+            )
         run(*build)
         self.assertEqual(run(str(executable)), "dependency source\n")
         self.assertEqual(dependency.stat().st_mtime_ns, dependency_time)
