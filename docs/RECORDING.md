@@ -10,6 +10,7 @@ Review them before sharing.
 
 Ask the agent for the recording's path, then open `transcript.md` in that directory.
 It shows calls and results with links to retained plots and other artifacts.
+It also links to source documents in `sessions/session-NNN.qmd`, one for each worker session that received source.
 Raw text and images are grouped under `capture/sessions/NNN/` by worker session and observed startup, cell, or post-cell interval.
 Completed files are read-only; copy a file before editing it.
 For the dice example in [Get started](getting-started.qmd), you can inspect both the simulation and the later comparison that reused its results.
@@ -36,14 +37,15 @@ Reference: [Retrieve the last SQL result](RUNTIME_REFERENCE.md#retrieve-the-last
 
 ## Turn the code into a report {#render-a-reviewed-copy}
 
-`transcript.qmd` is a starting point for a report, **not a replay or checkpoint**.
-It can contain failed evaluations and rejected calls.
-It omits interactive input, control operations, output, and recorded images.
+Each `sessions/session-NNN.qmd` is a starting point for a report, **not a replay or checkpoint**.
+It contains the R, Python, and SQL source associated with that worker, including failed evaluations, rejected calls, and source submitted alongside a control.
+Restarts and automatic worker replacement begin a separate document; an interrupt that preserves the worker stays in the same document.
+The documents omit interactive input, polling, control operations, output, and recorded images.
 
 Copy it before editing:
 
 ```sh
-cp transcript.qmd report.qmd
+cp sessions/session-001.qmd report.qmd
 ```
 
 Review the code, inputs, package declarations, and evaluation settings in `report.qmd`.
@@ -60,9 +62,9 @@ With `ir` already installed, use `ir render report.qmd`.
 Rendering requires R, even when the original session used only Python.
 SQL chunks need a user-supplied DBI connection.
 Package declarations are not a lockfile or a complete history of the environment.
-
-Some recordings disable evaluation because runtime information is unavailable or the session changed between incompatible dependency declarations.
-Review those boundaries and choose the rendering environment explicitly rather than simply enabling every chunk.
+Each document records accepted requirements for its worker session and describes the original working directory without setting the rendering directory.
+Copy required inputs beside the working copy or adjust their paths before rendering.
+Chunks permit errors so a recorded failure does not prevent reviewing later code; review those failures before relying on the report.
 
 <span id="storage-and-retention"></span> <span id="recording-failures"></span>
 
