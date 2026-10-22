@@ -40,7 +40,10 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
         ordinary.unlink()
         for path in [
             outside / "blocked",
-            *[workspace / name / "keep" for name in (".git", ".agents", ".codex", ".claude")],
+            *[
+                workspace / name / "keep"
+                for name in (".git", ".agents", ".codex", ".aws", ".claude")
+            ],
         ]:
             try:
                 _ = path.write_text("blocked")
@@ -70,13 +73,14 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
         host = root / "workspace"
         outside = root / "outside"
         outside.mkdir()
-        for name in (".git", ".agents", ".codex", ".claude"):
+        for name in (".git", ".agents", ".codex", ".aws", ".claude"):
             (host / name).mkdir(parents=True)
             (host / name / "keep").write_text("readable")
         config = host / ".agents/console/config.yaml"
         config.parent.mkdir()
+        # Writable roots cover the complete subtree; metadata exclusions are explicit.
         config.write_text(
-            "sandbox: {filesystem: {read_write: [.], read_only: [.claude]}}\n"
+            "sandbox: {filesystem: {read_write: [.], read_only: [.git, .agents, .codex, .aws, .claude]}}\n"
         )
         capture = root / "launches.jsonl"
         environment = os.environ | {
@@ -123,7 +127,10 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
         assert policy["network"] == "restricted"
         assert policy["filesystem"]["kind"] == "restricted"
         assert policy["filesystem"]["entries"][1:] == [
-            {"path": {"type": "path", "path": str(host / ".claude")}, "access": "read"},
+            *[
+                {"path": {"type": "path", "path": str(host / name)}, "access": "read"}
+                for name in (".git", ".agents", ".codex", ".aws", ".claude")
+            ],
             {"path": {"type": "path", "path": str(host)}, "access": "write"},
         ], policy
         for entry in transcript:
@@ -141,7 +148,7 @@ def test_workspace_permissions_and_description_survive_worker_replacement(
                         "fixed_workspace": True,
                         "identical_launches": len(launches),
                         "network": "restricted",
-                        "read_only": [".claude"],
+                        "read_only": [".git", ".agents", ".codex", ".aws", ".claude"],
                     }
                 ]
             },

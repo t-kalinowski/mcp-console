@@ -5,4 +5,8 @@ fixed_workspace: true
 identical_launches: 4
 network: restricted
 read_only:
+  - .git
+  - .agents
+  - .codex
+  - .aws
   - .claude
