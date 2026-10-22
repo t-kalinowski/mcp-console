@@ -122,6 +122,7 @@ pub(crate) struct Call {
     id: Option<u64>,
     result_images: Arc<Mutex<Option<ResultImages>>>,
     parts: Arc<Mutex<Vec<ResultPart>>>,
+    /// Actual worker addressed by a call that submitted source.
     addressed_session: Option<u64>,
 }
 #[derive(Clone)]
@@ -246,7 +247,16 @@ impl Transcript {
             // Validation can reject a restart-shaped request before retirement.
             // finish() associates otherwise unclaimed source only if this same
             // worker still owns output; actual replacement changes that owner.
-            let addressed_session = self.owner().map(|o| o.session_id);
+            let has_source = request.arguments.as_ref().is_some_and(|arguments| {
+                ["r", "python", "sql"]
+                    .iter()
+                    .any(|language| arguments.get(*language).is_some_and(Value::is_string))
+            });
+            let addressed_session = if has_source {
+                self.owner().map(|o| o.session_id)
+            } else {
+                None
+            };
             Ok(Call {
                 id: Some(call_id),
                 result_images: Arc::new(Mutex::new(None)),

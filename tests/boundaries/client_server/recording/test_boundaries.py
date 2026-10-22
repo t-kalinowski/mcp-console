@@ -197,6 +197,9 @@ def outcome_less_retirement(binary: Path, *, interval: str) -> Transcript:
         transcript = client.finish()
         retained = recording(root)
         capture = events(retained)
+        admitted = [e["call_id"] for e in capture if e["event"] == "source_admitted"]
+        settled = [e["call_id"] for e in capture if e["event"] == "source_finished"]
+        assert settled == admitted, (admitted, settled)
         assert log.read_text() == "before relay loss\n"
         assert not any(
             e["event"] == "worker_ended" and e["session_id"] == 1 for e in capture
@@ -257,6 +260,11 @@ def test_cell_entry_during_retirement_retains_ownership(binary: Path) -> Transcr
             "cell_ended",
         ], boundaries
         assert boundaries[-1]["completion_confirmed"] is True, boundaries
+        assert [
+            event["call_id"]
+            for event in events(retained)
+            if event["event"] == "source_finished"
+        ] == [1]
         return normalize_recording(transcript, root)
 
 

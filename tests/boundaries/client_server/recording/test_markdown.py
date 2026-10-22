@@ -471,6 +471,24 @@ def test_records_polls_input_controls_and_previews(
             assert "[output omitted:" in preview, preview
             transcript = client.finish()
         (recording,) = (workspace / ".agents/console/sessions").iterdir()
+        capture = [
+            json.loads(line)
+            for line in (recording / "capture/events.jsonl").read_text().splitlines()
+        ]
+        source_calls = {
+            event["call_id"]
+            for event in capture
+            if event["event"] == "tool_call"
+            and any(
+                language in event["request"]["arguments"]
+                for language in ("r", "python", "sql")
+            )
+        }
+        assert {
+            event["call_id"]
+            for event in capture
+            if event["event"] == "source_associated"
+        } == source_calls
         markdown = (recording / "transcript.md").read_text()
         assert "## Call 2: Poll" in markdown
         assert "## Call 4: Stdin" in markdown

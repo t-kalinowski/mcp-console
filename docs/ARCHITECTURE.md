@@ -370,9 +370,11 @@ The `cell_started` capture event records the call and interval owner; withheld s
 Source admission, worker association, and settlement use that same bounded recorder queue without blocking MCP reception or worker event dispatch on journal I/O.
 Admitted source survives an initial response until association or evaluation settlement.
 `source_admitted` and `source_finished` follow server admission, which can begin before worker acquisition and settle without execution.
+The admission owner records settlement at its first terminal outcome, including operation failure and retirement before evaluation completion.
 They cannot be inferred from `cell_started` and `cell_ended`, which describe actual worker execution.
 `source_associated` identifies the owning worker without claiming that the source ran.
 Actual acquisition and dispatch associate source with its worker; validation rejection can associate otherwise unclaimed source only with the still-surviving addressed worker.
+Calls without source do not acquire source associations.
 Unsettled associations retain call identity and settlement flags, and the source projection retains source rather than complete requests or stdin.
 Both release settled call entries.
 Completion closes the cell interval, and the final startup or post-cell interval includes shutdown output.
