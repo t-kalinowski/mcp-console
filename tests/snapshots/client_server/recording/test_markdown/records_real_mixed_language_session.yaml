@@ -4,6 +4,20 @@
 send:
   requirements:
     action: get
+  timeout_ms: 0
+result:
+  content:
+    - type: text
+      text: |-
+
+        [phase: dependency preparation]
+        [worker starting]
+  isError: false
+---
+send:
+  requirements:
+    action: get
+  timeout_ms: 60000
 result:
   content:
     - type: text

@@ -9,7 +9,9 @@ Review them before sharing.
 ## Read the recording {#location-and-files}
 
 Ask the agent for the recording's path, then open `transcript.md` in that directory.
-It shows calls and results with links to retained plots and other artifacts.
+It shows calls and results across all worker sessions, including recorded images and links to retained output.
+Links labeled “Session NNN source (QMD)” open source documents in `sessions/session-NNN.qmd`, one for each worker session that received source.
+Those files contain code and environment metadata; recorded results and images remain in `transcript.md` and the capture files.
 Raw text and images are grouped under `capture/sessions/NNN/` by worker session and observed startup, cell, or post-cell interval.
 Completed files are read-only; copy a file before editing it.
 For the dice example in [Get started](getting-started.qmd), you can inspect both the simulation and the later comparison that reused its results.
@@ -66,22 +68,36 @@ The managed recording also contains source documents in `sessions/session-NNN.qm
 
 See the [recording reference](RECORDING_REFERENCE.md#export-a-working-copy) for the file layout, delivery evidence, and export limitations.
 
-## Render reviewed source {#render-a-reviewed-copy}
+## Turn the code into a report {#render-a-reviewed-copy}
 
-Review the exported code, inputs, package declarations, and evaluation settings before executing `session.qmd`.
+Each `sessions/session-NNN.qmd` is a starting point for a report, **not a replay or checkpoint**.
+It contains the R, Python, and SQL source associated with that worker, including failed evaluations, rejected calls, and source submitted alongside a control.
+Restarts and automatic worker replacement begin a separate document; an interrupt that preserves the worker stays in the same document.
+The documents omit interactive input, polling, control operations, output, and recorded images.
+
+Copy it before editing:
+
+```sh
+cp sessions/session-001.qmd report.qmd
+```
+
+Review the code, inputs, package declarations, and evaluation settings in `report.qmd`.
 Rendering executes code outside the Console sandbox.
 
 After reviewing the copy:
 
 ```sh
-cd analysis-report
-uv tool run --from r-lib-ir ir render session.qmd
+uv tool run --from r-lib-ir ir render report.qmd
 ```
 
-With `ir` already installed, use `ir render session.qmd`.
+With `ir` already installed, use `ir render report.qmd`.
+
 Rendering requires R, even when the original session used only Python.
 SQL chunks need a user-supplied DBI connection.
 Package declarations are not a lockfile or a complete history of the environment.
+Each document records accepted requirements for its worker session and describes the original working directory without setting the rendering directory.
+Copy required inputs beside the working copy or adjust their paths before rendering.
+Chunks permit errors so a recorded failure does not prevent reviewing later code; review those failures before relying on the report.
 
 <span id="storage-and-retention"></span> <span id="recording-failures"></span>
 

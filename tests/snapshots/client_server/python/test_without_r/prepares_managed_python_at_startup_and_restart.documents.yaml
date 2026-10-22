@@ -63,6 +63,7 @@ qmd: |+
   open("old-worker-consumed-input", "w").close()
   ```
 
+path: sessions/session-001.qmd
 ---
 session: 2
 qmd: |+
@@ -110,6 +111,7 @@ qmd: |+
   print("cumulative packages retained")
   ```
 
+path: sessions/session-002.qmd
 ---
 session: 3
 qmd: |+
@@ -158,6 +160,7 @@ qmd: |+
   os._exit(47)
   ```
 
+path: sessions/session-003.qmd
 ---
 session: 4
 qmd: |+
@@ -199,6 +202,7 @@ qmd: |+
   print("cumulative packages retained")
   ```
 
+path: sessions/session-004.qmd
 ---
 session: 5
 qmd: |+
@@ -236,6 +240,7 @@ qmd: |+
   print("retained restart")
   ```
 
+path: sessions/session-005.qmd
 ---
 session: 6
 qmd: |+
@@ -274,3 +279,4 @@ qmd: |+
   42
   ```
 
+path: sessions/session-006.qmd

@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from contextlib import contextmanager
 from collections.abc import Iterator
+from yaml12 import parse_yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -751,14 +752,15 @@ def test_combined_preparation_precedes_first_sql_cell(
         env = managed_environment(root)
         cache = extension_cache(root, execution)
         with sql_client(binary, execution, env) as client:
-            result = client.send(
+            client.expect(
+                "Success\n-------\n[0 rows]\n",
                 requirements={"python": ["six"], "duckdb": ["fts"]},
                 sql="SET autoinstall_known_extensions = false; LOAD fts",
             )
-            assert not result.get("isError"), result
-            assert "Error:" not in last_tool_text(client)
-            client.send(python="import six; print('combined SQL preparation')")
-            assert last_tool_text(client) == "combined SQL preparation\n"
+            client.expect(
+                "combined SQL preparation\n",
+                python="import six; print('combined SQL preparation')",
+            )
             assert len(list(cache.glob("v*/**/fts.duckdb_extension"))) == 1
             return client.finish()[3:]
 
@@ -976,10 +978,7 @@ def test_live_extension_additions_require_an_idle_worker(
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         env = managed_environment(root)
-        # Pin the debugger's frame/return events independently of cached Python.
-        with sql_client(
-            binary, execution, env, arguments=("-c", 'python.version="3.14"')
-        ) as client:
+        with sql_client(binary, execution, env) as client:
             client.send(requirements={"duckdb": ["json"]})
             client.send(
                 python="identity = object(); identity_id = id(identity); answer = input('answer> ')",
@@ -1608,7 +1607,8 @@ def test_records_managed_sql_cells(
 ) -> TranscriptWithCompanions:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        workspace = root / "workspace"
+        # Require a quoted YAML scalar on every platform, including Unix.
+        workspace = root / "workspace # metadata"
         workspace.mkdir()
         env = managed_environment(root)
         with sql_client(binary, execution, env, workspace) as client:
@@ -1646,7 +1646,9 @@ def test_records_managed_sql_cells(
         assert "execute:\n  eval: false" not in quarto
         assert "\nir:" in quarto
         assert "root.dir:" not in quarto
-        assert f"  original-working-directory: {workspace.resolve()}" in quarto
+        metadata = parse_yaml(quarto.split("---\n", 2)[1])
+        recorded_directory = metadata["mcp-console"]["original-working-directory"]
+        assert Path(recorded_directory).samefile(workspace), metadata
         assert "```sql\nSELECT 42 AS recorded\n```" in markdown
         assert "```{sql}\n--| error: true\nSELECT 42 AS recorded\n```" in quarto
         assert (
@@ -1662,8 +1664,15 @@ def test_records_managed_sql_cells(
         assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
         working_directory = events[0]["working_directory"]
         assert Path(working_directory).samefile(workspace)
+        # Normalize the verified scalar, including quoting, for shared snapshots.
         return TranscriptWithCompanions(
-            records, {"qmd": quarto.replace(working_directory, "<workspace>")}
+            records,
+            {
+                "qmd": quarto.replace(
+                    json.dumps(recorded_directory, ensure_ascii=False),
+                    "<workspace>",
+                )
+            },
         )
 
 

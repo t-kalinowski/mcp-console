@@ -1,5 +1,5 @@
 ---
-!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.writable.yaml
+!same-as tests/snapshots/client_server/server/test_tools/initializes_and_lists_tools.yaml
 ---
 send:
   r: |2-
@@ -32,14 +32,6 @@ result:
         ````
         <div>not markdown</div>
         after
-  isError: false
----
-send:
-  r: invisible(.console$export_session("report"))
-result:
-  content:
-    - type: text
-      text: "[done]"
   isError: false
 ---
 quarto document:

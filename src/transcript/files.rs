@@ -337,7 +337,7 @@ fn finalize_files(directory: &Path) -> Result<(), String> {
         Err(errors.join("; "))
     }
 }
-pub(super) fn make_read_only(path: &Path) -> Result<(), String> {
+fn make_read_only(path: &Path) -> Result<(), String> {
     let mut permissions = std::fs::metadata(path)
         .map_err(|e| e.to_string())?
         .permissions();

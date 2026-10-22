@@ -9,7 +9,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from support.assertions import wait_for_evaluation_output
 from support.checkpoints import FifoCheckpoint
 from support.client import McpClient
 from support.execution import DIRECT, Execution, executions
@@ -67,9 +66,7 @@ def test_retains_source_after_an_early_response(
                 ), events
             finally:
                 release.release()
-            wait_for_evaluation_output(
-                client, "zod: delayed source\n", "delayed source completes"
-            )
+            client.expect("zod: delayed source\n")
             source = recording / "sessions/session-001.qmd"
             assert source.is_file(), "accepted source was lost after its early response"
             assert "echo delayed source" in source.read_text()

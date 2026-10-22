@@ -122,6 +122,8 @@ def test_records_python_without_r_dependencies(
         assert "\nir:\n  isolated: true\n  packages: []\n" in quarto, quarto
         assert "execute:\n  eval: false" not in quarto, quarto
         assert "review before executing" in quarto
+        assert "# From a working copy, run `ir render session-001.qmd`" in quarto
+        assert "# IR rendering requires R on the render host" in quarto
         assert "```{python}" in quarto, quarto
         return TranscriptWithCompanions(
             transcript=transcript,
@@ -395,19 +397,12 @@ def test_no_r_extension_preparation_uses_candidate_provider(
             answer = 41
             original_connection = _console.sql_connection()
             """)
-        client.expect(python=python)
-        # CPython 3.14 includes the -c program's source in its traceback.
-        wait_for_evaluation_output(
-            client,
-            None,
-            "candidate extension preparation failure",
-            expected_error=True,
-            completion_timeout_seconds=client.response_timeout,
+        client.send(python=python)
+        client.send(
             control="restart",
             requirements={
                 "action": "set",
                 "python": ["numpy", "pandas", "duckdb==1.4.4"],
-                "python_version": ["3.14"],
                 "duckdb": ["not_a_real_duckdb_extension"],
             },
         )

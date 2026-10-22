@@ -37,7 +37,7 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         ir_cache = ir_cache_directory(environment)
         client = McpClient(
             binary,
-            SANDBOXED.serve("--writable-root", str(workspace), "-c", "cache=host"),
+            SANDBOXED.serve("-c", "cache=host"),
             environment,
             current_directory=workspace,
         )
@@ -68,14 +68,13 @@ def test_renders_generated_document(binary: Path) -> Transcript:
         python_result = client.transcript[-1]["result"]["content"][0]["text"]
         assert "executed-python=42" in python_result, python_result
         assert "<div>not markdown</div>" in python_result, python_result
-        client.send(r='invisible(.console$export_session("report"))')
-        assert client.transcript[-1]["result"] == {
-            "content": [{"type": "text", "text": "[done]"}],
-            "isError": False,
-        }, client.transcript[-1]
         transcript = client.finish()
 
-        document = workspace / "report/session.qmd"
+        (recording,) = (workspace / ".agents/console/sessions").iterdir()
+        report = workspace / "report"
+        report.mkdir()
+        document = report / "session.qmd"
+        shutil.copyfile(recording / "sessions/session-001.qmd", document)
         shutil.copy2(
             workspace / "render-value.txt", document.parent / "render-value.txt"
         )

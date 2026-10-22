@@ -3,7 +3,7 @@ use super::state::{Environment, PythonEnvironment};
 use crate::worker_protocol::PythonRequirementManifest;
 
 /// The declaration is derived from retained resolver results, never a candidate.
-#[derive(Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Declaration {
     pub r: Vec<String>,
     pub python: Vec<String>,
@@ -191,9 +191,9 @@ impl Client {
         *retained = snapshot.clone();
         drop(retained);
         if changed
-            && let Some(transcript) = self.0.recording.lock().expect("recording lock").as_ref()
+            && let Some(recording) = self.0.recording.lock().expect("recording lock").as_ref()
         {
-            transcript.requirements_accepted(&snapshot["requirements"]);
+            recording.requirements_accepted(&snapshot["requirements"]);
         }
     }
 }

@@ -133,10 +133,13 @@ impl Evaluation {
         controlled_completion: bool,
         worker_revision: u64,
     ) -> Self {
-        transcript.source_admitted(call_id);
         let delivery_changed = Arc::new(tokio::sync::Notify::new());
         Self {
-            admission: super::admission::CellAdmission::new(generation),
+            admission: super::admission::CellAdmission::new(
+                generation,
+                transcript.clone(),
+                call_id,
+            ),
             state: Mutex::new(EvaluationState {
                 phase: EvaluationPhase::Evaluating,
                 completion_cut: None,
@@ -364,10 +367,6 @@ impl Evaluation {
         self.transcript.associate_current_call(self.call_id);
     }
 
-    pub(super) fn record_attachment(&self) {
-        self.transcript.source_attached(self.call_id);
-    }
-
     /// Queues text and briefly defers any outstanding input report for its receipt.
     pub(super) fn submit_stdin(&self, stdin: String) -> Result<(), String> {
         let mut state = self
@@ -507,23 +506,17 @@ impl Evaluation {
     }
 
     pub(super) fn complete_cell(&self, result: Result<(), SendFailure>) {
-        if self.admission.finish(if result.is_ok() {
+        self.admission.finish(if result.is_ok() {
             super::admission::CellOutcome::Completed
         } else {
             super::admission::CellOutcome::Failed
-        }) {
-            self.transcript.source_finished(self.call_id);
-        }
+        });
         self.complete(result, CompletionKind::Cell, None);
     }
 
     pub(super) fn complete_cell_after_grace(self: &Arc<Self>) {
-        if self
-            .admission
-            .finish(super::admission::CellOutcome::Completed)
-        {
-            self.transcript.source_finished(self.call_id);
-        }
+        self.admission
+            .finish(super::admission::CellOutcome::Completed);
         // Give raw-output readers a brief window to publish cross-pipe output that
         // arrived with Completed. The cut still leaves later observations for the
         // next response; it does not claim cross-pipe chronology.
@@ -570,9 +563,7 @@ impl Evaluation {
     }
 
     pub(super) fn start_replacement(&self, failure: SendFailure) {
-        if self.admission.finish(super::admission::CellOutcome::Failed) {
-            self.transcript.source_finished(self.call_id);
-        }
+        self.admission.finish(super::admission::CellOutcome::Failed);
         let Ok(mut state) = self.state.lock() else {
             return;
         };

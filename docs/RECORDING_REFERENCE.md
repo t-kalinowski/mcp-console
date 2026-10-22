@@ -1,27 +1,28 @@
 # Recording reference
 
-For reading a recording, retrieving omitted output, or exporting a report, see [Recordings and reports](RECORDING.md).
-
-A recording belongs to one Console process, from startup to shutdown, and can contain several worker sessions.
-Its capture retains protocol events, submitted source, input, requirements, emitted text, and images **without redaction**.
-Review a recording before sharing it.
-There is no aggregate quota or automatic cleanup.
+Console retains calls, source, input, requirements, output, and artifacts on the execution host, without redaction.
+For reading a recording, retrieving omitted output, or making a report, see [Recordings and reports](RECORDING.md).
 
 ## Storage and retention
 
 If `.agents/console` already exists in the launch directory, recordings use `.agents/console/sessions/<run-id>/`.
 Otherwise they use `~/.agents/console/sessions/<run-id>/`; `MCP_CONSOLE_HOME` replaces that fallback Console directory.
-Console does not create a project `.agents` directory to select project storage.
-Existing recordings are not migrated or rewritten.
+Console does not create a project `.agents` directory just to select project storage.
+There is no aggregate quota or automatic cleanup, so remove old recordings deliberately.
 
-The first MCP `tools/call` request targeting `send` activates recording, including polls, controls, requirement requests, and rejected submissions.
-Initialization, discovery, pings, startup output, and startup failures alone do not create a persistent recording directory.
-Console temporarily retains the preceding capture and publishes it in its original order when `send` arrives.
-A process that exits without `send` discards that temporary capture.
-The recorded process start time remains separate from recording activation time.
+The first received MCP `tools/call` targeting `send` activates a recording for the Console process.
+Polls, input, controls, rejected submissions, and requests cancelled before execution all activate recording.
+Initialization, tool discovery, pings, startup output, and startup failure alone do not create a persistent recording.
+
+Console retains preceding protocol traffic and startup text/images temporarily.
+The first send publishes that prelude in its observed order with its original timestamps.
+If the process exits without send, Console discards the temporary capture.
+The recording retains the process start time separately from publication time.
+Restarts and automatic worker replacement create numbered sessions within that same recording.
+Each cell gets a log file when execution starts, even if it produces no text output.
 
 ```text
-<recording>/
+recording/
 ├── capture/
 │   ├── events.jsonl
 │   └── sessions/
@@ -31,22 +32,31 @@ The recorded process start time remains separate from recording activation time.
 │       │   ├── cell-001.txt
 │       │   ├── cell-001-001.png
 │       │   ├── cell-001-post.txt
+│       │   ├── cell-001-post-001.png
 │       │   └── cell-002.txt
 │       └── 002/
-│           └── cell-001.txt
-├── transcript.md
-└── sessions/
-    ├── session-001.qmd
-    └── session-002.qmd
+│           └── startup.txt
+├── sessions/
+│   ├── session-001.qmd
+│   └── session-002.qmd
+└── transcript.md
 ```
 
-`transcript.md` covers the whole recording: calls, source, results, polls, input, controls, failures, session boundaries, and links to retained files.
-Each session QMD contains its submitted source and relevant dependency metadata, including failed and rejected source associated with that worker.
-Dependency metadata includes accepted requirements; rejected additions do not change it.
-It contains no captured results, images, polls, or controls.
-A session without source need not have a QMD.
-Both document types can be reconstructed from capture without executing recorded code.
-They are not checkpoints or guarantees of independent reproducibility.
+`transcript.md` records calls, source, results, polls, input, controls, and worker session boundaries, with links to source documents and retained output.
+It preserves response previews and omission notices while leaving routine protocol and lifecycle details in the journal.
+Results describe response assembly; local transport delivery is recorded separately in `capture/events.jsonl`.
+
+Each `sessions/session-NNN.qmd` contains source associated with that actual worker lifetime, including failed and rejected source, with error-permitting chunk options.
+Source admitted before worker acquisition stays pending until its worker is known, even if an initial response has already returned.
+A validation-rejected restart leaves its source with the surviving addressed worker.
+A failed acquisition does not create a session, and a session without source need not create a QMD.
+Source without a worker association remains in the journal and Markdown transcript.
+
+QMD metadata records accepted R and Python declarations, Python version and cutoff constraints, and DuckDB extension additions.
+Retained R requirements carry into replacement sessions; rejected additions do not change metadata, and replacement declarations do not rewrite the retiring session's document.
+The original working directory is descriptive metadata rather than an execution root.
+QMDs omit results, images, input, polls, and control wrappers.
+Existing recordings are not migrated or rewritten.
 
 ### Output intervals
 
@@ -95,20 +105,16 @@ Interrupting a surviving worker stays in its session.
 The journal can help inspect a recording with scripts or investigate a failed call.
 Its format may change between Console releases.
 
-The recording directory is a Console-managed record, not a working directory.
-Inspect it or export/copy material before editing.
 Completed managed files become read-only while retaining their existing privacy permissions.
 Cell logs close at their cell boundary; startup and post-cell logs stay writable until their next boundary.
 Images become read-only after writing.
-Session QMDs become read-only after session-related updates finish.
-The journal and recording-wide transcript remain writable until worker output, queued capture, result writers, and transport settlement can no longer update them.
+The journal, Markdown transcript, and session QMDs remain writable until worker output, queued capture, source associations, result writers, and transport settlement can no longer update them.
 Directories remain writable while Console needs them.
-These permissions protect against accidental edits, not unauthorized access; abrupt termination can leave files writable.
+These permissions protect against accidental edits; abrupt termination can leave files writable.
 
 Returned paths refer to the Console host.
 Project paths are normally relative to the launch directory; fallback paths are absolute.
-A long-location notice may use a path relative to the selected Console directory.
-Raw retention diagnostics name their interval file relative to the recording, so the location remains valid when temporary startup capture is published.
+A long-location notice may instead name a path relative to the selected Console directory.
 
 ## Export a working copy
 
@@ -167,12 +173,9 @@ An export labels responses without confirmed transport writes.
 
 <span id="recording-failures"></span>
 
-## Recording failures
-
-Recording and projection failures do not stop computation.
-Diagnostics identify unavailable or partial capture, and a projection failure can leave capture usable.
+Recording can fail while computation continues.
+A notice identifies files or artifacts that are unavailable or only partially retained; do not assume all output was saved.
 If a stalled journal writer exhausts the bounded protocol backlog, Console disables recording and reports the failure on stderr while continuing to receive MCP traffic.
-An explicit failed export is an error, not a successful partial report.
 
-The capture and generated document formats are internal formats without independent versioning.
-Implementation ownership is described in [Architecture](ARCHITECTURE.md#recording-ownership-and-failures).
+The recording journal and generated file formats are not independently versioned APIs.
+Implementation and failure-handling details belong in [Architecture](ARCHITECTURE.md#output-and-delivery).

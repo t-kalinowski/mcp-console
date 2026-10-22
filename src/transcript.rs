@@ -26,7 +26,7 @@ mod event;
 pub(crate) mod export;
 mod files;
 mod queue;
-use files::{CaptureFile, CaptureStorage, make_read_only};
+use files::{CaptureFile, CaptureStorage};
 use queue::{ProtocolEvents, QueuedEvent};
 mod markdown;
 mod output;
@@ -125,6 +125,7 @@ pub(crate) struct Call {
     id: Option<u64>,
     result_images: Arc<Mutex<Option<ResultImages>>>,
     parts: Arc<Mutex<Vec<ResultPart>>>,
+    /// Actual worker addressed by a call that submitted source.
     addressed_session: Option<u64>,
 }
 #[derive(Clone)]
@@ -249,7 +250,16 @@ impl Transcript {
             // Validation can reject a restart-shaped request before retirement.
             // finish() associates otherwise unclaimed source only if this same
             // worker still owns output; actual replacement changes that owner.
-            let addressed_session = self.owner().map(|o| o.session_id);
+            let has_source = request.arguments.as_ref().is_some_and(|arguments| {
+                ["r", "python", "sql"]
+                    .iter()
+                    .any(|language| arguments.get(*language).is_some_and(Value::is_string))
+            });
+            let addressed_session = if has_source {
+                self.owner().map(|o| o.session_id)
+            } else {
+                None
+            };
             Ok(Call {
                 id: Some(call_id),
                 result_images: Arc::new(Mutex::new(None)),
@@ -540,6 +550,12 @@ impl ActiveTranscript {
             return Ok(());
         }
         match &event {
+            Event::WorkerStarted { .. } | Event::WorkerEnded { .. } | Event::CellEnded { .. } => {
+                self.cell_snapshot = None;
+            }
+            Event::CellStarted { call_id, owner } => {
+                self.cell_snapshot = Some((*call_id, *owner, self.sequence));
+            }
             Event::ToolCall { call_id, .. } => {
                 self.call_sessions
                     .insert(*call_id, CallAssociation::default());
@@ -570,15 +586,6 @@ impl ActiveTranscript {
                     self.call_sessions.remove(call_id);
                 }
             }
-            Event::WorkerStarted { .. } | Event::WorkerEnded { .. } => {
-                self.cell_snapshot = None;
-            }
-            Event::CellStarted { call_id, owner } => {
-                self.cell_snapshot = Some((*call_id, *owner, self.sequence));
-            }
-            Event::CellEnded { .. } => {
-                self.cell_snapshot = None;
-            }
             Event::SourceAssociated {
                 call_id,
                 session_id,
@@ -592,19 +599,23 @@ impl ActiveTranscript {
                 }
                 call.session_id = Some(*session_id);
             }
-            Event::SourceAttached {
-                call_id,
-                session_id,
-            } => {
-                self.append(
-                    Event::SourceAssociated {
-                        call_id: *call_id,
-                        session_id: *session_id,
-                    },
-                    at,
-                )?;
-            }
-            _ => {}
+            Event::RecordingStarted { .. }
+            | Event::RecordingActivated
+            | Event::RecordingEnded
+            | Event::Protocol { .. }
+            | Event::Delivery { .. }
+            | Event::WorkerReady { .. }
+            | Event::OutputText { .. }
+            | Event::ImageOmitted { .. }
+            | Event::ProcessOutput { .. }
+            | Event::EnvironmentDiscovered { .. }
+            | Event::StartupFailed { .. }
+            | Event::PythonEnvironmentAccepted { .. }
+            | Event::RequirementsAccepted { .. }
+            | Event::RequirementsSelected { .. }
+            | Event::ImageRetained { .. }
+            | Event::CellOutput { .. }
+            | Event::SessionOutput { .. } => {}
         }
         self.sequence += 1;
         let envelope = Envelope {
@@ -661,11 +672,9 @@ impl ActiveTranscript {
         let mut errors = Vec::new();
         self.finished = true;
         // Retirement, output producers, and queued journal writes have settled.
-        if let Some(mut projections) = self.projections.take()
-            && let Err(error) = projections.finalize()
-        {
-            errors.push(error);
-        }
+        // QMD associations can settle after worker termination. Finalize their
+        // permissions with the recording, after all related updates finish.
+        self.projections.take();
         if let Err(error) = self.storage.finalize() {
             errors.push(error);
         }

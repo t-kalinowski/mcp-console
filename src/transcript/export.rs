@@ -148,7 +148,7 @@ fn reconstruct(
         exporting_call,
         cancelled,
         |offset, event| {
-            for id in documents.observe(&event)? {
+            if let Some(id) = documents.observe_capture(&event)? {
                 let fragment = documents.sessions.get_mut(&id).unwrap().take_source();
                 if id == session {
                     source

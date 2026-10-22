@@ -818,6 +818,7 @@ def test_prepares_managed_python_at_startup_and_restart(
                     "qmd": quarto.replace(
                         str(workspace.resolve()), "<workspace>"
                     ).replace(str(workspace), "<workspace>"),
+                    "path": path.relative_to(session).as_posix(),
                 }
             )
         assert not sources, sources
@@ -2665,10 +2666,17 @@ False
             records.append(
                 {
                     "recording": {
-                        # Readiness and source attachment can race during startup.
-                        # Assert their causal boundaries above, then retain the
-                        # event inventory without inventing a total order.
-                        "events": sorted({event["event"] for event in events}),
+                        "events": [
+                            event["event"]
+                            for event in events
+                            if event["event"]
+                            in {
+                                "recording_started",
+                                "tool_call",
+                                "tool_result",
+                                "cell_output",
+                            }
+                        ],
                         "markdown and quarto": "Python source retained",
                         "output log": "42\n",
                     }
@@ -3215,8 +3223,17 @@ def test_excludes_executable_directory_from_imports(
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
             for control in ({}, {"control": "restart"}):
-                client.send(
+                expected = "'{\"selected package\": 42}'\n"
+                if control:
+                    expected = (
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n" + expected + "[done]"
+                    )
+                # Exercise an early response and collect the completed evaluation.
+                client.expect(
+                    expected,
                     **control,
+                    timeout_ms=0,
                     # fmt: python
                     python=code("""
                         import json
@@ -3226,14 +3243,15 @@ def test_excludes_executable_directory_from_imports(
 
                         assert sys.path[0] == ""
                         assert os.path.dirname(sys.executable) not in sys.path
-                        assert selected_package.value == 42
+                        assert selected_package.value == 42, (
+                            selected_package.value,
+                            selected_package.__file__,
+                            sys.path,
+                            sys.prefix,
+                        )
                         json.dumps({"selected package": selected_package.value})
                         """),
                 )
-                assert not client.transcript[-1]["result"]["isError"], (
-                    client.transcript[-1]
-                )
-                assert "'{\"selected package\": 42}'\n" in last_result_text(client)
             return client.finish()
 
 

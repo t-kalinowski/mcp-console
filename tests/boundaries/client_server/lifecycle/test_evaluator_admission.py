@@ -114,7 +114,18 @@ def interrupt_held_evaluator(
                     .read_text()
                     .splitlines()
                 ]
-                assert any(event["event"] == "source_attached" for event in events)
+                assert not any(event["event"] == "source_attached" for event in events)
+                source_events = [
+                    event["event"]
+                    for event in events
+                    if event.get("call_id") == 1
+                    and event["event"].startswith("source_")
+                ]
+                assert source_events == [
+                    "source_admitted",
+                    "source_associated",
+                    "source_finished",
+                ], source_events
                 assert any(
                     event["event"] == "tool_call"
                     and event["request"]["arguments"].get("python")
