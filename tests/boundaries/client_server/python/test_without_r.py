@@ -3243,7 +3243,12 @@ def test_excludes_executable_directory_from_imports(
 
                         assert sys.path[0] == ""
                         assert os.path.dirname(sys.executable) not in sys.path
-                        assert selected_package.value == 42
+                        assert selected_package.value == 42, (
+                            selected_package.value,
+                            selected_package.__file__,
+                            sys.path,
+                            sys.prefix,
+                        )
                         json.dumps({"selected package": selected_package.value})
                         """),
                 )
