@@ -2,6 +2,7 @@
 !same-as python-only MCP initialization for this execution mode
 ---
 send:
+  timeout_ms: 0
   python: |
     import json
     import os
@@ -21,6 +22,7 @@ result:
 ---
 send:
   control: restart
+  timeout_ms: 0
   python: |
     import json
     import os

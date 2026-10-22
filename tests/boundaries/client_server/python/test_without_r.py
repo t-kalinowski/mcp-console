@@ -3223,8 +3223,17 @@ def test_excludes_executable_directory_from_imports(
         with McpClient(binary, execution.serve(), env, workspace) as client:
             client.initialize_and_list_tools()
             for control in ({}, {"control": "restart"}):
-                client.send(
+                expected = "'{\"selected package\": 42}'\n"
+                if control:
+                    expected = (
+                        "[worker stopped: in-memory state lost]\n"
+                        "[starting new worker]\n" + expected + "[done]"
+                    )
+                # Exercise an early response and collect the completed evaluation.
+                client.expect(
+                    expected,
                     **control,
+                    timeout_ms=0,
                     # fmt: python
                     python=code("""
                         import json
@@ -3238,10 +3247,6 @@ def test_excludes_executable_directory_from_imports(
                         json.dumps({"selected package": selected_package.value})
                         """),
                 )
-                assert not client.transcript[-1]["result"]["isError"], (
-                    client.transcript[-1]
-                )
-                assert "'{\"selected package\": 42}'\n" in last_result_text(client)
             return client.finish()
 
 
