@@ -22,7 +22,7 @@ env:
   # Manual version used by GitHub Actions cache keys and restore prefixes.
   # Bump for build inputs outside the hashed files, such as workflow build
   # flags or native dependency setup. Cargo and Maturin do not read this value.
-  CI_BUILD_CACHE_VERSION: "3"
+  CI_BUILD_CACHE_VERSION: "4"
   IR_LATEST_RESOLUTION_MAX_AGE_SECONDS: "604800"
   # The Python inventory determines defaults recorded in transcript snapshots.
   UV_VERSION: "0.13.1"
@@ -110,6 +110,7 @@ jobs:
         id: cache
         with:
           path: |
+            target/CACHEDIR.TAG
             target/debug
             target/release
             ${{ runner.temp }}/console-windows-cache
@@ -261,6 +262,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: |
+            target/CACHEDIR.TAG
             target/debug
             target/release
             ${{ runner.temp }}/console-windows-cache
@@ -442,6 +444,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: |
+            target/CACHEDIR.TAG
             target/debug
             target/release
             target/libexec
@@ -573,6 +576,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: |
+            target/CACHEDIR.TAG
             target/debug
             target/release
             target/libexec

@@ -85,6 +85,37 @@ edition = "2021"
         workflow = (ROOT / ".github/workflows/ci.yaml").read_text()
         job = "windows" if os.name == "nt" else "check"
         section = workflow.split(f"  {job}:\n", 1)[1]
+
+        def cache_paths(name: str) -> set[Path]:
+            step = section.split(f"      - name: {name}\n", 1)[1].split(
+                "\n      - ", 1
+            )[0]
+            paths = step.split("          path: |\n", 1)[1].split(
+                "\n          key:", 1
+            )[0]
+            return {
+                Path(path.strip())
+                for path in paths.splitlines()
+                if path.strip().startswith("target/")
+            }
+
+        restore = (
+            "Restore Windows build and dependency caches"
+            if os.name == "nt"
+            else "Restore Rust build data"
+        )
+        save = "Save Windows caches" if os.name == "nt" else "Save Rust build data"
+        cached_target = self.root / "cached-target"
+        (self.root / "target").rename(cached_target)
+        # Restore only what CI saves, including Cargo's target-directory marker.
+        for path in cache_paths(save) & cache_paths(restore):
+            source = cached_target / path.relative_to("target")
+            destination = self.root / path
+            if source.is_dir():
+                shutil.copytree(source, destination)
+            elif source.is_file():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
         step = section.partition(
             "      - name: Discard restored Console build artifacts\n"
         )[2]
