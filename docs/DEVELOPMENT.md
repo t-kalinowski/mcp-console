@@ -248,7 +248,7 @@ The hidden `sandbox --runner-config-env NAME` flag passes the named environment 
 It bypasses application configuration discovery, validation, and generated policy additions, including managed temporary storage and Console's platform extensions.
 The runner still validates and consumes its input.
 Its native `:workspace` preset protects `.claude` alongside its other metadata defaults.
-Console's `sandbox.profile: workspace` constructs its own explicit filesystem policy, documented in [Sandbox permissions](SANDBOX_CONFIGURATION.md#workspace-profile).
+Console's `sandbox.profile: workspace` extends the runner's `:workspace` preset with Console's temporary-storage policy and launch-root checks; see [Sandbox permissions](SANDBOX_CONFIGURATION.md#workspace-profile).
 This is an internal development escape hatch: neither the flag nor the runner's schema has a public stability guarantee.
 Use the public `sandbox --config-env` interface for configuration in the `config.yaml` format.
 
