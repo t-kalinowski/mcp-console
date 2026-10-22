@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.client import McpClient
 from support.checkpoints import release_fixture_checkpoint, wait_for_checkpoint
-from support.progress import normalize_elapsed
+from support.normalization import normalize_recording
 from boundaries.client_server._harness import wait_for_marker
 from support.execution import DIRECT, RUNTIME, SANDBOXED, Execution, executions
 from support.requirements import POSIX, requires
@@ -24,24 +24,6 @@ def events(recording: Path) -> list[dict]:
         json.loads(line)
         for line in (recording / "capture/events.jsonl").read_text().splitlines()
     ]
-
-
-def normalized(transcript: Transcript, workspace: Path) -> Transcript:
-    """Normalize locations and timing only after public content assertions."""
-    for entry in transcript:
-        for block in entry.get("result", {}).get("content", []):
-            if block["type"] == "text":
-                block["text"] = normalize_elapsed(block["text"])
-    data = json.dumps(transcript)
-    recordings = workspace / ".agents/console/sessions"
-    if recordings.is_dir():
-        for recording in recordings.iterdir():
-            data = data.replace(recording.name, "<recording ID>")
-    for path in sorted(
-        {workspace, workspace.resolve()}, key=lambda p: len(str(p)), reverse=True
-    ):
-        data = data.replace(json.dumps(str(path))[1:-1], "<workspace>")
-    return json.loads(data)
 
 
 @executions(RUNTIME)
@@ -81,7 +63,7 @@ def test_prompt_only_fragments_keep_cell_ownership(
         assert prompts == [
             {"session_id": 1, "cell_id": cell, "interval": "cell"} for cell in (1, 2)
         ], prompts
-        return normalized(transcript, workspace)
+        return normalize_recording(transcript, workspace)
 
 
 @requires(POSIX)
@@ -137,7 +119,7 @@ def test_preview_omission_preserves_raw_images(
         assert all(
             (recording / a["path"]).stat().st_mode & 0o222 == 0 for a in artifacts
         )
-        return normalized(transcript, workspace)
+        return normalize_recording(transcript, workspace)
 
 
 @requires(POSIX)
@@ -203,7 +185,7 @@ def test_raw_image_limit_preserves_inline_output_and_resets_at_cell_boundary(
             )
             == 2
         )
-        return normalized(transcript, workspace)
+        return normalize_recording(transcript, workspace)
 
 
 @requires(POSIX)
@@ -342,7 +324,7 @@ def test_cell_intervals_and_empty_cells(
                     assert path.stat().st_mode & 0o077 == 0, path
             elif path.is_dir():
                 assert path.stat().st_mode & 0o200, path
-        return normalized(transcript, workspace)
+        return normalize_recording(transcript, workspace)
 
 
 @requires(POSIX)
@@ -452,7 +434,7 @@ def test_projection_failure_preserves_capture_and_finalizes_files(
         for path in recording.rglob("*"):
             if path.is_file():
                 assert path.stat().st_mode & 0o222 == 0, path
-        return normalized(transcript, workspace)
+        return normalize_recording(transcript, workspace)
 
 
 if __name__ == "__main__":

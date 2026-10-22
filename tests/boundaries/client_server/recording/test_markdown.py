@@ -20,11 +20,10 @@ from support.assertions import (
 from support.client import McpClient
 from support.checkpoints import wait_for_checkpoint, wait_for_path
 from support.execution import DIRECT, SANDBOXED, Execution, executions
-from support.normalization import code
+from support.normalization import code, normalize_recording
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
-from boundaries.client_server.recording.test_intervals import normalized
 
 
 @requires(R)
@@ -493,7 +492,7 @@ def test_records_polls_input_controls_and_previews(
         assert "request input" in source and "preview huge line" in source
         for omitted in ("supplied answer", "control:", "[idle]", "[output omitted:"):
             assert omitted not in source, source
-        return normalized(transcript, workspace)
+        return normalize_recording(transcript, workspace)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,8 @@ from support.records import Transcript
 from support.suites import run_this_suite
 from boundaries.client_server.python.test_without_r import selected_environment
 
-from boundaries.client_server.recording.test_intervals import events, normalized
+from boundaries.client_server.recording.test_intervals import events
+from support.normalization import normalize_recording
 
 
 @executions(DIRECT, SANDBOXED)
@@ -85,7 +86,7 @@ def controlled_cells_recording(
             and event["call_id"] == calls[sources[1]]
         ]
         assert associations == [2], associations
-        return normalized(transcript, workspace)
+        return normalize_recording(transcript, workspace)
 
 
 @requires(R)
@@ -123,7 +124,7 @@ def test_rejected_restart_source_stays_with_the_surviving_session(
                 )
             capture = events(recording)
             assert len([e for e in capture if e["event"] == "worker_started"]) == 1
-            return normalized(client.finish(), workspace)
+            return normalize_recording(client.finish(), workspace)
 
 
 @executions(DIRECT, SANDBOXED)
@@ -181,7 +182,7 @@ def test_automatic_replacement_separates_source_and_failed_cells(
                 assert not path.stat().st_mode & 0o222, path
                 if os.name != "nt":
                     assert not path.stat().st_mode & 0o077, path
-        return normalized(transcript, workspace)
+        return normalize_recording(transcript, workspace)
 
 
 if __name__ == "__main__":

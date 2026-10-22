@@ -12,7 +12,8 @@ from support.requirements import R, SQL, requires
 from support.records import Transcript
 from support.suites import run_this_suite
 
-from boundaries.client_server.recording.test_intervals import events, normalized
+from boundaries.client_server.recording.test_intervals import events
+from support.normalization import normalize_recording
 
 
 @requires(SQL)
@@ -45,7 +46,7 @@ def test_records_accepted_live_duckdb_additions(
             managed = list((recording / "sessions").glob("*.qmd"))
             assert len(managed) == 1, managed
             assert "    - fts\n" in managed[0].read_text()
-            return normalized(client.finish(), workspace)
+            return normalize_recording(client.finish(), workspace)
 
 
 @requires(R)
@@ -101,7 +102,7 @@ def test_replacement_records_retained_r_requirements(
         assert "  packages:\n    - praise\n" in qmd, qmd
         assert "uncommittedpackage" not in qmd, qmd
         assert source in qmd, qmd
-        return normalized(transcript, workspace)
+        return normalize_recording(transcript, workspace)
 
 
 @requires(R)
@@ -137,7 +138,7 @@ def test_restart_requirements_leave_retired_source_unchanged(
             assert "  packages:\n    - praise\n" in qmd, qmd
             assert "original session" not in qmd and "replacement session" in qmd
             assert "Requirements selected" not in qmd and "eval: false" not in qmd
-            return normalized(client.finish(), workspace)
+            return normalize_recording(client.finish(), workspace)
 
 
 @requires(R)
@@ -173,7 +174,7 @@ def test_rejected_additions_leave_session_metadata_unchanged(
             assert "    - praise\n" in qmd, qmd
             capture = events(recording)
             assert len([e for e in capture if e["event"] == "worker_started"]) == 1
-            return normalized(client.finish(), workspace)
+            return normalize_recording(client.finish(), workspace)
 
 
 if __name__ == "__main__":
