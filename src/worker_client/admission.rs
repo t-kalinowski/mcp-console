@@ -76,11 +76,13 @@ impl CellAdmission {
         Ok(true)
     }
 
-    pub(super) fn finish(&self, outcome: CellOutcome) {
-        self.state
-            .lock()
-            .expect("cell admission lock")
-            .outcome
-            .get_or_insert(outcome);
+    /// Returns true only for the first terminal outcome.
+    pub(super) fn finish(&self, outcome: CellOutcome) -> bool {
+        let mut state = self.state.lock().expect("cell admission lock");
+        if state.outcome.is_some() {
+            return false;
+        }
+        state.outcome = Some(outcome);
+        true
     }
 }

@@ -114,7 +114,7 @@ def interrupt_held_evaluator(
                     .read_text()
                     .splitlines()
                 ]
-                assert not any(event["event"] == "source_attached" for event in events)
+                assert any(event["event"] == "source_attached" for event in events)
                 assert any(
                     event["event"] == "tool_call"
                     and event["request"]["arguments"].get("python")
@@ -125,7 +125,7 @@ def interrupt_held_evaluator(
                 assert not list((recording / "capture/sessions").glob("*/cell-*.txt"))
                 assert (
                     "discarded_cell = True"
-                    in (recording / "transcript.qmd").read_text()
+                    in (recording / "sessions/session-001.qmd").read_text()
                 )
                 fresh = client.send(
                     python="assert 'discarded_cell' not in globals(); 42"

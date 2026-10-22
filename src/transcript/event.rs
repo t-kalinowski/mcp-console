@@ -46,6 +46,20 @@ pub(super) enum Event<'a> {
         session_id: u64,
         outcome: &'a str,
     },
+    SourceAdmitted {
+        call_id: u64,
+    },
+    SourceFinished {
+        call_id: u64,
+    },
+    SourceAssociated {
+        call_id: u64,
+        session_id: u64,
+    },
+    SourceAttached {
+        call_id: u64,
+        session_id: u64,
+    },
     CellStarted {
         call_id: u64,
         owner: super::Owner,
