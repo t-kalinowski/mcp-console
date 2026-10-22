@@ -247,6 +247,8 @@ Line counts help review planning; they do not establish semantic scope.
 The hidden `sandbox --runner-config-env NAME` flag passes the named environment variable's JSON payload unchanged to the pinned native runner.
 It bypasses application configuration discovery, validation, and generated policy additions, including managed temporary storage and Console's platform extensions.
 The runner still validates and consumes its input.
+Its native `:workspace` preset protects `.claude` alongside its other metadata defaults.
+Console's `sandbox.profile: workspace` constructs its own explicit filesystem policy, documented in [Sandbox permissions](SANDBOX_CONFIGURATION.md#workspace-profile).
 This is an internal development escape hatch: neither the flag nor the runner's schema has a public stability guarantee.
 Use the public `sandbox --config-env` interface for configuration in the `config.yaml` format.
 
