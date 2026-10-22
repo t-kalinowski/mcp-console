@@ -579,18 +579,6 @@ impl ActiveTranscript {
                 }
                 call.session_id = Some(*session_id);
             }
-            Event::SourceAttached {
-                call_id,
-                session_id,
-            } => {
-                self.append(
-                    Event::SourceAssociated {
-                        call_id: *call_id,
-                        session_id: *session_id,
-                    },
-                    at,
-                )?;
-            }
             Event::RecordingStarted { .. }
             | Event::RecordingActivated
             | Event::RecordingEnded

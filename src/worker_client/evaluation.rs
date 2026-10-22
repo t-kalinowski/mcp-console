@@ -364,10 +364,6 @@ impl Evaluation {
         self.transcript.associate_current_call(self.call_id);
     }
 
-    pub(super) fn record_attachment(&self) {
-        self.transcript.source_attached(self.call_id);
-    }
-
     /// Queues text and briefly defers any outstanding input report for its receipt.
     pub(super) fn submit_stdin(&self, stdin: String) -> Result<(), String> {
         let mut state = self

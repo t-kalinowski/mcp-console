@@ -12,7 +12,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from support.requirements import POSIX, R, SQL, command, requires
-from support.assertions import assert_result_content, last_result_text
+from support.assertions import (
+    assert_result_content,
+    last_result_text,
+    wait_for_worker_ready,
+)
 from support.client import McpClient
 from support.checkpoints import wait_for_checkpoint, wait_for_path
 from support.execution import DIRECT, SANDBOXED, Execution, executions
@@ -39,6 +43,7 @@ def test_records_existing_python_startup_declaration(
             current_directory=workspace,
         )
         client.initialize_and_list_tools()
+        wait_for_worker_ready(client, "startup declaration available for inspection")
         inspection = client.send(requirements={"action": "get"})["structuredContent"]
         assert inspection["requirements"]["python"] == [], inspection
         client.expect("42\n", r="cat('42\\n')", requirements={"r": ["jsonlite"]})
@@ -52,10 +57,15 @@ def test_records_existing_python_startup_declaration(
             json.loads(line)
             for line in (session / "capture/events.jsonl").read_text().splitlines()
         ]
+        (r_call,) = [
+            event["call_id"]
+            for event in events
+            if event["event"] == "tool_call" and "r" in event["request"]["arguments"]
+        ]
         (cell,) = [
             event
             for event in events
-            if event["event"] == "cell_started" and event["call_id"] == 2
+            if event["event"] == "cell_started" and event["call_id"] == r_call
         ]
         session_id = cell["owner"]["session_id"]
         quarto = (session / f"sessions/session-{session_id:03}.qmd").read_text(
@@ -262,12 +272,17 @@ def test_records_real_mixed_language_session(
         assert ended["outcome"], ended
         assert f"## Session {session_id:03} ended\n" in completed
         assert completed_events[-1]["event"] == "recording_ended"
-        assert "![Artifact 1]" in markdown
+        assert "## Image 1 for call 4" in markdown
+        assert "![Image 1]" in markdown
         assert artifact["path"] in markdown
+        assert (
+            f"[Session {session_id:03} source (QMD)]"
+            f"(<sessions/session-{session_id:03}.qmd>)" in markdown
+        )
         assert f"```{{r}}\n#| error: true\n{r}```" in quarto
         assert f"```{{python}}\n#| error: true\n{python}```" in quarto
         assert f"```{{sql}}\n--| error: true\n{sql}```" in quarto
-        assert "Artifact 1" not in quarto
+        assert "Image 1" not in quarto
         assert "execute:" not in quarto
         assert "original-working-directory:" in quarto
         assert "root.dir:" not in quarto

@@ -630,7 +630,7 @@ def test_records_tool_calls_and_images(
             for excluded in (
                 "recorded stdin",
                 "before image",
-                "Artifact 1",
+                "Image 1",
                 "Result for call",
             )
         ), quarto_text
@@ -927,7 +927,7 @@ def test_flushes_calls_and_keeps_unpolled_images(
         unpolled_quarto = quarto.read_text(encoding="utf-8")
         assert unpolled_markdown.startswith(after_release_markdown)
         assert markdown.stat().st_ino == markdown_inode
-        assert f"[Artifact {artifact['artifact_id']} from call 2]" in unpolled_markdown
+        assert f"[Image {artifact['artifact_id']} from call 2]" in unpolled_markdown
         assert artifact["path"] in unpolled_markdown
         assert unpolled_quarto.startswith(after_release_quarto)
         assert (
@@ -1229,7 +1229,7 @@ def test_records_early_calls_before_startup_artifacts(binary: Path) -> Transcrip
             assert image.read_bytes() == expected_image
             markdown = (session / "transcript.md").read_text()
             assert markdown.index("## Call 1:") < markdown.index(
-                "## Artifact 1 for session"
+                "## Image 1 for session"
             ), markdown
             return [{"early_call_and_result_precede_startup_artifact": True}]
         finally:

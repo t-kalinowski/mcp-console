@@ -448,18 +448,6 @@ impl Transcript {
             ))
         });
     }
-    /// Attachment precedes execution and does not create an executed-cell log.
-    pub(crate) fn source_attached(&self, call_id: Option<u64>) {
-        self.observe(|events| {
-            Some((
-                QueuedEvent::Event(Event::SourceAttached {
-                    call_id: call_id?,
-                    session_id: events.owner?.session_id,
-                }),
-                (),
-            ))
-        });
-    }
     pub(crate) fn owner(&self) -> Option<Owner> {
         let events = self.1.lock().expect("protocol capture lock");
         events.failure.is_none().then_some(events.owner).flatten()

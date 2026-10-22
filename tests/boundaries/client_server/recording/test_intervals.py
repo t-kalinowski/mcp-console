@@ -65,7 +65,7 @@ def test_prompt_only_fragments_keep_cell_ownership(
             ):
                 result = client.send(python=source, timeout_ms=60000)
                 assert "x> " in result["content"][0]["text"], result
-                client.send(stdin="answer\n")
+                client.expect(stdin="answer\n")
             transcript = client.finish()
         (recording,) = (workspace / ".agents/console/sessions").iterdir()
         prompts = []
@@ -228,9 +228,13 @@ def test_cell_intervals_and_empty_cells(
             client.send()
             (active_recording,) = (workspace / ".agents/console/sessions").iterdir()
             active_capture = active_recording / "capture/sessions/001"
-            assert any(
-                e["event"] == "source_attached" for e in events(active_recording)
-            )
+            capture = events(active_recording)
+            assert not any(e["event"] == "source_attached" for e in capture)
+            assert [
+                e["session_id"]
+                for e in capture
+                if e["event"] == "source_associated" and e["call_id"] == 1
+            ] == [1]
             assert (active_capture / "cell-001.txt").stat().st_mode & 0o222 == 0
             assert (active_capture / "cell-001-post.txt").stat().st_mode & 0o200
             assert (active_recording / "capture/events.jsonl").stat().st_mode & 0o200

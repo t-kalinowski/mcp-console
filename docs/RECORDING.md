@@ -9,8 +9,9 @@ Review them before sharing.
 ## Read the recording {#location-and-files}
 
 Ask the agent for the recording's path, then open `transcript.md` in that directory.
-It shows calls and results with links to retained plots and other artifacts.
-It also links to source documents in `sessions/session-NNN.qmd`, one for each worker session that received source.
+It shows calls and results across all worker sessions, including recorded images and links to retained output.
+Links labeled “Session NNN source (QMD)” open source documents in `sessions/session-NNN.qmd`, one for each worker session that received source.
+Those files contain code and environment metadata; recorded results and images remain in `transcript.md` and the capture files.
 Raw text and images are grouped under `capture/sessions/NNN/` by worker session and observed startup, cell, or post-cell interval.
 Completed files are read-only; copy a file before editing it.
 For the dice example in [Get started](getting-started.qmd), you can inspect both the simulation and the later comparison that reused its results.
