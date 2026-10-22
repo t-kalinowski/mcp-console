@@ -76,10 +76,15 @@ try:
         relay.send({"kind": "completed"})
         relay.send({"kind": "console_output", "data": "post-cell text\n"})
         notify("post_sent")
-        relay.retire()
+        relay.send({"kind": "worker_exited", "code": 0})
         gate("release")
         write_all(2, b"after worker exit\n")
         gate("drained")
+        command = relay.receive()
+        assert command["kind"] == "shutdown", command
+        relay.send({"kind": "shutdown_started"})
+        for kind in ("stdout_closed", "stderr_closed", "worker_sideband_closed"):
+            relay.send({"kind": kind})
     else:
         assert mode == "process_output", mode
         relay.send({"kind": "completed"})
