@@ -285,6 +285,17 @@ def test_worker_exit_finalizes_and_clears_interval_owner(binary: Path) -> Transc
         gates["drained"].release()
         transcript = client.finish()
         assert post.read_text() == "post-cell text\n"
+        wire = [
+            json.loads(line)
+            for line in (root / "relay-wire.jsonl").read_text().splitlines()
+        ]
+        emitted = [entry["relay"]["kind"] for entry in wire if "relay" in entry]
+        assert emitted[-4:] == [
+            "stdout_closed",
+            "stderr_closed",
+            "worker_sideband_closed",
+            "worker_exited",
+        ], emitted
         return normalize_recording(transcript, root)
 
 
