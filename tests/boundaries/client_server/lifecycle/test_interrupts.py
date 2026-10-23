@@ -1,6 +1,7 @@
 #!/usr/bin/env -S uv run --script
 
 import os
+import json
 import select
 import signal
 import sys
@@ -236,6 +237,7 @@ def test_supervises_stopped_and_continued_workers(
             binary,
             execution.serve("--worker", str(wrapper)),
             environment,
+            current_directory=temporary_path,
         )
         workers: list[tuple[int, int]] = []
         passed = False
@@ -322,6 +324,24 @@ def test_supervises_stopped_and_continued_workers(
 
             client.send(r="echo echo")
             assert last_tool_text(client) == "zod: echo\n"
+            (recording,) = (temporary_path / ".agents/console/sessions").iterdir()
+            captured = [
+                json.loads(line)
+                for line in (recording / "capture/events.jsonl")
+                .read_text()
+                .splitlines()
+            ]
+            cells = [
+                event["owner"] for event in captured if event["event"] == "cell_started"
+            ]
+            assert [(owner["session_id"], owner["cell_id"]) for owner in cells] == [
+                (1, 1),
+                (2, 1),
+            ], cells
+            for session_id in (1, 2):
+                assert (
+                    recording / f"capture/sessions/{session_id:03}/cell-001.txt"
+                ).read_text() == "zod: echo\n"
             transcript = client.finish()
             passed = True
             return transcript

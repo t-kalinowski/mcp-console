@@ -305,7 +305,7 @@ def test_prepares_r_requirements_after_worker_startup(
         )
         42L
         """)
-    client.send(r=r, requirements={"r": ["zeallot"]})
+    client.expect("[1] 42\n", r=r, requirements={"r": ["zeallot"]})
     assert last_result_text(client) == "[1] 42\n"
     return client.finish()
 

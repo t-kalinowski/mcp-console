@@ -62,9 +62,9 @@ result:
         `timeout_ms=60000` (60 seconds), `requirements.action="add"`.
 
 
-        Text results, including notices, have an 8 KiB limit, retaining the
-        beginning and latest tail; images have separate limits. Response notices
-        report state and omitted-output locations.
+        Execution previews and their notices have an 8 KiB limit, retaining head
+        and tail; images have separate limits. Separate notices give session
+        bundle paths on the Console host.
 
 
         Evaluated code can read host files subject to configured restrictions
@@ -324,6 +324,8 @@ result:
       text: |
         captured grants, proxy selection, and restricted network verified
   isError: false
+session_bundles:
+  - <recording>/sessions/session-001
 ---
 send:
   control: restart
@@ -380,6 +382,8 @@ result:
       text: |
         captured grants, proxy selection, and restricted network verified
   isError: false
+session_bundles:
+  - <recording>/sessions/session-002
 ---
 send:
   python: os._exit(23)
@@ -438,6 +442,8 @@ result:
       text: |
         captured grants, proxy selection, and restricted network verified
   isError: false
+session_bundles:
+  - <recording>/sessions/session-003
 ---
 send:
   control: restart
@@ -497,6 +503,8 @@ result:
       text: |
         captured grants, proxy selection, and restricted network verified
   isError: false
+session_bundles:
+  - <recording>/sessions/session-004
 ---
 send:
   python: import yaml12; print(yaml12.__name__)

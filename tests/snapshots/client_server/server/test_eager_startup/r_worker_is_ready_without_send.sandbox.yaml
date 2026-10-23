@@ -125,6 +125,8 @@ result:
       text: |
         <prewarmed worker pid>
   isError: false
+session_bundles:
+  - <recording>/sessions/session-001
 ---
 send:
   r: Sys.getpid()

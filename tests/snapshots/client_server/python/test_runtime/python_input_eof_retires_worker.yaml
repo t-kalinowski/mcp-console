@@ -10,6 +10,8 @@ result:
     - type: text
       text: <Python EOF checkpoint>
   isError: false
+session_bundles:
+  - <recording>/sessions/session-001
 ---
 send:
   python: |
@@ -70,3 +72,5 @@ result:
       text: |
         False
   isError: false
+session_bundles:
+  - <recording>/sessions/session-002
