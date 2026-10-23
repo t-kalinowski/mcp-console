@@ -186,9 +186,6 @@ fn resolve_python_candidate(
         | ServerMessage::PythonVersionResolutionFailed { .. } => Err(infrastructure_failure(
             "worker received a Python version response while resolving Python".to_string(),
         )),
-        ServerMessage::SessionExported { .. } | ServerMessage::SessionChunkExported { .. } => Err(
-            infrastructure_failure("unexpected session export response".into()),
-        ),
         ServerMessage::Shutdown => {
             mark_shutting_down();
             Err("worker is shutting down".to_string())
@@ -240,9 +237,6 @@ pub(crate) fn resolve_r(
             };
             Ok(ResolutionOutcome::Failed { failure, message })
         }
-        ServerMessage::SessionExported { .. } | ServerMessage::SessionChunkExported { .. } => Err(
-            infrastructure_failure("unexpected session export response".into()),
-        ),
         ServerMessage::Shutdown => {
             mark_shutting_down();
             Err("worker is shutting down".to_string())
@@ -276,9 +270,6 @@ pub(crate) fn resolve_python_version(
     match receive_resolver_message().map_err(infrastructure_failure)? {
         ServerMessage::PythonVersionResolved { version } => Ok(version),
         ServerMessage::PythonVersionResolutionFailed { message } => Err(message),
-        ServerMessage::SessionExported { .. } | ServerMessage::SessionChunkExported { .. } => Err(
-            infrastructure_failure("unexpected session export response".into()),
-        ),
         ServerMessage::Shutdown => {
             mark_shutting_down();
             Err("worker is shutting down".to_string())
@@ -381,36 +372,4 @@ fn send_image(data: String) -> Result<(), String> {
             mime_type: "image/png".to_string(),
         })
         .map_err(|error| format!("R worker failed to send a plot image: {error}"))
-}
-
-/// Request a capture snapshot; destination writes happen only in this worker.
-pub(crate) fn export_session(
-    directory: &std::path::Path,
-) -> Result<Vec<std::path::PathBuf>, String> {
-    if cell_language().is_none() {
-        return Err("export_session requires an executing cell".into());
-    }
-    send_worker_message(&WorkerMessage::ExportSession)?;
-    match receive_resolver_message()? {
-        ServerMessage::SessionExported { result } => result?.write(directory, || {
-            send_worker_message(&WorkerMessage::ExportChunk)?;
-            match receive_resolver_message()? {
-                ServerMessage::SessionChunkExported { result } => result,
-                ServerMessage::Shutdown => {
-                    mark_shutting_down();
-                    Err("session export interrupted by shutdown".into())
-                }
-                _ => Err(infrastructure_failure(
-                    "unexpected response while exporting a file".into(),
-                )),
-            }
-        }),
-        ServerMessage::Shutdown => {
-            mark_shutting_down();
-            Err("session export interrupted by shutdown".into())
-        }
-        _ => Err(infrastructure_failure(
-            "unexpected response while exporting session".into(),
-        )),
-    }
 }

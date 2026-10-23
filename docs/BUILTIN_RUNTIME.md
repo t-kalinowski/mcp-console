@@ -122,8 +122,9 @@ Reference: [Retrieve the last SQL result](RUNTIME_REFERENCE.md#retrieve-the-last
 
 [Recordings](RECORDING.md) retain the code, output, and plots so you can see what the agent did and inspect its results.
 Ask the agent for the recording's location.
-Use `.console$export_session("report")` in R or `_console.export_session("report")` in Python to copy the current session into writable source and result documents.
-The export ends before its calling cell began and does not execute the recorded code.
+Console announces a portable session bundle when source and results become available.
+Open its `session.md` or copy the bundle with your client's file tools; included images use relative links.
+Paths refer to the Console host and do not grant sandbox access.
 Review the source, inputs, and package requirements before executing the QMD.
 
 Continue with [Packages and environments](REQUIREMENTS.md) to learn how the agent gets the libraries it uses.

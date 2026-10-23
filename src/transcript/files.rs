@@ -7,96 +7,6 @@ use std::sync::{Arc, Mutex};
 
 use super::{create_private_directory, create_private_file};
 
-/// Validate the opened object, then keep that handle through export. A path
-/// check alone cannot authorize a later privileged open of worker-writable capture.
-pub(super) fn open_capture_image(directory: &Path, relative: &str) -> Result<File, String> {
-    let recording = directory.canonicalize().map_err(|e| e.to_string())?;
-    let capture = directory
-        .join("capture/sessions")
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let path = directory
-        .join(relative)
-        .canonicalize()
-        .map_err(|e| format!("recorded image {relative} unavailable: {e}"))?;
-    if !capture.starts_with(&recording) || !path.starts_with(&capture) {
-        return Err("recorded image is outside this recording's capture".into());
-    }
-    let mut options = File::options();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let file = options
-        .open(path)
-        .map_err(|e| format!("recorded image {relative} unavailable: {e}"))?;
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err("recorded image is not a regular file".into());
-    }
-    if !opened_path(&file)?.starts_with(&capture) {
-        return Err("opened image is outside this recording's capture".into());
-    }
-    Ok(file)
-}
-
-fn opened_path(file: &File) -> Result<PathBuf, String> {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::fd::AsRawFd as _;
-        std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).map_err(|e| e.to_string())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::fd::AsRawFd as _;
-        use std::os::unix::ffi::OsStrExt as _;
-        let mut buffer = [0 as libc::c_char; libc::PATH_MAX as usize];
-        // SAFETY: F_GETPATH writes at most PATH_MAX bytes and terminates the
-        // path on success. The descriptor remains owned by file.
-        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) } < 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(
-            unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }.to_bytes(),
-        )))
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStringExt as _;
-        use std::os::windows::io::AsRawHandle as _;
-        use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
-        let mut buffer = vec![0u16; 32768];
-        // SAFETY: the live file handle and writable buffer cover this call;
-        // zero flags request the normalized DOS path, as canonicalize does.
-        let length = unsafe {
-            GetFinalPathNameByHandleW(
-                file.as_raw_handle(),
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-                0,
-            )
-        } as usize;
-        if length == 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        if length >= buffer.len() {
-            return Err("recorded image path exceeds the Windows path limit".into());
-        }
-        Ok(std::ffi::OsString::from_wide(&buffer[..length]).into())
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        let _ = file;
-        Err("session image export is unavailable on this platform".into())
-    }
-}
-
 #[derive(Default)]
 pub(super) struct CaptureStorage {
     files: Mutex<Option<CaptureFiles>>,
@@ -380,6 +290,27 @@ impl super::Transcript {
         if let Err(error) = retained {
             self.disable(error);
             return None;
+        }
+        // Copy emitted bytes before publishing links. A projection failure must
+        // not discard an otherwise usable raw capture or reopen capture paths.
+        let portable = (|| {
+            let relative = format!(
+                "sessions/session-{:03}/images/{}",
+                owner.session_id,
+                super::bundle_image_name(id, mime_type)
+            );
+            let portable = self.3.create_file(&relative)?;
+            let mut portable = portable.lock().map_err(|_| "bundle image lock poisoned")?;
+            portable
+                .writer
+                .as_mut()
+                .expect("bundle image writer")
+                .write_all(bytes)
+                .map_err(|e| e.to_string())?;
+            portable.finish()
+        })();
+        if let Err(message) = portable {
+            self.queue_event(super::queue::QueuedEvent::ProjectionFailed { message });
         }
         self.queue_event(super::queue::QueuedEvent::ImageRetained {
             owner,

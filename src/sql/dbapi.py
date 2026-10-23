@@ -363,26 +363,8 @@ def dispatch(source):
     return _runtime.without_automatic_resolution(_dispatch, source)
 
 
-def export_session(directory: str) -> dict:
-    """Export source and recorded results from before this cell to a new directory."""
-    import json
-    import os
-    from pathlib import Path
-    import _mcp_console_services
-
-    paths = [
-        Path(path)
-        for path in json.loads(
-            _mcp_console_services.export_session(os.fspath(directory))
-        )
-    ]
-    return {"qmd": paths[0], "markdown": paths[1], "images": paths[2:]}
-
-
 _builtins._console = _SimpleNamespace(
-    sql_connection=sql_connection,
-    sql_last_result=sql_last_result,
-    export_session=export_session,
+    sql_connection=sql_connection, sql_last_result=sql_last_result
 )
 
 

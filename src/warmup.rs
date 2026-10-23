@@ -305,6 +305,12 @@ async fn evaluate(
             .content
             .iter()
             .filter_map(|content| content.as_text())
+            // Discovery is useful to an agent, but is not runtime diagnostics.
+            .filter(|content| {
+                !content.meta.as_ref().is_some_and(|meta| {
+                    meta.get(crate::transcript::BUNDLE_META) == Some(&serde_json::Value::Bool(true))
+                })
+            })
             .map(|content| content.text.as_str())
             .collect::<String>();
         output.push_str(&text);

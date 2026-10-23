@@ -20,6 +20,8 @@ result:
         [input requested: "answer> "]
         [waiting for stdin]
   isError: false
+session_bundles:
+  - <recording>/sessions/session-001
 ---
 send:
   requirements:
@@ -142,9 +144,7 @@ result:
               "json",
               "sqlite"
             ],
-            "python_version": [
-              "3.14"
-            ],
+            "python_version": [],
             "exclude_newer": null
           },
           "prepared": true,
@@ -166,8 +166,7 @@ result:
         - icu
         - json
         - sqlite
-      python_version:
-        - "3.14"
+      python_version: []
       exclude_newer: ~
     prepared: true
     runtime_requirements:

@@ -28,6 +28,8 @@ result:
         [input requested: "Startup gate> "]
         [waiting for stdin]
   isError: false
+session_bundles:
+  - <recording>/sessions/session-001
 ---
 send:
   control: interrupt
@@ -37,7 +39,7 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 497, in initialize_connection
+          File "<string>", line 479, in initialize_connection
           File "<console startup>", line 6, in <module>
           File "<string>", line 50, in _console_input
         KeyboardInterrupt
@@ -81,6 +83,8 @@ result:
         42
         [done]
   isError: false
+session_bundles:
+  - <recording>/sessions/session-002
 ---
 send:
   python: assert startup_count == 1

@@ -30,12 +30,6 @@ pub(crate) enum RResolutionFailureKind {
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ServerMessage {
-    SessionExported {
-        result: Result<crate::transcript::export::SessionExport, String>,
-    },
-    SessionChunkExported {
-        result: Result<Option<String>, String>,
-    },
     Evaluate {
         language: Language,
         source: String,
@@ -166,10 +160,6 @@ pub(crate) enum ConsoleChannel {
 pub(crate) enum WorkerMessage {
     #[serde(deserialize_with = "deserialize_payload_free")]
     CellStarted,
-    #[serde(deserialize_with = "deserialize_payload_free")]
-    ExportSession,
-    #[serde(deserialize_with = "deserialize_payload_free")]
-    ExportChunk,
     #[serde(deserialize_with = "deserialize_payload_free")]
     Ready,
     RuntimeInitialized {

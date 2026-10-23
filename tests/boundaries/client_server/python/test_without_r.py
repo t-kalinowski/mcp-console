@@ -789,9 +789,9 @@ def test_prepares_managed_python_at_startup_and_restart(
                     calls[event["call_id"]]["python"]
                 )
         documents = []
-        for path in sorted((session / "sessions").glob("session-*.qmd")):
+        for path in sorted((session / "sessions").glob("session-*/session.qmd")):
             quarto = path.read_text()
-            session_id = int(path.stem.removeprefix("session-"))
+            session_id = int(path.parent.name.removeprefix("session-"))
             expected = sources.pop(session_id)
             for source in set(expected):
                 assert quarto.count(source) == expected.count(source), (
@@ -960,7 +960,9 @@ def test_adds_python_packages_to_idle_managed_worker(
         ]
         assert len(accepted) >= 3, accepted
         assert {"py-yaml12", "six", "more-itertools"}.issubset(accepted[-1])
-        quarto = sorted((session / "sessions").glob("session-*.qmd"))[-1].read_text()
+        quarto = sorted((session / "sessions").glob("session-*/session.qmd"))[
+            -1
+        ].read_text()
         assert "execute:\n  eval: false" not in quarto
         assert "original-working-directory:" in quarto and "\nir:" in quarto
         assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
@@ -1082,7 +1084,9 @@ def test_resolves_reached_import_in_managed_worker(
             and {"py-yaml12", "pydash"}.issubset(event["packages"])
             for event in events
         )
-        quarto = sorted((session / "sessions").glob("session-*.qmd"))[-1].read_text()
+        quarto = sorted((session / "sessions").glob("session-*/session.qmd"))[
+            -1
+        ].read_text()
         assert "execute:\n  eval: false" not in quarto
         assert "original-working-directory:" in quarto and "\nir:" in quarto
         assert "ir:\n  isolated: true\n  packages: []\n  python-packages:\n" in quarto
@@ -1305,6 +1309,15 @@ def automatic_resolution_failure_and_cancel_keep_accepted_state(
                 )
                 interrupt = client.start_send(control="interrupt")
                 client.receive_many([pending, interrupt])
+                # Interrupt acknowledgment can precede the worker's terminal
+                # receipt. Collect that state without depending on scheduling.
+                wait_for_evaluation_output(
+                    client,
+                    "\n[idle]",
+                    "automatic Python resolution interruption settled",
+                    completion_timeout_seconds=client.response_timeout,
+                    received=interrupt,
+                )
                 assert os.read(alive, 1) == b""
                 assert (
                     client.send(requirements={"action": "get"})["structuredContent"][
@@ -2616,7 +2629,7 @@ False
             records = client.finish()
             (session,) = (workspace / ".agents/console/sessions").iterdir()
             markdown = (session / "transcript.md").read_text()
-            quarto = (session / "sessions/session-001.qmd").read_text()
+            quarto = (session / "sessions/session-001/session.qmd").read_text()
             assert "recorded_value = 41" in markdown and "recorded_value = 41" in quarto
             assert "execute:\n  eval: false" not in quarto
             assert "original-working-directory:" in quarto and "\nir:" in quarto
@@ -2660,7 +2673,7 @@ False
                 assert ready["sequence"] < cell["sequence"]
                 assert associated["sequence"] < cell["sequence"]
                 assert associated["session_id"] == cell["owner"]["session_id"]
-            replacement = (session / "sessions/session-002.qmd").read_text()
+            replacement = (session / "sessions/session-002/session.qmd").read_text()
             assert "'recorded_value' in globals()" in replacement
             assert "recorded_value = 41" not in replacement
             records.append(
@@ -3281,7 +3294,7 @@ def test_records_managed_python_defaults(
             client.expect("42\n", python="retained")
             records = client.finish()
         (session,) = (workspace / ".agents/console/sessions").iterdir()
-        quarto = (session / "sessions/session-001.qmd").read_text()
+        quarto = (session / "sessions/session-001/session.qmd").read_text()
         defaults = ["numpy", "pandas", "matplotlib", "plotnine"]
         if SQL.available:
             defaults.append("duckdb")

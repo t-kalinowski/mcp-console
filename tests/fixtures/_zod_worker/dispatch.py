@@ -36,9 +36,6 @@ EXACT_HANDLERS: dict[str, Callable[[WorkerContext, str], LoopAction | None]] = {
     "emit console kinds": output.emit_console_kinds,
     "emit image": output.emit_image,
     "emit image formats": recording.emit_image_formats,
-    "export session": recording.export_session,
-    "emit export image": recording.emit_export_image,
-    "export image summary": recording.export_image_summary,
     "emit image before completion": output.emit_image_before_completion,
     "emit output and image before completion": output.emit_image_before_completion,
     # Input

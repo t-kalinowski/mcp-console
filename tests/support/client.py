@@ -204,6 +204,8 @@ class McpClient:
         self.stdout = TextReader(process.stdout)
         self.stderr = TextReader(process.stderr)
         self.transcript: Transcript = []
+        self.bundle_notices: list[str] = []
+        self._announced_bundles: set[Path] = set()
         self._next_request_id = 1
         self._issued_request_ids: set[int | str] = set()
         self._last_serialized_message: str | None = None
@@ -316,6 +318,7 @@ class McpClient:
         assert message.keys() == {"result"} or message.keys() == {"error"}, message
         assert entry.keys().isdisjoint(message), message
         entry.update(message)
+        self._record_bundle_notice(entry)
 
     def receive_many(self, entries: list[TranscriptEntry]) -> None:
         pending = {entry["id"]: entry for entry in entries}
@@ -330,6 +333,43 @@ class McpClient:
             assert message.keys() == {"result"} or message.keys() == {"error"}, message
             assert entry.keys().isdisjoint(message), message
             entry.update(message)
+            self._record_bundle_notice(entry)
+
+    def _record_bundle_notice(self, entry: TranscriptEntry) -> None:
+        # Check the public discovery contract, then keep its notice separately
+        # in the transcript so evaluation assertions still compare exact output.
+        content = entry.get("result", {}).get("content", [])
+        prefix = "Session bundle on the Console host: "
+        notices = [
+            block
+            for block in content
+            if block.get("_meta", {}).get("mcp-console/session-bundle") is True
+        ]
+        for block in notices:
+            assert (
+                block.keys() == {"type", "text", "_meta"} and block["type"] == "text"
+            ), block
+            assert block["_meta"] == {"mcp-console/session-bundle": True}, block
+            text = block["text"]
+            lines = text.splitlines()
+            assert len(lines) == 4, text
+            bundle = Path(lines[0].removeprefix(prefix))
+            assert bundle.is_absolute() and bundle not in self._announced_bundles, text
+            assert lines[1] == f"Source: {bundle / 'session.qmd'}", text
+            assert lines[2] == f"Report: {bundle / 'session.md'}", text
+            assert (
+                lines[3]
+                == "This live bundle updates as results are assembled; the path grants no filesystem access."
+            ), text
+            assert (bundle / "session.qmd").is_file() and (
+                bundle / "session.md"
+            ).is_file(), text
+            self._announced_bundles.add(bundle)
+            self.bundle_notices.append(text)
+            entry.setdefault("session_bundles", []).append(
+                f"<recording>/sessions/{bundle.name}"
+            )
+            content.remove(block)
 
     def start_request(self, method: str, **params: Any) -> TranscriptEntry:
         message: dict[str, Any] = {

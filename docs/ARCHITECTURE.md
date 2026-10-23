@@ -387,33 +387,28 @@ Combined text/image omission notices retain their common observed interval owner
 Image omission ownership is aggregated before per-interval receipts retire, with bounded state independent of the number of omitted images.
 Response assembly uses those receipts without waiting for the journal to rediscover ownership.
 
-Raw files live under `capture/sessions/NNN/`; recording-wide `transcript.md` and source-only `sessions/session-NNN.qmd` remain projections of the journal.
+Raw files live under `capture/sessions/NNN/`; recording-wide `transcript.md` and portable `sessions/session-NNN/` bundles remain projections of the journal.
 Session documents follow actual worker lifetimes, including automatic replacements, and are created only when source is associated.
 Their metadata follows accepted live requirements and acquisition snapshots, including retained R declarations; replacement preparation does not rewrite a retiring session.
 The Markdown projection retains calls and assembled results, including previews and omission notices, while the journal retains routine protocol, delivery, and low-level lifecycle evidence.
 Completed interval files and images become read-only after their writers retire.
 The temporary-publication registry keeps weak references to active file handles and releases completed entries; publication copies completed files while relocating live producers.
 Process-wide files finalize only after retirement, delivery settlement, queued initial capture, and blocking result writers settle.
-Session QMD permissions finalize at that same barrier because source associations and metadata updates can follow worker termination.
+Session document permissions finalize at that same barrier because source associations and metadata updates can follow worker termination.
 Capture completion ownership survives handler cancellation and delivery deadlines, including after a result writer releases the journal mutex.
 Finalization completes permissions on retained files even after recording or projection failure, without inventing a successful `recording_ended` event for disabled capture.
 
-Runtime export uses the existing worker sideband to request a snapshot ending before the current cell began.
-The server reconstructs source and report content in two streaming passes over capture, excluding the exporting call.
-It copies the snapshot boundary and recording path under the recorder lock, then releases the lock before scanning the completed prefix so live capture can continue.
-Reconstruction and chunk reads run on a callback-owned thread, leaving worker event dispatch free to process output, interrupts, and retirement.
-The dispatcher admits at most one pending chunk request; completion or retirement cancels the callback and closes its request channel.
-Cancellation is checked between filesystem operations and before replies through that worker's command owner; retirement never joins a stalled export read.
-A blocked operating-system read can finish later, after which cancellation releases its handles and temporary storage.
-The first spools source and retains dependency metadata, journal offsets, and cell/session/delivery associations; the second spools the displayed results by interval.
-Each event is discarded after processing, so raw output chunk counts, historical stdin, and complete document contents do not accumulate in reconstruction memory.
-Memory covers one journal record plus association and file indexes; temporary storage holds the reconstructed documents until the callback completes or retires.
-It receives no destination path.
-The worker writes the returned content under its existing sandbox and filesystem permissions.
-Documents and images cross the sideband in at most 64 KiB decoded chunks, requested after the worker writes the preceding chunk.
-The server supplies an ordered file list and retains opened spool and image handles between requests, with reads bounded by their selected lengths.
-Image validation rejects non-files and links outside capture, checks the opened handle's actual location, and retains that handle so later path replacement cannot redirect transfer.
-No interpreter, SQL query, plot replay, or Quarto process participates in reconstruction.
+Session bundles contain the source QMD, report-style Markdown, and relative image links.
+The existing projection owner updates them from typed events and assembled results, never by scanning the journal during a runtime callback.
+Result fragments use the output tape's recorded interval ownership, so a later poll can append to an earlier cell or session.
+One anonymous temporary file spools report sections through its original handle; memory retains section ranges and pending source associations, not cumulative response text or stdin.
+Publication streams the ordered sections into an atomic replacement after each relevant source/result update, rather than on raw output chunks.
+This bounds memory but rewrites the session report as it grows; it is a progress projection, not a constant-cost append log.
+Portable image copies are written from emitted bytes under the capture producer, before links are published, without reopening worker-modifiable capture paths.
+The ordinary blocking recording task owns document I/O; the MCP receive loop and worker event dispatcher remain available.
+Each bundle's first available notice is included in its assembled tool result and canonical journal record, but omitted from the report presentation.
+Discovery paths refer to Console-managed files on the host, convey no filesystem authority, and introduce no destination-writing sideband or runtime helper.
+Individual document replacement is atomic; copying an active bundle does not establish a cross-file snapshot.
 
 A journal or artifact failure disables further recording without stopping computation.
 Queued and in-flight protocol, worker lifecycle, and output capture events share a bound of 1,024 events or 8 MiB of serialized event data.
@@ -426,7 +421,7 @@ Diagnostics and notices report unavailable or partial retention.
 Journal events and generated projections are internal formats, not independently versioned public APIs.
 A journaled result records response assembly.
 Separate delivery events record whether a local transport write completed successfully, without claiming client acknowledgment or model observation.
-See [Output and delivery](#output-and-delivery) for ownership and [Open work](TODO.md) for retention and export gaps.
+See [Output and delivery](#output-and-delivery) for ownership and [Open work](TODO.md) for retention gaps.
 
 ## Developer terms
 

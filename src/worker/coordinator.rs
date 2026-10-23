@@ -256,9 +256,7 @@ impl Coordinator {
                 }
             }
             ServerMessage::Shutdown => return Ok(false),
-            ServerMessage::SessionExported { .. }
-            | ServerMessage::SessionChunkExported { .. }
-            | ServerMessage::RResolved { .. }
+            ServerMessage::RResolved { .. }
             | ServerMessage::RResolutionFailed { .. }
             | ServerMessage::PythonResolved { .. }
             | ServerMessage::PythonResolutionFailed { .. }

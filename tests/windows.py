@@ -1897,11 +1897,12 @@ class WindowsConsole(unittest.TestCase):
             Path(session.directory.name) / ".agents/console/sessions"
         ).iterdir()
         source_documents = [
-            recording / f"sessions/session-{session_id:03}.qmd"
+            recording / f"sessions/session-{session_id:03}/session.qmd"
             for session_id in range(1, 14)
         ]
         self.assertEqual(
-            sorted((recording / "sessions").glob("*.qmd")), source_documents
+            sorted((recording / "sessions").glob("session-*/session.qmd")),
+            source_documents,
         )
         self.assertFalse((recording / "transcript.qmd").exists())
         for path in (

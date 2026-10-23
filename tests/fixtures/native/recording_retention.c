@@ -32,9 +32,6 @@ static void (*native_free)(void *);
 // Small allocations and allocations in the worker do not affect this bound.
 struct retention_profile {
     _Atomic int64_t live;
-    _Atomic int64_t baseline;
-    _Atomic int64_t peak;
-    _Atomic uint64_t enabled;
 };
 static struct retention_profile *retained;
 static pid_t owner;
@@ -59,12 +56,7 @@ static void observe(void *pointer, int direction) {
     if (retained == NULL || getpid() != owner || pointer == NULL) return;
     size_t size = allocation_size(pointer);
     if (size >= 256 * 1024) {
-        int64_t live = atomic_fetch_add(&retained->live, direction * (int64_t)size) + direction * (int64_t)size;
-        if (atomic_load(&retained->enabled)) {
-            int64_t peak = live - atomic_load(&retained->baseline);
-            int64_t previous = atomic_load(&retained->peak);
-            while (peak > previous && !atomic_compare_exchange_weak(&retained->peak, &previous, peak)) {}
-        }
+        atomic_fetch_add(&retained->live, direction * (int64_t)size);
     }
 }
 

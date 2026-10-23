@@ -17,11 +17,13 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 504, in initialize_connection
+          File "<string>", line 486, in initialize_connection
         sqlite3.ProgrammingError: Cannot operate on a closed database.
         Error: configured startup did not complete; SQL withheld; explicit restart required
         Error: SQL unavailable: configured startup did not complete; explicit restart required
   isError: false
+session_bundles:
+  - <recording>/sessions/session-001
 ---
 send:
   sql: SELECT 42 AS answer
@@ -37,7 +39,7 @@ language: python
 failure: closed database
 first_sql: |
   Traceback (most recent call last):
-    File "<string>", line 504, in initialize_connection
+    File "<string>", line 486, in initialize_connection
   sqlite3.ProgrammingError: Cannot operate on a closed database.
   Error: configured startup did not complete; SQL withheld; explicit restart required
   Error: SQL unavailable: configured startup did not complete; explicit restart required

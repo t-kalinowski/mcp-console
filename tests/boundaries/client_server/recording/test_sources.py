@@ -64,7 +64,7 @@ def controlled_cells_recording(
                 assert label in last_result_text(client), result
             transcript = client.finish()
         (recording,) = (workspace / ".agents/console/sessions").iterdir()
-        documents = sorted((recording / "sessions").glob("*.qmd"))
+        documents = sorted((recording / "sessions").glob("session-*/session.qmd"))
         assert len(documents) == 2, documents
         original, replacement = [path.read_text() for path in documents]
         assert sources[0] in original, original
@@ -117,7 +117,7 @@ def test_rejected_restart_source_stays_with_the_surviving_session(
             )
             client.expect(python="assert 'rejected_restart_python' not in globals()")
             (recording,) = (workspace / ".agents/console/sessions").iterdir()
-            managed = (recording / "sessions/session-001.qmd").read_text()
+            managed = (recording / "sessions/session-001/session.qmd").read_text()
             for language, source in sources.items():
                 assert f"```{{{language}}}\n#| error: true\n{source}\n```" in managed, (
                     managed
@@ -153,10 +153,10 @@ def test_automatic_replacement_separates_source_and_failed_cells(
             assert "ValueError: retained failure" in last_result_text(client), rejected
             transcript = client.finish()
         (recording,) = (workspace / ".agents/console/sessions").iterdir()
-        documents = sorted((recording / "sessions").glob("*.qmd"))
-        assert [path.name for path in documents] == [
-            "session-001.qmd",
-            "session-002.qmd",
+        documents = sorted((recording / "sessions").glob("session-*/session.qmd"))
+        assert [path.parent.name for path in documents] == [
+            "session-001",
+            "session-002",
         ]
         original, replacement = [path.read_text() for path in documents]
         assert "print('original session')" in original
@@ -173,7 +173,7 @@ def test_automatic_replacement_separates_source_and_failed_cells(
         assert "ValueError: retained failure" in markdown
         for id in (1, 2):
             assert f"## Session {id:03} started" in markdown
-            assert f"sessions/session-{id:03}.qmd" in markdown
+            assert f"sessions/session-{id:03}/session.qmd" in markdown
         assert (
             len([e for e in events(recording) if e["event"] == "worker_started"]) == 2
         )

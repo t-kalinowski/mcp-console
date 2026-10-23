@@ -19,17 +19,19 @@ use rmcp::{
         RequestMetaObject,
     },
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
+pub(crate) const BUNDLE_META: &str = "mcp-console/session-bundle";
+
 mod event;
-pub(crate) mod export;
 mod files;
 mod queue;
 use files::{CaptureFile, CaptureStorage};
 use queue::{ProtocolEvents, QueuedEvent};
 mod markdown;
 mod output;
+mod report;
 pub(crate) use output::{CellOutput, OutputRecord};
 
 /// Retained process diagnostics have no worker interval or raw text file.
@@ -38,13 +40,13 @@ pub(crate) struct ProcessOutput {
     pub retained_bytes: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub(crate) struct Owner {
     pub session_id: u64,
     pub cell_id: Option<u64>,
     pub interval: Interval,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Interval {
     Startup,
@@ -68,7 +70,7 @@ impl Owner {
     }
 }
 /// Byte ranges in the actual assembled text blocks, or one image block.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize)]
 pub(crate) struct ResultPart {
     pub block: usize,
     pub start: usize,
@@ -105,8 +107,6 @@ struct ActiveTranscript {
     pending_projection_failure: Option<String>,
     run_id: String,
     sequence: u64,
-    // Call, observed owner, and the journal boundary before cell entry.
-    cell_snapshot: Option<(u64, Owner, u64)>,
     call_sessions: BTreeMap<u64, CallAssociation>,
     finished: bool,
 }
@@ -269,9 +269,13 @@ impl Transcript {
         })
         .unwrap_or_else(Call::unrecorded)
     }
-    pub(crate) fn finish(&self, call: Call, response: &Result<CallToolResponse, ErrorData>) {
+    pub(crate) fn finish(
+        &self,
+        call: Call,
+        response: &Result<CallToolResponse, ErrorData>,
+    ) -> Vec<rmcp::model::TextContent> {
         let Some(call_id) = call.id else {
-            return;
+            return Vec::new();
         };
         self.update(|state| {
             let images = call.take_result_images()?;
@@ -296,8 +300,35 @@ impl Transcript {
                     Utc::now(),
                 )?;
             }
-            active.finish(call_id, images, &parts, response, Utc::now())
-        });
+            let notices = if active.published && response.is_ok() {
+                active
+                    .projections
+                    .as_mut()
+                    .map(|p| p.take_notices())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let recorded_notices: Vec<_> = notices
+                .into_iter()
+                .map(|text| {
+                    rmcp::model::TextContent::new(text).with_meta(
+                        serde_json::Map::from_iter([(BUNDLE_META.into(), Value::Bool(true))])
+                            .into(),
+                    )
+                })
+                .collect();
+            active.finish(
+                call_id,
+                images,
+                &parts,
+                response,
+                &recorded_notices,
+                Utc::now(),
+            )?;
+            Ok(recorded_notices)
+        })
+        .unwrap_or_default()
     }
     pub(crate) fn finalize(&self) {
         self.update(|state| {
@@ -462,7 +493,6 @@ impl ActiveTranscript {
             pending_projection_failure,
             run_id,
             sequence: 0,
-            cell_snapshot: None,
             call_sessions: BTreeMap::new(),
             finished: false,
         };
@@ -550,12 +580,6 @@ impl ActiveTranscript {
             return Ok(());
         }
         match &event {
-            Event::WorkerStarted { .. } | Event::WorkerEnded { .. } | Event::CellEnded { .. } => {
-                self.cell_snapshot = None;
-            }
-            Event::CellStarted { call_id, owner } => {
-                self.cell_snapshot = Some((*call_id, *owner, self.sequence));
-            }
             Event::ToolCall { call_id, .. } => {
                 self.call_sessions
                     .insert(*call_id, CallAssociation::default());
@@ -604,6 +628,10 @@ impl ActiveTranscript {
             | Event::RecordingEnded
             | Event::Protocol { .. }
             | Event::Delivery { .. }
+            | Event::WorkerStarted { .. }
+            | Event::WorkerEnded { .. }
+            | Event::CellStarted { .. }
+            | Event::CellEnded { .. }
             | Event::WorkerReady { .. }
             | Event::OutputText { .. }
             | Event::ImageOmitted { .. }
@@ -645,21 +673,36 @@ impl ActiveTranscript {
         result_images: ResultImages,
         parts: &[ResultPart],
         response: &Result<CallToolResponse, ErrorData>,
+        notices: &[rmcp::model::TextContent],
         at: DateTime<Utc>,
     ) -> Result<(), String> {
         let outcome = match response {
-            Ok(CallToolResponse::Complete(result)) => Outcome::Result {
-                result: Self::project_result(call_id, result_images, result)?,
-            },
+            Ok(CallToolResponse::Complete(result)) => {
+                let mut result = Self::project_result(call_id, result_images, result)?;
+                result
+                    .content
+                    .splice(0..0, notices.iter().map(RecordedContent::Text));
+                Outcome::Result { result }
+            }
             Ok(_) => {
                 return Err("console tool unexpectedly returned a non-final MCP response".into());
             }
             Err(error) => Outcome::Error { error },
         };
+        // Notices precede output so the terminal status remains the response
+        // suffix for clients polling by that documented marker.
+        let parts: Vec<_> = parts
+            .iter()
+            .cloned()
+            .map(|mut part| {
+                part.block += notices.len();
+                part
+            })
+            .collect();
         self.append(
             Event::ToolResult {
                 call_id,
-                parts,
+                parts: &parts,
                 outcome,
             },
             at,
@@ -832,4 +875,13 @@ fn replace_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn bundle_image_name(id: u64, mime_type: &str) -> String {
+    let extension = match mime_type {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        _ => "bin",
+    };
+    format!("image-{id:06}.{extension}")
 }

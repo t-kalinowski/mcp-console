@@ -22,6 +22,8 @@ pub(super) struct Writers {
     markdown: ProjectionWriter,
     directory: PathBuf,
     documents: Documents,
+    reports: super::report::Reports,
+    announced: std::collections::BTreeSet<u64>,
 }
 struct ProjectionWriter {
     writer: BufWriter<File>,
@@ -30,9 +32,9 @@ struct ProjectionWriter {
 }
 /// Retain only source awaiting association and each worker's source document.
 #[derive(Default)]
-pub(super) struct Documents {
+struct Documents {
     calls: BTreeMap<u64, PendingSource>,
-    pub(super) sessions: BTreeMap<u64, QuartoWriter>,
+    sessions: BTreeMap<u64, QuartoWriter>,
     metadata: Metadata,
     current: Option<u64>,
 }
@@ -50,7 +52,7 @@ struct Metadata {
     r_available: bool,
     metadata_known: bool,
 }
-pub(super) struct QuartoWriter {
+struct QuartoWriter {
     metadata: Metadata,
     sources: Vec<QuartoSource>,
 }
@@ -72,6 +74,8 @@ impl Writers {
         Ok(Self {
             markdown: ProjectionWriter::new(markdown, "Markdown transcript"),
             directory: directory.to_owned(),
+            reports: super::report::Reports::new()?,
+            announced: Default::default(),
             documents: Documents {
                 metadata: Metadata {
                     working_directory: working_directory
@@ -102,27 +106,45 @@ impl Writers {
     pub(super) fn append(&mut self, event: &Envelope<'_>) -> Result<(), String> {
         let mut fragment = String::new();
         render_event(&mut fragment, event)?;
-        if let Some(id) = self.documents.observe(&event.event)? {
-            let document = &self.documents.sessions[&id];
+        let mut changed = self.reports.observe(event)?;
+        let source_changed = self.documents.observe(&event.event)?;
+        if let Some(id) = source_changed {
+            changed.push(id);
+        }
+        changed.sort_unstable();
+        changed.dedup();
+        for id in changed {
+            let Some(document) = self.documents.sessions.get(&id) else {
+                continue;
+            };
             if document.has_source() {
-                let path = self.directory.join(format!("sessions/session-{id:03}.qmd"));
+                let bundle = self.directory.join(format!("sessions/session-{id:03}"));
+                super::create_private_directory(&bundle, true).map_err(|e| e.to_string())?;
+                let path = bundle.join("session.qmd");
                 let first = !path.exists();
-                super::replace_private_file(
-                    &path,
-                    document.render(&format!("session-{id:03}.qmd")).as_bytes(),
-                )?;
+                if first || source_changed == Some(id) {
+                    super::replace_private_file(&path, document.render("session.qmd").as_bytes())?;
+                }
+                self.reports.publish(&self.directory, id)?;
                 if first {
-                    writeln!(
-                        fragment,
-                        "[Session {id:03} source (QMD)](<sessions/session-{id:03}.qmd>)
-"
-                    )
-                    .unwrap();
+                    writeln!(fragment, "[Session {id:03} source (QMD)](<sessions/session-{id:03}/session.qmd>) · [Report (Markdown)](<sessions/session-{id:03}/session.md>)\n").unwrap();
                 }
             }
         }
         self.markdown.append(MARKDOWN_HEADER, &fragment)?;
         Ok(())
+    }
+    pub(super) fn take_notices(&mut self) -> Vec<String> {
+        self.documents.sessions.iter().filter_map(|(id, document)| {
+            if self.announced.contains(id) { return None; }
+            // Components use native separators even when storage was selected
+            // with mixed separators, so all three advertised paths agree.
+            let bundle = self.directory.join(format!("sessions/session-{id:03}")).components().collect::<PathBuf>();
+            if document.has_source() && bundle.join("session.qmd").is_file()
+                && bundle.join("session.md").is_file() && self.announced.insert(*id) {
+                Some(format!("Session bundle on the Console host: {}\nSource: {}\nReport: {}\nThis live bundle updates as results are assembled; the path grants no filesystem access.\n", bundle.display(), bundle.join("session.qmd").display(), bundle.join("session.md").display()))
+            } else { None }
+        }).collect()
     }
 }
 impl Documents {
@@ -206,7 +228,15 @@ impl Documents {
                 }
             }
             Event::ToolResult { call_id, .. } => {
-                self.finish_result(*call_id);
+                // Response assembly can precede the admitted cell's worker.
+                // Keep that source until association or actual settlement.
+                if self
+                    .calls
+                    .get(call_id)
+                    .is_some_and(|pending| !pending.admitted)
+                {
+                    self.calls.remove(call_id);
+                }
             }
             Event::RequirementsAccepted { requirements } => {
                 self.metadata.requirements(requirements);
@@ -234,108 +264,6 @@ impl Documents {
             | Event::SessionOutput { .. } => {}
         }
         Ok(None)
-    }
-
-    /// Replay projection inputs without retaining result payloads or stdin.
-    /// Live and reconstructed documents share the same typed state transitions.
-    pub(super) fn observe_capture(&mut self, recorded: &Value) -> Result<Option<u64>, String> {
-        let id = |name: &str| {
-            recorded[name]
-                .as_u64()
-                .ok_or_else(|| format!("capture {name} missing"))
-        };
-        let request;
-        let request_id;
-        let requirements;
-        let event = match recorded["event"].as_str().unwrap_or("") {
-            "recording_started" => {
-                self.metadata.working_directory = recorded["working_directory"]
-                    .as_str()
-                    .ok_or("recording working directory missing")?
-                    .into();
-                self.metadata.metadata_known = !recorded["dynamic_resolution"].is_null();
-                self.metadata.dynamic_resolution =
-                    recorded["dynamic_resolution"].as_bool().unwrap_or(false);
-                self.metadata
-                    .requirements(&recorded["startup_requirements"]);
-                return Ok(None);
-            }
-            "environment_discovered" => {
-                requirements = serde_json::from_value(recorded["startup_requirements"].clone())
-                    .map_err(|e| e.to_string())?;
-                Event::EnvironmentDiscovered {
-                    dynamic_resolution: recorded["dynamic_resolution"]
-                        .as_bool()
-                        .ok_or("resolution policy missing")?,
-                    python_preparation: recorded["python_preparation"]
-                        .as_bool()
-                        .ok_or("Python preparation policy missing")?,
-                    r_available: recorded["r_available"]
-                        .as_bool()
-                        .ok_or("R availability missing")?,
-                    startup_requirements: &requirements,
-                }
-            }
-            "worker_started" => Event::WorkerStarted {
-                session_id: id("session_id")?,
-                pid: serde_json::from_value(recorded["pid"].clone()).map_err(|e| e.to_string())?,
-                requirements: &recorded["requirements"],
-            },
-            "worker_ended" => Event::WorkerEnded {
-                session_id: id("session_id")?,
-                outcome: recorded["outcome"]
-                    .as_str()
-                    .ok_or("worker outcome missing")?,
-            },
-            "tool_call" => {
-                if !["r", "python", "sql"]
-                    .iter()
-                    .any(|language| recorded["request"]["arguments"][language].is_string())
-                {
-                    return Ok(None);
-                }
-                request = serde_json::from_value(recorded["request"].clone())
-                    .map_err(|e| e.to_string())?;
-                request_id = serde_json::from_value(recorded["request_id"].clone())
-                    .map_err(|e| e.to_string())?;
-                Event::ToolCall {
-                    call_id: id("call_id")?,
-                    request: &request,
-                    request_id: &request_id,
-                }
-            }
-            "source_admitted" => Event::SourceAdmitted {
-                call_id: id("call_id")?,
-            },
-            "source_finished" => Event::SourceFinished {
-                call_id: id("call_id")?,
-            },
-            "source_associated" => Event::SourceAssociated {
-                call_id: id("call_id")?,
-                session_id: id("session_id")?,
-            },
-            "tool_result" => {
-                self.finish_result(id("call_id")?);
-                return Ok(None);
-            }
-            "requirements_accepted" => Event::RequirementsAccepted {
-                requirements: &recorded["requirements"],
-            },
-            _ => return Ok(None),
-        };
-        self.observe(&event)
-    }
-
-    fn finish_result(&mut self, call_id: u64) {
-        // Response assembly can precede the admitted cell's worker.
-        // Keep that source until association or actual settlement.
-        if self
-            .calls
-            .get(&call_id)
-            .is_some_and(|pending| !pending.admitted)
-        {
-            self.calls.remove(&call_id);
-        }
     }
 
     fn update_current_metadata(&mut self) -> Option<u64> {
@@ -371,19 +299,7 @@ impl QuartoWriter {
     fn has_source(&self) -> bool {
         !self.sources.is_empty()
     }
-    pub(super) fn take_source(&mut self) -> String {
-        let mut document = String::new();
-        for source in self.sources.drain(..) {
-            push_quarto_fence(
-                &mut document,
-                &format!("{{{}}}", source.language),
-                source.language,
-                &source.contents,
-            );
-        }
-        document
-    }
-    pub(super) fn render(&self, filename: &str) -> String {
+    fn render(&self, filename: &str) -> String {
         let mut document = String::from(
             "---
 # Source recorded by MCP Console; review before executing.

@@ -23,6 +23,8 @@ result:
       text: |
         selected native DBI identity
   isError: false
+session_bundles:
+  - <recording>/sessions/session-001
 ---
 send:
   sql: CREATE TABLE chosen AS SELECT 11 AS value
@@ -224,6 +226,8 @@ result:
         ℹ Error type: CATALOG
         [done]
   isError: false
+session_bundles:
+  - <recording>/sessions/session-002
 ---
 send:
   r: >-

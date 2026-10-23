@@ -3,7 +3,7 @@ use super::state::{Environment, PythonEnvironment};
 use crate::worker_protocol::PythonRequirementManifest;
 
 /// The declaration is derived from retained resolver results, never a candidate.
-#[derive(Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct Declaration {
     pub r: Vec<String>,
     pub python: Vec<String>,

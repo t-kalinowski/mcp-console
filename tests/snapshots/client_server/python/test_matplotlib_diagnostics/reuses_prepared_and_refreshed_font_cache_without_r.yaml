@@ -52,6 +52,8 @@ result:
       text: |
         prepared font cache and selected configuration reused
   isError: false
+session_bundles:
+  - <recording>/sessions/session-001
 ---
 send:
   python: |
@@ -172,6 +174,8 @@ result:
       text: |
         prepared font cache and selected configuration reused
   isError: false
+session_bundles:
+  - <recording>/sessions/session-002
 ---
 send:
   requirements:
@@ -226,6 +230,8 @@ result:
       text: |
         prepared font cache and selected configuration reused
   isError: false
+session_bundles:
+  - <recording>/sessions/session-003
 ---
 send:
   python: |

@@ -20,7 +20,7 @@ from windows_sandbox import BINARY, workspace
 
 @unittest.skipUnless(os.name == "nt", "native Windows MXC")
 class WindowsMxc(unittest.TestCase):
-    def test_host_recording_exports_writable_copy_and_completes_read_only(self):
+    def test_host_session_bundle_completes_read_only(self):
         from support.client import McpClient
 
         with workspace() as root:
@@ -50,7 +50,7 @@ class WindowsMxc(unittest.TestCase):
                         "isError": False,
                     },
                 )
-                client.send(python="paths = _console.export_session('report')")
+                self.assertEqual(len(client.bundle_notices), 1)
                 client.finish()
             (recording,) = (root / ".agents/console/sessions").iterdir()
             self.assertEqual(
@@ -63,14 +63,13 @@ class WindowsMxc(unittest.TestCase):
                         path.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY,
                         path,
                     )
-            self.assertIn("recorded result", (root / "report/session.md").read_text())
-            qmd = (root / "report/session.qmd").read_text()
+            self.assertIn(
+                "recorded result",
+                (recording / "sessions/session-001/session.md").read_text(),
+            )
+            qmd = (recording / "sessions/session-001/session.qmd").read_text()
             self.assertIn("print('recorded result')", qmd)
             self.assertNotIn("export_session", qmd)
-            for path in (root / "report").iterdir():
-                self.assertFalse(
-                    path.stat().st_file_attributes & stat.FILE_ATTRIBUTE_READONLY, path
-                )
             self.assertTrue(root.is_dir())
         self.assertFalse(root.exists())
 

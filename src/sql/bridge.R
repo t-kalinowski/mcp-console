@@ -202,19 +202,6 @@ base::local(
     console <- new.env(parent = emptyenv())
     console$sql_connection <- sql_connection
     console$sql_last_result <- function(n = NULL) fetch_last_result(n)
-    console$export_session <- function(directory) {
-      stopifnot(
-        is.character(directory),
-        length(directory) == 1L,
-        !is.na(directory)
-      )
-      paths <- .Call("mcp_console_export_session", path.expand(directory))
-      list(
-        qmd = paths[[1L]],
-        markdown = paths[[2L]],
-        images = paths[-c(1L, 2L)]
-      )
-    }
     base::assign(".console", console, envir = tools)
 
     ensure_printer <- function() {

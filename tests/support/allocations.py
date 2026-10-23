@@ -34,13 +34,13 @@ class AllocationProfile:
 
 
 class RetentionProfile:
-    """Live large allocations and peak growth, independent of allocator caches."""
+    """Live large server allocations, independent of allocator caches."""
 
     def __init__(self, root: Path) -> None:
         path = root / "retained-allocations"
-        path.write_bytes(bytes(32))
+        path.write_bytes(bytes(8))
         with path.open("r+b") as stream:
-            self.mapping = mmap.mmap(stream.fileno(), 32)
+            self.mapping = mmap.mmap(stream.fileno(), 8)
         self.environment = {
             LOADER_VARIABLE: str(build_interposer(root, "recording_retention")),
             "MCP_CONSOLE_TEST_RETENTION_PROFILE": str(path),
@@ -49,13 +49,6 @@ class RetentionProfile:
     @property
     def live(self) -> int:
         return struct.unpack_from("=q", self.mapping)[0]
-
-    def start(self) -> None:
-        struct.pack_into("=qqQ", self.mapping, 8, self.live, 0, 1)
-
-    def stop(self) -> int:
-        struct.pack_into("=Q", self.mapping, 24, 0)
-        return struct.unpack_from("=q", self.mapping, 16)[0]
 
     def close(self) -> None:
         self.mapping.close()

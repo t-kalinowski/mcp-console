@@ -260,17 +260,13 @@ Before using the connection directly from R or Python, finish retrieval or selec
 For queries submitted directly through Python DuckDB 2.x, fetch until no rows remain (or use `fetchall()`) before other operations such as registering a frame on that connection.
 Direct connection use while a result is pending is unsupported: it can invalidate the result without Console detecting the change.
 
-## Export the current session
+## Locate the session report
 
-Use `.console$export_session(directory)` in R or `_console.export_session(directory)` in Python to create writable `session.qmd`, `session.md`, and referenced images in a new directory.
-The helper returns `qmd`, `markdown`, and `images` paths as an R list or a Python dictionary of `pathlib.Path` objects.
-R export does not initialize Python; Python export works without R.
-
-The snapshot ends before the calling cell began, excluding that cell's source and unfinished results.
-The QMD contains source and dependency metadata; the Markdown preserves recorded client-facing previews, errors, omission notices, and images without executing code or expanding raw logs.
-Later polls retain the results' original cell associations.
-The worker's normal filesystem permissions apply, and destination collisions or unavailable capture raise errors.
-See [Recording reference](RECORDING_REFERENCE.md#export-a-working-copy) for the layout, delivery evidence, and limitations.
+Console announces the current session bundle when its source and report first become available.
+Open `session.md` for recorded previews and images or copy the entire bundle with your client's file tools.
+`session.qmd` contains source and dependency metadata for review and later execution.
+Paths refer to the Console host and do not grant filesystem access.
+See [Session bundles](RECORDING_REFERENCE.md#session-bundles) for updates, portability, and completion.
 
 ## Plots and images
 

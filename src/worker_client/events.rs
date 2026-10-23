@@ -1,5 +1,4 @@
 mod deferred;
-mod export;
 mod operation;
 
 pub(super) use operation::{
@@ -49,14 +48,12 @@ struct PendingPythonCandidate {
 struct RuntimeCandidates {
     r: Vec<crate::resolver::ManagedR>,
     python: Vec<PendingPythonCandidate>,
-    export: Option<export::ExportTask>,
 }
 
 impl RuntimeCandidates {
     fn clear(&mut self) {
         self.r.clear();
         self.python.clear();
-        self.export = None;
     }
 }
 
@@ -477,8 +474,6 @@ fn ignored_during_retirement(event: &RelayEvent) -> bool {
     matches!(
         event,
         RelayEvent::Ready
-            | RelayEvent::ExportSession
-            | RelayEvent::ExportChunk
             | RelayEvent::RuntimeInitialized { .. }
             | RelayEvent::RInitialization { .. }
             | RelayEvent::InputRequested { .. }
@@ -545,24 +540,6 @@ fn handle_semantic_event(
             Route::Cell(evaluation) => evaluation.start_cell_capture(),
             _ => Err("worker started a cell without an admitted source".into()),
         }),
-        RelayEvent::ExportSession => {
-            candidates.export = None;
-            let recording = callbacks
-                .client
-                .0
-                .recording
-                .lock()
-                .map_err(|_| "recording lock poisoned")?
-                .clone()
-                .ok_or_else(|| "session capture unavailable".to_string());
-            candidates.export = Some(export::ExportTask::start(recording, commands.clone()));
-            Ok(())
-        }
-        RelayEvent::ExportChunk => candidates
-            .export
-            .as_ref()
-            .ok_or_else(|| "no pending session export".to_string())
-            .and_then(|export| export.request_chunk()),
         RelayEvent::ConsoleOutput { data } => operation.with_route(|route| match route {
             Route::Cell(evaluation) => evaluation.output(Output, data),
             Route::Bootstrap | Route::Preparation | Route::Idle => {
@@ -778,7 +755,6 @@ fn handle_semantic_event(
         | RelayEvent::PythonPrepared
         | RelayEvent::PythonPreparationFailed { .. }
         | RelayEvent::PythonPreparationRejected { .. }) => {
-            candidates.export = None;
             operation.complete(event, &mut candidates.r, &mut candidates.python, output)
         }
         RelayEvent::Ready

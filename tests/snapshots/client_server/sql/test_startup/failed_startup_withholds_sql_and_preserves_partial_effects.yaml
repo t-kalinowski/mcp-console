@@ -15,12 +15,14 @@ result:
     - type: text
       text: |
         Traceback (most recent call last):
-          File "<string>", line 497, in initialize_connection
+          File "<string>", line 479, in initialize_connection
           File "<console startup>", line 2, in <module>
         RuntimeError: startup failure
         Error: configured startup did not complete; SQL withheld; explicit restart required
         Error: SQL unavailable: configured startup did not complete; explicit restart required
   isError: false
+session_bundles:
+  - <recording>/sessions/session-001
 ---
 send:
   sql: SELECT 42 AS answer
@@ -44,7 +46,7 @@ language: python
 failure: startup failure
 first_sql: |
   Traceback (most recent call last):
-    File "<string>", line 497, in initialize_connection
+    File "<string>", line 479, in initialize_connection
     File "<console startup>", line 2, in <module>
   RuntimeError: startup failure
   Error: configured startup did not complete; SQL withheld; explicit restart required

@@ -15,6 +15,8 @@ result:
     - type: text
       text: "[done]"
   isError: false
+session_bundles:
+  - <recording>/sessions/session-001
 ---
 send:
   control: restart
@@ -24,8 +26,6 @@ send:
       - numpy
       - pandas
       - duckdb==1.4.4
-    python_version:
-      - "3.14"
     duckdb:
       - not_a_real_duckdb_extension
 result:
