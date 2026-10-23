@@ -16,7 +16,7 @@ pub(super) struct CaptureStorage {
 struct CaptureFiles {
     temporary: Option<tempfile::TempDir>,
     directory: PathBuf,
-    bundles: Arc<super::bundle::Root>,
+    bundles: Option<Arc<super::bundle::Root>>,
     active: BTreeMap<String, std::sync::Weak<Mutex<CaptureFile>>>,
 }
 
@@ -44,9 +44,9 @@ impl CaptureStorage {
                 .map_err(|e| e.to_string())?;
             *state = Some(CaptureFiles {
                 temporary: Some(temporary),
-                bundles: Arc::new(
+                bundles: Some(Arc::new(
                     super::bundle::Root::open(&directory).map_err(|e| e.to_string())?,
-                ),
+                )),
                 directory,
                 active: BTreeMap::new(),
             });
@@ -59,7 +59,7 @@ impl CaptureStorage {
     }
 
     pub(super) fn bundles(&self) -> Result<Arc<super::bundle::Root>, String> {
-        self.with_files(|files| Ok(files.bundles.clone()))
+        self.with_files(|files| Ok(files.bundles.as_ref().expect("bundle root").clone()))
     }
 
     pub(super) fn create_file(&self, relative: &str) -> Result<Arc<Mutex<CaptureFile>>, String> {
@@ -71,7 +71,11 @@ impl CaptureStorage {
                 .map_err(|_| "recording path lock poisoned")?
                 .join(relative);
             let writer = if relative.starts_with("sessions/") {
-                files.bundles.image(Path::new(relative))
+                files
+                    .bundles
+                    .as_ref()
+                    .expect("bundle root")
+                    .image(Path::new(relative))
             } else {
                 create_private_directory(path.parent().expect("capture parent"), true)
                     .and_then(|()| create_private_file(&path))
@@ -101,8 +105,9 @@ impl CaptureStorage {
                 }
             }
             copy_capture(&files.directory, destination)?;
-            files.bundles =
-                Arc::new(super::bundle::Root::open(destination).map_err(|e| e.to_string())?);
+            files.bundles = Some(Arc::new(
+                super::bundle::Root::open(destination).map_err(|e| e.to_string())?,
+            ));
             files.directory = destination.to_owned();
             Ok(())
         })
@@ -138,7 +143,7 @@ impl CaptureStorage {
                 }
             }
             files.active.clear();
-            if let Err(error) = finalize_files(&files.bundles.0) {
+            if let Err(error) = finalize_files(&files.bundles.as_ref().expect("bundle root").0) {
                 errors.push(error);
             }
             if errors.is_empty() {
@@ -152,6 +157,9 @@ impl CaptureStorage {
 
 impl Drop for CaptureFiles {
     fn drop(&mut self) {
+        // Windows cannot remove a scratch directory while its pinned handle
+        // remains open. Projection and producer owners have already retired.
+        self.bundles.take();
         if let Some(temporary) = self.temporary.take() {
             discard_temporary_capture(temporary);
         }

@@ -393,6 +393,7 @@ Their metadata follows accepted live requirements and acquisition snapshots, inc
 The Markdown projection retains calls and assembled results, including previews and omission notices, while the journal retains routine protocol, delivery, and low-level lifecycle evidence.
 Completed interval files and images become read-only after their writers retire.
 The temporary-publication registry keeps weak references to active file handles and releases completed entries; publication copies completed files while relocating live producers.
+After producers and projections retire, scratch cleanup releases its pinned directory handle before removing an unpublished capture.
 Process-wide files finalize only after retirement, delivery settlement, queued initial capture, and blocking result writers settle.
 Session document permissions finalize at that same barrier because source associations and metadata updates can follow worker termination.
 Capture completion ownership survives handler cancellation and delivery deadlines, including after a result writer releases the journal mutex.

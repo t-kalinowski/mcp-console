@@ -25,7 +25,7 @@ import unittest
 import zipfile
 
 from windows_gate import Gate
-from support.checkpoints import wait_for_path
+from support.checkpoints import wait_for_path, wait_for_checkpoint
 from support.installation import native_console
 from support.normalization import code
 from support.bundles import split_bundle_notice
@@ -2437,6 +2437,62 @@ class WindowsConsole(unittest.TestCase):
                 )
             finally:
                 bundle.rmdir()
+
+    def test_shutdown_discards_unpublished_capture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            scratch = root / "scratch"
+            scratch.mkdir()
+            hooks = root / "hooks"
+            hooks.mkdir()
+            (hooks / "sitecustomize.py").write_text(
+                # fmt: python
+                code("""
+                    import sys
+                    from pathlib import Path
+
+                    if "_mcp_console_services" in sys.modules:
+                        print("unpublished startup output", flush=True)
+                        Path("startup-ready").touch()
+                    """)
+            )
+            session = Session(
+                {
+                    **os.environ,
+                    "RETICULATE_PYTHON": sys.executable,
+                    "RETICULATE_PYTHONPATH": str(hooks),
+                    "TMP": str(scratch),
+                    "TEMP": str(scratch),
+                    "TMPDIR": str(scratch),
+                }
+            )
+            try:
+                session.initialize()
+                wait_for_path(
+                    Path(session.directory.name) / "startup-ready",
+                    "worker startup without send",
+                    timeout=session.timeout,
+                )
+                capture = wait_for_checkpoint(
+                    lambda: next(
+                        (
+                            path
+                            for path in scratch.iterdir()
+                            if (path / "capture/events.jsonl").is_file()
+                        ),
+                        None,
+                    ),
+                    "unpublished capture observed",
+                    root=scratch,
+                    recursive=True,
+                    timeout=session.timeout,
+                )
+                self.assertFalse(
+                    (Path(session.directory.name) / ".agents/console/sessions").exists()
+                )
+            finally:
+                session.close()
+            self.assertFalse(capture.exists())
 
     def test_eof_retires_running_worker(self):
         session = self.session()
