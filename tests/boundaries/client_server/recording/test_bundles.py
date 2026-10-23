@@ -27,6 +27,99 @@ from boundaries.client_server.python.test_without_r import selected_environment
 
 
 @requires(POSIX)
+@executions(SANDBOXED)
+def test_bundle_symlink_cannot_redirect_host_writes(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        target = root / "denied"
+        target.mkdir()
+        with McpClient(
+            binary,
+            execution.serve("--writable-root", str(workspace)),
+            current_directory=workspace,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect(
+                "ready\n",
+                # fmt: python
+                python=code("""
+                    from pathlib import Path
+
+                    target = Path.cwd().parent / "denied"
+                    try:
+                        (target / "worker-write").write_text("forbidden")
+                    except PermissionError:
+                        pass
+                    else:
+                        raise AssertionError("target must be outside the worker write policy")
+                    print("ready")
+                    """),
+            )
+            client.expect(
+                "swapped\n",
+                # fmt: python
+                python=code("""
+                    (recording,) = Path(".agents/console/sessions").iterdir()
+                    bundle = recording / "sessions/session-001"
+                    bundle.rename(recording / "saved-session")
+                    bundle.symlink_to(target, target_is_directory=True)
+                    print("swapped")
+                    """),
+            )
+            assert not list(target.iterdir()), list(target.iterdir())
+            client.expect("still running\n", python="print('still running')")
+            transcript, diagnostics = client.finish_with_standard_error()
+            assert not list(target.iterdir()), list(target.iterdir())
+            assert "transcript projections disabled:" in diagnostics, diagnostics
+            return normalize_recording(transcript, workspace)
+
+
+@requires(POSIX)
+@executions(DIRECT)
+def test_replacements_do_not_accumulate_report_descriptors(
+    binary: Path, execution: Execution
+) -> Transcript:
+    worker = Path(__file__).resolve().parents[3] / "fixtures/zod"
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        wrapper = root / "bounded-console"
+        wrapper.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, resource, sys\n"
+            "resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))\n"
+            f"os.execv({str(binary)!r}, [{str(binary)!r}, *sys.argv[1:]])\n"
+        )
+        wrapper.chmod(0o700)
+        with McpClient(
+            wrapper,
+            execution.serve("--worker", str(worker)),
+            current_directory=root,
+        ) as client:
+            client.initialize_and_list_tools()
+            for session in range(1, 49):
+                if session > 1:
+                    client.send(control="restart")
+                client.expect(
+                    f"zod: session {session:03}\n", r=f"echo session {session:03}"
+                )
+            transcript, diagnostics = client.finish_with_standard_error()
+            assert diagnostics == "", diagnostics
+            assert len(client.bundle_notices) == 48, len(client.bundle_notices)
+            (recording,) = (root / ".agents/console/sessions").iterdir()
+            for session in range(1, 49):
+                report = recording / f"sessions/session-{session:03}/session.md"
+                assert f"zod: session {session:03}\n```" in report.read_text()
+            return [
+                *transcript[:3],
+                {"session bundles": "48 sessions under a 64-descriptor limit"},
+            ]
+
+
+@requires(POSIX)
 @executions(DIRECT, SANDBOXED)
 def test_bundle_notice_escapes_path_line_breaks(
     binary: Path, execution: Execution

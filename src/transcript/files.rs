@@ -16,6 +16,7 @@ pub(super) struct CaptureStorage {
 struct CaptureFiles {
     temporary: Option<tempfile::TempDir>,
     directory: PathBuf,
+    bundles: Arc<super::bundle::Root>,
     active: BTreeMap<String, std::sync::Weak<Mutex<CaptureFile>>>,
 }
 
@@ -43,6 +44,9 @@ impl CaptureStorage {
                 .map_err(|e| e.to_string())?;
             *state = Some(CaptureFiles {
                 temporary: Some(temporary),
+                bundles: Arc::new(
+                    super::bundle::Root::open(&directory).map_err(|e| e.to_string())?,
+                ),
                 directory,
                 active: BTreeMap::new(),
             });
@@ -54,18 +58,25 @@ impl CaptureStorage {
         self.with_files(|files| Ok(files.directory.clone()))
     }
 
+    pub(super) fn bundles(&self) -> Result<Arc<super::bundle::Root>, String> {
+        self.with_files(|files| Ok(files.bundles.clone()))
+    }
+
     pub(super) fn create_file(&self, relative: &str) -> Result<Arc<Mutex<CaptureFile>>, String> {
         self.with_files(|files| {
             let path = files.directory.join(relative);
-            create_private_directory(path.parent().expect("capture parent"), true)
-                .map_err(|e| e.to_string())?;
             let public_path = self
                 .public_directory
                 .lock()
                 .map_err(|_| "recording path lock poisoned")?
                 .join(relative);
-            let writer = create_private_file(&path)
-                .map_err(|e| format!("failed to create {}: {e}", public_path.display()))?;
+            let writer = if relative.starts_with("sessions/") {
+                files.bundles.image(Path::new(relative))
+            } else {
+                create_private_directory(path.parent().expect("capture parent"), true)
+                    .and_then(|()| create_private_file(&path))
+            }
+            .map_err(|e| format!("failed to create {}: {e}", public_path.display()))?;
             let file = Arc::new(Mutex::new(CaptureFile {
                 writer: Some(writer),
                 path,
@@ -90,6 +101,8 @@ impl CaptureStorage {
                 }
             }
             copy_capture(&files.directory, destination)?;
+            files.bundles =
+                Arc::new(super::bundle::Root::open(destination).map_err(|e| e.to_string())?);
             files.directory = destination.to_owned();
             Ok(())
         })
@@ -125,7 +138,7 @@ impl CaptureStorage {
                 }
             }
             files.active.clear();
-            if let Err(error) = finalize_files(&files.directory) {
+            if let Err(error) = finalize_files(&files.bundles.0) {
                 errors.push(error);
             }
             if errors.is_empty() {
@@ -186,8 +199,8 @@ impl CaptureFile {
         }
         if let Some(mut writer) = self.writer.take() {
             writer.flush().map_err(|e| e.to_string())?;
+            make_read_only(&writer)?;
         }
-        make_read_only(&self.path)?;
         self.complete = true;
         Ok(())
     }
@@ -225,15 +238,31 @@ fn copy_capture(source: &Path, destination: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-fn finalize_files(directory: &Path) -> Result<(), String> {
+fn finalize_files(directory: &cap_std::fs::Dir) -> Result<(), String> {
     let mut errors = Vec::new();
-    for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
+    for entry in directory.entries().map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let kind = entry.file_type().map_err(|e| e.to_string())?;
         let result = if kind.is_dir() {
-            finalize_files(&entry.path())
+            entry
+                .open_dir()
+                .map_err(|e| e.to_string())
+                .and_then(|dir| finalize_files(&dir))
         } else if kind.is_file() {
-            make_read_only(&entry.path())
+            entry
+                .metadata()
+                .and_then(|metadata| {
+                    let mut permissions = metadata.permissions();
+                    #[cfg(unix)]
+                    {
+                        use cap_std::fs::PermissionsExt as _;
+                        permissions.set_mode(permissions.mode() & !0o222);
+                    }
+                    #[cfg(not(unix))]
+                    permissions.set_readonly(true);
+                    directory.set_permissions(entry.file_name(), permissions)
+                })
+                .map_err(|e| e.to_string())
         } else {
             Ok(())
         };
@@ -247,10 +276,8 @@ fn finalize_files(directory: &Path) -> Result<(), String> {
         Err(errors.join("; "))
     }
 }
-fn make_read_only(path: &Path) -> Result<(), String> {
-    let mut permissions = std::fs::metadata(path)
-        .map_err(|e| e.to_string())?
-        .permissions();
+fn make_read_only(file: &File) -> Result<(), String> {
+    let mut permissions = file.metadata().map_err(|e| e.to_string())?.permissions();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -258,8 +285,8 @@ fn make_read_only(path: &Path) -> Result<(), String> {
     }
     #[cfg(not(unix))]
     permissions.set_readonly(true);
-    std::fs::set_permissions(path, permissions)
-        .map_err(|e| format!("failed to make {} read-only: {e}", path.display()))
+    file.set_permissions(permissions)
+        .map_err(|e| format!("failed to make capture file read-only: {e}"))
 }
 
 impl super::Transcript {

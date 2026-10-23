@@ -28,6 +28,7 @@ from windows_gate import Gate
 from support.checkpoints import wait_for_path
 from support.installation import native_console
 from support.normalization import code
+from support.bundles import split_bundle_notice
 from support.r import r_test_environment
 from windows_distribution import NATIVE_SUFFIXES, inspect_artifacts
 
@@ -82,6 +83,7 @@ class Session:
             )
         (Path(self.directory.name) / ".agents/console").mkdir(parents=True)
         self.errors = tempfile.TemporaryFile()
+        self.bundle_notices = []
         command = [str(binary or BINARY), "serve"]
         if not sandbox:
             command.append("--no-sandbox")
@@ -188,7 +190,27 @@ class Session:
                 )
             if response.get("id") == self.sequence:
                 assert "error" not in response, response
-                return response["result"]
+                result = response["result"]
+                if method == "tools/call" and params.get("name") == "send":
+                    notices = [
+                        item
+                        for item in result.get("content", [])
+                        if item.get("_meta", {}).get("mcp-console/session-bundle")
+                        is True
+                    ]
+                    for notice in notices:
+                        text, remainder = split_bundle_notice(notice["text"])
+                        assert text == notice["text"] and remainder == "", notice
+                        self.bundle_notices.append(text)
+                    result = {
+                        **result,
+                        "content": [
+                            item
+                            for item in result.get("content", [])
+                            if item not in notices
+                        ],
+                    }
+                return result
 
     def initialize(self):
         self.server_info = self.request(
@@ -2387,6 +2409,34 @@ class WindowsConsole(unittest.TestCase):
         self.assertIn("exited", json.dumps(result))
         result = session.send(r="42L")
         self.assertIn("42", json.dumps(result))
+
+    def test_bundle_junction_cannot_redirect_host_writes(self):
+        session = self.session()
+        session.expect("ready", python="print('ready')")
+        (recording,) = (
+            Path(session.directory.name) / ".agents/console/sessions"
+        ).iterdir()
+        # Active Windows report handles pin their directory names. A junction
+        # can still be planted for a replacement before its first source.
+        session.send(control="restart")
+        bundle = recording / "sessions/session-002"
+        self.assertFalse(bundle.exists())
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary)
+            subprocess.run(
+                ["cmd.exe", "/d", "/c", "mklink", "/J", str(bundle), str(target)],
+                check=True,
+                capture_output=True,
+            )
+            try:
+                session.expect("still running", python="print('still running')")
+                self.assertEqual(list(target.iterdir()), [])
+                session.errors.seek(0)
+                self.assertIn(
+                    b"transcript projections disabled:", session.errors.read()
+                )
+            finally:
+                bundle.rmdir()
 
     def test_eof_retires_running_worker(self):
         session = self.session()

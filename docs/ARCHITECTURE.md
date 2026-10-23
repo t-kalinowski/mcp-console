@@ -402,7 +402,10 @@ Session bundles contain the source QMD, report-style Markdown, and relative imag
 The existing projection owner updates them from typed events and assembled results, never by scanning the journal during a runtime callback.
 Result fragments use the output tape's recorded interval ownership, so a later poll can append to an earlier cell or session.
 One anonymous temporary file spools report sections through its original handle; memory retains section ranges and pending source associations, not cumulative response text or stdin.
-Publication retains the original private report handle and offsets for published sections.
+Bundle traversal, source replacement, portable image creation, and final permission updates use a pinned recording-directory capability.
+Managed bundle components reject symlinks; concurrent replacement cannot redirect these operations outside the pinned directory.
+Publication retains the original private handle and offsets for the most recently updated report, closing the previous session's report handle.
+Late updates to an evicted session reconstruct a private replacement from the existing spool without reopening its managed file or executing source.
 Ordinary source/result updates append new content and replace the tail's completion note; a late result for an earlier interval rewrites only the affected suffix.
 Unchanged preceding sections are neither scanned nor recopied, and raw output chunks do not trigger report publication.
 Portable image copies are written from emitted bytes under the capture producer, before links are published, without reopening worker-modifiable capture paths.

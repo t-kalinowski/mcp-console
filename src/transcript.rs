@@ -24,6 +24,7 @@ use serde_json::Value;
 
 pub(crate) const BUNDLE_META: &str = "mcp-console/session-bundle";
 
+mod bundle;
 mod event;
 mod files;
 mod queue;
@@ -470,7 +471,7 @@ impl ActiveTranscript {
             .map_err(|e| e.to_string())
             .and_then(|()| {
                 markdown::Writers::new(
-                    &directory,
+                    &storage,
                     working_directory,
                     configuration.dynamic_resolution,
                     configuration.r_available,
@@ -561,7 +562,7 @@ impl ActiveTranscript {
                 .map_err(|e| e.to_string())?,
         );
         if let Some(projections) = &mut self.projections
-            && let Err(error) = projections.relocate(&directory)
+            && let Err(error) = projections.relocate(&self.storage)
         {
             self.projections = None;
             self.pending_projection_failure = Some(error);
@@ -850,31 +851,6 @@ fn create_private_file(path: &Path) -> std::io::Result<File> {
     #[cfg(unix)]
     options.mode(0o600);
     options.open(path)
-}
-
-fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut file = create_private_file(path)
-        .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
-    file.write_all(bytes)
-        .and_then(|()| file.flush())
-        .map_err(|error| format!("failed to write {}: {error}", path.display()))
-}
-
-fn replace_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let temporary = path.with_file_name(".transcript.qmd.tmp");
-    if let Err(error) = write_new(&temporary, bytes) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
-    }
-    if let Err(error) = std::fs::rename(&temporary, path) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(format!(
-            "failed to replace {} from {}: {error}",
-            path.display(),
-            temporary.display()
-        ));
-    }
-    Ok(())
 }
 
 fn bundle_image_name(id: u64, mime_type: &str) -> String {

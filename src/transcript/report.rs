@@ -4,7 +4,6 @@ use super::event::{Envelope, Event, Outcome, RecordedContent};
 use super::{Interval, Owner};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -96,7 +95,7 @@ pub(super) struct Reports {
     sections: BTreeMap<(u64, SectionId), Section>,
     order: BTreeSet<(u64, u64, SectionId)>,
     dirty: BTreeSet<(u64, u64, SectionId)>,
-    published: BTreeMap<u64, Published>,
+    published: Option<(u64, Published)>,
     current: Option<u64>,
 }
 impl Reports {
@@ -109,7 +108,7 @@ impl Reports {
             sections: BTreeMap::new(),
             order: BTreeSet::new(),
             dirty: BTreeSet::new(),
-            published: BTreeMap::new(),
+            published: None,
             current: None,
         })
     }
@@ -345,30 +344,46 @@ impl Reports {
         changed.dedup();
         Ok(changed)
     }
-    pub(super) fn publish(&mut self, directory: &Path, session: u64) -> Result<(), String> {
-        let Some(&first) = self
+    pub(super) fn publish(
+        &mut self,
+        directory: &cap_std::fs::Dir,
+        session: u64,
+    ) -> Result<(), String> {
+        let Some(mut first) = self
             .dirty
             .range((session, 0, SectionId::Startup)..)
             .take_while(|(id, _, _)| *id == session)
             .next()
+            .copied()
         else {
             return Ok(());
         };
         self.dirty.retain(|(id, _, _)| *id != session);
-        if let std::collections::btree_map::Entry::Vacant(entry) = self.published.entry(session) {
-            let destination = directory.join(format!("sessions/session-{session:03}/session.md"));
-            // Keep the original private handle; publication never reopens a
-            // managed path that submitted code could replace with a symlink.
-            let mut file = super::create_private_file(&destination).map_err(|e| e.to_string())?;
+        let fresh = self.published.as_ref().map(|(id, _)| *id) != Some(session);
+        if fresh {
+            // Only the most recently updated report keeps a handle. Late
+            // results for an evicted session rebuild from the existing spool
+            // into a private replacement; never reopen its managed file.
+            self.published = None;
+            let mut file = super::bundle::create_file(directory, ".session.md.tmp")
+                .map_err(|e| e.to_string())?;
             writeln!(file, "# MCP Console session {session:03}\n\nRecorded source and assembled response previews.\nA transport write does not confirm that the client or model read a response.\nOmission notices are preserved; supplementary raw logs remain in Console capture and are not expanded here.\nThis live report may change while the recording is active.\n").map_err(|e| e.to_string())?;
             let end = file.stream_position().map_err(|e| e.to_string())?;
-            entry.insert(Published {
-                file,
-                sections: BTreeMap::new(),
-                end,
-            });
+            self.published = Some((
+                session,
+                Published {
+                    file,
+                    sections: BTreeMap::new(),
+                    end,
+                },
+            ));
+            first = *self
+                .order
+                .range((session, 0, SectionId::Startup)..)
+                .next()
+                .expect("session report sections");
         }
-        let published = self.published.get_mut(&session).unwrap();
+        let published = &mut self.published.as_mut().unwrap().1;
         let key = (first.1, first.2);
         let previous = published.sections.split_off(&key);
         let anchor = previous.first_key_value();
@@ -460,6 +475,11 @@ impl Reports {
             .set_len(published.end)
             .and_then(|()| published.file.flush())
             .map_err(|e| e.to_string())?;
+        if fresh {
+            directory
+                .rename(".session.md.tmp", directory, "session.md")
+                .map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 }

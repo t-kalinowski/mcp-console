@@ -155,6 +155,7 @@ A recorded result proves response assembly; local transport delivery is separate
 The QMD is atomically replaced; the report updates in place and can be read partway through an update.
 Images are written before a report links to them.
 A live bundle is a progress view, not an atomic archive snapshot.
+Replacing managed bundle directories with symlinks disables their projection; Console does not write through those links.
 Its documents remain writable until recording finalization, when pending source associations, results, output, and delivery owners have settled.
 Managed images become read-only after writing, and completed documents become read-only while retaining their privacy permissions.
 Abrupt termination can leave files writable or projections incomplete.

@@ -21,6 +21,7 @@ Results record response assembly; transport write evidence is retained separatel
 pub(super) struct Writers {
     markdown: ProjectionWriter,
     directory: PathBuf,
+    bundles: std::sync::Arc<super::bundle::Root>,
     documents: Documents,
     reports: super::report::Reports,
     announced: std::collections::BTreeSet<u64>,
@@ -62,18 +63,20 @@ struct QuartoSource {
 }
 impl Writers {
     pub(super) fn new(
-        directory: &Path,
+        storage: &super::CaptureStorage,
         working_directory: &Path,
         dynamic_resolution: bool,
         r_available: bool,
         requirements: &crate::worker_client::Declaration,
         metadata_known: bool,
     ) -> Result<Self, String> {
+        let directory = storage.directory()?;
         let markdown = super::create_private_file(&directory.join("transcript.md"))
             .map_err(|e| e.to_string())?;
         Ok(Self {
             markdown: ProjectionWriter::new(markdown, "Markdown transcript"),
             directory: directory.to_owned(),
+            bundles: storage.bundles()?,
             reports: super::report::Reports::new()?,
             announced: Default::default(),
             documents: Documents {
@@ -93,7 +96,8 @@ impl Writers {
             },
         })
     }
-    pub(super) fn relocate(&mut self, directory: &Path) -> Result<(), String> {
+    pub(super) fn relocate(&mut self, storage: &super::CaptureStorage) -> Result<(), String> {
+        let directory = storage.directory()?;
         self.markdown.writer = BufWriter::new(
             std::fs::OpenOptions::new()
                 .append(true)
@@ -101,6 +105,7 @@ impl Writers {
                 .map_err(|e| e.to_string())?,
         );
         self.directory = directory.to_owned();
+        self.bundles = storage.bundles()?;
         Ok(())
     }
     pub(super) fn append(&mut self, event: &Envelope<'_>) -> Result<(), String> {
@@ -119,13 +124,16 @@ impl Writers {
             };
             if document.has_source() {
                 let bundle = self.directory.join(format!("sessions/session-{id:03}"));
-                super::create_private_directory(&bundle, true).map_err(|e| e.to_string())?;
+                let bundle_directory = self.bundles.session(id).map_err(|e| e.to_string())?;
                 let path = bundle.join("session.qmd");
                 let first = !path.exists();
                 if first || source_changed == Some(id) {
-                    super::replace_private_file(&path, document.render("session.qmd").as_bytes())?;
+                    super::bundle::replace_source(
+                        &bundle_directory,
+                        document.render("session.qmd").as_bytes(),
+                    )?;
                 }
-                self.reports.publish(&self.directory, id)?;
+                self.reports.publish(&bundle_directory, id)?;
                 if first {
                     writeln!(fragment, "[Session {id:03} source (QMD)](<sessions/session-{id:03}/session.qmd>) · [Report (Markdown)](<sessions/session-{id:03}/session.md>)\n").unwrap();
                 }
