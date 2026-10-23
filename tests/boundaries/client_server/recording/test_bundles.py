@@ -7,6 +7,8 @@ import json
 import shutil
 import sys
 import tempfile
+import mmap
+import struct
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
@@ -16,11 +18,102 @@ from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import normalize_recording
 from support.records import Transcript
 from support.suites import run_this_suite
-from support.requirements import R, SQL, POSIX, requires
+from support.requirements import R, SQL, POSIX, NATIVE_FIXTURES, requires
+from support.native import LOADER_VARIABLE, build_interposer
 from support.normalization import code
 from support.checkpoints import release_fixture_checkpoint
 from boundaries.client_server._harness import wait_for_marker
 from boundaries.client_server.python.test_without_r import selected_environment
+
+
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_bundle_notice_escapes_path_line_breaks(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory) / 'line\nbreak\r\ttab\u0085\u2028\u2029"\\end'
+        root.mkdir()
+        with McpClient(
+            binary,
+            execution.serve(),
+            current_directory=root,
+        ) as client:
+            client.initialize_and_list_tools()
+            client.expect("ready\n", python="print('ready')")
+            (notice,) = client.bundle_notices
+            lines = notice.splitlines()
+            assert len(lines) == 4, notice
+            bundle = Path(json.loads(lines[0].split(": ", 1)[1]))
+            assert bundle.is_relative_to(root.resolve()), bundle
+            assert (
+                Path(json.loads(lines[1].removeprefix("Source: ")))
+                == bundle / "session.qmd"
+            )
+            assert (
+                Path(json.loads(lines[2].removeprefix("Report: ")))
+                == bundle / "session.md"
+            )
+            assert "ready\n```" in (bundle / "session.md").read_text()
+            return normalize_recording(client.finish(), root)
+
+
+@requires(NATIVE_FIXTURES)
+@executions(DIRECT)
+def test_report_publication_writes_only_changed_content(
+    binary: Path, execution: Execution
+) -> Transcript:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        profile = root / "report-writes"
+        profile.write_bytes(bytes(8))
+        with profile.open("r+b") as stream, mmap.mmap(stream.fileno(), 8) as counts:
+            with McpClient(
+                binary,
+                execution.serve(),
+                {
+                    **os.environ,
+                    LOADER_VARIABLE: str(build_interposer(root, "report_writes")),
+                    "MCP_CONSOLE_TEST_REPORT_WRITES": str(profile),
+                },
+                current_directory=root,
+            ) as client:
+                client.initialize_and_list_tools()
+                for _ in range(24):
+                    client.expect(
+                        "result:" + "x" * 2048 + "\n",
+                        python='print("result:" + "x" * 2048)',
+                    )
+                result = client.send(
+                    # fmt: python
+                    python=code("""
+                        for index in range(24):
+                            print("polled:" + "y" * 2048)
+                            input("next> ")
+                        """)
+                )
+                for _ in range(24):
+                    assert result["content"][0]["text"].endswith(
+                        "[waiting for stdin]"
+                    ), result
+                    result = client.send(stdin="\n")
+                assert result["content"][0]["text"] == "[done]", result
+                transcript, diagnostics = client.finish_with_standard_error()
+                assert diagnostics == "", diagnostics
+            (recording,) = (root / ".agents/console/sessions").iterdir()
+            report = (recording / "sessions/session-001/session.md").read_text()
+            assert report.count("result:" + "x" * 2048) == 24, report
+            assert report.count("polled:" + "y" * 2048) == 24, report
+            assert report.count("_Execution ended; completion confirmed._") == 25, (
+                report
+            )
+            assert "Unexecuted submission" not in report, report
+            written = struct.unpack_from("=Q", counts)[0]
+            assert written < len(report.encode()) * 4, (written, len(report.encode()))
+            return [
+                *transcript[:3],
+                {"report publication": "bounded writes across cells and polls"},
+            ]
 
 
 @executions(DIRECT, SANDBOXED)
@@ -47,7 +140,10 @@ def test_materializes_portable_bundle(binary: Path, execution: Execution) -> Tra
             assert (bundle / "session.qmd").is_file()
             assert (bundle / "session.md").is_file()
             notice = client.bundle_notices[-1]
-            assert str(bundle) in notice, response
+            assert (
+                Path(json.loads(notice.splitlines()[0].split(": ", 1)[1]))
+                == bundle.resolve()
+            ), response
             assert "Console host" in notice, notice
             assert "observed value" in (bundle / "session.md").read_text()
             qmd = (bundle / "session.qmd").read_text()

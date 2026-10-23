@@ -4,6 +4,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
+from support.bundles import evaluation_output as evaluation_output
 from support.assertions import last_tool_text
 from support.client import McpClient
 from support.progress import normalize_elapsed
@@ -138,53 +139,3 @@ def normalize_trailing_spaces(client: McpClient) -> str:
         output += "\n"
     client.transcript[-1]["result"]["content"][0]["text"] = output
     return output
-
-
-def split_bundle_notice(text: str) -> tuple[str, str]:
-    """Validate flattened SDK discovery text before comparing evaluation output."""
-    prefix = "Session bundle on the Console host: "
-    if not text.startswith(prefix):
-        return "", text
-    lines = text.split("\n", 4)
-    assert len(lines) == 5, text
-    bundle = Path(lines[0].removeprefix(prefix))
-    assert bundle.is_absolute(), text
-    assert re.fullmatch(r"session-\d{3,}", bundle.name), text
-    assert lines[1] == f"Source: {bundle / 'session.qmd'}", text
-    assert lines[2] == f"Report: {bundle / 'session.md'}", text
-    assert (
-        lines[3]
-        == "This live bundle updates as results are assembled; the path grants no filesystem access."
-    ), text
-    return "\n".join(lines[:4]) + "\n", lines[4]
-
-
-def evaluation_output(text: str) -> str:
-    return split_bundle_notice(text)[1]
-
-
-def normalize_bundle_locations(value: Any) -> Any:
-    """Keep discovery visible in SDK snapshots; normalize only its host location."""
-    if isinstance(value, str):
-        if value.startswith("Session bundle on the Console host: <"):
-            return value  # Already normalized by the recording-specific case.
-        notice, remainder = split_bundle_notice(value)
-        if notice:
-            directory = notice.splitlines()[0].removeprefix(
-                "Session bundle on the Console host: "
-            )
-            portable = f"<recording>/sessions/{Path(directory).name}"
-            return (
-                notice.replace(
-                    str(Path(directory) / "session.qmd"), portable + "/session.qmd"
-                )
-                .replace(str(Path(directory) / "session.md"), portable + "/session.md")
-                .replace(directory, portable)
-                + remainder
-            )
-        return value
-    if isinstance(value, list):
-        return [normalize_bundle_locations(item) for item in value]
-    if isinstance(value, dict):
-        return {key: normalize_bundle_locations(item) for key, item in value.items()}
-    return value

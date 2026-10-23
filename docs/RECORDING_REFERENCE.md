@@ -125,6 +125,7 @@ A long-location notice may instead name a path relative to the selected Console 
 
 Each `sessions/session-NNN/` is a portable bundle of source, recorded results, and images for one actual worker lifetime.
 The first send response after a bundle becomes available includes a separate notice with its directory, QMD, and Markdown paths on the Console host.
+Each path is a JSON string on one line; decode its quotes and escapes to recover the filesystem path, including any embedded line breaks.
 Execution previews retain their existing 8 KiB budget; the discovery notice adds location metadata without reducing or expanding the captured output preview.
 Restarts and automatic replacement produce separate bundles and notices when their source documents become available.
 A session with no associated source has no source/report bundle to announce.
@@ -151,7 +152,8 @@ Console updates documents from recording events and assembled results, without i
 The bundle includes current source, including an executing cell, and only results assembled so far.
 A recorded result proves response assembly; local transport delivery is separate evidence in capture, and neither proves that a model read it.
 
-Documents are atomically replaced individually; images are written before a report links to them.
+The QMD is atomically replaced; the report updates in place and can be read partway through an update.
+Images are written before a report links to them.
 A live bundle is a progress view, not an atomic archive snapshot.
 Its documents remain writable until recording finalization, when pending source associations, results, output, and delivery owners have settled.
 Managed images become read-only after writing, and completed documents become read-only while retaining their privacy permissions.

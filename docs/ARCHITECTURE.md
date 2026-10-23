@@ -402,13 +402,15 @@ Session bundles contain the source QMD, report-style Markdown, and relative imag
 The existing projection owner updates them from typed events and assembled results, never by scanning the journal during a runtime callback.
 Result fragments use the output tape's recorded interval ownership, so a later poll can append to an earlier cell or session.
 One anonymous temporary file spools report sections through its original handle; memory retains section ranges and pending source associations, not cumulative response text or stdin.
-Publication streams the ordered sections into an atomic replacement after each relevant source/result update, rather than on raw output chunks.
-This bounds memory but rewrites the session report as it grows; it is a progress projection, not a constant-cost append log.
+Publication retains the original private report handle and offsets for published sections.
+Ordinary source/result updates append new content and replace the tail's completion note; a late result for an earlier interval rewrites only the affected suffix.
+Unchanged preceding sections are neither scanned nor recopied, and raw output chunks do not trigger report publication.
 Portable image copies are written from emitted bytes under the capture producer, before links are published, without reopening worker-modifiable capture paths.
 The ordinary blocking recording task owns document I/O; the MCP receive loop and worker event dispatcher remain available.
 Each bundle's first available notice is included in its assembled tool result and canonical journal record, but omitted from the report presentation.
 Discovery paths refer to Console-managed files on the host, convey no filesystem authority, and introduce no destination-writing sideband or runtime helper.
-Individual document replacement is atomic; copying an active bundle does not establish a cross-file snapshot.
+QMD replacement is atomic; the report updates in place, so a reader can observe an update in progress.
+Copying an active bundle does not establish a cross-file snapshot.
 
 A journal or artifact failure disables further recording without stopping computation.
 Queued and in-flight protocol, worker lifecycle, and output capture events share a bound of 1,024 events or 8 MiB of serialized event data.

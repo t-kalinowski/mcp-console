@@ -1,11 +1,11 @@
 ---
 preview:
-  text_bytes: 8589
+  text_bytes: 8595
   concat:
     - |
-      Session bundle on the Console host: <recording>/sessions/session-001
-      Source: <recording>/sessions/session-001/session.qmd
-      Report: <recording>/sessions/session-001/session.md
+      Session bundle on the Console host: "<recording>/sessions/session-001"
+      Source: "<recording>/sessions/session-001/session.qmd"
+      Report: "<recording>/sessions/session-001/session.md"
       This live bundle updates as results are assembled; the path grants no filesystem access.
     - repeat: x
       count: 3968
@@ -16,12 +16,12 @@ preview:
       count: 3968
 ---
 preview:
-  text_bytes: 8589
+  text_bytes: 8595
   concat:
     - |
-      Session bundle on the Console host: <recording>/sessions/session-001
-      Source: <recording>/sessions/session-001/session.qmd
-      Report: <recording>/sessions/session-001/session.md
+      Session bundle on the Console host: "<recording>/sessions/session-001"
+      Source: "<recording>/sessions/session-001/session.qmd"
+      Report: "<recording>/sessions/session-001/session.md"
       This live bundle updates as results are assembled; the path grants no filesystem access.
     - repeat: x
       count: 3968

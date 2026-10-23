@@ -142,7 +142,11 @@ impl Writers {
             let bundle = self.directory.join(format!("sessions/session-{id:03}")).components().collect::<PathBuf>();
             if document.has_source() && bundle.join("session.qmd").is_file()
                 && bundle.join("session.md").is_file() && self.announced.insert(*id) {
-                Some(format!("Session bundle on the Console host: {}\nSource: {}\nReport: {}\nThis live bundle updates as results are assembled; the path grants no filesystem access.\n", bundle.display(), bundle.join("session.qmd").display(), bundle.join("session.md").display()))
+                // JSON strings round-trip separators, quotes, and control
+                // characters while keeping each advertised path on one line.
+                let path = |path: &Path| serde_json::to_string(&path.to_string_lossy()).unwrap()
+                    .replace('\u{85}', "\\u0085").replace('\u{2028}', "\\u2028").replace('\u{2029}', "\\u2029");
+                Some(format!("Session bundle on the Console host: {}\nSource: {}\nReport: {}\nThis live bundle updates as results are assembled; the path grants no filesystem access.\n", path(&bundle), path(&bundle.join("session.qmd")), path(&bundle.join("session.md"))))
             } else { None }
         }).collect()
     }

@@ -18,7 +18,8 @@ import mcp_console
 from mcp_console import AsyncMCPConsole, MCPConsole
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.r import r_test_environment
-from support.normalization import code, evaluation_output, normalize_bundle_locations
+from support.normalization import code, evaluation_output
+from support.bundles import normalize_bundle_locations
 from support.records import Transcript
 from support.previews import assert_preview
 from support.progress import elapsed_progress, normalize_elapsed, without_elapsed

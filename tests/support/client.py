@@ -11,6 +11,7 @@ from threading import Thread
 from typing import Any, Self, TextIO
 
 from support.records import ToolResult, Transcript, TranscriptEntry
+from support.bundles import split_bundle_notice
 
 SERVER_SHUTDOWN_SECONDS = 11
 SERVER_REAP_SECONDS = 2
@@ -351,16 +352,12 @@ class McpClient:
             ), block
             assert block["_meta"] == {"mcp-console/session-bundle": True}, block
             text = block["text"]
+            notice, remainder = split_bundle_notice(text)
+            assert notice == text and remainder == "", text
             lines = text.splitlines()
             assert len(lines) == 4, text
-            bundle = Path(lines[0].removeprefix(prefix))
+            bundle = Path(json.loads(lines[0].removeprefix(prefix)))
             assert bundle.is_absolute() and bundle not in self._announced_bundles, text
-            assert lines[1] == f"Source: {bundle / 'session.qmd'}", text
-            assert lines[2] == f"Report: {bundle / 'session.md'}", text
-            assert (
-                lines[3]
-                == "This live bundle updates as results are assembled; the path grants no filesystem access."
-            ), text
             assert (bundle / "session.qmd").is_file() and (
                 bundle / "session.md"
             ).is_file(), text

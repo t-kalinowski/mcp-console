@@ -13,7 +13,7 @@ from support.records import (
     YamlStream,
 )
 from support.progress import normalize_elapsed
-from support.normalization import normalize_bundle_locations
+from support.bundles import normalize_bundle_locations
 
 root = Path(__file__).resolve().parents[2]
 snapshot_directory = root / "tests" / "snapshots"
