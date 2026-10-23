@@ -14,9 +14,6 @@ send:
     stopifnot(is.null(.console$sql_connection(connection = sqlite)))
     stopifnot(identical(.console$sql_connection(), sqlite))
     writeLines("selected native DBI identity")
-  requirements:
-    r:
-      - RSQLite
 result:
   content:
     - type: text

@@ -21,6 +21,7 @@ from support.client import McpClient
 from support.checkpoints import wait_for_checkpoint, wait_for_path
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_recording
+from support.bundles import normalize_bundle_locations
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
@@ -287,6 +288,10 @@ def test_records_real_mixed_language_session(
         assert "root.dir:" not in quarto
         assert markdown.endswith("\n")
         assert quarto.endswith("\n")
+
+        for notice in client.bundle_notices:
+            assert notice in markdown, notice
+            markdown = markdown.replace(notice, normalize_bundle_locations(notice))
 
         session_event = events[0]
         recorded_workspace = session_event["working_directory"]

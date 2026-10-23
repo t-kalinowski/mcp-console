@@ -161,9 +161,9 @@ md: |+
   ## Result for call 4
 
   ```text
-  Session bundle on the Console host: "<workspace>/.agents/console/sessions/<run ID>/sessions/session-002"
-  Source: "<workspace>/.agents/console/sessions/<run ID>/sessions/session-002/session.qmd"
-  Report: "<workspace>/.agents/console/sessions/<run ID>/sessions/session-002/session.md"
+  Session bundle on the Console host: "<recording>/sessions/session-002"
+  Source: "<recording>/sessions/session-002/session.qmd"
+  Report: "<recording>/sessions/session-002/session.md"
   This live bundle updates as results are assembled; the path grants no filesystem access.
   ```
 

@@ -233,9 +233,8 @@ def test_materializes_portable_bundle(binary: Path, execution: Execution) -> Tra
             assert (bundle / "session.qmd").is_file()
             assert (bundle / "session.md").is_file()
             notice = client.bundle_notices[-1]
-            assert (
-                Path(json.loads(notice.splitlines()[0].split(": ", 1)[1]))
-                == bundle.resolve()
+            assert Path(json.loads(notice.splitlines()[0].split(": ", 1)[1])).samefile(
+                bundle
             ), response
             assert "Console host" in notice, notice
             assert "observed value" in (bundle / "session.md").read_text()
