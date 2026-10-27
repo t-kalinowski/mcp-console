@@ -1,6 +1,14 @@
 ---
 content:
   - type: text
+    text: |
+      Session bundle on the Console host: "<recording>/sessions/session-001"
+      Source: "<recording>/sessions/session-001/session.qmd"
+      Report: "<recording>/sessions/session-001/session.md"
+      This live bundle updates as results are assembled; the path grants no filesystem access.
+    _meta:
+      mcp-console/session-bundle: true
+  - type: text
     text: |-
 
       [elapsed: <elapsed>s since admission; no new output]

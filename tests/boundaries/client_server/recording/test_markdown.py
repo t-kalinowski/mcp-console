@@ -21,6 +21,7 @@ from support.client import McpClient
 from support.checkpoints import wait_for_checkpoint, wait_for_path
 from support.execution import DIRECT, SANDBOXED, Execution, executions
 from support.normalization import code, normalize_recording
+from support.bundles import normalize_bundle_locations
 from support.r import r_test_environment, reference_plots
 from support.records import Transcript, TranscriptWithCompanions
 from support.suites import run_this_suite
@@ -67,7 +68,7 @@ def test_records_existing_python_startup_declaration(
             if event["event"] == "cell_started" and event["call_id"] == r_call
         ]
         session_id = cell["owner"]["session_id"]
-        quarto = (session / f"sessions/session-{session_id:03}.qmd").read_text(
+        quarto = (session / f"sessions/session-{session_id:03}/session.qmd").read_text(
             encoding="utf-8"
         )
         assert "  python-packages: []\n" in quarto, quarto
@@ -246,7 +247,7 @@ def test_records_real_mixed_language_session(
             if event["event"] == "cell_started" and event["call_id"] == 4
         ]
         session_id = cell["owner"]["session_id"]
-        quarto = (session / f"sessions/session-{session_id:03}.qmd").read_text(
+        quarto = (session / f"sessions/session-{session_id:03}/session.qmd").read_text(
             encoding="utf-8"
         )
         # Snapshot at the completed SQL response. Bounded EOF retirement can
@@ -256,7 +257,7 @@ def test_records_real_mixed_language_session(
         completed = (session / "transcript.md").read_text(encoding="utf-8")
         assert completed.startswith(markdown)
         assert completed.endswith("## Recording finished\n\n")
-        assert (session / f"sessions/session-{session_id:03}.qmd").read_text(
+        assert (session / f"sessions/session-{session_id:03}/session.qmd").read_text(
             encoding="utf-8"
         ) == quarto
         completed_events = [
@@ -276,7 +277,7 @@ def test_records_real_mixed_language_session(
         assert artifact["path"] in markdown
         assert (
             f"[Session {session_id:03} source (QMD)]"
-            f"(<sessions/session-{session_id:03}.qmd>)" in markdown
+            f"(<sessions/session-{session_id:03}/session.qmd>)" in markdown
         )
         assert f"```{{r}}\n#| error: true\n{r}```" in quarto
         assert f"```{{python}}\n#| error: true\n{python}```" in quarto
@@ -287,6 +288,10 @@ def test_records_real_mixed_language_session(
         assert "root.dir:" not in quarto
         assert markdown.endswith("\n")
         assert quarto.endswith("\n")
+
+        for notice in client.bundle_notices:
+            assert notice in markdown, notice
+            markdown = markdown.replace(notice, normalize_bundle_locations(notice))
 
         session_event = events[0]
         recorded_workspace = session_event["working_directory"]
@@ -366,7 +371,9 @@ after"""
 
         session = next((workspace / ".agents/console" / "sessions").iterdir())
         markdown = (session / "transcript.md").read_text(encoding="utf-8")
-        quarto = (session / "sessions/session-001.qmd").read_text(encoding="utf-8")
+        quarto = (session / "sessions/session-001/session.qmd").read_text(
+            encoding="utf-8"
+        )
         assert f"`````python\n{source}\n`````" in markdown
         assert (
             """`````text
@@ -420,7 +427,8 @@ echo SELECT 42
                 "sentence",
                 "--skip-embedded-formatters",
                 "transcript.md",
-                "sessions/session-001.qmd",
+                "sessions/session-001/session.qmd",
+                "sessions/session-001/session.md",
             ],
             cwd=session,
             check=False,
@@ -431,15 +439,15 @@ echo SELECT 42
             "stdout": formatting.stdout,
             "stderr": formatting.stderr,
             "transcript.md": (session / "transcript.md").read_text(encoding="utf-8"),
-            "sessions/session-001.qmd": (
-                session / "sessions/session-001.qmd"
+            "sessions/session-001/session.qmd": (
+                session / "sessions/session-001/session.qmd"
             ).read_text(encoding="utf-8"),
         }
         transcript.append(
             {
                 "generated documents": {
                     "transcript.md": "Yamark formatted",
-                    "sessions/session-001.qmd": "Yamark formatted",
+                    "sessions/session-001/session.qmd": "Yamark formatted",
                 }
             }
         )
@@ -506,7 +514,14 @@ def test_records_polls_input_controls_and_previews(
             "## Cell started",
         ):
             assert chatter not in markdown, markdown
-        source = (recording / "sessions/session-001.qmd").read_text()
+        report = (recording / "sessions/session-001/session.md").read_text()
+        assert preview in report, report
+        assert report.count("\nzod stdin: supplied answer\n") == 1, report
+        assert "## Call" not in report and "## Result" not in report, report
+        # The report preserves what was presented, without expanding the raw log.
+        raw = (recording / "capture/sessions/001/cell-003.txt").read_text()
+        assert len(report) < len(raw), (len(report), len(raw))
+        source = (recording / "sessions/session-001/session.qmd").read_text()
         assert "request input" in source and "preview huge line" in source
         for omitted in ("supplied answer", "control:", "[idle]", "[output omitted:"):
             assert omitted not in source, source

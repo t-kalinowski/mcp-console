@@ -253,6 +253,7 @@ class TranscriptRunnerFixture(unittest.TestCase):
             "cases.py",
             "records.py",
             "snapshots.py",
+            "bundles.py",
             "progress.py",
             "requirements.py",
             "linux_sandbox.py",

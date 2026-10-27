@@ -930,7 +930,16 @@ def test_bounds_argument_decoding_errors(
                 for line in (session / "capture/events.jsonl").read_text().splitlines()
                 if (event := json.loads(line))["event"] == "tool_result"
             ]
-            assert recorded == [*results, result]
+            assert len(client.bundle_notices) == 1, client.bundle_notices
+            notice = {
+                "type": "text",
+                "text": client.bundle_notices[0],
+                "_meta": {"mcp-console/session-bundle": True},
+            }
+            assert recorded == [
+                *results,
+                {**result, "content": [notice, *result["content"]]},
+            ]
             compact_previews(client, "éλ")
             for entry in client.transcript:
                 if "send" in entry and entry["send"] in [case[0] for case in cases]:

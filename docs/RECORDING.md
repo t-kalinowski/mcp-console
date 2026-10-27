@@ -10,8 +10,9 @@ Review them before sharing.
 
 Ask the agent for the recording's path, then open `transcript.md` in that directory.
 It shows calls and results across all worker sessions, including recorded images and links to retained output.
-Links labeled “Session NNN source (QMD)” open source documents in `sessions/session-NNN.qmd`, one for each worker session that received source.
-Those files contain code and environment metadata; recorded results and images remain in `transcript.md` and the capture files.
+Console announces each session bundle when it first becomes available, with paths to its source and report on the Console host.
+The transcript links to the same bundles in `sessions/session-NNN/`.
+Each bundle contains `session.qmd` with code and environment metadata, `session.md` with recorded response previews, and an `images/` directory for portable image links.
 Raw text and images are grouped under `capture/sessions/NNN/` by worker session and observed startup, cell, or post-cell interval.
 Completed files are read-only; copy a file before editing it.
 For the dice example in [Get started](getting-started.qmd), you can inspect both the simulation and the later comparison that reused its results.
@@ -36,9 +37,28 @@ For SQL, your agent can retrieve the last result in R or Python without running 
 
 Reference: [Retrieve the last SQL result](RUNTIME_REFERENCE.md#retrieve-the-last-sql-result).
 
+## Copy a session bundle {#export-a-working-copy}
+
+Ask the agent for the session bundle path announced in its tool response.
+Open `session.md` to read source and recorded results, including previews, errors, omission notices, and images.
+Results collected by later polls stay with their cells; startup and between-cell output remain distinguishable.
+Console updates this report as it assembles responses, without executing code, repeating SQL, recomputing plots, or invoking Quarto.
+
+Copy the entire bundle, including `images/`, using file tools that can read the Console host and write your chosen destination.
+Those tools' filesystem permissions apply; the announced path does not grant sandbox access.
+There is no runtime export helper or destination directory argument.
+If submitted code cannot write the destination, use the client's file tools or copy the bundle yourself.
+
+A live bundle can change while it is copied.
+Wait until the Console process finishes for a completed record, and make your working copy writable before editing if the copy preserved read-only permissions.
+Included images use relative links and remain usable after the bundle is moved.
+Supplementary raw logs mentioned in omission notices remain in capture and are not included in the bundle.
+
+See the [recording reference](RECORDING_REFERENCE.md#session-bundles) for completion and delivery limitations.
+
 ## Turn the code into a report {#render-a-reviewed-copy}
 
-Each `sessions/session-NNN.qmd` is a starting point for a report, **not a replay or checkpoint**.
+Each `sessions/session-NNN/session.qmd` is a starting point for a report, **not a replay or checkpoint**.
 It contains the R, Python, and SQL source associated with that worker, including failed evaluations, rejected calls, and source submitted alongside a control.
 Restarts and automatic worker replacement begin a separate document; an interrupt that preserves the worker stays in the same document.
 The documents omit interactive input, polling, control operations, output, and recorded images.
@@ -46,7 +66,8 @@ The documents omit interactive input, polling, control operations, output, and r
 Copy it before editing:
 
 ```sh
-cp sessions/session-001.qmd report.qmd
+cp sessions/session-001/session.qmd report.qmd
+chmod u+w report.qmd
 ```
 
 Review the code, inputs, package declarations, and evaluation settings in `report.qmd`.

@@ -22,6 +22,9 @@ use rmcp::{
 use serde::Serialize;
 use serde_json::Value;
 
+pub(crate) const BUNDLE_META: &str = "mcp-console/session-bundle";
+
+mod bundle;
 mod event;
 mod files;
 mod queue;
@@ -29,6 +32,7 @@ use files::{CaptureFile, CaptureStorage};
 use queue::{ProtocolEvents, QueuedEvent};
 mod markdown;
 mod output;
+mod report;
 pub(crate) use output::{CellOutput, OutputRecord};
 
 /// Retained process diagnostics have no worker interval or raw text file.
@@ -266,9 +270,13 @@ impl Transcript {
         })
         .unwrap_or_else(Call::unrecorded)
     }
-    pub(crate) fn finish(&self, call: Call, response: &Result<CallToolResponse, ErrorData>) {
+    pub(crate) fn finish(
+        &self,
+        call: Call,
+        response: &Result<CallToolResponse, ErrorData>,
+    ) -> Vec<rmcp::model::TextContent> {
         let Some(call_id) = call.id else {
-            return;
+            return Vec::new();
         };
         self.update(|state| {
             let images = call.take_result_images()?;
@@ -293,8 +301,35 @@ impl Transcript {
                     Utc::now(),
                 )?;
             }
-            active.finish(call_id, images, &parts, response, Utc::now())
-        });
+            let notices = if active.published && response.is_ok() {
+                active
+                    .projections
+                    .as_mut()
+                    .map(|p| p.take_notices())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let recorded_notices: Vec<_> = notices
+                .into_iter()
+                .map(|text| {
+                    rmcp::model::TextContent::new(text).with_meta(
+                        serde_json::Map::from_iter([(BUNDLE_META.into(), Value::Bool(true))])
+                            .into(),
+                    )
+                })
+                .collect();
+            active.finish(
+                call_id,
+                images,
+                &parts,
+                response,
+                &recorded_notices,
+                Utc::now(),
+            )?;
+            Ok(recorded_notices)
+        })
+        .unwrap_or_default()
     }
     pub(crate) fn finalize(&self) {
         self.update(|state| {
@@ -436,7 +471,7 @@ impl ActiveTranscript {
             .map_err(|e| e.to_string())
             .and_then(|()| {
                 markdown::Writers::new(
-                    &directory,
+                    &storage,
                     working_directory,
                     configuration.dynamic_resolution,
                     configuration.r_available,
@@ -527,7 +562,7 @@ impl ActiveTranscript {
                 .map_err(|e| e.to_string())?,
         );
         if let Some(projections) = &mut self.projections
-            && let Err(error) = projections.relocate(&directory)
+            && let Err(error) = projections.relocate(&self.storage)
         {
             self.projections = None;
             self.pending_projection_failure = Some(error);
@@ -595,10 +630,10 @@ impl ActiveTranscript {
             | Event::Protocol { .. }
             | Event::Delivery { .. }
             | Event::WorkerStarted { .. }
-            | Event::WorkerReady { .. }
             | Event::WorkerEnded { .. }
             | Event::CellStarted { .. }
             | Event::CellEnded { .. }
+            | Event::WorkerReady { .. }
             | Event::OutputText { .. }
             | Event::ImageOmitted { .. }
             | Event::ProcessOutput { .. }
@@ -639,21 +674,36 @@ impl ActiveTranscript {
         result_images: ResultImages,
         parts: &[ResultPart],
         response: &Result<CallToolResponse, ErrorData>,
+        notices: &[rmcp::model::TextContent],
         at: DateTime<Utc>,
     ) -> Result<(), String> {
         let outcome = match response {
-            Ok(CallToolResponse::Complete(result)) => Outcome::Result {
-                result: Self::project_result(call_id, result_images, result)?,
-            },
+            Ok(CallToolResponse::Complete(result)) => {
+                let mut result = Self::project_result(call_id, result_images, result)?;
+                result
+                    .content
+                    .splice(0..0, notices.iter().map(RecordedContent::Text));
+                Outcome::Result { result }
+            }
             Ok(_) => {
                 return Err("console tool unexpectedly returned a non-final MCP response".into());
             }
             Err(error) => Outcome::Error { error },
         };
+        // Notices precede output so the terminal status remains the response
+        // suffix for clients polling by that documented marker.
+        let parts: Vec<_> = parts
+            .iter()
+            .cloned()
+            .map(|mut part| {
+                part.block += notices.len();
+                part
+            })
+            .collect();
         self.append(
             Event::ToolResult {
                 call_id,
-                parts,
+                parts: &parts,
                 outcome,
             },
             at,
@@ -803,27 +853,11 @@ fn create_private_file(path: &Path) -> std::io::Result<File> {
     options.open(path)
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut file = create_private_file(path)
-        .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
-    file.write_all(bytes)
-        .and_then(|()| file.flush())
-        .map_err(|error| format!("failed to write {}: {error}", path.display()))
-}
-
-fn replace_private_file(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let temporary = path.with_file_name(".transcript.qmd.tmp");
-    if let Err(error) = write_new(&temporary, bytes) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(error);
-    }
-    if let Err(error) = std::fs::rename(&temporary, path) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(format!(
-            "failed to replace {} from {}: {error}",
-            path.display(),
-            temporary.display()
-        ));
-    }
-    Ok(())
+fn bundle_image_name(id: u64, mime_type: &str) -> String {
+    let extension = match mime_type {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        _ => "bin",
+    };
+    format!("image-{id:06}.{extension}")
 }
