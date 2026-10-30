@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from inspect import iscoroutinefunction
 from typing import TYPE_CHECKING, Any
 
-from ._common import Command, stdio_command
+from ._common import Command, content_text, result_text, stdio_command
 
 if TYPE_CHECKING:
     from chatlas import Tool
+    from mcp.types import CallToolResult
 
     from ._client import AsyncMCPConsole
     from ._sync import MCPConsole
@@ -23,9 +25,16 @@ def tool(console: MCPConsole | AsyncMCPConsole) -> Tool:
 
     This uses the connected server's schema, including its configured languages
     and requirements fields. `register_tool(console.send)` infers a schema from
-    Python annotations and cannot describe those server settings. The adapter
-    returns text, with placeholders for images; [register()](chatlas.register.html)
-    uses chatlas's native MCP support to preserve image content.
+    Python annotations and cannot describe those server settings.
+
+    Text results return text, and tool errors raise. A successful result
+    containing an image returns a `chatlas.ContentToolResult` carrying the
+    ordered text and image content, with `extra={"display": {"open": True}}`
+    following shinychat's display convention so compatible chat UIs open the
+    tool-result card by default. The metadata is inert for clients that do not
+    read it. [register()](chatlas.register.html) uses chatlas's native MCP
+    support instead; chatlas owns that connection's result objects, so the
+    display hint cannot be attached there.
 
     Args:
         console: A connected `MCPConsole` or `AsyncMCPConsole`. An async client's
@@ -62,12 +71,50 @@ def tool(console: MCPConsole | AsyncMCPConsole) -> Tool:
     from chatlas import Tool
 
     definition = console.send_tool
+    if iscoroutinefunction(console.send):
+
+        async def invoke(**arguments: Any) -> Any:
+            return _tool_result(await console._call_send(arguments))
+
+    else:
+
+        def invoke(**arguments: Any) -> Any:
+            return _tool_result(console._call_send(arguments))
+
     return Tool(
-        func=console.send,
+        func=invoke,
         name=definition.name,
         description=definition.description or "",
         parameters=definition.input_schema,
         strict=False,
+    )
+
+
+def _tool_result(result: CallToolResult) -> Any:
+    """Convert a Console `send` result into the chatlas tool's return value.
+
+    Text-only results stay plain text and errors raise, matching
+    `MCPConsole.send()`. A successful result containing an image becomes a
+    `ContentToolResult` whose value holds the ordered content (chatlas expands
+    such values so providers receive text and image blocks) and whose `extra`
+    asks shinychat-compatible UIs to open the tool-result card by default.
+    """
+    if result.is_error or not any(item.type == "image" for item in result.content):
+        return result_text(result)
+
+    from chatlas import ContentToolResult
+    from chatlas.types import ContentImageInline, ContentText
+
+    value = [
+        ContentImageInline(data=item.data, image_content_type=item.mime_type)
+        if item.type == "image"
+        else ContentText(text=content_text(item))
+        for item in result.content
+    ]
+    return ContentToolResult(
+        value=value,
+        model_format="as_is",
+        extra={"display": {"open": True}},
     )
 
 

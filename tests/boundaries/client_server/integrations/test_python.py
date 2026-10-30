@@ -826,6 +826,57 @@ def test_sync_responses_preserves_text_and_images(
         return outputs
 
 
+@requires(POSIX)
+@executions(DIRECT, SANDBOXED)
+def test_chatlas_tool_opens_image_results_by_default(
+    binary: Path, execution: Execution
+) -> Transcript:
+    from chatlas import ContentToolResult
+    from chatlas.types import ContentImageInline, ContentText
+
+    def check_image(result) -> dict:
+        assert isinstance(result, ContentToolResult), type(result)
+        assert result.error is None
+        assert result.extra == {"display": {"open": True}}, result.extra
+        kinds = [type(item) for item in result.value]
+        assert kinds == [ContentText, ContentImageInline, ContentText], kinds
+        text, image, after = result.value
+        assert (text.text, after.text) == ("before image\n", "after image\n")
+        return {
+            "type": type(result).__name__,
+            "extra": result.extra,
+            "image": {"mime": image.image_content_type, "data": image.data},
+        }
+
+    async def exercise(console) -> dict:
+        tool = mcp_console.chatlas.tool(console)
+
+        async def invoke(arguments):
+            result = tool.func(**arguments)
+            return await result if inspect.isawaitable(result) else result
+
+        image = check_image(await invoke({"r": "emit image"}))
+        text = await invoke({"r": "echo text"})
+        assert text == "zod: text\n", (type(text), text)
+        try:
+            await invoke({"r": "echo r", "python": "echo python"})
+        except RuntimeError as rejected:
+            error = str(rejected)
+        else:
+            raise AssertionError("errored result did not raise")
+        return {"image": image, "error": error}
+
+    async def asynchronous() -> dict:
+        async with AsyncMCPConsole(**options(binary, execution)) as console:
+            return await exercise(console)
+
+    async_result = asyncio.run(asynchronous())
+    with MCPConsole(**options(binary, execution)) as console:
+        sync_result = asyncio.run(exercise(console))
+    assert sync_result == async_result
+    return [sync_result]
+
+
 def test_thread_configuration_preserves_existing_servers(binary: Path) -> Transcript:
     from openai_codex.generated.v2_all import ThreadStartParams
 
