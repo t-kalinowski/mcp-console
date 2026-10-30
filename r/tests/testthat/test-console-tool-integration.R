@@ -239,6 +239,49 @@ test_that("console_tool exposes configured descriptions and omits hidden paramet
   })
 })
 
+test_that("console_tool opens image results by default", {
+  with_temp_working_directory({
+    send <- console_tool(
+      path = real_mcp_console(),
+      config = ConsoleConfig(
+        r = RConfig(resolution = "disabled"),
+        languages = "r",
+        sandbox = FALSE
+      )
+    )
+    result <- send(r = 'cat("before\n"); plot(1:3); cat("after\n")')
+    expect_true(S7::S7_inherits(result, ellmer::ContentToolResult))
+    expect_identical(result@extra, list(display = list(open = TRUE)))
+    is_image <- vapply(
+      result@value,
+      \(x) S7::S7_inherits(x, ellmer::ContentImageInline),
+      logical(1)
+    )
+    expect_identical(sum(is_image), 1L)
+    expect_identical(result@value[[which(is_image)]]@type, "image/png")
+    is_text <- vapply(
+      result@value,
+      \(x) S7::S7_inherits(x, ellmer::ContentText),
+      logical(1)
+    )
+    expect_true(all(is_image | is_text))
+    text <- paste(
+      vapply(result@value[is_text], \(x) x@text, character(1)),
+      collapse = ""
+    )
+    expect_identical(text, "before\nafter\n")
+
+    text_result <- send(r = "6 * 7")
+    expect_true(S7::S7_inherits(text_result, ellmer::ContentText))
+
+    error_result <- send(requirements = list(action = "get", r = "praise"))
+    expect_true(S7::S7_inherits(error_result, ellmer::ContentText))
+    expect_match(error_result@text, "takes no package lists", fixed = TRUE)
+    rm(send)
+    invisible(gc())
+  })
+})
+
 test_that("console_tool works when registered with an ellmer chat", {
   # fmt: r
   source <- r"(
